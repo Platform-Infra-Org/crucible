@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -599,7 +600,9 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	s.event(ctx, inst.ID, "requested", fmt.Sprintf("%s, estimate $%.2f, tier %s", inst.Runtime, inst.EstimateUSD, inst.Tier))
 	if inst.State == Provisioning {
 		s.event(ctx, inst.ID, "approved", "auto")
-		go s.provision(context.WithoutCancel(ctx), inst, m.Lab) // ponytail: a goroutine, not a River job, until provisioning gets long (M4)
+		// ponytail: a goroutine, not a River job: creates are idempotent, the sweep fails provisioning stuck > 15 min
+		// and removes orphaned lab namespaces (M4 ruling 5). Make it a job if API restarts mid-provision become common.
+		go s.provision(context.WithoutCancel(ctx), inst, m.Lab)
 	} else {
 		s.notifyRequest(ctx, st.Platform, inst, u.Email, notify.LabPending)
 	}
@@ -618,11 +621,14 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	}
 	if err != nil {
 		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
-		_ = s.Runners[inst.Runtime].Destroy(ctx, inst)
-		_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
+		// a fresh ctx: after a provisioning timeout ctx is already expired and would leak the namespace
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer dcancel()
+		_ = s.Runners[inst.Runtime].Destroy(dctx, inst)
+		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
 			WHERE id = $1 AND state = 'provisioning'`,
 			inst.ID, s.runnerErr(err).Error(), s.Now())
-		s.event(ctx, inst.ID, "failed", err.Error())
+		s.event(dctx, inst.ID, "failed", err.Error())
 		return
 	}
 	now := s.Now()
@@ -1128,6 +1134,45 @@ func (s *Service) Sweep(ctx context.Context) {
 			}
 		}
 		s.destroy(ctx, inst, reason)
+	}
+	s.reconcileCluster(ctx)
+}
+
+// reconcileCluster deletes lab namespaces whose lab is over or unknown: a destroy that failed, a lab ended while
+// the API restarted mid-provision, or a leftover from a deleted database. Namespaces of labs that are provisioning,
+// ready or being destroyed are never touched.
+func (s *Service) reconcileCluster(ctx context.Context) {
+	cr, ok := s.Runners["cluster"].(*ClusterRunner)
+	if !ok {
+		return
+	}
+	ids, err := cr.Live(ctx)
+	if err != nil {
+		s.Log.Warn("listing lab namespaces failed", "err", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := s.DB.Query(ctx, `SELECT id FROM lab_instances WHERE id = ANY($1) AND state IN ('provisioning', 'ready', 'destroying')`, ids)
+	if err != nil {
+		s.Log.Error("lab namespace reconcile query failed", "err", err)
+		return
+	}
+	active, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		s.Log.Error("lab namespace reconcile query failed", "err", err)
+		return
+	}
+	for _, id := range ids {
+		if slices.Contains(active, id) {
+			continue
+		}
+		if err := cr.Destroy(ctx, &Instance{ID: id, Runtime: "cluster"}); err != nil {
+			s.Log.Warn("removing an orphaned lab namespace failed", "lab", id, "err", err)
+			continue
+		}
+		s.Log.Info("removed an orphaned lab namespace", "lab", id)
 	}
 }
 

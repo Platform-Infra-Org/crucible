@@ -15,6 +15,7 @@ import (
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
 	"github.com/riverqueue/river"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
@@ -96,9 +97,29 @@ func run(ctx context.Context) error {
 	if len(rates) > 0 {
 		slog.Warn("CRUCIBLE_DEV_LAB_USD_PER_HOUR is set: these local labs are priced for testing approvals", "rates", rates)
 	}
-	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
-		Estimators: map[string]labs.Estimator{"local": rates},
-		Now:        time.Now, Log: slog.Default()}
+	runners := map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}}
+	estimators := map[string]labs.Estimator{"local": rates}
+	if os.Getenv("CRUCIBLE_CLUSTER_LABS") == "1" {
+		// KUBECONFIG when set (dev), else the pod's service account (in-cluster).
+		cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(),
+			&clientcmd.ConfigOverrides{}).ClientConfig()
+		if err != nil {
+			return fmt.Errorf("cluster labs: %w", err)
+		}
+		// Dev clusters only: off unless explicitly set to exactly "1", and loud when on.
+		privileged := os.Getenv("CRUCIBLE_CLUSTER_PRIVILEGED") == "1"
+		if privileged {
+			slog.Warn("CRUCIBLE_CLUSTER_PRIVILEGED=1: cluster labs run as privileged pods without sysbox. Use this on development clusters only")
+		}
+		cr, err := labs.NewClusterRunner(cfg, privileged)
+		if err != nil {
+			return fmt.Errorf("cluster labs: %w", err)
+		}
+		runners["cluster"], estimators["cluster"] = cr, rates // M4 ruling 6: priced like local labs until M6
+		slog.Info("cluster labs enabled", "api", cfg.Host, "privileged", privileged)
+	}
+	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
+		Now: time.Now, Log: slog.Default()}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})

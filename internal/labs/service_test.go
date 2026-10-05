@@ -34,6 +34,7 @@ type fakeRunner struct {
 	exit        func(ScriptSpec) int
 	destroyed   []string
 	provision   func() // optional hook: blocks/observes Provision
+	output      string // script output (default "out")
 }
 
 func (f *fakeRunner) Available(*Instance) error { return f.unavailable }
@@ -54,7 +55,11 @@ func (f *fakeRunner) RunScript(_ context.Context, _ *Instance, sp ScriptSpec) (S
 	if f.exit != nil {
 		code = f.exit(sp)
 	}
-	return ScriptResult{ExitCode: code, Output: "out"}, nil
+	out := "out"
+	if f.output != "" {
+		out = f.output
+	}
+	return ScriptResult{ExitCode: code, Output: out}, nil
 }
 func (f *fakeRunner) Destroy(_ context.Context, in *Instance) error {
 	f.mu.Lock()
@@ -351,5 +356,24 @@ func TestSkippedTaskIsNotPenalised(t *testing.T) {
 	res, err := f.s.Check(ctx, f.u, v.ID, "t3-fix-nginx", "")
 	if err != nil || !res.Lab.Complete || res.Lab.MaxScore != 5 || res.Lab.Score != 5 {
 		t.Fatalf("score %v/%v complete %v err %v", res.Lab.Score, res.Lab.MaxScore, res.Lab.Complete, err)
+	}
+}
+
+// Postgres TEXT rejects NUL and invalid UTF-8; script output is arbitrary bytes.
+func TestBinaryScriptOutputIsStored(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.run.output = "a\x00b \xe2\x82" // NUL and a multibyte rune cut by the output cap
+	v := f.start(t)
+	res, err := f.s.Check(ctx, f.u, v.ID, "t1-forge-file", "x\x00y")
+	if err != nil || !res.Passed || res.Output != "ab \uFFFD" {
+		t.Fatalf("check with binary output: %+v %v", res, err)
+	}
+	d, err := f.s.OpenTask(ctx, f.u, v.ID, "t2-find-port")
+	if err != nil || d.SetupError != "" || d.Status != "open" {
+		t.Fatalf("setup with binary output: %+v %v", d, err)
+	}
+	if res, err := f.s.Check(ctx, f.u, v.ID, "t2-find-port", "8081"); err != nil || !res.Passed {
+		t.Fatalf("task must not be stuck being prepared: %+v %v", res, err)
 	}
 }

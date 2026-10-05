@@ -448,7 +448,9 @@ func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.La
 	}
 	ctx, cancel := context.WithTimeout(ctx, sc.Timeout.D()+15*time.Second)
 	defer cancel()
-	return s.Runners[inst.Runtime].RunScript(ctx, inst, ScriptSpec{Service: sc.RunIn, Script: body, Env: env, Timeout: sc.Timeout.D()})
+	res, err := s.Runners[inst.Runtime].RunScript(ctx, inst, ScriptSpec{Service: sc.RunIn, Script: body, Env: env, Timeout: sc.Timeout.D()})
+	res.Output = cleanText(res.Output) // every runner: output is inserted into TEXT columns
+	return res, err
 }
 
 // runSetup runs a setup script, retrying once (spec §8.5). It returns an error if the scenario could not be prepared.
@@ -460,9 +462,12 @@ func (s *Service) runSetup(ctx context.Context, inst *Instance, lab *content.Lab
 		if err != nil {
 			return s.runnerErr(err) // could not run at all: not a scenario failure
 		}
-		_, _ = s.DB.Exec(ctx, `INSERT INTO setup_runs (lab_id, task, attempt, exit_code, output, duration_ms, at)
+		if _, err := s.DB.Exec(ctx, `INSERT INTO setup_runs (lab_id, task, attempt, exit_code, output, duration_ms, at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)`, inst.ID, taskID, attempt, res.ExitCode, res.Output,
-			s.Now().Sub(start).Milliseconds(), s.Now())
+			s.Now().Sub(start).Milliseconds(), s.Now()); err != nil {
+			s.Log.Error("recording setup run failed", "lab", inst.ID, "task", taskID, "err", err)
+			return fmt.Errorf("recording setup run: %w", err)
+		}
 		if res.ExitCode == 0 {
 			return nil
 		}
@@ -563,6 +568,7 @@ func hintText(lab *content.Lab, h *content.Hint) string {
 }
 
 func (s *Service) Check(ctx context.Context, u *auth.User, labID, taskID, answer string) (*CheckResult, error) {
+	answer = cleanText(answer) // stored in TEXT and passed as an env var
 	inst, lab, quiz, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
 	if err != nil {
 		return nil, err

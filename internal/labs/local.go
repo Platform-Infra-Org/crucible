@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	"strings"
 
 	"crucible/internal/agenthub"
 	ap "crucible/internal/agentproto"
@@ -36,7 +37,12 @@ func (l LocalRunner) RunScript(ctx context.Context, inst *Instance, s ScriptSpec
 	if err != nil {
 		return ScriptResult{}, err
 	}
-	return ScriptResult{ExitCode: res.ExitCode, Output: string(res.Data), TimedOut: res.TimedOut}, nil
+	return ScriptResult{ExitCode: res.ExitCode, Output: cleanText(string(res.Data)), TimedOut: res.TimedOut}, nil
+}
+
+// cleanText makes arbitrary bytes storable in Postgres TEXT: no NUL, valid UTF-8 (a rune cut by the output cap becomes U+FFFD).
+func cleanText(s string) string {
+	return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "\uFFFD")
 }
 
 func (l LocalRunner) OpenPTY(ctx context.Context, inst *Instance, service string, cols, rows int) (PTY, error) {

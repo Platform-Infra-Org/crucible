@@ -157,7 +157,7 @@ func TestLoadProblems(t *testing.T) {
 		"merged privileged":            {map[string]string{"modules/m1/lab/compose.yaml": "x-c: &c {image: alpine:3.22, privileged: true}\nservices:\n  box:\n    <<: *c\n"}, "privileged"},
 		"service not a map":            {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box: [image]\n"}, "box"},
 		"volumes not a list":           {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: /:/h\n"}, "volumes that are not a list"},
-		"bind via $VAR":                {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"${HOME}:/h\"]\n"}, "host path"},
+		"bind via $VAR":                {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"${HOME}:/h\"]\n"}, "interpolation is not allowed"},
 		"multi-document":               {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n---\nservices:\n  box:\n    privileged: true\n    volumes: [\"/:/host:ro\"]\n"}, "multiple YAML documents"},
 		"multi-document empty first":   {map[string]string{"modules/m1/lab/compose.yaml": "---\n---\nservices:\n  box:\n    privileged: true\n"}, "multiple YAML documents"},
 		"rw short bind":                {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"./files:/files\"]\n"}, "writable bind"},
@@ -168,6 +168,12 @@ func TestLoadProblems(t *testing.T) {
 		"undeclared named volume long": {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [{type: volume, source: nope, target: /d}]\n"}, "not declared"},
 		"quoted merge key":             {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    \"<<\": {privileged: true}\n"}, "<<"},
 		"bind ro up":                   {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"../x:/x:ro\"]\n"}, "host path"},
+		"interp PATH env":              {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    environment: [\"X=${PATH}\"]\n"}, "interpolation is not allowed"},
+		"interp HOME label":            {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    labels: {a: $HOME}\n"}, "interpolation is not allowed"},
+		"interp default image":         {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: evil.example${DOCKER_CONFIG:-y}:x\n"}, "interpolation is not allowed"},
+		"interp default env map":       {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    environment: {X: \"${X:-y}\"}\n"}, "interpolation is not allowed"},
+		"interp in key":                {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    labels: {\"$K\": v}\n"}, "interpolation is not allowed"},
+		"interp odd dollars":           {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    command: \"echo $$$HOME\"\n"}, "interpolation is not allowed"},
 		"bad regex":                    {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: regex, prompt: P, answer: '('}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "regex"},
 	}
 	for name, c := range cases {
@@ -210,6 +216,14 @@ services:
 volumes: {data: {}, logs: {labels: {a: b}}}
 networks: {inner: {internal: true}, plain: {driver: bridge}}
 `
+	_, probs := Load(tree(t, map[string]string{"modules/m1/lab/compose.yaml": compose}))
+	if len(probs) > 0 {
+		t.Fatalf("unexpected problems: %v", probs)
+	}
+}
+
+func TestLocalComposeAllowsEscapedDollarAndTrailingEmptyDocument(t *testing.T) {
+	compose := "services:\n  box:\n    image: alpine:3.22\n    command: echo $$HOME\n---\n"
 	_, probs := Load(tree(t, map[string]string{"modules/m1/lab/compose.yaml": compose}))
 	if len(probs) > 0 {
 		t.Fatalf("unexpected problems: %v", probs)

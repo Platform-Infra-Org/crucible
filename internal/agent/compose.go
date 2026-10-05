@@ -71,7 +71,7 @@ func (c Compose) Provision(ctx context.Context, labID string, bundle []byte, com
 	if err := os.WriteFile(filepath.Join(dir, composeMarker), []byte(compose), 0o644); err != nil {
 		return err
 	}
-	out, err := docker(ctx, c.labDir(labID), c.args(labID, "up", "-d", "--wait")...).CombinedOutput()
+	out, err := docker(ctx, c.args(labID, "up", "-d", "--wait")...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker compose up: %w: %s", err, tail(out))
 	}
@@ -86,7 +86,7 @@ func (c Compose) Destroy(ctx context.Context, labID string) error {
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	out, err := docker(ctx, c.labDir(labID), c.args(labID, "down", "-v", "--remove-orphans")...).CombinedOutput()
+	out, err := docker(ctx, c.args(labID, "down", "-v", "--remove-orphans")...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("docker compose down: %w: %s", err, tail(out))
 	}
@@ -119,7 +119,7 @@ func (c Compose) RunScript(ctx context.Context, labID, service string, script []
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, service, "sh", "-s")
-	cmd := docker(context.Background(), c.labDir(labID), args...)
+	cmd := docker(context.Background(), args...)
 	cmd.Stdin = bytes.NewReader(script)
 	return RunLimited(ctx, cmd, timeout)
 }
@@ -128,7 +128,7 @@ func (c Compose) StartPTY(labID, service string, cols, rows int) (Session, error
 	if err := validID(labID); err != nil {
 		return nil, err
 	}
-	cmd := docker(context.Background(), c.labDir(labID), c.args(labID, "exec", service, "sh", "-c",
+	cmd := docker(context.Background(), c.args(labID, "exec", service, "sh", "-c",
 		"if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi")...)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
@@ -162,32 +162,22 @@ func tail(b []byte) string {
 	return s
 }
 
-// composeEnv is the environment docker compose runs with: just enough to find and reach Docker. Compose files
-// interpolate ${VAR}; with the agent's own environment a lab could read CRUCIBLE_TOKEN or cloud credentials.
-// HOME is the lab directory (so $HOME never reveals the trainee's home); DOCKER_CONFIG keeps the real ~/.docker.
-func composeEnv(environ []string, labDir string) []string {
-	out := []string{"HOME=" + labDir}
-	realHome, hasConfig := "", false
+// composeEnv is the environment docker compose runs with: just enough to find and reach Docker. It drops the
+// agent's secrets (CRUCIBLE_TOKEN, cloud credentials). Local lab compose files cannot interpolate ${VAR}
+// (the content loader rejects it), so nothing here is readable from a lab.
+func composeEnv(environ []string) []string {
+	var out []string
 	for _, kv := range environ {
-		k, v, _ := strings.Cut(kv, "=")
-		switch {
-		case k == "HOME":
-			realHome = v
-		case k == "DOCKER_CONFIG":
-			hasConfig = true
-			out = append(out, kv)
-		case k == "PATH" || k == "TMPDIR" || k == "XDG_RUNTIME_DIR" || strings.HasPrefix(k, "DOCKER_"):
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "PATH" || k == "HOME" || k == "USER" || k == "TMPDIR" || k == "XDG_RUNTIME_DIR" || strings.HasPrefix(k, "DOCKER_") {
 			out = append(out, kv)
 		}
-	}
-	if !hasConfig && realHome != "" {
-		out = append(out, "DOCKER_CONFIG="+filepath.Join(realHome, ".docker"))
 	}
 	return out
 }
 
-func docker(ctx context.Context, labDir string, args ...string) *exec.Cmd {
+func docker(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Env = composeEnv(os.Environ(), labDir)
+	cmd.Env = composeEnv(os.Environ())
 	return cmd
 }

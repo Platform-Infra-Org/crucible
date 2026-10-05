@@ -45,8 +45,8 @@ func TestLabsListsOnlyLabDirs(t *testing.T) {
 
 func TestComposeEnvKeepsOnlyDockerEssentials(t *testing.T) {
 	got := composeEnv([]string{"PATH=/bin", "HOME=/h", "CRUCIBLE_TOKEN=secret", "AWS_SECRET_ACCESS_KEY=k",
-		"DOCKER_HOST=unix:///x", "USER=u", "GITHUB_TOKEN=g", "XDG_RUNTIME_DIR=/run/u"}, "/lab")
-	want := []string{"HOME=/lab", "PATH=/bin", "DOCKER_HOST=unix:///x", "XDG_RUNTIME_DIR=/run/u", "DOCKER_CONFIG=/h/.docker"}
+		"DOCKER_HOST=unix:///x", "USER=u", "GITHUB_TOKEN=g", "XDG_RUNTIME_DIR=/run/u"})
+	want := []string{"PATH=/bin", "HOME=/h", "DOCKER_HOST=unix:///x", "USER=u", "XDG_RUNTIME_DIR=/run/u"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("composeEnv = %v", got)
 	}

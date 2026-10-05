@@ -476,16 +476,31 @@ func (l *loader) localCompose(file string) {
 	}
 	// docker compose merges every "---" document, so exactly one is allowed.
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	var top map[string]yaml.Node
-	if err := dec.Decode(&top); err != nil {
+	var doc yaml.Node
+	if err := dec.Decode(&doc); err != nil {
 		if err != io.EOF { // an empty file is reported by lab() as having no services
 			l.add(file, "%v", err)
 		}
 		return
 	}
-	var extra yaml.Node
-	if err := dec.Decode(&extra); err != io.EOF {
-		l.add(file, "compose file: multiple YAML documents are not allowed for runtime: local")
+	for {
+		var extra yaml.Node
+		err := dec.Decode(&extra)
+		if err == io.EOF {
+			break
+		}
+		if err != nil || !emptyDoc(&extra) {
+			l.add(file, "compose file: multiple YAML documents are not allowed for runtime: local")
+			return
+		}
+	}
+	if interpolates(&doc) {
+		l.add(file, "compose variable interpolation is not allowed in local labs (use $$ for a literal $)")
+		return
+	}
+	var top map[string]yaml.Node
+	if err := doc.Decode(&top); err != nil {
+		l.add(file, "%v", err)
 		return
 	}
 	bad := func(where, what string) {
@@ -650,4 +665,23 @@ func envFiles(n *yaml.Node) []string {
 		return out
 	}
 	return []string{""} // malformed: rejected as a non-local path
+}
+
+// emptyDoc reports whether n is a YAML document with no content (e.g. after a trailing "---").
+func emptyDoc(n *yaml.Node) bool {
+	return n.Kind == 0 || n.Kind == yaml.DocumentNode && (len(n.Content) == 0 || n.Content[0].Tag == "!!null" && n.Content[0].Value == "")
+}
+
+// interpolates reports whether any key or value contains a compose ${VAR}/$VAR reference (anything but $$).
+// Compose would resolve it against the agent's environment, leaking paths and secrets.
+func interpolates(n *yaml.Node) bool {
+	if n.Kind == yaml.ScalarNode && strings.Contains(strings.ReplaceAll(n.Value, "$$", ""), "$") {
+		return true
+	}
+	for _, c := range n.Content {
+		if interpolates(c) {
+			return true
+		}
+	}
+	return false
 }

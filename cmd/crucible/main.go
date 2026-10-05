@@ -2,19 +2,27 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
+	"crucible/internal/awsops"
 	"crucible/internal/config"
 	"crucible/internal/content"
 )
 
 const usage = `usage:
-  crucible lint <content-or-platform-dir>`
+  crucible lint <content-or-platform-dir>
+  crucible aws init --region REGION --domain HOSTNAME
+  crucible aws up --var-file FILE
+  crucible aws deploy | snapshot | sleep | wake | status
+  crucible aws teardown --var-file FILE --yes`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -28,10 +36,60 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(lint(os.Args[2], os.Stdout))
+	case "aws":
+		os.Exit(awsCmd(os.Args[2:]))
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+func awsCmd(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
+	region := fs.String("region", "", "AWS region (init)")
+	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
+	varFile := fs.String("var-file", "deploy/aws/main/crucible.tfvars", "terraform variables file")
+	yes := fs.Bool("yes", false, "confirm teardown")
+	_ = fs.Parse(args[1:])
+	root, _ := os.Getwd()
+	ops := awsops.Default(root)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	var err error
+	switch args[0] {
+	case "init":
+		if *region == "" || *domain == "" {
+			fmt.Fprintln(os.Stderr, "--region and --domain are required")
+			return 2
+		}
+		err = ops.Init(ctx, *region, *domain)
+	case "up":
+		err = ops.Up(ctx, *varFile)
+	case "deploy":
+		err = ops.Deploy(ctx)
+	case "snapshot":
+		err = ops.Snapshot(ctx)
+	case "sleep":
+		err = ops.SleepNode(ctx)
+	case "wake":
+		err = ops.Wake(ctx)
+	case "status":
+		err = ops.Status(ctx)
+	case "teardown":
+		err = ops.Teardown(ctx, *varFile, *yes)
+	default:
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
 }
 
 func lint(dir string, w io.Writer) int {

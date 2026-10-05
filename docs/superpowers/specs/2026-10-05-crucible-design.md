@@ -31,7 +31,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 |---|---|
 | Scale | < 100 users, single org |
 | Hosting | Kubernetes (Helm chart) |
-| SSO | Generic OIDC (Keycloak or any compliant IdP) |
+| SSO | Generic OIDC. On AWS: Amazon Cognito user pool (invite-only, email username, optional MFA, in the persistent stack). Locally: Keycloak container |
 | Source of truth | Config + content in **git**; runtime data in **Postgres** |
 | UI → git writes | Config changes = direct bot commit; content edits = Crucible-native review then merge |
 | Git host | Generic git (SSH/HTTPS), polling + optional webhook |
@@ -223,7 +223,7 @@ aws:
 ## 5. Identity & RBAC
 
 ### 5.1 Authentication
-OIDC authorization-code + PKCE against the configured IdP. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` authenticates with a **pairing token** the trainee generates on the *Connect your laptop* page (shown once, stored hashed, revocable). This works with any OIDC provider, including those without device-code support. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
+OIDC authorization-code + PKCE against the configured IdP: an Amazon Cognito user pool on AWS (setup guide: `docs/runbooks/cognito.md`), Keycloak for local development. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` authenticates with a **pairing token** the trainee generates on the *Connect your laptop* page (shown once, stored hashed, revocable). This works with any OIDC provider, including those without device-code support. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
 
 ### 5.2 Roles
 - **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views.
@@ -369,6 +369,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 | Database | Postgres 18 StatefulSet on the node's disk | 0 |
 | Snapshots + uploads | S3 (SSE-S3, 30-day lifecycle) | < 1 |
 | Access | SSM Session Manager, no SSH port | 0 |
+| Sign-in | Amazon Cognito user pool, Essentials tier (≤ 10,000 monthly active users free) | 0 |
 | Start/stop | EventBridge Scheduler calling EC2 Start/StopInstances directly | ~0 |
 | **Total** | | **~50 business hours · ~130 24/7** |
 

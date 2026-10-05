@@ -2,21 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run Crucible on AWS at the lowest sensible cost (≈ $50/month on a business-hours schedule): one EC2 instance with single-node k3s. It sleeps on a schedule, is backed up nightly to S3, and can be torn down and rebuilt from git plus the latest snapshot with one command each.
+**Goal:** Run Crucible on AWS at the lowest sensible cost (≈ $50/month on a business-hours schedule): one EC2 instance with single-node k3s, with sign-in through an invite-only Amazon Cognito user pool. It sleeps on a schedule, is backed up nightly to S3, and can be torn down and rebuilt from git plus the latest snapshot with one command each.
 
 **Architecture:**
 - Two Terraform stacks:
-  - `deploy/aws/persistent`: state + data buckets, created once and never destroyed.
+  - `deploy/aws/persistent`: state + data buckets and the Cognito user pool that holds the accounts, created once and never destroyed.
   - `deploy/aws/main`: default-VPC EC2 node with an Elastic IP, IAM role, SSM parameters and EventBridge Scheduler sleep/wake.
 - Cloud-init installs k3s (bundled Traefik with Let's Encrypt).
 - A Helm chart runs Postgres, Crucible and a backup CronJob. An init container restores the latest snapshot into an empty database.
 - Releases are image tarballs in S3, imported into k3s's containerd, so there is no container registry to pay for or authenticate against.
 - `crucible aws …` subcommands orchestrate terraform, docker, helm and the AWS CLI.
 
-**Tech Stack:** Terraform ≥ 1.10 (AWS provider ~> 6.0, native S3 state locking), k3s, Helm 3, Traefik (k3s-bundled), Postgres 18, AWS CLI v2, SSM Run Command, EventBridge Scheduler, Go (CLI orchestration).
+**Tech Stack:** Terraform ≥ 1.10 (AWS provider ~> 6.0, native S3 state locking), Amazon Cognito (Essentials tier, managed login), k3s, Helm 3, Traefik (k3s-bundled), Postgres 18, AWS CLI v2, SSM Run Command, EventBridge Scheduler, Go (CLI orchestration).
 
 **Spec:** `docs/superpowers/specs/2026-10-05-crucible-design.md` (§9.4 "Deployment, hibernate & restore")
 **Depends on:** M1 (`docs/superpowers/plans/2026-10-05-m1-local-forge.md`) complete.
+**Operator guide for sign-in:** `docs/runbooks/cognito.md`
 
 ## Global Constraints
 
@@ -30,6 +31,10 @@
   - Secrets live in SSM Parameter Store SecureStrings under `/<name>/`. They are never put in user data or the Helm values file.
 - **Schedule:** a business-hours default in `Europe/Bucharest`: wake 07:30 and sleep 19:30, Mon–Fri. The nightly backup runs at 19:15, before sleep.
 - **Releases:** the image is built for `linux/amd64` and tagged with the git short SHA. Uncommitted work gets a `-dirty-<unix>` suffix.
+- **Sign-in:**
+  - Amazon Cognito user pool, invite-only (`allow_admin_create_user_only`), email as username, optional TOTP MFA, `deletion_protection = ACTIVE`.
+  - It lives in the persistent stack, so teardown never deletes accounts.
+  - Crucible talks to it as a plain OIDC provider; local development keeps Keycloak.
 
 ## Review Focus
 
@@ -50,6 +55,7 @@
 | Elastic IP / public IPv4 | $3.7 | $3.7 (billed while stopped) |
 | S3 (snapshots + releases, < 10 GiB) | < $1 | < $1 |
 | SSM, Scheduler, Session Manager | ~$0 | ~$0 |
+| Cognito (Essentials, ≤ 10,000 monthly active users free) | $0 | $0 |
 | **Total** | **~$130** | **~$50** |
 
 Cheaper knobs (documented, not default):
@@ -61,7 +67,7 @@ Cheaper knobs (documented, not default):
 ## File Structure
 
 ```
-deploy/aws/persistent/{main.tf,persistent.tftest.hcl}
+deploy/aws/persistent/{main.tf,cognito.tf,persistent.tftest.hcl}
 deploy/aws/main/{versions.tf,variables.tf,main.tf,scheduler.tf,outputs.tf,bootstrap.sh.tftpl,terraform.tfvars.example,main.tftest.hcl}
 deploy/helm/crucible/{Chart.yaml,values.yaml}
 deploy/helm/crucible/templates/{postgres.yaml,crucible.yaml,backup.yaml}
@@ -70,18 +76,19 @@ internal/awsops/{awsops.go,awsops_test.go}
 cmd/crucible/main.go                      # adds `crucible aws …`
 Dockerfile                                # adds git credential helper
 docs/runbooks/aws.md                      # operator runbook
+docs/runbooks/cognito.md                  # sign-in setup and user management guide (already written)
 ```
 
 ---
 
-### Task 1: Persistent stack (state + data buckets)
+### Task 1: Persistent stack (state + data buckets + Cognito user pool)
 
 **Files:**
-- Create: `deploy/aws/persistent/main.tf`, `deploy/aws/persistent/persistent.tftest.hcl`
+- Create: `deploy/aws/persistent/main.tf`, `deploy/aws/persistent/cognito.tf`, `deploy/aws/persistent/persistent.tftest.hcl`
 - Modify: `.gitignore` (add `deploy/aws/**/.terraform/`, `deploy/aws/**/terraform.tfstate*`, `deploy/aws/main/*.tfvars`)
 
 **Interfaces:**
-- Produces outputs `region`, `state_bucket`, `data_bucket` (read by `crucible aws` in Task 5).
+- Produces outputs `region`, `state_bucket`, `data_bucket`, `cognito_user_pool_id`, `oidc_client_id`, `oidc_issuer`, `cognito_login_url` (read by `crucible aws` in Task 5).
 - Bucket names are `<name>-<account id>-tfstate` and `<name>-<account id>-data`.
 
 - [ ] **Step 1: Write the failing test**
@@ -96,6 +103,7 @@ mock_provider "aws" {
 
 variables {
   region = "eu-west-1"
+  domain = "crucible.example.com"
 }
 
 run "buckets_are_private_versioned_and_expiring" {
@@ -116,6 +124,27 @@ run "buckets_are_private_versioned_and_expiring" {
   assert {
     condition     = one([for r in aws_s3_bucket_lifecycle_configuration.data.rule : r.expiration[0].days if r.id == "expire-snapshots"]) == 30
     error_message = "snapshots expire after 30 days"
+  }
+}
+
+run "cognito_is_invite_only_and_protected" {
+  command = plan
+
+  assert {
+    condition     = aws_cognito_user_pool.users.admin_create_user_config[0].allow_admin_create_user_only
+    error_message = "self sign-up must be disabled (invite-only)"
+  }
+  assert {
+    condition     = aws_cognito_user_pool.users.deletion_protection == "ACTIVE"
+    error_message = "the user pool must have deletion protection"
+  }
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.crucible.callback_urls) == toset(["https://crucible.example.com/auth/callback"])
+    error_message = "callback must be exactly https://<domain>/auth/callback"
+  }
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.crucible.allowed_oauth_flows) == toset(["code"]) && aws_cognito_user_pool_client.crucible.generate_secret
+    error_message = "authorization-code flow with a client secret only"
   }
 }
 ```
@@ -146,6 +175,10 @@ variable "region" { type = string }
 variable "name" {
   type    = string
   default = "crucible"
+}
+variable "domain" {
+  type        = string
+  description = "Crucible's public hostname; used for the Cognito callback URL"
 }
 
 data "aws_caller_identity" "me" {}
@@ -223,16 +256,93 @@ output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "data_bucket" { value = aws_s3_bucket.data.bucket }
 ```
 
+`deploy/aws/persistent/cognito.tf`:
+```hcl
+# Invite-only sign-in for Crucible (see docs/runbooks/cognito.md). Lives here so teardown never deletes accounts.
+resource "aws_cognito_user_pool" "users" {
+  name                     = var.name
+  user_pool_tier           = "ESSENTIALS" # managed login pages; free up to 10,000 monthly active users
+  deletion_protection      = "ACTIVE"
+  username_attributes      = ["email"]
+  auto_verified_attributes = ["email"]
+  mfa_configuration        = "OPTIONAL"
+
+  software_token_mfa_configuration {
+    enabled = true
+  }
+
+  admin_create_user_config {
+    allow_admin_create_user_only = true
+    invite_message_template {
+      email_subject = "You've been invited to Crucible"
+      email_message = "Welcome to the forge. Sign in at https://${var.domain} with {username} and the temporary password {####}. You'll choose your own password on first sign-in."
+      sms_message   = "Crucible: {username} / {####}"
+    }
+  }
+
+  password_policy {
+    minimum_length                   = 12
+    require_lowercase                = true
+    require_uppercase                = true
+    require_numbers                  = true
+    require_symbols                  = false
+    temporary_password_validity_days = 7
+  }
+
+  account_recovery_setting {
+    recovery_mechanism {
+      name     = "verified_email"
+      priority = 1
+    }
+  }
+
+  lifecycle { prevent_destroy = true }
+}
+
+resource "aws_cognito_user_pool_domain" "login" {
+  domain                = "${var.name}-${data.aws_caller_identity.me.account_id}" # https://<this>.auth.<region>.amazoncognito.com
+  user_pool_id          = aws_cognito_user_pool.users.id
+  managed_login_version = 2
+}
+
+resource "aws_cognito_user_pool_client" "crucible" {
+  name                                 = "crucible"
+  user_pool_id                         = aws_cognito_user_pool.users.id
+  generate_secret                      = true
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  callback_urls                        = ["https://${var.domain}/auth/callback"]
+  logout_urls                          = ["https://${var.domain}/"]
+  supported_identity_providers         = ["COGNITO"]
+  explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH"]
+  prevent_user_existence_errors        = "ENABLED"
+  enable_token_revocation              = true
+}
+
+# Managed login needs a style assigned to the client; start from Cognito's defaults (restyle in the console).
+resource "aws_cognito_managed_login_branding" "crucible" {
+  user_pool_id                = aws_cognito_user_pool.users.id
+  client_id                   = aws_cognito_user_pool_client.crucible.id
+  use_cognito_provided_values = true
+}
+
+output "cognito_user_pool_id" { value = aws_cognito_user_pool.users.id }
+output "oidc_client_id" { value = aws_cognito_user_pool_client.crucible.id }
+output "oidc_issuer" { value = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.users.id}" }
+output "cognito_login_url" { value = "https://${aws_cognito_user_pool_domain.login.domain}.auth.${var.region}.amazoncognito.com" }
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `terraform -chdir=deploy/aws/persistent fmt -check && terraform -chdir=deploy/aws/persistent test`
-Expected: `Success! 1 passed, 0 failed.`
+Expected: `Success! 2 passed, 0 failed.`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add deploy/aws/persistent .gitignore
-git commit -m "feat(aws): persistent state and data buckets"
+git commit -m "feat(aws): persistent buckets and invite-only Cognito user pool"
 ```
 
 ---
@@ -247,7 +357,7 @@ git commit -m "feat(aws): persistent state and data buckets"
   - `deploy/aws/main/main.tftest.hcl`
 
 **Interfaces:**
-- Consumes: `data_bucket` and `region` from Task 1 (passed by `crucible aws up` as `-var`).
+- Consumes: `data_bucket`, `region`, `cognito_user_pool_id`, `oidc_client_id` and `oidc_issuer` from Task 1 (passed by `crucible aws up` as `-var`). The client secret is read from Cognito by a data source and is never typed or passed on the command line.
 - Produces:
   - Outputs: `instance_id`, `public_ip`, `url`, `domain`, `region`, `data_bucket`.
   - On the node:
@@ -274,6 +384,9 @@ mock_provider "aws" {
   mock_data "aws_iam_policy_document" {
     defaults = { json = "{}" }
   }
+  mock_data "aws_cognito_user_pool_client" {
+    defaults = { client_secret = "s3cret" }
+  }
 }
 mock_provider "random" {}
 
@@ -282,9 +395,10 @@ variables {
   data_bucket        = "crucible-123456789012-data"
   domain             = "crucible.example.com"
   acme_email         = "ops@example.com"
-  platform_repo      = "https://git.example.com/crucible/platform.git"
-  oidc_issuer        = "https://sso.example.com/realms/corp"
-  oidc_client_secret = "s3cret"
+  platform_repo        = "https://git.example.com/crucible/platform.git"
+  oidc_issuer          = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"
+  oidc_client_id       = "client123"
+  cognito_user_pool_id = "eu-west-1_abc"
 }
 
 run "node_is_locked_down" {
@@ -411,15 +525,10 @@ variable "git_credentials" {
   sensitive   = true
   description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com"
 }
+# Set by `crucible aws up` from the persistent stack's Cognito outputs.
 variable "oidc_issuer" { type = string }
-variable "oidc_client_id" {
-  type    = string
-  default = "crucible"
-}
-variable "oidc_client_secret" {
-  type      = string
-  sensitive = true
-}
+variable "oidc_client_id" { type = string }
+variable "cognito_user_pool_id" { type = string }
 ```
 
 `deploy/aws/main/main.tf`:
@@ -470,6 +579,11 @@ resource "aws_security_group" "web" {
 }
 
 # --- secrets (SecureString, read by deploy.sh through the instance role) ---
+data "aws_cognito_user_pool_client" "crucible" {
+  user_pool_id = var.cognito_user_pool_id
+  client_id    = var.oidc_client_id
+}
+
 resource "random_password" "db" {
   length  = 32
   special = false # used inside a postgres:// URL
@@ -482,7 +596,7 @@ resource "random_password" "hook" {
 
 locals {
   params = {
-    oidc_client_secret = var.oidc_client_secret
+    oidc_client_secret = data.aws_cognito_user_pool_client.crucible.client_secret
     platform_repo      = var.platform_repo
     git_credentials    = var.git_credentials == "" ? "none" : var.git_credentials # SSM rejects empty values
     git_hook_secret    = random_password.hook.result
@@ -792,9 +906,7 @@ domain             = "crucible.example.com"
 acme_email         = "ops@example.com"
 platform_repo      = "https://git.example.com/crucible/platform.git"
 git_credentials    = "https://crucible-bot:TOKEN@git.example.com"
-oidc_issuer        = "https://sso.example.com/realms/corp"
-oidc_client_id     = "crucible"
-oidc_client_secret = "from-your-idp"
+# Sign-in (Cognito issuer, client id and secret) is wired automatically from the persistent stack.
 # route53_zone_id  = "Z0123456789"   # optional: manage the A record
 # instance_type    = "t3a.large"     # cheaper if you only use local labs
 # schedule_enabled = false           # run 24/7
@@ -1103,12 +1215,13 @@ git commit -m "feat(helm): single-node chart with postgres, nightly S3 backups a
 
 ## One-time setup (per AWS account)
 1. Install: terraform ≥ 1.10, AWS CLI v2 (logged in), Docker with buildx, Helm 3, Go 1.26.
-2. `go run ./cmd/crucible aws init --region eu-west-1`. This creates the state and data buckets (never destroyed).
+2. `go run ./cmd/crucible aws init --region eu-west-1 --domain crucible.example.com`. This creates the state and data buckets and the Cognito user pool (none of them are ever destroyed).
 3. `cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars` and fill it in.
-   Register `https://<domain>/auth/callback` as a redirect URI in your OIDC provider.
+   Sign-in needs no settings here; it is wired from the Cognito user pool automatically.
 4. `go run ./cmd/crucible aws up --var-file deploy/aws/main/crucible.tfvars`
 5. Point DNS: an A record for `<domain>` → `public_ip` output (skip if `route53_zone_id` is set).
    The first HTTPS request may take ~1 min while Let's Encrypt issues the certificate.
+6. Invite people and add them to teams: follow `docs/runbooks/cognito.md`.
 
 ## Everyday
 | Want | Command |
@@ -1119,6 +1232,7 @@ git commit -m "feat(helm): single-node chart with postgres, nightly S3 backups a
 | Start before the schedule | `crucible aws wake` |
 | Is it up? | `crucible aws status` |
 | Shell on the node | `aws ssm start-session --target <instance_id>` |
+| Invite / remove a person | `docs/runbooks/cognito.md` |
 
 The schedule wakes the node at 07:30 and sleeps it at 19:30 (Mon–Fri, `schedule_timezone`). The backup runs at 19:15.
 
@@ -1150,7 +1264,7 @@ git commit -m "docs: AWS runbook"
 **Interfaces:**
 - Consumes: Terraform outputs from Tasks 1–2; node scripts `/opt/crucible/{deploy,snapshot}.sh` and the `/opt/crucible/.ready` marker.
 - Produces: `awsops.Ops{Root string; Exec func(ctx, dir, name string, args ...string) error; Output func(ctx, dir, name string, args ...string) (string, error); Sleep func(time.Duration); Log io.Writer}` with methods:
-  - `Init(ctx, region)`
+  - `Init(ctx, region, domain)`
   - `Up(ctx, varFile)`
   - `Deploy(ctx)`
   - `Snapshot(ctx)`
@@ -1198,7 +1312,7 @@ func (r *recorder) ops(root string) Ops {
 func fakeAWS(cmd string) string {
 	switch {
 	case strings.Contains(cmd, "output -json"):
-		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"}}`
+		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
 	case strings.HasPrefix(cmd, "git rev-parse"):
 		return "abc123def456"
 	case strings.HasPrefix(cmd, "git status"):
@@ -1270,6 +1384,9 @@ func TestTeardownRequiresYes(t *testing.T) {
 	}
 	if snap, destroy := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "destroy"); snap < 0 || destroy < snap {
 		t.Fatalf("teardown must snapshot first:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.calls[indexOf(r.calls, "destroy")], "cognito_user_pool_id=eu-west-1_abc") {
+		t.Fatal("destroy must receive the Cognito variables from the persistent stack")
 	}
 }
 ```
@@ -1349,12 +1466,19 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	return out, nil
 }
 
-func (o Ops) Init(ctx context.Context, region string) error {
+func (o Ops) Init(ctx context.Context, region, domain string) error {
 	d := o.dir("persistent")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
 	}
-	return o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "apply", "-var", "region="+region)
+	return o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "apply", "-var", "region="+region, "-var", "domain="+domain)
+}
+
+// mainVars passes the persistent stack's outputs (buckets, Cognito) into the main stack.
+func mainVars(p map[string]string) []string {
+	return []string{"-var", "region=" + p["region"], "-var", "data_bucket=" + p["data_bucket"],
+		"-var", "oidc_issuer=" + p["oidc_issuer"], "-var", "oidc_client_id=" + p["oidc_client_id"],
+		"-var", "cognito_user_pool_id=" + p["cognito_user_pool_id"]}
 }
 
 func (o Ops) Up(ctx context.Context, varFile string) error {
@@ -1369,8 +1493,7 @@ func (o Ops) Up(ctx context.Context, varFile string) error {
 		return err
 	}
 	abs, _ := filepath.Abs(varFile)
-	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "apply", "-var-file="+abs,
-		"-var", "region="+p["region"], "-var", "data_bucket="+p["data_bucket"]); err != nil {
+	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, mainVars(p)...)...); err != nil {
 		return err
 	}
 	return o.Deploy(ctx)
@@ -1571,9 +1694,12 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes bool) error {
 	} else {
 		fmt.Fprintln(o.Log, "node is not running; relying on the last nightly snapshot")
 	}
+	p, err := o.outputs(ctx, "persistent")
+	if err != nil {
+		return err
+	}
 	abs, _ := filepath.Abs(varFile)
-	return o.Exec(ctx, o.Root, "terraform", "-chdir="+o.dir("main"), "destroy", "-auto-approve", "-var-file="+abs,
-		"-var", "region="+m["region"], "-var", "data_bucket="+m["data_bucket"])
+	return o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + o.dir("main"), "destroy", "-auto-approve", "-var-file=" + abs}, mainVars(p)...)...)
 }
 ```
 
@@ -1581,7 +1707,7 @@ Modify `cmd/crucible/main.go`. Replace the `usage` constant and the `switch` in 
 ```go
 const usage = `usage:
   crucible lint <content-or-platform-dir>
-  crucible aws init --region REGION
+  crucible aws init --region REGION --domain HOSTNAME
   crucible aws up --var-file FILE
   crucible aws deploy | snapshot | sleep | wake | status
   crucible aws teardown --var-file FILE --yes`
@@ -1610,6 +1736,7 @@ func awsCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init)")
+	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
 	varFile := fs.String("var-file", "deploy/aws/main/crucible.tfvars", "terraform variables file")
 	yes := fs.Bool("yes", false, "confirm teardown")
 	_ = fs.Parse(args[1:])
@@ -1620,11 +1747,11 @@ func awsCmd(args []string) int {
 	var err error
 	switch args[0] {
 	case "init":
-		if *region == "" {
-			fmt.Fprintln(os.Stderr, "--region is required")
+		if *region == "" || *domain == "" {
+			fmt.Fprintln(os.Stderr, "--region and --domain are required")
 			return 2
 		}
-		err = ops.Init(ctx, *region)
+		err = ops.Init(ctx, *region, *domain)
 	case "up":
 		err = ops.Up(ctx, *varFile)
 	case "deploy":
@@ -1674,9 +1801,9 @@ git commit -m "feat(cli): crucible aws init/up/deploy/snapshot/sleep/wake/status
 **Interfaces:**
 - Consumes: everything above.
 
-- [ ] **A1. Bootstrap:** `crucible aws init --region eu-west-1`, then `crucible aws up --var-file deploy/aws/main/crucible.tfvars`.
+- [ ] **A1. Bootstrap:** `crucible aws init --region eu-west-1 --domain <domain>`, then `crucible aws up --var-file deploy/aws/main/crucible.tfvars`.
   Expected: Terraform creates about 15 resources; the CLI prints `🔥 <sha> is live at https://<domain>`.
-- [ ] **A2. Login and lab:** open `https://<domain>`, log in through your IdP, pair `crucible-agent` from a laptop against the cloud URL, and finish Forge 101's lab.
+- [ ] **A2. Login and lab:** invite yourself as described in `docs/runbooks/cognito.md`, open `https://<domain>`, sign in with the emailed temporary password (and set your own), pair `crucible-agent` from a laptop against the cloud URL, and finish Forge 101's lab.
   Expected: same behaviour as the local check; the certificate is valid (Let's Encrypt).
 - [ ] **A3. Sleep and wake:** `crucible aws sleep`, then `crucible aws status` shows `stopped`; then `crucible aws wake`.
   Expected: the URL is healthy again and progress from A2 is still there.

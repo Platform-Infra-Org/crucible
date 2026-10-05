@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# helm lint + assertions on rendered manifests (no cluster needed).
+set -euo pipefail
+chart="$(dirname "$0")/crucible"
+helm lint "$chart" --set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso
+out=$(helm template t "$chart" --set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso --set host=crucible.example.com)
+need() { grep -q -- "$1" <<<"$out" || { echo "missing: $1"; exit 1; }; }
+need 'kind: CronJob'
+need 'pg_dump -h postgres -U crucible -Fc crucible'
+need "to_regclass('public.users')"                       # restore only into an empty database
+need 'router.tls.certresolver: le'
+need 'host: crucible.example.com'
+need 'imagePullPolicy: Never'
+need 'type: Recreate'
+need 'CRUCIBLE_QUIZ_SECRET'
+if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
+echo "helm chart OK"

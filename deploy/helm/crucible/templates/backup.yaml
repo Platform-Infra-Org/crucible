@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: crucible-backup }
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  timeZone: {{ .Values.backup.timeZone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: {{ .Values.postgres.image }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  apk add --no-cache aws-cli >/dev/null
+                  ts=$(date -u +%Y%m%dT%H%M%SZ)
+                  pg_dump -h postgres -U crucible -Fc crucible > /tmp/db.dump
+                  aws s3 cp /tmp/db.dump "s3://{{ .Values.backup.bucket }}/snapshots/crucible-$ts.dump"
+                  echo "snapshot crucible-$ts.dump uploaded"
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
+                - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }

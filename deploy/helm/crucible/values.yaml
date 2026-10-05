@@ -1,0 +1,22 @@
+image:
+  repository: docker.io/library/crucible   # imported into containerd from the S3 release tarball
+  tag: dev
+  pullPolicy: Never
+host: crucible.example.com
+publicURL: https://crucible.example.com
+platformBranch: main
+syncInterval: 60s
+oidc:
+  issuer: ""
+  clientId: crucible
+secretName: crucible-secrets
+tls:
+  certResolver: le
+postgres:
+  image: postgres:18-alpine
+  storage: 10Gi
+backup:
+  bucket: ""
+  region: ""
+  schedule: "15 19 * * *"
+  timeZone: Europe/Bucharest

@@ -16,6 +16,7 @@ RUN CGO_ENABLED=0 go build -o /out/crucible-api ./cmd/crucible-api && CGO_ENABLE
 FROM alpine:3.22
 RUN apk add --no-cache git tar ca-certificates \
  && git config --system --add safe.directory '*' \
+ && git config --system credential.helper 'store --file=/etc/crucible/git-credentials' \
  && adduser -D -u 10001 crucible && mkdir /data && chown crucible /data
 COPY --from=go /out/ /usr/local/bin/
 COPY --from=web /src/web/dist /app/web

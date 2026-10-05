@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: crucible }
+spec:
+  replicas: 1                 # ponytail: one process holds the agent hub; scale out needs a shared hub (later)
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: crucible } }
+  template:
+    metadata: { labels: { app: crucible } }
+    spec:
+      initContainers:
+        - name: restore
+          image: {{ .Values.postgres.image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              until pg_isready -h postgres -U crucible; do sleep 2; done
+              if [ "$(psql -h postgres -U crucible -d crucible -tAc "select to_regclass('public.users') is not null")" = "t" ]; then
+                echo "database already initialised; no restore"; exit 0
+              fi
+              apk add --no-cache aws-cli >/dev/null
+              latest=$(aws s3 ls "s3://{{ .Values.backup.bucket }}/snapshots/" | awk '{print $4}' | sort | tail -n1)
+              if [ -z "$latest" ]; then echo "no snapshot found: fresh install"; exit 0; fi
+              aws s3 cp "s3://{{ .Values.backup.bucket }}/snapshots/$latest" /tmp/db.dump
+              pg_restore -h postgres -U crucible -d crucible --no-owner /tmp/db.dump
+              echo "restored $latest"
+          env:
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
+            - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8080 }]
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
+            - { name: DATABASE_URL, value: "postgres://crucible:$(POSTGRES_PASSWORD)@postgres:5432/crucible?sslmode=disable" }
+            - name: CRUCIBLE_PLATFORM_REPO
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_PLATFORM_REPO } }
+            - { name: CRUCIBLE_PLATFORM_BRANCH, value: {{ .Values.platformBranch | quote }} }
+            - { name: CRUCIBLE_PUBLIC_URL, value: {{ .Values.publicURL | quote }} }
+            - { name: CRUCIBLE_SYNC_INTERVAL, value: {{ .Values.syncInterval | quote }} }
+            - name: CRUCIBLE_GIT_HOOK_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_GIT_HOOK_SECRET } }
+            - name: CRUCIBLE_QUIZ_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_QUIZ_SECRET } }
+            - { name: OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }} }
+            - { name: OIDC_CLIENT_ID, value: {{ .Values.oidc.clientId | quote }} }
+            - name: OIDC_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: OIDC_CLIENT_SECRET } }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: git-credentials, mountPath: /etc/crucible/git-credentials, subPath: git-credentials, readOnly: true }
+      volumes:
+        - name: data
+          emptyDir: {}        # git mirrors and exports: rebuilt from git on start
+        - name: git-credentials
+          secret: { secretName: {{ .Values.secretName }}, items: [{ key: git-credentials, path: git-credentials }] }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: crucible }
+spec:
+  selector: { app: crucible }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: crucible
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: {{ .Values.tls.certResolver }}
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {{ .Values.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: crucible, port: { number: 80 } } }

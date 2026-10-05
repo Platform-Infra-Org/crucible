@@ -19,6 +19,9 @@ import (
 
 var ErrOffline = errors.New("agent offline")
 
+// CloseReplaced tells an agent that a newer agent for the same user took over; it must stop, not reconnect.
+const CloseReplaced = websocket.StatusCode(4001)
+
 // Heartbeat and write timing; vars so tests can shorten them.
 var (
 	pingInterval = 15 * time.Second
@@ -74,7 +77,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 	h.agents[userID] = c
 	h.mu.Unlock()
 	if old != nil { // closed outside h.mu: a half-open peer must not freeze the hub
-		go func() { _ = old.ws.Close(websocket.StatusPolicyViolation, "replaced by a newer agent") }()
+		go func() { _ = old.ws.Close(CloseReplaced, "replaced by a newer agent") }()
 	}
 
 	go func() { // heartbeat: a failed ping drops the conn, which ends the read loop below

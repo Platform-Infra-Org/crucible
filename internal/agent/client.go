@@ -12,10 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"crucible/internal/agenthub"
 	"github.com/coder/websocket"
 
 	ap "crucible/internal/agentproto"
 )
+
+// ErrReplaced means another crucible-agent connected with the same account (one laptop agent per user).
+var ErrReplaced = errors.New("another crucible-agent connected with your account; this one stops (run one agent per user)")
 
 var errRejected = errors.New("pairing token rejected — generate a new one")
 
@@ -40,7 +44,7 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(err, errRejected) {
+		if errors.Is(err, errRejected) || errors.Is(err, ErrReplaced) {
 			return err
 		}
 		c.Log.Warn("disconnected from Crucible, retrying in 3s", "err", err)
@@ -74,6 +78,9 @@ func (c *Client) runOnce(ctx context.Context) error {
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
+			if websocket.CloseStatus(err) == agenthub.CloseReplaced {
+				return ErrReplaced
+			}
 			return err
 		}
 		var m ap.Msg

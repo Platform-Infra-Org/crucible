@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -329,11 +331,11 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			if err := yamlx.ReadLoose(p, &c); err != nil {
 				l.add(p, "%v", err)
 			}
-			for name, svc := range c.Services {
+			for name := range c.Services {
 				services[name] = true
-				if lab.Runtime == "local" {
-					l.localService(p, name, &svc)
-				}
+			}
+			if lab.Runtime == "local" {
+				l.localCompose(p)
 			}
 		}
 	case "aws":
@@ -449,39 +451,100 @@ func (l *loader) script(dir, lf, what string, s *Script, services map[string]boo
 	}
 }
 
-// localService rejects compose settings that would give a local lab access to the trainee's laptop.
-func (l *loader) localService(file, name string, n *yaml.Node) {
-	var svc struct {
-		Privileged  bool        `yaml:"privileged"`
-		NetworkMode string      `yaml:"network_mode"`
-		Pid         string      `yaml:"pid"`
-		Ipc         string      `yaml:"ipc"`
-		CapAdd      []string    `yaml:"cap_add"`
-		Devices     []yaml.Node `yaml:"devices"`
-		Volumes     []yaml.Node `yaml:"volumes"`
+// localServiceKeys are the compose service settings a local lab may use. It is an allowlist: anything else
+// (privileged, *_mode/pid/ipc/uts/cgroup, devices, cap_add, security_opt, ports, build, extra_hosts, secrets,
+// configs, volumes_from, logging, …) could reach the trainee's laptop.
+var localServiceKeys = map[string]bool{
+	"image": true, "command": true, "entrypoint": true, "environment": true, "env_file": true, "working_dir": true,
+	"user": true, "hostname": true, "expose": true, "volumes": true, "tmpfs": true, "healthcheck": true,
+	"depends_on": true, "restart": true, "networks": true, "labels": true, "stop_signal": true,
+	"stop_grace_period": true, "tty": true, "stdin_open": true, "init": true, "read_only": true, "cap_drop": true,
+	"mem_limit": true, "cpus": true, "dns": true, "platform": true, "pull_policy": true,
+}
+
+// localPath reports whether p is a path inside the lab directory (no absolute, ~, $VAR or ../ escapes).
+func localPath(p string) bool {
+	return p != "" && !strings.ContainsAny(p, "~$") && filepath.IsLocal(filepath.Clean(p))
+}
+
+// localCompose rejects compose settings that would give a local lab access to the trainee's laptop.
+func (l *loader) localCompose(file string) {
+	var top map[string]yaml.Node
+	if err := yamlx.ReadLoose(file, &top); err != nil {
+		return // the services decode in lab() already reported it
 	}
+	bad := func(where, what string) {
+		l.add(file, "%s: %s is not allowed for runtime: local (it can reach the trainee's laptop); use runtime: cluster", where, what)
+	}
+	for _, k := range slices.Sorted(maps.Keys(top)) {
+		v := top[k]
+		switch {
+		case strings.HasPrefix(k, "x-"), k == "version", k == "name":
+		case k == "services":
+			var svcs map[string]yaml.Node
+			if err := v.Decode(&svcs); err != nil {
+				l.add(file, "services: %v", err)
+				continue
+			}
+			for _, name := range slices.Sorted(maps.Keys(svcs)) {
+				n := svcs[name]
+				l.localService(file, name, &n, bad)
+			}
+		case k == "volumes", k == "networks":
+			var defs map[string]map[string]yaml.Node
+			if err := v.Decode(&defs); err != nil {
+				l.add(file, "%s: %v", k, err)
+				continue
+			}
+			kind := strings.TrimSuffix(k, "s")
+			for _, name := range slices.Sorted(maps.Keys(defs)) {
+				for _, opt := range slices.Sorted(maps.Keys(defs[name])) {
+					o := defs[name][opt]
+					switch {
+					case opt == "labels", kind == "network" && opt == "internal":
+					case kind == "network" && opt == "driver" && o.Value == "bridge":
+					default:
+						bad(fmt.Sprintf("%s %q", kind, name), opt)
+					}
+				}
+			}
+		default:
+			bad("compose file", k)
+		}
+	}
+}
+
+func (l *loader) localService(file, name string, n *yaml.Node, bad func(where, what string)) {
+	var svc map[string]yaml.Node
 	if err := n.Decode(&svc); err != nil {
 		l.add(file, "service %q: %v", name, err)
 		return
 	}
-	bad := func(what string) {
-		l.add(file, "service %q: %s is not allowed for runtime: local (it reaches the trainee's laptop); use runtime: cluster", name, what)
-	}
-	if svc.Privileged {
-		bad("privileged: true")
-	}
-	for k, v := range map[string]string{"network_mode": svc.NetworkMode, "pid": svc.Pid, "ipc": svc.Ipc} {
-		if v == "host" {
-			bad(k + ": host")
+	where := fmt.Sprintf("service %q", name)
+	for _, k := range slices.Sorted(maps.Keys(svc)) {
+		v := svc[k]
+		switch {
+		case k == "<<" || strings.HasPrefix(k, "x-"): // YAML merge keys and extensions; merged keys are checked too
+		case k == "volumes":
+			localVolumes(where, &v, bad)
+		case k == "env_file":
+			for _, p := range envFiles(&v) {
+				if !localPath(p) {
+					bad(where, fmt.Sprintf("env_file %q (a host path outside the lab)", p))
+				}
+			}
+		case !localServiceKeys[k]:
+			bad(where, k)
 		}
 	}
-	if len(svc.CapAdd) > 0 {
-		bad("cap_add")
+}
+
+func localVolumes(where string, n *yaml.Node, bad func(where, what string)) {
+	if n.Kind != yaml.SequenceNode {
+		bad(where, "volumes that are not a list")
+		return
 	}
-	if len(svc.Devices) > 0 {
-		bad("devices")
-	}
-	for _, v := range svc.Volumes {
+	for _, v := range n.Content {
 		var src string
 		if v.Kind == yaml.ScalarNode {
 			if parts := strings.Split(v.Value, ":"); len(parts) > 1 {
@@ -493,17 +556,46 @@ func (l *loader) localService(file, name string, n *yaml.Node) {
 				Source string `yaml:"source"`
 			}
 			_ = v.Decode(&long)
-			if long.Type == "bind" {
+			switch long.Type {
+			case "volume", "tmpfs":
+				continue
+			case "bind":
 				src = long.Source
+			default:
+				bad(where, fmt.Sprintf("volume type %q", long.Type))
+				continue
 			}
 		}
 		if src == "" {
 			continue
 		}
 		if strings.HasPrefix(src, ".") || strings.ContainsAny(src, `/\~$`) { // a bind mount, not a named volume
-			if !filepath.IsLocal(filepath.Clean(src)) || strings.HasPrefix(src, "~") || strings.Contains(src, "$") {
-				bad(fmt.Sprintf("volume %q (a host path outside the lab)", src))
+			if !localPath(src) {
+				bad(where, fmt.Sprintf("volume %q (a host path outside the lab)", src))
 			}
 		}
 	}
+}
+
+// envFiles lists env_file paths in any of compose's shapes: "a", ["a", …], [{path: a}, …].
+func envFiles(n *yaml.Node) []string {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		return []string{n.Value}
+	case yaml.SequenceNode:
+		var out []string
+		for _, it := range n.Content {
+			if it.Kind == yaml.ScalarNode {
+				out = append(out, it.Value)
+				continue
+			}
+			var long struct {
+				Path string `yaml:"path"`
+			}
+			_ = it.Decode(&long)
+			out = append(out, long.Path)
+		}
+		return out
+	}
+	return []string{""} // malformed: rejected as a non-local path
 }

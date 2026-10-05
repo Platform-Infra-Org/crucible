@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -203,5 +204,30 @@ func TestStuckPTYWriteDoesNotBlockAgent(t *testing.T) {
 	defer rc()
 	if _, err := hub.Call(rctx, 1, ap.Msg{Type: ap.TRunScript, LabID: "lab1", Service: "web", Data: []byte("ok")}); err != nil {
 		t.Fatalf("agent blocked by stuck PTY write: %v", err)
+	}
+}
+
+func TestReplacedAgentStopsInsteadOfReconnecting(t *testing.T) {
+	hub := agenthub.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.Serve(w, r, 1) }))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	newClient := func() *agent.Client {
+		return &agent.Client{Server: srv.URL, Token: "t", Exec: &fakeExec{provisioned: map[string]string{}}, Log: slog.Default()}
+	}
+	first := make(chan error, 1)
+	go func() { first <- newClient().Run(ctx) }()
+	for i := 0; i < 200 && !hub.Online(1); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	go func() { _ = newClient().Run(ctx) }()
+	select {
+	case err := <-first:
+		if !errors.Is(err, agent.ErrReplaced) {
+			t.Fatalf("first agent: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the replaced agent kept running")
 	}
 }

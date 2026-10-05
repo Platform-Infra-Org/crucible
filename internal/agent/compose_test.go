@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,14 @@ func TestLabsListsOnlyLabDirs(t *testing.T) {
 	}
 	if got := c.Labs(); len(got) != 1 || got[0] != "0123456789ab" {
 		t.Fatalf("Labs() = %v", got)
+	}
+}
+
+func TestComposeEnvKeepsOnlyDockerEssentials(t *testing.T) {
+	got := composeEnv([]string{"PATH=/bin", "HOME=/h", "CRUCIBLE_TOKEN=secret", "AWS_SECRET_ACCESS_KEY=k",
+		"DOCKER_HOST=unix:///x", "USER=u", "GITHUB_TOKEN=g", "XDG_RUNTIME_DIR=/run/u"})
+	want := []string{"PATH=/bin", "HOME=/h", "DOCKER_HOST=unix:///x", "USER=u", "XDG_RUNTIME_DIR=/run/u"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("composeEnv = %v", got)
 	}
 }

@@ -17,7 +17,7 @@ export function ConnectPage() {
       </p>
       <ol>
         <li>Get <code>crucible-agent</code> for your platform from your admin (or build it with <code>make build</code>).</li>
-        <li>Generate a pairing token. A new token revokes the previous one.</li>
+        <li>Generate a pairing token. A new token revokes the previous one. Run one agent per account: starting it on another laptop stops this one.</li>
         <li>Run the command below and leave it running while you do labs.</li>
       </ol>
       <button className="primary" onClick={async () => {

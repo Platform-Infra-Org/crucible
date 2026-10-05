@@ -68,6 +68,35 @@ run "node_is_locked_down" {
   }
 }
 
+run "node_settings_come_from_ssm" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_parameter.env.name == "/crucible/env" && aws_ssm_parameter.env.type == "String"
+    error_message = "node settings must be a plain String parameter /<name>/env"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "DOMAIN=crucible.example.com\n") && strcontains(aws_ssm_parameter.env.value, "BACKUP_CRON='15 19 * * *'\n")
+    error_message = "env parameter must carry the node settings"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "--name '/crucible/env'") && !strcontains(aws_instance.node.user_data, "DOMAIN=")
+    error_message = "bootstrap must fetch settings from SSM instead of baking them into user data"
+  }
+}
+
+run "backups_may_write_only_snapshots_and_latest" {
+  command = plan
+
+  assert {
+    condition = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "s3:PutObject")])) == toset([
+      "arn:aws:s3:::crucible-123456789012-data/snapshots/*",
+      "arn:aws:s3:::crucible-123456789012-data/latest/crucible-latest.dump",
+    ])
+    error_message = "node may PutObject only on snapshots/* and latest/crucible-latest.dump"
+  }
+}
+
 run "schedule_can_be_disabled" {
   command = plan
   variables {

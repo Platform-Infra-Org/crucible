@@ -46,6 +46,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 }
 
 # snapshots/  nightly pg_dump files (30 days)
+# latest/     copy of the newest dump; never expires, so a long teardown still restores
 # releases/   image tarballs + Helm chart per git sha
 # current-release  sha the node deploys on boot
 resource "aws_s3_bucket" "data" {
@@ -87,6 +88,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     status = "Enabled"
     filter { prefix = "releases/" }
     expiration { days = 60 } # the running node keeps its image locally; `crucible aws up` republishes
+    noncurrent_version_expiration { noncurrent_days = 7 }
+  }
+  rule {
+    id     = "prune-old-latest" # the current latest/ dump is kept forever; only overwritten copies go
+    status = "Enabled"
+    filter { prefix = "latest/" }
     noncurrent_version_expiration { noncurrent_days = 7 }
   }
 }

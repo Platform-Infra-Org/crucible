@@ -28,6 +28,10 @@ run "buckets_are_private_versioned_and_expiring" {
     condition     = one([for r in aws_s3_bucket_lifecycle_configuration.data.rule : r.expiration[0].days if r.id == "expire-snapshots"]) == 30
     error_message = "snapshots expire after 30 days"
   }
+  assert {
+    condition     = one([for r in aws_s3_bucket_lifecycle_configuration.data.rule : length(r.expiration) if r.filter[0].prefix == "latest/"]) == 0
+    error_message = "the latest/ snapshot copy must never expire"
+  }
 }
 
 run "cognito_is_invite_only_and_protected" {

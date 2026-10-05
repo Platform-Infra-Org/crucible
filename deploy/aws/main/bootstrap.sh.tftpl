@@ -10,10 +10,11 @@ trap 'touch /opt/crucible/.failed' ERR
 retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }
 
 timedatectl set-timezone '${timezone}'
-apt-get -o DPkg::Lock::Timeout=600 update
-apt-get -o DPkg::Lock::Timeout=600 install -y unzip curl
+retry apt-get -o DPkg::Lock::Timeout=600 update
+retry apt-get -o DPkg::Lock::Timeout=600 install -y unzip curl
 retry curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
-unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --update
+unzip -q /tmp/awscli.zip -d /tmp
+/tmp/aws/install --update
 
 # Traefik (bundled with k3s): Let's Encrypt via HTTP-01 and an HTTP→HTTPS redirect.
 mkdir -p /var/lib/rancher/k3s/server/manifests
@@ -58,26 +59,21 @@ YAML
 retry curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
 INSTALL_K3S_VERSION='${k3s_version}' sh /tmp/k3s-install.sh --write-kubeconfig-mode 600
 retry curl -fsSL https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz -o /tmp/helm.tgz
-tar -xzf /tmp/helm.tgz -C /tmp && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+tar -xzf /tmp/helm.tgz -C /tmp
+install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
 
-cat > /etc/crucible.env <<'ENV'
-REGION=${region}
-NAME=${name}
-DATA_BUCKET=${data_bucket}
-DOMAIN=${domain}
-PLATFORM_BRANCH=${platform_branch}
-OIDC_ISSUER=${oidc_issuer}
-OIDC_CLIENT_ID=${oidc_client_id}
-BACKUP_CRON='${backup_cron}'
-TIMEZONE=${timezone}
-ENV
+# Node settings live in SSM (/${name}/env) so `crucible aws up` can change them later; deploy.sh refreshes this file.
+retry aws ssm get-parameter --region '${region}' --name '/${name}/env' --query Parameter.Value --output text > /etc/crucible.env
 
 cat > /opt/crucible/deploy.sh <<'SH'
 #!/bin/bash
 # Imports the current release image into k3s and (re)installs the Helm release. Safe to re-run.
 set -euo pipefail
+export HOME=/root
 exec 9>/run/crucible-deploy.lock
 flock 9
+aws ssm get-parameter --region '${region}' --name '/${name}/env' --query Parameter.Value --output text > /etc/crucible.env.new
+mv /etc/crucible.env.new /etc/crucible.env
 source /etc/crucible.env
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml AWS_REGION=$REGION
 work=$(mktemp -d)
@@ -112,7 +108,7 @@ cat > /opt/crucible/snapshot.sh <<'SH'
 #!/bin/bash
 # Runs the backup CronJob now and waits for it to finish.
 set -euo pipefail
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+export HOME=/root KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 job="crucible-backup-manual-$(date +%s)"
 kubectl -n crucible create job "$job" --from=cronjob/crucible-backup
 for _ in $(seq 180); do

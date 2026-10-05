@@ -75,6 +75,23 @@ locals {
   }
 }
 
+# Non-secret node settings. deploy.sh re-reads this on every run, so tfvars changes reach a running node.
+resource "aws_ssm_parameter" "env" {
+  name  = "/${var.name}/env"
+  type  = "String"
+  value = <<-ENV
+    REGION=${var.region}
+    NAME=${var.name}
+    DATA_BUCKET=${var.data_bucket}
+    DOMAIN=${var.domain}
+    PLATFORM_BRANCH=${var.platform_branch}
+    OIDC_ISSUER=${var.oidc_issuer}
+    OIDC_CLIENT_ID=${var.oidc_client_id}
+    BACKUP_CRON='${var.backup_cron}'
+    TIMEZONE=${var.schedule_timezone}
+  ENV
+}
+
 resource "aws_ssm_parameter" "secret" {
   for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
   name     = "/${var.name}/${each.key}"
@@ -104,7 +121,7 @@ data "aws_iam_policy_document" "node" {
   }
   statement {
     actions   = ["s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.data_bucket}/snapshots/*"]
+    resources = ["arn:aws:s3:::${var.data_bucket}/snapshots/*", "arn:aws:s3:::${var.data_bucket}/latest/crucible-latest.dump"]
   }
   statement {
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
@@ -153,22 +170,16 @@ resource "aws_instance" "node" {
   }
 
   user_data = templatefile("${path.module}/bootstrap.sh.tftpl", {
-    region          = var.region
-    name            = var.name
-    data_bucket     = var.data_bucket
-    domain          = var.domain
-    acme_email      = var.acme_email
-    k3s_version     = var.k3s_version
-    timezone        = var.schedule_timezone
-    backup_cron     = var.backup_cron
-    platform_branch = var.platform_branch
-    oidc_issuer     = var.oidc_issuer
-    oidc_client_id  = var.oidc_client_id
+    region      = var.region
+    name        = var.name
+    acme_email  = var.acme_email
+    k3s_version = var.k3s_version
+    timezone    = var.schedule_timezone
   })
 
   tags = { Name = var.name }
 
-  depends_on = [aws_ssm_parameter.secret, aws_iam_role_policy.node]
+  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_iam_role_policy.node]
 
   lifecycle {
     ignore_changes = [ami, user_data] # never replace the node because Ubuntu published a new AMI

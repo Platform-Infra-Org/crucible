@@ -268,7 +268,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - **Reading:** Markdown rendered with syntax highlighting, mermaid, callouts; "mark as read" + scroll tracking.
 - **Instant quizzes:** scored server-side; answers never sent to the client before submission. Attempts limit and cooldown configurable per quiz (default unlimited, no cooldown); best score counts.
 - **Human scoring:** submissions land in the program's **Scoring Queue** (Anvil view): filter by training/trainee/type, rubric shown, score + written feedback, return-for-rework. Lab submissions show the check results, a terminal transcript (recorded PTY output), and uploaded artifacts; scorers can override auto-check results with a reason (audited). Live **sign-offs** are created by a scorer ("Mark passed after live demo") with notes.
-- **Forge ranks:** rank = % of the trainee's enrolled programs completed (weighted by item points) — **Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Master Smith 100%** (defaults; overridable in `platform.yaml`). Enrolling in a new program can lower the %, but a rank once earned is never lost. Per-training completion grants a badge. Rank-up triggers the hammer-strike animation. Ranks are personal; no leaderboards.
+- **Forge ranks:** rank = % of the trainee's enrolled programs completed (weighted by item points) — **Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Sword 90% → Masterwork 100%** (defaults; overridable in `platform.yaml`). Enrolling in a new program can lower the %, but a rank once earned is never lost. Per-training completion grants a badge. Rank-up triggers the hammer-strike animation. Ranks are personal; no leaderboards.
 
 ---
 

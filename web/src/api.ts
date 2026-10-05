@@ -11,7 +11,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   const res = await fetch(path, {
     ...rest,
     credentials: 'same-origin',
-    headers: json !== undefined ? { 'Content-Type': 'application/json' } : rest.headers,
+    headers: json !== undefined ? { 'Content-Type': 'application/json', ...Object.fromEntries(new Headers(rest.headers)) } : rest.headers,
     body: json !== undefined ? JSON.stringify(json) : rest.body,
   })
   if (res.status === 401) {
@@ -19,7 +19,13 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
     throw new ApiError(401, 'login required')
   }
   const text = await res.text()
-  const body = text ? JSON.parse(text) : undefined
+  let body: { error?: string } | undefined
+  try {
+    body = text ? JSON.parse(text) : undefined
+  } catch {
+    if (!res.ok) throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`)
+    throw new ApiError(res.status, 'invalid JSON response')
+  }
   if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText)
   return body as T
 }

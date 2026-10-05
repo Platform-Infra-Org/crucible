@@ -27,7 +27,7 @@ export function Loader({ label, lines }: { label: string; lines?: string[] }) {
       </svg>
       <p className="loader-label">{label}</p>
       <AnimatePresence mode="wait">
-        <motion.blockquote key={quote} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.5 }}>
+        <motion.blockquote aria-live="off" key={quote} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.5 }}>
           “{quote}”
         </motion.blockquote>
       </AnimatePresence>

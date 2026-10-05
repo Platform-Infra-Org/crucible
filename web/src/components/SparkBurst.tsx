@@ -1,7 +1,9 @@
 import { motion } from 'motion/react'
+import { useCalm } from '../me'
 
 export function SparkBurst({ trigger }: { trigger: number }) {
-  if (!trigger) return null
+  const calm = useCalm()
+  if (!trigger || calm) return null
   return (
     <div className="sparks" aria-hidden="true" key={trigger}>
       {Array.from({ length: 14 }, (_, i) => {

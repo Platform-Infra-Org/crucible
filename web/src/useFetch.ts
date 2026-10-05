@@ -6,6 +6,10 @@ export function useFetch<T>(path: string | null, intervalMs?: number) {
   const [error, setError] = useState<ApiError>()
   const [tick, setTick] = useState(0)
   useEffect(() => {
+    setData(undefined)
+    setError(undefined)
+  }, [path])
+  useEffect(() => {
     if (!path) return
     let live = true
     api<T>(path)

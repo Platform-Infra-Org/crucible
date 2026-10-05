@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, Route, Routes } from 'react-router'
 import { MotionConfig } from 'motion/react'
 import { api } from './api'
+import { CalmContext, MeContext, osCalm, useMe } from './me'
 import type { Me } from './types'
 import { applyTheme } from './theme/theme'
 import { addQuotes } from './lib/quotes'
@@ -16,14 +17,7 @@ import { LabPage } from './pages/Lab'
 import { ConnectPage } from './pages/Connect'
 import { SettingsPage } from './pages/Settings'
 
-type MeCtx = { me: Me; setPrefs: (theme: string, calm: boolean) => Promise<void> }
-const MeContext = createContext<MeCtx | null>(null)
-
-export function useMe(): MeCtx {
-  const v = useContext(MeContext)
-  if (!v) throw new Error('useMe outside <App>')
-  return v
-}
+export { useMe }
 
 export default function App() {
   const [me, setMe] = useState<Me>()
@@ -38,17 +32,25 @@ export default function App() {
     api<{ quotes: string[] }>('/api/meta').then((m) => addQuotes(m.quotes ?? [])).catch(() => {})
   }, [])
 
-  if (error) return <div className="center"><p className="error">{error}</p></div>
-  if (!me) return <Loader label="Stoking the forge…" />
+  const calm = !!me?.user.calm_motion || osCalm()
+  const wrap = (children: React.ReactNode) => (
+    <CalmContext.Provider value={calm}>
+      <MotionConfig reducedMotion={calm ? 'always' : 'never'} transition={calm ? { duration: 0 } : undefined}>
+        {children}
+      </MotionConfig>
+    </CalmContext.Provider>
+  )
+
+  if (error) return wrap(<div className="center"><p className="error">{error}</p></div>)
+  if (!me) return wrap(<Loader label="Stoking the forge…" />)
 
   const setPrefs = async (theme: string, calm: boolean) => {
     await api('/api/me/prefs', { method: 'PUT', json: { theme, calm_motion: calm } })
     setMe({ ...me, user: { ...me.user, theme, calm_motion: calm } })
     applyTheme(theme, calm)
   }
-  return (
+  return wrap(
     <MeContext.Provider value={{ me, setPrefs }}>
-      <MotionConfig reducedMotion={me.user.calm_motion ? 'always' : 'user'}>
         <Nav />
         <Routes>
           <Route path="/" element={<Hearth />} />
@@ -61,7 +63,6 @@ export default function App() {
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>
         <Toaster />
-      </MotionConfig>
-    </MeContext.Provider>
+    </MeContext.Provider>,
   )
 }

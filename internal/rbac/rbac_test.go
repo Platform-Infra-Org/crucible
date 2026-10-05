@@ -36,8 +36,10 @@ func TestMatrix(t *testing.T) {
 		{senior, ManageProgram, "", false},
 		{senior, Score, trainee, true},
 		{senior, Score, senior, false}, // never score yourself
+		{admin, Score, admin, false},   // admins can't score themselves either
 		{leader, ApproveLabs, trainee, true},
 		{leader, ApproveLabs, leader, false}, // never approve your own request
+		{admin, ApproveLabs, admin, false},   // admins can't approve themselves either
 		{trainee, ApproveLabs, trainee, false},
 		{leader, ViewSpend, "", true},
 		{trainee, ViewSpend, "", false},
@@ -49,6 +51,17 @@ func TestMatrix(t *testing.T) {
 			t.Errorf("%s %v subject=%s: got %v want %v", tc.actor, tc.action, tc.subject, got, tc.want)
 		}
 	}
+
+	// Test unknown training (should not panic, should return false)
+	if got := c.Can(leader, TakeTraining, "forge", "nope", ""); got != false {
+		t.Errorf("unknown training: got %v want false", got)
+	}
+
+	// Test unknown team (should not panic, should return false)
+	if got := c.Can(leader, TakeTraining, "nope", "forge-101", ""); got != false {
+		t.Errorf("unknown team: got %v want false", got)
+	}
+
 	if n := len(c.Enrollments("TRAINEE@crucible.local")); n != 1 {
 		t.Errorf("enrollments = %d", n)
 	}

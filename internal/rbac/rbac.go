@@ -34,16 +34,30 @@ func (c Checker) IsAdmin(email string) bool {
 
 func (c Checker) Can(actor string, a Action, team, training, subject string) bool {
 	actor, subject = strings.ToLower(actor), strings.ToLower(subject)
+
+	// Check self-rule first (spec: nobody scores or approves for themselves)
+	if (a == Score || a == ApproveLabs) && subject == actor {
+		return false
+	}
+
 	if c.IsAdmin(actor) {
 		return true
 	}
+
 	t := c.P.Teams[team]
 	if t == nil {
 		return false
 	}
+
 	role := t.RoleOf(actor)
 	p := t.Programs[training]
-	in := func(list []string) bool { return p != nil && slices.Contains(list, actor) }
+
+	// nil-safe: use empty program if training doesn't exist (empty roles/enrollment)
+	if p == nil {
+		p = &config.Program{}
+	}
+
+	in := func(list []string) bool { return slices.Contains(list, actor) }
 
 	switch a {
 	case TakeTraining:
@@ -54,9 +68,9 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 	case ManageProgram:
 		return role == "leader" || in(p.Roles.Manager)
 	case Score:
-		return subject != actor && in(p.Roles.Scorers)
+		return in(p.Roles.Scorers)
 	case ApproveLabs:
-		return subject != actor && (role == "leader" || in(p.Roles.Approvers))
+		return role == "leader" || in(p.Roles.Approvers)
 	case ViewSpend:
 		return role == "leader" || in(p.Roles.Manager) || in(p.Roles.Approvers)
 	case EditTeam:

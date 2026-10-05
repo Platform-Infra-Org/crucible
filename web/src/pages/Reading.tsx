@@ -12,17 +12,25 @@ export function ReadingPage() {
   const path = `/api/programs/${team}/${training}/modules/${module}/reading/${item}`
   const { data, error } = useFetch<{ title: string; markdown: string }>(path)
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Unrolling the scroll…" />
   const markRead = async () => {
     setBusy(true)
-    await api(`${path}/read`, { method: 'POST' })
-    nav(`/p/${team}/${training}`)
+    setErr(undefined)
+    try {
+      await api(`${path}/read`, { method: 'POST' })
+      nav(`/p/${team}/${training}`)
+    } catch (e) {
+      setErr((e as Error).message)
+      setBusy(false)
+    }
   }
   return (
     <article className="page">
       <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
       <Markdown text={data.markdown} assetBase={`/api/programs/${team}/${training}/assets`} />
+      {err && <p className="error" role="alert">{err}</p>}
       <button className="primary" disabled={busy} onClick={markRead}>Mark as read</button>
     </article>
   )

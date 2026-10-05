@@ -74,7 +74,7 @@ function Question({ q, n, value, onChange, verdict }: { q: PublicQuestion; n: nu
         <fieldset className={cls}>
           {legend}
           {q.left!.map((left, i) => (
-            <label key={left}>
+            <label key={i}>
               {left}{' '}
               <select aria-label={left} value={picks[i]} onChange={(e) => { const next = [...picks]; next[i] = Number(e.target.value); onChange(next) }}>
                 <option value={-1}>Choose…</option>
@@ -103,6 +103,7 @@ export function QuizPage() {
   const [result, setResult] = useState<QuizResult>()
   const [spark, setSpark] = useState(0)
   const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
   useEffect(() => {
     if (!data) return
     const init: Answers = {}
@@ -116,10 +117,13 @@ export function QuizPage() {
   if (!data) return <Loader label="Heating the test piece…" />
   const submit = async () => {
     setBusy(true)
+    setErr(undefined)
     try {
       const r = await api<QuizResult>(`${base}/attempts`, { method: 'POST', json: { answers } })
       setResult(r)
       if (r.passed) setSpark((s) => s + 1)
+    } catch (e) {
+      setErr((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -131,18 +135,19 @@ export function QuizPage() {
       <h1>Prove your temper</h1>
       <p className="muted">Pass mark: {Math.round(data.pass_threshold * 100)}%</p>
       {data.questions.map((q, i) => (
-        <Question key={q.id} q={q} n={i + 1} value={answers[q.id]} onChange={(v) => setAnswers((a) => ({ ...a, [q.id]: v }))} verdict={result?.correct[q.id]} />
+        <Question key={q.id} q={q} n={i + 1} value={answers[q.id]} onChange={(v) => { setResult(undefined); setAnswers((a) => ({ ...a, [q.id]: v })) }} verdict={result?.correct[q.id]} />
       ))}
       <div className="row">
         <button className="primary" disabled={busy} onClick={submit}>Submit answers</button>
         <SparkBurst trigger={spark} />
       </div>
-      {result && (
-        <div role="status" className={`result ${result.passed ? 'pass' : 'fail'}`}>
+      {err && <p className="error" role="alert">{err}</p>}
+      <div role="status" className={result ? `result ${result.passed ? 'pass' : 'fail'}` : undefined}>
+        {result && (<>
           {result.passed ? `Passed: ${pct}%. Tempered!` : `Not yet: ${pct}%. Reheat and try again.`}{' '}
           {result.passed && <Link to={`/p/${team}/${training}`}>Back to the training</Link>}
-        </div>
-      )}
+        </>)}
+      </div>
     </section>
   )
 }

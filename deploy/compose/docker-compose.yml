@@ -12,10 +12,10 @@ services:
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_HOSTNAME: http://localhost:8081            # what the browser uses
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8081}           # what the browser uses
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"       # the API reaches it as http://keycloak:8080
       KC_HEALTH_ENABLED: "true"
-    ports: ["8081:8080"]
+    ports: ["${KEYCLOAK_PORT:-8081}:8080"]
     volumes: ["./keycloak:/opt/keycloak/data/import:ro"]
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
@@ -29,7 +29,7 @@ services:
       CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
       CRUCIBLE_PUBLIC_URL: http://localhost:8080
       CRUCIBLE_SYNC_INTERVAL: 10s
-      OIDC_ISSUER: http://localhost:8081/realms/crucible
+      OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/crucible
       OIDC_DISCOVERY_URL: http://keycloak:8080/realms/crucible
       OIDC_CLIENT_ID: crucible
       OIDC_CLIENT_SECRET: crucible-dev-secret

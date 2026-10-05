@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -52,6 +53,7 @@ func (l *loader) file(base, rel, where string) (string, bool) {
 // Load parses and validates a content repo. It returns nil and the problems if anything is wrong.
 func Load(dir string) (*Training, []Problem) {
 	l := &loader{root: dir}
+	l.noSymlinks(dir)
 	tf := filepath.Join(dir, "training.yaml")
 	t := &Training{Dir: dir}
 	if !l.read(tf, t) {
@@ -90,6 +92,22 @@ func Load(dir string) (*Training, []Problem) {
 	return t, nil
 }
 
+// noSymlinks rejects any symlink in the repo: every later read follows links, so one could expose server files.
+func (l *loader) noSymlinks(dir string) {
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			l.add(p, "%v", err)
+		case p == dir:
+		case d.IsDir() && d.Name() == ".git":
+			return filepath.SkipDir
+		case d.Type()&fs.ModeSymlink != 0:
+			l.add(p, "symlinks are not allowed in content repos")
+		}
+		return nil
+	})
+}
+
 func (l *loader) module(dir, id string) *Module {
 	mf := filepath.Join(dir, "module.yaml")
 	m := &Module{ID: id, Dir: dir}
@@ -117,6 +135,9 @@ func (l *loader) module(dir, id string) *Module {
 				}
 				b, _ := os.ReadFile(p)
 				itemID := strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
+				if itemID == "quiz" || itemID == "lab" {
+					l.add(mf, "reading id %q is reserved; rename %s", itemID, rel)
+				}
 				if seen[itemID] {
 					l.add(mf, "duplicate reading id %q", itemID)
 				}
@@ -132,6 +153,10 @@ func (l *loader) module(dir, id string) *Module {
 				}
 				m.Items = append(m.Items, Item{Kind: "quiz", ID: "quiz", Title: "Quiz", Path: filepath.Join(dir, "quiz.yaml")})
 			case "lab":
+				if filepath.Clean(rel) == "." {
+					l.add(mf, "lab must be its own directory inside the module, not the module itself")
+					continue
+				}
 				p, ok := l.file(dir, rel, mf)
 				if !ok {
 					continue
@@ -304,8 +329,11 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			if err := yamlx.ReadLoose(p, &c); err != nil {
 				l.add(p, "%v", err)
 			}
-			for name := range c.Services {
+			for name, svc := range c.Services {
 				services[name] = true
+				if lab.Runtime == "local" {
+					l.localService(p, name, &svc)
+				}
 			}
 		}
 	case "aws":
@@ -418,5 +446,64 @@ func (l *loader) script(dir, lf, what string, s *Script, services map[string]boo
 	}
 	if s.Timeout == 0 {
 		s.Timeout = yamlx.Duration(def)
+	}
+}
+
+// localService rejects compose settings that would give a local lab access to the trainee's laptop.
+func (l *loader) localService(file, name string, n *yaml.Node) {
+	var svc struct {
+		Privileged  bool        `yaml:"privileged"`
+		NetworkMode string      `yaml:"network_mode"`
+		Pid         string      `yaml:"pid"`
+		Ipc         string      `yaml:"ipc"`
+		CapAdd      []string    `yaml:"cap_add"`
+		Devices     []yaml.Node `yaml:"devices"`
+		Volumes     []yaml.Node `yaml:"volumes"`
+	}
+	if err := n.Decode(&svc); err != nil {
+		l.add(file, "service %q: %v", name, err)
+		return
+	}
+	bad := func(what string) {
+		l.add(file, "service %q: %s is not allowed for runtime: local (it reaches the trainee's laptop); use runtime: cluster", name, what)
+	}
+	if svc.Privileged {
+		bad("privileged: true")
+	}
+	for k, v := range map[string]string{"network_mode": svc.NetworkMode, "pid": svc.Pid, "ipc": svc.Ipc} {
+		if v == "host" {
+			bad(k + ": host")
+		}
+	}
+	if len(svc.CapAdd) > 0 {
+		bad("cap_add")
+	}
+	if len(svc.Devices) > 0 {
+		bad("devices")
+	}
+	for _, v := range svc.Volumes {
+		var src string
+		if v.Kind == yaml.ScalarNode {
+			if parts := strings.Split(v.Value, ":"); len(parts) > 1 {
+				src = parts[0]
+			}
+		} else {
+			var long struct {
+				Type   string `yaml:"type"`
+				Source string `yaml:"source"`
+			}
+			_ = v.Decode(&long)
+			if long.Type == "bind" {
+				src = long.Source
+			}
+		}
+		if src == "" {
+			continue
+		}
+		if strings.HasPrefix(src, ".") || strings.ContainsAny(src, `/\~$`) { // a bind mount, not a named volume
+			if !filepath.IsLocal(filepath.Clean(src)) || strings.HasPrefix(src, "~") || strings.Contains(src, "$") {
+				bad(fmt.Sprintf("volume %q (a host path outside the lab)", src))
+			}
+		}
 	}
 }

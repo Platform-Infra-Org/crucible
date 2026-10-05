@@ -123,6 +123,19 @@ func TestLoadProblems(t *testing.T) {
 		"quiz not terminal": {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "quiz: q2", "quiz: q1", 1)}, "terminal question"},
 		"hint too costly":   {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "cost: 1", "cost: 5", 1)}, "hint 2 cost"},
 		"path escape":       {map[string]string{"modules/m1/module.yaml": "title: M1\nitems:\n  - reading: ../../../etc/passwd\n"}, "must stay inside"},
+		"reading id quiz":   {map[string]string{"modules/m1/module.yaml": "title: M1\nitems:\n  - reading: reading/quiz.md\n", "modules/m1/reading/quiz.md": "# Q\n"}, `reading id "quiz" is reserved`},
+		"reading id lab":    {map[string]string{"modules/m1/module.yaml": "title: M1\nitems:\n  - reading: lab.md\n", "modules/m1/lab.md": "# L\n"}, `reading id "lab" is reserved`},
+		"lab is module dir": {map[string]string{"modules/m1/module.yaml": "title: M1\nitems:\n  - lab: .\n", "modules/m1/lab.yaml": base["modules/m1/lab/lab.yaml"]}, "lab must be its own directory"},
+		"local privileged":  {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    privileged: true\n"}, "privileged"},
+		"local host net":    {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    network_mode: host\n"}, "network_mode: host"},
+		"local pid host":    {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    pid: host\n"}, "pid: host"},
+		"local ipc host":    {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    ipc: host\n"}, "ipc: host"},
+		"local cap_add":     {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    cap_add: [SYS_ADMIN]\n"}, "cap_add"},
+		"local devices":     {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    devices: [/dev/kvm]\n"}, "devices"},
+		"local abs bind":    {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"/etc:/host-etc\"]\n"}, "host path"},
+		"local home bind":   {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"~/.ssh:/k\"]\n"}, "host path"},
+		"local long bind":   {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [{type: bind, source: /var/run/docker.sock, target: /s}]\n"}, "host path"},
+		"local escape bind": {map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    volumes: [\"../../..:/up\"]\n"}, "host path"},
 		"bad regex":         {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: regex, prompt: P, answer: '('}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "regex"},
 	}
 	for name, c := range cases {
@@ -139,5 +152,32 @@ func TestLoadProblems(t *testing.T) {
 				t.Fatalf("want problem containing %q, got:\n%s", c.want, strings.Join(all, "\n"))
 			}
 		})
+	}
+}
+
+func TestLoadRejectsSymlinks(t *testing.T) {
+	dir := tree(t, nil)
+	if err := os.Symlink("/etc/passwd", filepath.Join(dir, "modules/m1/reading/intro.md")+".lnk"); err != nil {
+		t.Fatal(err)
+	}
+	tr, probs := Load(dir)
+	if tr != nil || len(probs) == 0 || !strings.Contains(probs[0].String(), "symlinks are not allowed") {
+		t.Fatalf("symlink must be rejected, got %v", probs)
+	}
+}
+
+func TestLocalComposeAllowsNamedVolumesAndRelativeBinds(t *testing.T) {
+	_, probs := Load(tree(t, map[string]string{"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    cap_drop: [ALL]\n    volumes: [\"data:/data\", \"./files:/files:ro\", /scratch, {type: volume, source: data, target: /d2}]\nvolumes: {data: {}}\n"}))
+	if len(probs) > 0 {
+		t.Fatalf("unexpected problems: %v", probs)
+	}
+}
+
+func TestClusterComposeMayUseHostAccess(t *testing.T) {
+	lab := strings.Replace(base["modules/m1/lab/lab.yaml"], "runtime: local", "runtime: cluster", 1)
+	_, probs := Load(tree(t, map[string]string{"modules/m1/lab/lab.yaml": lab,
+		"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    privileged: true\n"}))
+	if len(probs) > 0 {
+		t.Fatalf("cluster runtime is not restricted here: %v", probs)
 	}
 }

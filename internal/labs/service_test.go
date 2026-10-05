@@ -33,10 +33,16 @@ type fakeRunner struct {
 	scripts     []ScriptSpec
 	exit        func(ScriptSpec) int
 	destroyed   []string
+	provision   func() // optional hook: blocks/observes Provision
 }
 
-func (f *fakeRunner) Available(*Instance) error                                  { return f.unavailable }
-func (f *fakeRunner) Provision(context.Context, *Instance, []byte, string) error { return nil }
+func (f *fakeRunner) Available(*Instance) error { return f.unavailable }
+func (f *fakeRunner) Provision(context.Context, *Instance, []byte, string) error {
+	if f.provision != nil {
+		f.provision()
+	}
+	return nil
+}
 func (f *fakeRunner) OpenPTY(context.Context, *Instance, string, int, int) (PTY, error) {
 	return nil, io.EOF
 }
@@ -274,5 +280,76 @@ func TestSweepExtendAndOwnership(t *testing.T) {
 	got, _ := f.s.Get(ctx, f.u, v.ID)
 	if got.State != Destroyed || got.EndReason != "idle" || len(f.run.destroyed) != 1 {
 		t.Fatalf("idle sweep: %+v destroyed %v", got, f.run.destroyed)
+	}
+}
+
+func (f *fakeRunner) destroyedN() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.destroyed)
+}
+
+func TestEndDuringProvisioningDestroysLateContainers(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	release := make(chan struct{})
+	f.run.provision = func() { <-release }
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.End(ctx, f.u, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := f.run.destroyedN()
+	close(release)
+	for i := 0; i < 200 && f.run.destroyedN() == before; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if f.run.destroyedN() == before {
+		t.Fatal("late-provisioned containers were never destroyed")
+	}
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != Destroyed {
+		t.Fatalf("state must stay destroyed, got %s", got.State)
+	}
+}
+
+func TestStuckDestroyingIsRecovered(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	v := f.start(t)
+	_, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', destroyed_at = $2 WHERE id = $1`,
+		v.ID, f.clk.Now().Add(-11*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != Destroyed {
+		t.Fatalf("stuck lab not recovered: %s", got.State)
+	}
+	if n := f.start(t); n.ID == v.ID {
+		t.Fatal("start must create a new lab")
+	}
+}
+
+func TestSkippedTaskIsNotPenalised(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	failSetup := true
+	f.run.exit = func(sp ScriptSpec) int {
+		if failSetup && strings.Contains(string(sp.Script), "nginx -s reload") && sp.Env == nil {
+			return 1
+		}
+		return 0
+	}
+	v := f.start(t)
+	_, _ = f.s.Check(ctx, f.u, v.ID, "t1-forge-file", "")
+	_, _ = f.s.OpenTask(ctx, f.u, v.ID, "t2-find-port")
+	if _, err := f.s.Skip(ctx, f.u, v.ID, "t2-find-port"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.s.Check(ctx, f.u, v.ID, "t3-fix-nginx", "")
+	if err != nil || !res.Lab.Complete || res.Lab.MaxScore != 5 || res.Lab.Score != 5 {
+		t.Fatalf("score %v/%v complete %v err %v", res.Lab.Score, res.Lab.MaxScore, res.Lab.Complete, err)
 	}
 }

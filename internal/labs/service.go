@@ -302,7 +302,9 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 			v.Complete = false
 		}
 		v.Score += tv.Awarded
-		v.MaxScore += t.Points
+		if tv.Status != "skipped" { // skipping is without penalty (spec §8.5)
+			v.MaxScore += t.Points
+		}
 		v.Tasks = append(v.Tasks, tv)
 	}
 	if inst.State == Ready {
@@ -393,6 +395,9 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 		if err != nil {
 			return nil, err
 		}
+		if existing == nil {
+			return nil, apperr.Wrap(apperr.Conflict, "the lab is changing state; try again")
+		}
 		return s.view(ctx, existing)
 	}
 	if err != nil {
@@ -416,15 +421,23 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	if err != nil {
 		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
 		_ = s.Runners[inst.Runtime].Destroy(ctx, inst)
-		_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3 WHERE id = $1`,
+		_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
+			WHERE id = $1 AND state = 'provisioning'`,
 			inst.ID, s.runnerErr(err).Error(), s.Now())
 		s.event(ctx, inst.ID, "failed", err.Error())
 		return
 	}
 	now := s.Now()
 	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"})
-	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
+	if err == nil && tag.RowsAffected() == 0 {
+		// the lab was ended while provisioning: nobody else will clean these containers up
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer dcancel()
+		_ = s.Runners[inst.Runtime].Destroy(dctx, inst)
+		return
+	}
 	s.event(ctx, inst.ID, "ready", "")
 }
 
@@ -618,7 +631,12 @@ func (s *Service) finishTask(ctx context.Context, inst *Instance, lab *content.L
 			return nil // not finished yet
 		}
 		score += r.Points
-		maxScore += t.Points
+		if r.Status != "skipped" {
+			maxScore += t.Points
+		}
+	}
+	if maxScore == 0 {
+		maxScore = 1 // everything skipped
 	}
 	s.event(ctx, inst.ID, "completed", fmt.Sprintf("%.2f/%.2f", score, maxScore))
 	return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "complete", score/maxScore)
@@ -731,7 +749,7 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	}
 	// ponytail: M3 re-checks the schedule window and cost tier here (spec §8.6); local labs cost nothing.
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, extended = true, last_activity_at = $3
-		WHERE id = $1 AND NOT extended`, inst.ID, inst.EndsAt.Add(inst.MaxExtension), s.Now())
+		WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, inst.EndsAt.Add(inst.MaxExtension), s.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -752,11 +770,19 @@ func (s *Service) End(ctx context.Context, u *auth.User, labID string) (*View, e
 }
 
 func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
-	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', end_reason = $2
-		WHERE id = $1 AND state IN ('provisioning', 'ready')`, inst.ID, reason)
+	// the request may be cancelled mid-way; a half-finished destroy would wedge the lab in 'destroying'
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	// destroyed_at doubles as "destroying since" until the final update (see Sweep)
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', end_reason = $2, destroyed_at = $3
+		WHERE id = $1 AND state IN ('provisioning', 'ready')`, inst.ID, reason, s.Now())
 	if err != nil || tag.RowsAffected() == 0 {
 		return
 	}
+	s.finishDestroy(ctx, inst, reason)
+}
+
+func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason string) {
 	note := ""
 	if err := s.Runners[inst.Runtime].Destroy(ctx, inst); err != nil {
 		note = "cleanup failed: " + err.Error()
@@ -775,7 +801,8 @@ func (s *Service) Sweep(ctx context.Context) {
 	now := s.Now()
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
-		   OR (state = 'provisioning' AND created_at < $1 - interval '15 minutes')`, now)
+		   OR (state = 'provisioning' AND created_at < $1 - interval '15 minutes')
+		   OR (state = 'destroying' AND destroyed_at < $1 - interval '10 minutes')`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)
 		return
@@ -791,6 +818,13 @@ func (s *Service) Sweep(ctx context.Context) {
 	for _, inst := range due {
 		reason := "idle"
 		switch {
+		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			err := s.Runners[inst.Runtime].Destroy(ctx, inst)
+			_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
+				WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), map[bool]string{true: "cleanup timed out", false: ""}[err != nil])
+			cancel()
+			continue
 		case inst.State == Provisioning:
 			reason = "provision_timeout"
 		case inst.EndsAt != nil && !inst.EndsAt.After(now):

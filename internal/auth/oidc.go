@@ -74,13 +74,13 @@ func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id token", http.StatusBadGateway)
 		return
 	}
-	var claims struct {
-		Email    string `json:"email"`
-		Name     string `json:"name"`
-		Username string `json:"preferred_username"`
+	var claims idClaims
+	if err := idt.Claims(&claims); err != nil {
+		http.Error(w, "invalid id token claims", http.StatusBadGateway)
+		return
 	}
-	if err := idt.Claims(&claims); err != nil || claims.Email == "" {
-		http.Error(w, "your identity provider did not send an email address", http.StatusForbidden)
+	if msg := claims.problem(); msg != "" {
+		http.Error(w, msg, http.StatusForbidden)
 		return
 	}
 	if claims.Name == "" {
@@ -108,6 +108,25 @@ func (o *OIDC) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Path: "/", MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type idClaims struct {
+	Email         string `json:"email"`
+	EmailVerified any    `json:"email_verified"` // bool, or "true"/"false" from some IdPs
+	Name          string `json:"name"`
+	Username      string `json:"preferred_username"`
+}
+
+// problem explains why these claims cannot log in, or returns "". Accounts are keyed by email, so an
+// unverified email could claim someone else's enrolments.
+func (c idClaims) problem() string {
+	if c.Email == "" {
+		return "your identity provider did not send an email address"
+	}
+	if v := c.EmailVerified; v != true && v != "true" {
+		return "your email address is not verified with the identity provider; verify it and sign in again"
+	}
+	return ""
 }
 
 func valueOr(c *http.Cookie, err error) string {

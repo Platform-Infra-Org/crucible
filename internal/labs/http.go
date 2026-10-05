@@ -18,7 +18,7 @@ func (s *Service) Routes(r chi.Router) {
 	user := func(r *http.Request) *auth.User { return auth.UserFrom(r.Context()) }
 	p := func(r *http.Request, k string) string { return chi.URLParam(r, k) }
 
-	r.Get("/api/admin/kill-switch", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/api/kill-switch", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.KillSwitch(r.Context())
 		reply(w, v, err)
 	})

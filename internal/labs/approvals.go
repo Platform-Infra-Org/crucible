@@ -237,7 +237,18 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 	note = strings.TrimSpace(cleanText(note))
 	next := Rejected
 	var lab *content.Lab
+	now := s.Now()
+	// the decision and its audit entry commit together: no unaudited approvals
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
 	if approve {
+		// serialize cap re-check + approve per team so two approvals can't both fit under one cap
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, inst.Team); err != nil {
+			return "", err
+		}
 		if sc := p.ProgramSchedule(inst.Team, inst.Training); !sc.Open(s.Now()) {
 			return "", apperr.Wrap(apperr.Conflict, "The program's schedule window is closed; approve it when it opens.")
 		}
@@ -252,8 +263,17 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 				return "", err
 			}
 			if over {
-				_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET over_cap = true, tier = 'admin' WHERE id = $1 AND state = 'pending_approval'`, inst.ID)
+				tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET over_cap = true, tier = 'admin', escalate_at = $2
+					WHERE id = $1 AND state = 'pending_approval'`, inst.ID, escalateAt(p, inst.Team, inst.Training, now))
+				if err != nil {
+					return "", err
+				}
+				if tag.RowsAffected() == 0 {
+					return "", apperr.Wrap(apperr.Conflict, "this request was already decided")
+				}
 				if !(rbac.Checker{P: p}).IsAdmin(u.Email) {
+					inst.Tier = string(rbac.TierAdmin)
+					s.notifyRequest(ctx, p, inst, email, notify.LabPending)
 					return "", apperr.Wrap(apperr.Conflict, "approving this would now pass a budget cap, so it has been passed to an admin")
 				}
 				inst.OverCap = true // an admin approving it now is an audited override
@@ -264,7 +284,6 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		}
 		next = Provisioning
 	}
-	now := s.Now()
 	action := "lab.reject"
 	if approve {
 		action = "lab.approve"
@@ -272,12 +291,6 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 			action = "lab.budget_override"
 		}
 	}
-	// the decision and its audit entry commit together: no unaudited approvals
-	tx, err := s.DB.Begin(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
 	tag, err := tx.Exec(ctx, `UPDATE lab_instances SET state = $2, decided_by = $3, decided_at = $4, decision_note = $5,
 		destroyed_at = CASE WHEN $2 = 'rejected' THEN $4::timestamptz END
 		WHERE id = $1 AND state = 'pending_approval'`, inst.ID, string(next), strings.ToLower(u.Email), now, note)

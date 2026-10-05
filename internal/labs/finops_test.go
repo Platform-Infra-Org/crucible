@@ -164,3 +164,85 @@ func TestKillSwitchStopsProvisioningLab(t *testing.T) {
 		t.Fatalf("late containers must be removed too: %+v", got)
 	}
 }
+
+func TestOverCapHandOffAnnouncesToAdminAndRestartsTheClock(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.plat.Teams["forge"].Programs["forge-101"].BudgetUSDMonth = 10
+	f.rates["first-heat"] = 2
+	v := f.request(t, f.u) // escalates (leader to admin) 4 h from now
+	f.clk.Add(3 * time.Hour)
+	f.spent(t, "bbbbbbbbbbb2", "forge-101", 9)
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); !errors.Is(err, apperr.Conflict) {
+		t.Fatal(err)
+	}
+	if ev := f.notes.last(notify.LabPending); ev == nil || !slices.Contains(ev.To, "admin@crucible.local") {
+		t.Fatalf("admins told: %+v", ev)
+	}
+	f.clk.Add(90 * time.Minute) // past the original deadline
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != PendingApproval || got.Tier != rbac.TierAdmin {
+		t.Fatalf("must not expire at the old deadline: %+v", got)
+	}
+}
+
+func TestKillSwitchPausesEscalation(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 2
+	v := f.request(t, f.u)
+	if _, err := f.s.SetKillSwitch(ctx, f.admin, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "paused") {
+		t.Fatalf("decide while paused: %v", err)
+	}
+	f.clk.Add(10 * time.Hour)
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != PendingApproval || got.Tier != rbac.TierApprover {
+		t.Fatalf("paused: %+v", got)
+	}
+	if _, err := f.s.SetKillSwitch(ctx, f.admin, false); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != PendingApproval || got.Tier != rbac.TierApprover {
+		t.Fatalf("resumed without instantly escalating: %+v", got)
+	}
+	f.clk.Add(5 * time.Hour)
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.Tier == rbac.TierApprover {
+		t.Fatalf("escalates after the remaining time: %+v", got)
+	}
+}
+
+func TestBudgetAlertsFireAgainNextMonth(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.spent(t, "bbbbbbbbbbb1", "forge-101", 170)
+	_ = f.s.CheckBudgets(ctx)
+	n := len(f.notes.events)
+	f.clk.Set(time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC))
+	f.spent(t, "bbbbbbbbbbb2", "forge-101", 170)
+	_ = f.s.CheckBudgets(ctx)
+	if len(f.notes.events) == n {
+		t.Fatal("a new month alerts again")
+	}
+}
+
+func TestRecentApprovalDoesNotBypassTheCap(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 2
+	f.spent(t, "bbbbbbbbbbb1", "forge-101", 249)
+	_, err := f.s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at, last_activity_at,
+		ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, decided_by, decided_at)
+		VALUES ('bbbbbbbbbbb3', $1, 'forge', 'forge-101', '02-first-lab', 'abc', 'local', 'failed', $2, $2, 3600, 1800, 300, 0, 'leader@crucible.local', $2)`,
+		f.u.ID, f.clk.Now().Add(-10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := f.request(t, f.u); v.Tier != rbac.TierAdmin || !v.OverCap {
+		t.Fatalf("%+v", v)
+	}
+}

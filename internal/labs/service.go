@@ -994,6 +994,14 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 			return nil, apperr.Wrap(apperr.Conflict, "this extension would need a new approval; end the lab and request it again, or ask your approver")
 		}
 	}
+	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil {
+		extra := inst.HourlyUSD * end.Sub(*inst.EndsAt).Hours()
+		if over, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, extra); err != nil {
+			return nil, err
+		} else if over {
+			return nil, apperr.Wrap(apperr.Conflict, "this extension would pass the budget hard cap; ask an admin")
+		}
+	}
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, limit_reason = $3, extended = true, last_activity_at = $4
 		WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, end, reason, s.Now())
 	if err != nil {
@@ -1073,10 +1081,12 @@ func (s *Service) Sweep(ctx context.Context) {
 		return // a slow sweep is still running; the next periodic job picks up whatever it missed
 	}
 	defer s.sweepMu.Unlock()
+	now := s.Now()
+	paused := false
 	if ks, err := s.KillSwitch(ctx); err == nil && ks.Enabled {
 		s.killAll(ctx)
+		paused = true // escalation and expiry of pending requests wait until labs are re-enabled
 	}
-	now := s.Now()
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
 		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 - interval '15 minutes')
@@ -1098,7 +1108,9 @@ func (s *Service) Sweep(ctx context.Context) {
 		reason := "idle"
 		switch {
 		case inst.State == PendingApproval:
-			s.escalate(ctx, inst)
+			if !paused {
+				s.escalate(ctx, inst)
+			}
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)

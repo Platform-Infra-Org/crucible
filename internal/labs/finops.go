@@ -61,6 +61,7 @@ func (s *Service) CheckBudgets(ctx context.Context) error {
 			if tr != "" {
 				scope, who, to = teamID+"/"+tr, "Program "+teamID+"/"+tr, append(to, t.Programs[tr].Roles.Manager...)
 			}
+			to = slices.DeleteFunc(slices.Clone(to), func(e string) bool { return e == "" })
 			for _, lvl := range alertLevels(sp) {
 				tag, err := s.DB.Exec(ctx, `INSERT INTO budget_alerts (scope, month, level) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, scope, month, lvl)
 				if err != nil {
@@ -109,6 +110,17 @@ func (s *Service) SetKillSwitch(ctx context.Context, u *auth.User, enabled bool)
 		return KillSwitch{}, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	var was bool
+	var since *time.Time
+	if err := tx.QueryRow(ctx, `SELECT enabled, changed_at FROM kill_switch FOR UPDATE`).Scan(&was, &since); err != nil {
+		return KillSwitch{}, err
+	}
+	if was && !enabled && since != nil { // escalation was paused: give pending requests their remaining time back
+		if _, err := tx.Exec(ctx, `UPDATE lab_instances SET escalate_at = escalate_at + ($1::timestamptz - $2::timestamptz)
+			WHERE state = 'pending_approval'`, s.Now(), *since); err != nil {
+			return KillSwitch{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE kill_switch SET enabled = $1, changed_by = lower($2), changed_at = $3`, enabled, u.Email, s.Now()); err != nil {
 		return KillSwitch{}, err
 	}

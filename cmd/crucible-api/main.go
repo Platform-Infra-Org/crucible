@@ -13,11 +13,14 @@ import (
 	"time"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
+	"github.com/riverqueue/river"
+
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
 	"crucible/internal/db"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
+	"crucible/internal/jobs"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 )
@@ -76,7 +79,21 @@ func run(ctx context.Context) error {
 	labSvc := &labs.Service{DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
 		Now: time.Now, Log: slog.Default()}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
-	go labSvc.RunSweeper(ctx, 15*time.Second)
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})
+	riverLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}}, riverLog)
+	if err != nil {
+		return err
+	}
+	if err := jobClient.Start(ctx); err != nil {
+		return err
+	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = jobClient.Stop(stop)
+	}()
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),

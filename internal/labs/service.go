@@ -31,6 +31,8 @@ type Service struct {
 	Now     func() time.Time
 	Log     *slog.Logger
 
+	sweepMu sync.Mutex // one sweep at a time in this process
+
 	touchMu sync.Mutex
 	touched map[string]time.Time
 
@@ -842,6 +844,10 @@ func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason stri
 
 // Sweep destroys labs past their end time or idle deadline, and provisioning that hung.
 func (s *Service) Sweep(ctx context.Context) {
+	if !s.sweepMu.TryLock() {
+		return // a slow sweep is still running; the next periodic job picks up whatever it missed
+	}
+	defer s.sweepMu.Unlock()
 	now := s.Now()
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
@@ -916,19 +922,6 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
 			}
 			cancel()
-		}
-	}
-}
-
-func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.Sweep(ctx)
 		}
 	}
 }

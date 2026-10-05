@@ -11,7 +11,7 @@
    The first HTTPS request may take ~1 min while Let's Encrypt issues the certificate. If `up` ends with "isn't answering yet", DNS or the certificate is still settling: wait, then run `crucible aws status` until `healthz: ok`.
 6. Invite people and add them to teams: follow [cognito.md](cognito.md).
 
-**Platform repo prerequisites (M3).** `platform.yaml` must define `cost_tiers` (`auto_approve_usd`, `tier1_usd`, `tier2_usd`); Crucible refuses a platform config without them and keeps serving the last good one. Programs may name a `schedule` defined under `schedules`. The bot git credential now needs push access: the UI commits config changes (team roster, program settings, budgets) to the platform repo.
+**Platform repo prerequisites (M3).** `platform.yaml` must define `cost_tiers` (`auto_approve_usd`, `tier1_usd`, `tier2_usd`); Crucible refuses a platform config without them and keeps serving the last good one. Programs may name a `schedule` defined under `schedules`. The bot git credential now needs push access: the UI commits config changes (team roster, program settings, budgets) to the platform repo. Set `git_bot_email` (and optionally `git_bot_name`) in your tfvars to an author email your git host accepts for that bot; the default `crucible-bot@example.com` is rejected by hosts that require verified commit emails.
 
 Second machine or fresh clone: copy the persistent state back first, then run `crucible aws up` (it is idempotent) to initialise the S3 backend before using `deploy`.
 

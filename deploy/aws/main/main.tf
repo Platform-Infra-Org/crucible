@@ -89,6 +89,8 @@ resource "aws_ssm_parameter" "env" {
     OIDC_CLIENT_ID=${var.oidc_client_id}
     BACKUP_CRON='${var.backup_cron}'
     TIMEZONE=${var.schedule_timezone}
+    GIT_BOT_NAME='${var.git_bot_name}'
+    GIT_BOT_EMAIL=${var.git_bot_email}
   ENV
 }
 

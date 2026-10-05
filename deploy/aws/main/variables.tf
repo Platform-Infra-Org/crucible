@@ -63,6 +63,15 @@ variable "git_credentials" {
   sensitive   = true
   description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com. The token needs push (write) access to the platform repo: the UI commits config changes."
 }
+variable "git_bot_name" {
+  type    = string
+  default = "Crucible Bot"
+}
+variable "git_bot_email" {
+  type        = string
+  default     = "crucible-bot@example.com"
+  description = "Author email of the config commits the UI pushes. Use one your git host accepts (e.g. the bot account's verified email)."
+}
 # Set by `crucible aws up` from the persistent stack's Cognito outputs.
 variable "oidc_issuer" { type = string }
 variable "oidc_client_id" { type = string }

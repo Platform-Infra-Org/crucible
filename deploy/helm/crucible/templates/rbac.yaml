@@ -15,10 +15,10 @@ metadata: { name: crucible-labs }
 rules:
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list, create, delete]
+    verbs: [list, create, delete]
   - apiGroups: [""]
     resources: [pods]
-    verbs: [get, list, create]
+    verbs: [get, create]          # no list: a cluster-wide list would expose every pod's env, and admission can't gate reads
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [get, create]          # WebSocket exec authorizes get (and create on newer API servers); SPDY uses create

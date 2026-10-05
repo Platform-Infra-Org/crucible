@@ -2,9 +2,22 @@ package labs
 
 import (
 	"context"
+	"errors"
+	"io"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/remotecommand"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // completeFirstLab marks module 02 done so the linear training unlocks 03-cluster-heat.
@@ -61,5 +74,186 @@ func TestClusterLabChecksAreNotSelfReported(t *testing.T) {
 	}
 	if got := f.run.scripts[len(f.run.scripts)-1]; got.Service != "shell" || !strings.Contains(string(got.Script), "hello crucible") {
 		t.Fatalf("the check must run the t1 script in the shell service: %+v", got)
+	}
+}
+
+// onPodCreate lets a test decide what the "kubelet" reports for the lab pod.
+func onPodCreate(cs *fake.Clientset, mutate func(*corev1.Pod)) {
+	cs.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		mutate(a.(k8stesting.CreateAction).GetObject().(*corev1.Pod))
+		return false, nil, nil // fall through: the tracker stores the mutated pod
+	})
+}
+
+func podReady(p *corev1.Pod) {
+	p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+}
+
+type execCall struct {
+	ns, pod string
+	cmd     []string
+	stdin   []byte
+	tty     bool
+}
+
+type fakeExec struct {
+	mu    sync.Mutex
+	calls []execCall
+	fn    func(ctx context.Context, cmd []string, o remotecommand.StreamOptions) error
+}
+
+func (f *fakeExec) exec(ctx context.Context, ns, pod string, cmd []string, o remotecommand.StreamOptions) error {
+	var in []byte
+	if o.Stdin != nil && !o.Tty {
+		in, _ = io.ReadAll(o.Stdin)
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, execCall{ns, pod, cmd, in, o.Tty})
+	fn := f.fn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, cmd, o)
+	}
+	return nil
+}
+
+func (f *fakeExec) last() execCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[len(f.calls)-1]
+}
+
+func testRunner(cs *fake.Clientset, fe *fakeExec) *ClusterRunner {
+	return &ClusterRunner{Client: cs, exec: fe.exec, Poll: time.Millisecond}
+}
+
+func TestProvisionCreatesIsolatedLab(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	onPodCreate(cs, podReady)
+	fe := &fakeExec{}
+	r := testRunner(cs, fe)
+	if err := r.Provision(ctx, &Instance{ID: testID}, []byte("tarball"), "compose.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	ns := "lab-" + testID
+	var order []string
+	for _, a := range cs.Actions() {
+		if a.GetVerb() == "create" {
+			order = append(order, a.GetResource().Resource)
+		}
+	}
+	if !slices.Equal(order, []string{"namespaces", "resourcequotas", "limitranges", "networkpolicies", "pods"}) {
+		t.Fatalf("the policy and quota must exist before the pod: %v", order)
+	}
+	if len(fe.calls) != 2 {
+		t.Fatalf("exec calls: %+v", fe.calls)
+	}
+	untar, up := fe.calls[0], fe.calls[1]
+	if untar.ns != ns || untar.pod != "lab" || !slices.Equal(untar.cmd, []string{"tar", "xzf", "-", "-C", "/lab"}) || string(untar.stdin) != "tarball" {
+		t.Fatalf("untar: %+v", untar)
+	}
+	if !slices.Equal(up.cmd, []string{"docker", "compose", "up", "-d", "--wait"}) {
+		t.Fatalf("compose up: %+v", up)
+	}
+	// a second attempt (sweep retry, double start) is harmless
+	if err := r.Provision(ctx, &Instance{ID: testID}, []byte("tarball"), "compose.yaml"); err != nil {
+		t.Fatalf("provision must be idempotent: %v", err)
+	}
+}
+
+func TestProvisionRejectsBadInput(t *testing.T) {
+	cs := fake.NewClientset()
+	r := testRunner(cs, &fakeExec{})
+	for _, tc := range []struct{ id, compose string }{{"../kube-system", "compose.yaml"}, {"ABCDEF012345", "compose.yaml"}, {testID, "../x.yaml"}, {testID, "/etc/x.yaml"}} {
+		if err := r.Provision(context.Background(), &Instance{ID: tc.id}, nil, tc.compose); err == nil {
+			t.Fatalf("%+v must be refused", tc)
+		}
+	}
+	if len(cs.Actions()) != 0 {
+		t.Fatalf("nothing may reach the API for bad input: %v", cs.Actions())
+	}
+}
+
+func TestProvisionFailsFast(t *testing.T) {
+	old := unschedulableGrace
+	unschedulableGrace = 0
+	t.Cleanup(func() { unschedulableGrace = old })
+	cases := map[string]struct {
+		mutate func(*corev1.Pod)
+		want   string
+	}{
+		"cluster full": {func(p *corev1.Pod) {
+			p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable}}
+		}, "no room for another lab"},
+		"image": {func(p *corev1.Pod) {
+			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: labContainer,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "pull access denied"}}}}
+		}, "could not be started"},
+		"dockerd died": {func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed; p.Status.Message = "dockerd exited" }, "stopped"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cs := fake.NewClientset()
+			onPodCreate(cs, tc.mutate)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := testRunner(cs, &fakeExec{}).Provision(ctx, &Instance{ID: testID}, nil, "compose.yaml")
+			if err == nil || !strings.Contains(err.Error(), tc.want) || ctx.Err() != nil {
+				t.Fatalf("want a fast %q error, got %v (ctx %v)", tc.want, err, ctx.Err())
+			}
+		})
+	}
+}
+
+func TestProvisionReportsComposeFailure(t *testing.T) {
+	cs := fake.NewClientset()
+	onPodCreate(cs, podReady)
+	fe := &fakeExec{fn: func(_ context.Context, cmd []string, o remotecommand.StreamOptions) error {
+		if cmd[0] == "docker" {
+			_, _ = o.Stdout.Write([]byte("pull access denied for nope"))
+			return utilexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1}
+		}
+		return nil
+	}}
+	err := testRunner(cs, fe).Provision(context.Background(), &Instance{ID: testID}, nil, "compose.yaml")
+	if err == nil || !strings.Contains(err.Error(), "docker compose up") || !strings.Contains(err.Error(), "pull access denied") {
+		t.Fatalf("the trainee sees the compose log tail: %v", err)
+	}
+}
+
+func labNS(id string, deleting bool) *corev1.Namespace {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "lab-" + id, Labels: map[string]string{labLabel: id}}}
+	if deleting {
+		now := metav1.Now()
+		ns.DeletionTimestamp, ns.Finalizers = &now, []string{"kubernetes"}
+	}
+	return ns
+}
+
+func TestDestroyAndLive(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset(labNS(testID, false), labNS("bbbbbbbbbbbb", true),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sneaky", Labels: map[string]string{labLabel: "cccccccccccc"}}})
+	r := testRunner(cs, &fakeExec{})
+	ids, err := r.Live(ctx)
+	if err != nil || !slices.Equal(ids, []string{testID}) {
+		t.Fatalf("live = running lab namespaces only (not terminating, not mislabelled): %v %v", ids, err)
+	}
+	if err := r.Destroy(ctx, &Instance{ID: testID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CoreV1().Namespaces().Get(ctx, "lab-"+testID, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("namespace must be gone: %v", err)
+	}
+	if err := r.Destroy(ctx, &Instance{ID: testID}); err != nil {
+		t.Fatalf("destroying twice is fine: %v", err)
+	}
+	if err := r.Destroy(ctx, &Instance{ID: "default"}); err == nil {
+		t.Fatal("only lab ids may be destroyed")
+	}
+	if _, err := cs.CoreV1().Namespaces().Get(ctx, "default", metav1.GetOptions{}); err != nil {
+		t.Fatal("default must survive")
 	}
 }

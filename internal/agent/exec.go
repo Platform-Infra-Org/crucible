@@ -13,38 +13,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	ap "crucible/internal/agentproto"
 )
-
-type capped struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (c *capped) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if room := ap.MaxOutput - c.buf.Len(); room > 0 {
-		c.buf.Write(p[:min(len(p), room)])
-	}
-	return len(p), nil
-}
-
-func (c *capped) Bytes() []byte {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return bytes.Clone(c.buf.Bytes())
-}
 
 // RunLimited runs cmd with a timeout and keeps at most MaxOutput bytes of combined output.
 // ponytail: killing `docker compose exec` stops the client; the in-container process may linger until the lab is destroyed.
 func RunLimited(ctx context.Context, cmd *exec.Cmd, timeout time.Duration) (ap.Msg, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out := &capped{}
+	out := &ap.Capped{}
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {

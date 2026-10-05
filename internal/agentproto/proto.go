@@ -1,6 +1,11 @@
 // Package agentproto is the JSON message format between crucible-api and crucible-agent.
 package agentproto
 
+import (
+	"bytes"
+	"sync"
+)
+
 const (
 	TProvision = "provision"  // API → agent: Data = lab bundle (tar.gz), Compose = compose file name
 	TDestroy   = "destroy"    // API → agent
@@ -30,4 +35,26 @@ type Msg struct {
 	ExitCode  int               `json:"exit_code"`
 	TimedOut  bool              `json:"timed_out,omitempty"`
 	Error     string            `json:"error,omitempty"`
+}
+
+// Capped keeps the first MaxOutput bytes written to it and silently drops the rest. Safe for concurrent writers
+// (stdout and stderr of one script).
+type Capped struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *Capped) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if room := MaxOutput - c.buf.Len(); room > 0 {
+		c.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+func (c *Capped) Bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return bytes.Clone(c.buf.Bytes())
 }

@@ -20,9 +20,13 @@ import (
 const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible aws init --region REGION --domain HOSTNAME
-  crucible aws up --var-file FILE
-  crucible aws deploy | snapshot | sleep | wake | status
-  crucible aws teardown --var-file FILE --yes`
+  crucible aws up [--var-file FILE] [--no-snapshot]
+  crucible aws deploy | snapshot | wake | status
+  crucible aws sleep [--no-snapshot]
+  crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
+
+--var-file defaults to deploy/aws/main/crucible.tfvars in the repo root.
+--no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -52,12 +56,16 @@ func awsCmd(args []string) int {
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init)")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
-	varFile := fs.String("var-file", "deploy/aws/main/crucible.tfvars", "terraform variables file")
+	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
 	yes := fs.Bool("yes", false, "confirm teardown")
+	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
 	_ = fs.Parse(args[1:])
 	root, _ := os.Getwd()
 	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
 		root = strings.TrimSpace(string(top))
+	}
+	if *varFile == "" {
+		*varFile = filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars")
 	}
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -71,19 +79,19 @@ func awsCmd(args []string) int {
 		}
 		err = ops.Init(ctx, *region, *domain)
 	case "up":
-		err = ops.Up(ctx, *varFile)
+		err = ops.Up(ctx, *varFile, *noSnapshot)
 	case "deploy":
 		err = ops.Deploy(ctx)
 	case "snapshot":
 		err = ops.Snapshot(ctx)
 	case "sleep":
-		err = ops.SleepNode(ctx)
+		err = ops.SleepNode(ctx, *noSnapshot)
 	case "wake":
 		err = ops.Wake(ctx)
 	case "status":
 		err = ops.Status(ctx)
 	case "teardown":
-		err = ops.Teardown(ctx, *varFile, *yes)
+		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2

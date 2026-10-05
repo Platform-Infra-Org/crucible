@@ -1,8 +1,9 @@
 package awsops
 
 import (
+	"bytes"
 	"context"
-	"io"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 type recorder struct {
 	calls     []string
 	output    func(cmd string) string
-	noPackage bool // helm package produces nothing
+	outErr    func(cmd string) error // optional: make an Output call fail
+	noPackage bool                   // helm package produces nothing
+	log       bytes.Buffer
+	unhealthy bool // /healthz never answers
 }
 
 func (r *recorder) ops(root string) Ops {
@@ -37,18 +41,28 @@ func (r *recorder) ops(root string) Ops {
 		Output: func(_ context.Context, _ string, name string, args ...string) (string, error) {
 			cmd := name + " " + strings.Join(args, " ")
 			r.calls = append(r.calls, cmd)
+			if r.outErr != nil {
+				if err := r.outErr(cmd); err != nil {
+					return "", err
+				}
+			}
 			return r.output(cmd), nil
 		},
 		Sleep: func(time.Duration) {},
-		Log:   io.Discard,
-		Get:   func(string) (*http.Response, error) { return &http.Response{StatusCode: 200, Body: http.NoBody}, nil },
+		Log:   &r.log,
+		Get: func(string) (*http.Response, error) {
+			if r.unhealthy {
+				return nil, errors.New("connection refused")
+			}
+			return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+		},
 	}
 }
 
 func fakeAWS(cmd string) string {
 	switch {
 	case strings.Contains(cmd, "output -json"):
-		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
+		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"public_ip":{"value":"203.0.113.7"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
 	case strings.HasPrefix(cmd, "git rev-parse"):
 		return "abc123def456"
 	case strings.HasPrefix(cmd, "git status"):
@@ -102,7 +116,7 @@ func TestDeployPublishesReleaseThenRollsOut(t *testing.T) {
 
 func TestSleepSnapshotsBeforeStop(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).SleepNode(context.Background()); err != nil {
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	snap, stop := indexOf(r.calls, "/opt/crucible/snapshot.sh"), indexOf(r.calls, "stop-instances")
@@ -113,13 +127,13 @@ func TestSleepSnapshotsBeforeStop(t *testing.T) {
 
 func TestTeardownRequiresYes(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", false); err == nil {
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", false, false); err == nil {
 		t.Fatal("teardown without --yes must fail")
 	}
 	if indexOf(r.calls, "destroy") >= 0 {
 		t.Fatal("nothing may be destroyed without --yes")
 	}
-	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true); err != nil {
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if snap, destroy := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "destroy"); snap < 0 || destroy < snap {
@@ -169,7 +183,7 @@ func TestDeployAndSnapshotRefuseStoppedNode(t *testing.T) {
 func TestTeardownStates(t *testing.T) {
 	for state, wantDestroy := range map[string]bool{"": false, "stopping": false, "pending": false, "stopped": true} {
 		r := &recorder{output: stateAWS(state)}
-		err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true)
+		err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false)
 		if got := indexOf(r.calls, "destroy") >= 0; got != wantDestroy || (err == nil) != wantDestroy {
 			t.Fatalf("state %q: destroyed=%v err=%v", state, got, err)
 		}
@@ -181,7 +195,7 @@ func TestTeardownStates(t *testing.T) {
 
 func TestSleepAbortsWhenStateUnknown(t *testing.T) {
 	r := &recorder{output: stateAWS("")}
-	if err := r.ops(t.TempDir()).SleepNode(context.Background()); err == nil {
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false); err == nil {
 		t.Fatal("must abort")
 	}
 	if indexOf(r.calls, "stop-instances") >= 0 {
@@ -200,13 +214,129 @@ func TestInitAndUp(t *testing.T) {
 		t.Fatalf("init apply missing:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
-	if err := o.Up(context.Background(), "x.tfvars"); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
 		t.Fatal(err)
+	}
+	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); snap < 0 || apply < snap {
+		t.Fatalf("up must snapshot a running node before apply:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "Point an A record c.example.com → 203.0.113.7") {
+		t.Fatalf("up must print the DNS hint, got:\n%s", r.log.String())
 	}
 	for _, want := range []string{"-backend-config=bucket=st", "-backend-config=key=main.tfstate", "-backend-config=use_lockfile=true",
 		"-var data_bucket=bkt", "-var oidc_client_id=client123", "-var cognito_user_pool_id=eu-west-1_abc", "-var oidc_issuer=https://cognito-idp"} {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
 		}
+	}
+}
+
+func TestUpFirstTimeSkipsSnapshot(t *testing.T) {
+	applied := false
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "main output -json") && !applied {
+			return `{}`
+		}
+		return fakeAWS(cmd)
+	}}
+	o := r.ops(t.TempDir())
+	exec := o.Exec
+	o.Exec = func(ctx context.Context, dir, name string, args ...string) error {
+		if len(args) > 1 && args[1] == "apply" {
+			applied = true
+		}
+		return exec(ctx, dir, name, args...)
+	}
+	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
+		t.Fatal(err)
+	}
+	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); apply < 0 || (snap >= 0 && snap < apply) {
+		t.Fatalf("no pre-apply snapshot without a node:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestOutputsRequireInitAndUp(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "output -json") {
+			return `{"instance_id":{"value":null}}`
+		}
+		return fakeAWS(cmd)
+	}}
+	o := r.ops(t.TempDir())
+	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
+		t.Fatalf("main: %v", err)
+	}
+	if err := o.Up(context.Background(), "x.tfvars", false); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
+		t.Fatalf("persistent: %v", err)
+	}
+}
+
+func TestNoSnapshotSkipsSnapshotLoudly(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "send-command") >= 0 || indexOf(r.calls, "stop-instances") < 0 || indexOf(r.calls, "destroy") < 0 {
+		t.Fatalf("--no-snapshot must stop/destroy without a snapshot:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if strings.Count(r.log.String(), "WARNING: --no-snapshot") != 2 {
+		t.Fatalf("missing loud warning:\n%s", r.log.String())
+	}
+}
+
+func TestSSMRetriesOnlyWhileUnregistered(t *testing.T) {
+	sends := func(r *recorder) int { return strings.Count(strings.Join(r.calls, "\n"), "send-command") }
+	denied := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") {
+			return errors.New("exit status 254: An error occurred (AccessDeniedException) when calling the SendCommand operation")
+		}
+		return nil
+	}}
+	if err := denied.ops(t.TempDir()).Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "AccessDenied") {
+		t.Fatalf("want AccessDenied, got %v", err)
+	}
+	if n := sends(denied); n != 1 {
+		t.Fatalf("AccessDenied must fail fast, sent %d times", n)
+	}
+	n := 0
+	fresh := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") {
+			if n++; n < 3 {
+				return errors.New("exit status 254: An error occurred (InvalidInstanceId) when calling the SendCommand operation")
+			}
+		}
+		return nil
+	}}
+	if err := fresh.ops(t.TempDir()).Snapshot(context.Background()); err != nil || sends(fresh) != 3 {
+		t.Fatalf("unregistered node must be retried: err=%v sends=%d", err, sends(fresh))
+	}
+}
+
+func TestUnhealthyMessagesPointAtStatus(t *testing.T) {
+	r := &recorder{output: fakeAWS, unhealthy: true}
+	err := r.ops(t.TempDir()).Deploy(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "https://c.example.com/healthz isn't answering yet") || !strings.Contains(err.Error(), "crucible aws status") {
+		t.Fatalf("got %v", err)
+	}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.log.String(), "healthz: not answering") {
+		t.Fatalf("status must probe /healthz:\n%s", r.log.String())
+	}
+	ok := &recorder{output: fakeAWS}
+	_ = ok.ops(t.TempDir()).Status(context.Background())
+	if !strings.Contains(ok.log.String(), "healthz: ok") {
+		t.Fatalf("status:\n%s", ok.log.String())
+	}
+}
+
+func TestDefaultOutputIncludesStderrInError(t *testing.T) {
+	_, err := Default(t.TempDir()).Output(context.Background(), "", "sh", "-c", "echo 'An error occurred (ExpiredToken)' >&2; exit 3")
+	if err == nil || !strings.Contains(err.Error(), "ExpiredToken") {
+		t.Fatalf("got %v", err)
 	}
 }

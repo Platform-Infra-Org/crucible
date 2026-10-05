@@ -35,9 +35,13 @@ func Default(root string) Ops {
 			return cmd.Run()
 		},
 		Output: func(ctx context.Context, dir, name string, args ...string) (string, error) {
+			var stderr strings.Builder
 			cmd := exec.CommandContext(ctx, name, args...)
-			cmd.Dir, cmd.Stderr = dir, os.Stderr
+			cmd.Dir, cmd.Stderr = dir, io.MultiWriter(os.Stderr, &stderr)
 			out, err := cmd.Output()
+			if err != nil && stderr.Len() > 0 { // callers match on the AWS error code
+				err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+			}
 			return strings.TrimSpace(string(out)), err
 		},
 		Sleep: time.Sleep,
@@ -60,7 +64,13 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	}
 	out := map[string]string{}
 	for k, v := range parsed {
-		out[k] = fmt.Sprint(v.Value)
+		if v.Value != nil {
+			out[k] = fmt.Sprint(v.Value)
+		}
+	}
+	need, first := map[string]string{"persistent": "state_bucket", "main": "instance_id"}[stack], map[string]string{"persistent": "init", "main": "up"}[stack]
+	if out[need] == "" {
+		return nil, fmt.Errorf("the %s stack has no %s output: run `crucible aws %s` first", stack, need, first)
 	}
 	return out, nil
 }
@@ -80,7 +90,8 @@ func mainVars(p map[string]string) []string {
 		"-var", "cognito_user_pool_id=" + p["cognito_user_pool_id"]}
 }
 
-func (o Ops) Up(ctx context.Context, varFile string) error {
+// Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
+func (o Ops) Up(ctx context.Context, varFile string, noSnapshot bool) error {
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {
 		return err
@@ -91,11 +102,45 @@ func (o Ops) Up(ctx context.Context, varFile string) error {
 		"-backend-config=region="+p["region"], "-backend-config=use_lockfile=true"); err != nil {
 		return err
 	}
+	if m, err := o.outputs(ctx, "main"); err == nil { // a node already exists
+		if err := o.snapshotFirst(ctx, m, noSnapshot, "applying"); err != nil {
+			return err
+		}
+	}
 	abs, _ := filepath.Abs(varFile)
 	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, mainVars(p)...)...); err != nil {
 		return err
 	}
+	m, err := o.outputs(ctx, "main")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(o.Log, "Point an A record %s → %s now (skip if route53_zone_id is set).\n", m["domain"], m["public_ip"])
 	return o.Deploy(ctx)
+}
+
+// snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").
+func (o Ops) snapshotFirst(ctx context.Context, m map[string]string, noSnapshot bool, what string) error {
+	if noSnapshot {
+		fmt.Fprintf(o.Log, "WARNING: --no-snapshot: skipping the snapshot before %s; everything since the last backup may be LOST\n", what)
+		return nil
+	}
+	st, err := o.state(ctx, m)
+	if err != nil {
+		return fmt.Errorf("not %s: %w (use --no-snapshot to skip the snapshot)", what, err)
+	}
+	switch st {
+	case "running":
+		if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
+			return fmt.Errorf("snapshot failed, not %s (use --no-snapshot to skip it): %w", what, err)
+		}
+	case "stopped":
+		fmt.Fprintln(o.Log, "warning: node is stopped; relying on the last snapshot taken before it slept")
+	case "terminated": // nothing left to back up
+	default:
+		return fmt.Errorf("node is %s; wait until the node is stable (running or stopped) and retry", st)
+	}
+	return nil
 }
 
 // Deploy builds the image for the current commit, publishes it to S3 and rolls it out on the node.
@@ -203,6 +248,9 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 			"--document-name", "AWS-RunShellScript", "--parameters", string(params), "--query", "Command.CommandId", "--output", "text"); err == nil {
 			break
 		}
+		if !strings.Contains(err.Error(), "InvalidInstanceId") && !strings.Contains(err.Error(), "not registered") {
+			return fmt.Errorf("ssm send-command: %w", err) // AccessDenied, ExpiredToken, …: retrying won't help
+		}
 		o.Sleep(15 * time.Second)
 	}
 	if err != nil {
@@ -258,19 +306,23 @@ func (o Ops) requireRunning(ctx context.Context, m map[string]string) error {
 }
 
 // SleepNode snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
-func (o Ops) SleepNode(ctx context.Context) error {
+func (o Ops) SleepNode(ctx context.Context, noSnapshot bool) error {
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
 		return err
 	}
-	st, err := o.state(ctx, m)
-	if err != nil {
-		return fmt.Errorf("not stopping: %w", err)
-	}
-	if st == "running" {
-		if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
-			return fmt.Errorf("snapshot failed, not stopping: %w", err)
+	if !noSnapshot {
+		st, err := o.state(ctx, m)
+		if err != nil {
+			return fmt.Errorf("not stopping: %w", err)
 		}
+		if st == "running" {
+			if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
+				return fmt.Errorf("snapshot failed, not stopping (use --no-snapshot to skip it): %w", err)
+			}
+		}
+	} else {
+		fmt.Fprintln(o.Log, "WARNING: --no-snapshot: stopping without a snapshot; everything since the last backup may be LOST if the disk is lost")
 	}
 	if err := o.Exec(ctx, o.Root, "aws", "ec2", "stop-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
 		return err
@@ -293,26 +345,36 @@ func (o Ops) Wake(ctx context.Context) error {
 	return o.waitHealthy(ctx, m["url"])
 }
 
-func (o Ops) waitHealthy(ctx context.Context, url string) error {
+// healthy probes <url>/healthz once.
+func (o Ops) healthy(url string) error {
 	get := o.Get
 	if get == nil {
 		c := &http.Client{Timeout: 10 * time.Second}
 		get = c.Get
 	}
+	res, err := get(url + "/healthz")
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", res.StatusCode)
+	}
+	return nil
+}
+
+func (o Ops) waitHealthy(ctx context.Context, url string) error {
 	for i := 0; i < 120; i++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if res, err := get(url + "/healthz"); err == nil {
-			res.Body.Close()
-			if res.StatusCode == 200 {
-				fmt.Fprintf(o.Log, "🔥 the forge is lit: %s\n", url)
-				return nil
-			}
+		if o.healthy(url) == nil {
+			fmt.Fprintf(o.Log, "🔥 the forge is lit: %s\n", url)
+			return nil
 		}
 		o.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("%s did not become healthy within 10 minutes", url)
+	return fmt.Errorf("the node is up but %s/healthz isn't answering yet — if DNS or the certificate isn't ready, wait and run `crucible aws status`", url)
 }
 
 func (o Ops) Status(ctx context.Context) error {
@@ -324,11 +386,15 @@ func (o Ops) Status(ctx context.Context) error {
 	if err != nil {
 		st = "unknown (" + err.Error() + ")"
 	}
-	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\n", m["instance_id"], st, m["url"])
+	health := "ok"
+	if err := o.healthy(m["url"]); err != nil {
+		health = "not answering (" + err.Error() + ")"
+	}
+	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\nhealthz: %s\n", m["instance_id"], st, m["url"], health)
 	return nil
 }
 
-func (o Ops) Teardown(ctx context.Context, varFile string, yes bool) error {
+func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot bool) error {
 	if !yes {
 		return errors.New("teardown destroys the node (buckets and snapshots are kept); re-run with --yes to confirm")
 	}
@@ -336,19 +402,8 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes bool) error {
 	if err != nil {
 		return err
 	}
-	st, err := o.state(ctx, m)
-	if err != nil {
-		return fmt.Errorf("aborting teardown: %w", err)
-	}
-	switch st {
-	case "running":
-		if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
-			return fmt.Errorf("final snapshot failed, aborting teardown: %w", err)
-		}
-	case "stopped":
-		fmt.Fprintln(o.Log, "warning: node is stopped; relying on the last snapshot taken before it slept")
-	default:
-		return fmt.Errorf("node is %s; wait until the node is stable (running or stopped) and retry", st)
+	if err := o.snapshotFirst(ctx, m, noSnapshot, "tearing down"); err != nil {
+		return err
 	}
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {

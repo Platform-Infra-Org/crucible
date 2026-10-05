@@ -17,12 +17,14 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/content"
 	"crucible/internal/db"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
 	"crucible/internal/jobs"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
+	"crucible/internal/notify"
 )
 
 func main() {
@@ -50,7 +52,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("CRUCIBLE_SYNC_INTERVAL: %w", err)
 	}
-	go syncer.Run(ctx, every)
 
 	public := strings.TrimRight(env("CRUCIBLE_PUBLIC_URL", "http://localhost:8080"), "/")
 	store := auth.Store{DB: pool}
@@ -76,16 +77,27 @@ func run(ctx context.Context) error {
 		quizSecret = "crucible-dev-quiz-secret"
 	}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, QuizSecret: quizSecret}
-	labSvc := &labs.Service{DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
+	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
+		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
+			Username: os.Getenv("CRUCIBLE_SMTP_USERNAME"), Password: os.Getenv("CRUCIBLE_SMTP_PASSWORD")}}
+	if notifySvc.SMTP.Addr == "" {
+		slog.Warn("CRUCIBLE_SMTP_ADDR is not set: email notifications are off (Slack/Teams webhooks still work)")
+	}
+	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
 		Now: time.Now, Log: slog.Default()}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})
+	river.AddWorker(workers, &notify.EmailWorker{S: notifySvc})
+	river.AddWorker(workers, &notify.WebhookWorker{S: notifySvc})
 	riverLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}}, riverLog)
 	if err != nil {
 		return err
 	}
+	notifySvc.Jobs = jobClient
+	syncer.OnProblem = func(key string, probs []content.Problem) { notifySvc.ReportSyncProblem(ctx, key, probs) }
+	go syncer.Run(ctx, every)
 	if err := jobClient.Start(ctx); err != nil {
 		return err
 	}
@@ -97,7 +109,7 @@ func run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
-		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Hub: hub,
+		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Notify: notifySvc, Hub: hub,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

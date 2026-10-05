@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"crucible/internal/content"
 )
 
 func run(t *testing.T, dir string, args ...string) {
@@ -129,5 +131,20 @@ func TestExportFailureRetried(t *testing.T) {
 	}
 	if tr, _ := s.Current().ProgramTraining("a", "t1"); tr.Title != "T2" {
 		t.Fatalf("export failure was cached: %+v", s.Current().Problems)
+	}
+}
+
+func TestOnProblemFiresOncePerNewProblem(t *testing.T) {
+	s, _, trainingRepo := setup(t) // first sync happened before the hook was set: nothing to announce
+	var keys []string
+	s.OnProblem = func(key string, _ []content.Problem) { keys = append(keys, key) }
+	commit(t, trainingRepo, map[string]string{"training.yaml": "id: t1\nmodules: [m1]\n"})
+	for range 2 {
+		if err := s.SyncOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(keys) != 1 || keys[0] != "t1@"+s.Current().Heads["t1"] {
+		t.Fatalf("OnProblem keys = %v", keys)
 	}
 }

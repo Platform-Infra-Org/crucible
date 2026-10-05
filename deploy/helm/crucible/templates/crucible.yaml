@@ -60,6 +60,14 @@ spec:
             - { name: OIDC_CLIENT_ID, value: {{ .Values.oidc.clientId | quote }} }
             - name: OIDC_CLIENT_SECRET
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: OIDC_CLIENT_SECRET } }
+            - name: CRUCIBLE_SMTP_ADDR
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_ADDR, optional: true } }
+            - name: CRUCIBLE_SMTP_FROM
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_FROM, optional: true } }
+            - name: CRUCIBLE_SMTP_USERNAME
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_USERNAME, optional: true } }
+            - name: CRUCIBLE_SMTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_PASSWORD, optional: true } }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 5

@@ -25,3 +25,5 @@ export type TaskDetail = TaskView & { instructions: string; hints: string[] | nu
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
 export type HintResult = { index: number; text: string; cost: number; lab: LabView }
 export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null }
+
+export type NotificationPrefs = { email_enabled: boolean; kinds: { kind: string; label: string; muted: boolean }[] }

@@ -1,4 +1,9 @@
+import { useState } from 'react'
 import { useMe } from '../App'
+import { api } from '../api'
+import { useFetch } from '../useFetch'
+import { toast } from '../lib/alerts'
+import type { NotificationPrefs } from '../types'
 import { THEMES } from '../theme/theme'
 
 export function SettingsPage() {
@@ -21,6 +26,40 @@ export function SettingsPage() {
       <label>
         <input type="checkbox" checked={me.user.calm_motion} onChange={(e) => setPrefs(theme, e.target.checked)} /> Calm forge (turn off animations)
       </label>
+      <NotificationSettings />
     </section>
+  )
+}
+
+function NotificationSettings() {
+  const { data, error, reload } = useFetch<NotificationPrefs>('/api/me/notifications')
+  const [saving, setSaving] = useState(false)
+  if (error) return <p className="error">{error.message}</p>
+  if (!data) return null
+  const toggle = async (kind: string, muted: boolean) => {
+    const next = data.kinds.filter((k) => (k.kind === kind ? muted : k.muted)).map((k) => k.kind)
+    setSaving(true)
+    try {
+      await api('/api/me/notifications', { method: 'PUT', json: { muted: next } })
+      reload()
+    } catch (e) {
+      toast((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <>
+      <h2>Email notifications</h2>
+      {!data.email_enabled && <p className="muted">Email is not configured on this Crucible yet; these choices apply once it is.</p>}
+      <fieldset className="stack" disabled={saving}>
+        <legend className="muted">Email me when…</legend>
+        {data.kinds.map((k) => (
+          <label key={k.kind}>
+            <input type="checkbox" checked={!k.muted} onChange={(e) => toggle(k.kind, !e.target.checked)} /> {k.label}
+          </label>
+        ))}
+      </fieldset>
+    </>
   )
 }

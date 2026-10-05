@@ -18,6 +18,7 @@ import (
 	"crucible/internal/db/dbtest"
 	"crucible/internal/gitsync"
 	"crucible/internal/learn"
+	"crucible/internal/notify"
 )
 
 type clock struct {
@@ -71,7 +72,33 @@ func (f *fakeRunner) Destroy(_ context.Context, in *Instance) error {
 	return nil
 }
 
+type fakeNotifier struct {
+	mu     sync.Mutex
+	events []notify.Event
+}
+
+func (n *fakeNotifier) Notify(_ context.Context, ev notify.Event) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.events = append(n.events, ev)
+	return nil
+}
+
+// last returns the most recent event of kind, or nil.
+func (n *fakeNotifier) last(kind notify.Kind) *notify.Event {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for i := len(n.events) - 1; i >= 0; i-- {
+		if n.events[i].Kind == kind {
+			ev := n.events[i]
+			return &ev
+		}
+	}
+	return nil
+}
+
 type fx struct {
+	notes *fakeNotifier
 	s     *Service
 	run   *fakeRunner
 	clk   *clock
@@ -103,8 +130,9 @@ func setup(t *testing.T, unlock bool) *fx {
 	}
 	run := &fakeRunner{}
 	clk := &clock{t: time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)}
-	s := &Service{DB: pool, Learn: ls, Runners: map[string]Runner{"local": run}, Now: clk.Now, Log: slog.Default()}
-	return &fx{s: s, run: run, clk: clk, u: u, other: other}
+	notes := &fakeNotifier{}
+	s := &Service{DB: pool, Learn: ls, Runners: map[string]Runner{"local": run}, Now: clk.Now, Log: slog.Default(), Notify: notes}
+	return &fx{notes: notes, s: s, run: run, clk: clk, u: u, other: other}
 }
 
 func (f *fx) start(t *testing.T) *View {
@@ -258,6 +286,9 @@ func TestSetupFailureAllowsSkipAndResetIsRateLimited(t *testing.T) {
 	after, err := f.s.Skip(ctx, f.u, v.ID, "t2-find-port")
 	if err != nil || statusOf(after, "t2-find-port") != "skipped" || statusOf(after, "t3-fix-nginx") != "open" {
 		t.Fatalf("skip: %v %+v", err, after)
+	}
+	if ev := f.notes.last(notify.SetupFailed); ev == nil || len(ev.To) != 1 || ev.To[0] != "senior@crucible.local" {
+		t.Fatalf("maintainers must hear about a failed scenario: %+v", ev)
 	}
 }
 

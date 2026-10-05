@@ -22,9 +22,16 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/content"
 	"crucible/internal/learn"
+	"crucible/internal/notify"
 )
 
+// Notifier queues notifications (implemented by *notify.Service).
+type Notifier interface {
+	Notify(ctx context.Context, ev notify.Event) error
+}
+
 type Service struct {
+	Notify  Notifier
 	DB      *pgxpool.Pool
 	Learn   *learn.Service
 	Runners map[string]Runner
@@ -156,6 +163,24 @@ func (s *Service) runnerErr(err error) error {
 		return errAgentOffline
 	}
 	return err
+}
+
+// notify queues ev; a failure is logged, never returned: the lab action itself already happened.
+func (s *Service) notify(ctx context.Context, ev notify.Event) {
+	if s.Notify == nil || (len(ev.To) == 0 && ev.Team == "") {
+		return
+	}
+	if err := s.Notify.Notify(context.WithoutCancel(ctx), ev); err != nil {
+		s.Log.Error("queueing notification failed", "kind", ev.Kind, "err", err)
+	}
+}
+
+// trainingOf returns the content version a lab runs, or nil while syncing / if it vanished.
+func (s *Service) trainingOf(inst *Instance) *content.Training {
+	if st := s.Learn.State(); st != nil {
+		return st.Training(inst.Training, inst.SHA)
+	}
+	return nil
 }
 
 func (s *Service) labContent(inst *Instance) (*content.Lab, *content.Quiz, error) {
@@ -492,8 +517,17 @@ func (s *Service) runSetup(ctx context.Context, inst *Instance, lab *content.Lab
 		}
 		last = fmt.Errorf("setup exited with %d", res.ExitCode)
 	}
-	// ponytail: maintainers are notified by M3 notifications; until then this is logged.
 	s.Log.Warn("setup script failed twice", "lab", inst.ID, "task", taskID)
+	if t := s.trainingOf(inst); t != nil {
+		step := "the lab-level setup"
+		if taskID != "" {
+			step = "the setup for task " + taskID
+		}
+		s.notify(ctx, notify.Event{Kind: notify.SetupFailed, To: t.Maintainers,
+			Subject: fmt.Sprintf("Lab scenario failed to prepare: %s / %s", inst.Training, inst.Module),
+			Text: fmt.Sprintf("%s in %s/%s exited non-zero twice (lab %s, team %s). The trainee was offered a skip. Script output is stored in setup_runs.",
+				step, inst.Training, inst.Module, inst.ID, inst.Team)})
+	}
 	s.event(ctx, inst.ID, "setup_failed", taskID)
 	return last
 }

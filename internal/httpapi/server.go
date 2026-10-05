@@ -20,6 +20,7 @@ import (
 	"crucible/internal/httpx"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
+	"crucible/internal/notify"
 	"crucible/internal/rbac"
 )
 
@@ -29,6 +30,7 @@ type Deps struct {
 	Sync       *gitsync.Syncer
 	Learn      *learn.Service
 	Labs       *labs.Service
+	Notify     *notify.Service
 	Hub        *agenthub.Hub
 	PublicURL  string
 	HookSecret string
@@ -113,6 +115,9 @@ func NewRouter(d Deps) chi.Router {
 		})
 		d.Learn.Routes(r)
 		d.Labs.Routes(r)
+		if d.Notify != nil {
+			d.Notify.Routes(r)
+		}
 	})
 
 	r.NotFound(spa(d.WebDir))

@@ -39,6 +39,10 @@ func (s *State) ProgramTraining(team, training string) (*content.Training, strin
 type Syncer struct {
 	DataDir, PlatformRepo, PlatformBranch string
 	Log                                   *slog.Logger
+	// OnProblem, if set, is called for every problem key that is new compared with the previous sync. The first sync
+	// after start never calls it, so a restart does not re-announce old failures. Keys: "platform", "<training>",
+	// "<training>@<sha>", "<team>/<training>". It runs inside SyncOnce and must not call SyncOnce.
+	OnProblem func(key string, problems []content.Problem)
 
 	cur     atomic.Pointer[State]
 	mu      sync.Mutex
@@ -104,6 +108,9 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 			next = *prev
 			next.PlatformErr = err.Error()
 		}
+		if prev != nil && prev.PlatformErr != err.Error() && s.OnProblem != nil {
+			s.OnProblem("platform", []content.Problem{{File: "platform", Msg: err.Error()}})
+		}
 		s.cur.Store(&next)
 		return fmt.Errorf("platform config at %.7s: %w", psha, err)
 	}
@@ -151,6 +158,13 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 			st.ProgramSHAs[key] = sha
 			if st.Training(id, sha) == nil && prev != nil && prev.Training(id, prev.ProgramSHAs[key]) != nil {
 				st.ProgramSHAs[key] = prev.ProgramSHAs[key] // invalid new version: stay on the last good one
+			}
+		}
+	}
+	if prev != nil && s.OnProblem != nil {
+		for key, probs := range st.Problems {
+			if _, seen := prev.Problems[key]; !seen {
+				s.OnProblem(key, probs)
 			}
 		}
 	}

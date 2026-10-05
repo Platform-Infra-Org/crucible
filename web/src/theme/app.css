@@ -134,3 +134,7 @@ pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px
 [data-calm='true'] .timer.cooling, [data-calm='true'] .timer.critical { box-shadow: none; }
 .spacer { flex: 1; }
 .tasks[hidden] { display: none; }
+
+.stack { display: grid; gap: 0.6rem; max-width: 44rem; border: 0; padding: 0; margin: 0 0 1.5rem; }
+.stack label { display: grid; gap: 0.25rem; }
+.stack label:has(> input[type='checkbox']) { display: flex; gap: 0.5rem; align-items: center; }

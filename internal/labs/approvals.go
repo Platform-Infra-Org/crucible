@@ -238,7 +238,10 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 	next := Rejected
 	var lab *content.Lab
 	if approve {
-		// Tasks 7 and 8 add: schedule window open, kill switch off, cap re-check.
+		if sc := p.ProgramSchedule(inst.Team, inst.Training); !sc.Open(s.Now()) {
+			return "", apperr.Wrap(apperr.Conflict, "The program's schedule window is closed; approve it when it opens.")
+		}
+		// Task 8 adds: kill switch off, cap re-check.
 		if lab, _, err = s.labContent(inst); err != nil {
 			return "", err
 		}
@@ -324,7 +327,7 @@ func (s *Service) escalate(ctx context.Context, inst *Instance) {
 			Link:    labLink(inst)})
 		return
 	}
-	at := p.ProgramSchedule(inst.Team, inst.Training).AddOpen(now, p.Settings.Escalation())
+	at := escalateAt(p, inst.Team, inst.Training, now)
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET tier = $2, escalate_at = $3
 		WHERE id = $1 AND state = 'pending_approval' AND tier = $4`, inst.ID, next, at, inst.Tier)
 	if err != nil || tag.RowsAffected() == 0 {

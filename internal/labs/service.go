@@ -374,7 +374,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
-		v.CanExtend = !inst.Extended && inst.MaxExtension > 0
+		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule"
 	}
 	return v, nil
 }
@@ -470,7 +470,37 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Tier = rbac.Checker{P: p}.Route(q.Tier, team, training, u.Email)
 		}
 	}
+	if sc := p.ProgramSchedule(team, training); !sc.Open(s.Now()) {
+		now := s.Now()
+		q.Blocked = "Labs for this program run " + sc.String() + "."
+		if n := sc.NextOpen(now); !n.IsZero() {
+			q.Blocked += " Next window opens " + n.In(sc.Location()).Format("Mon 15:04") + "."
+		}
+	}
 	return q, nil
+}
+
+// escalateAt is when a request waiting since now moves up a tier: escalation hours counted inside the schedule.
+// A schedule too sparse for AddOpen (zero) falls back to plain wall-clock time rather than a zero deadline.
+func escalateAt(p *config.Platform, team, training string, now time.Time) time.Time {
+	if at := p.ProgramSchedule(team, training).AddOpen(now, p.Settings.Escalation()); !at.IsZero() {
+		return at
+	}
+	return now.Add(p.Settings.Escalation())
+}
+
+// scheduleLimit is the end of the program's open window (spec §8.6). Zero when the program runs any time; now
+// when the window is already closed (a lab approved just before close must not run on overnight).
+func (s *Service) scheduleLimit(inst *Instance, now time.Time) Limit {
+	st := s.Learn.State()
+	if st == nil || st.Platform == nil {
+		return Limit{}
+	}
+	sc := st.Platform.ProgramSchedule(inst.Team, inst.Training)
+	if sc != nil && !sc.Open(now) {
+		return Limit{At: now, Reason: "schedule"}
+	}
+	return Limit{At: sc.End(now), Reason: "schedule"}
 }
 
 func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, training, module string) (bool, error) {
@@ -532,10 +562,7 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 		}
 	} else {
 		inst.State = PendingApproval
-		at := st.Platform.ProgramSchedule(team, training).AddOpen(now, st.Platform.Settings.Escalation())
-		if at.IsZero() { // the schedule never opens for long enough
-			return nil, apperr.Wrap(apperr.Unavailable, "this program's schedule leaves no time to escalate a request")
-		}
+		at := escalateAt(st.Platform, team, training, now)
 		inst.EscalateAt = &at
 	}
 	err = s.insert(ctx, inst)
@@ -583,7 +610,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		return
 	}
 	now := s.Now()
-	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"})
+	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now))
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
@@ -935,16 +962,31 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	if inst.State != Ready || inst.Extended || inst.MaxExtension == 0 || inst.EndsAt == nil {
 		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
 	}
-	// ponytail: M3 re-checks the schedule window and cost tier here (spec §8.6); local labs cost nothing.
-	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, extended = true, last_activity_at = $3
-		WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, inst.EndsAt.Add(inst.MaxExtension), s.Now())
+	end, reason := inst.EndsAt.Add(inst.MaxExtension), "ttl"
+	if lim := s.scheduleLimit(inst, s.Now()); !lim.At.IsZero() && lim.At.Before(end) {
+		end, reason = lim.At, lim.Reason
+	}
+	if !end.After(*inst.EndsAt) {
+		return nil, apperr.Wrap(apperr.Conflict, "the schedule window closes first; this lab can't be extended")
+	}
+	// ponytail: spec §8.6 "Extension pending" (send the extension back through approval) ships with real cloud costs
+	// in M6; until then an extension that would lift the estimate into a higher tier is refused.
+	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil && st.Platform.Settings.CostTiers != nil {
+		tiers := *st.Platform.Settings.CostTiers
+		more := inst.EstimateUSD + inst.HourlyUSD*end.Sub(*inst.EndsAt).Hours()
+		if rbac.Tier(inst.Runtime, more, tiers) != rbac.Tier(inst.Runtime, inst.EstimateUSD, tiers) {
+			return nil, apperr.Wrap(apperr.Conflict, "this extension would need a new approval; end the lab and request it again, or ask your approver")
+		}
+	}
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, limit_reason = $3, extended = true, last_activity_at = $4
+		WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, end, reason, s.Now())
 	if err != nil {
 		return nil, err
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
 	}
-	s.event(ctx, inst.ID, "extended", inst.MaxExtension.String())
+	s.event(ctx, inst.ID, "extended", end.Sub(*inst.EndsAt).String())
 	return s.Get(ctx, u, labID)
 }
 
@@ -1049,7 +1091,10 @@ func (s *Service) Sweep(ctx context.Context) {
 		case inst.State == Provisioning:
 			reason = "provision_timeout"
 		case inst.EndsAt != nil && !inst.EndsAt.After(now):
-			reason = "ttl"
+			reason = inst.LimitReason // ttl or schedule
+			if reason == "" {
+				reason = "ttl"
+			}
 		}
 		s.destroy(ctx, inst, reason)
 	}

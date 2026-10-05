@@ -170,5 +170,6 @@ output "oidc_issuer"          { value = "https://cognito-idp.eu-west-1.amazonaws
 | Crucible shows "invalid id token" after sign-in | Issuer mismatch, e.g. a pool in another region | Check `terraform -chdir=deploy/aws/persistent output oidc_issuer` matches the region; re-run `crucible aws up` |
 | Signed in, but the Hearth is empty | The email isn't enrolled in any program | Add the exact email to `team.yaml` and a `programs/*.yaml` |
 | "Your identity provider did not send an email address" | The app client lacks the `email` scope | Restore the scopes `openid email profile` (Terraform does this) |
+| Sign-in fails with "email not verified" (or Crucible rejects the account) | The user's `email_verified` attribute is false, e.g. created without `--message-action`/verification | `aws cognito-idp admin-update-user-attributes --user-pool-id "$POOL" --username <email> --user-attributes Name=email_verified,Value=true` |
 | Invite email never arrives | Daily email limit reached, or spam filter | Resend tomorrow, check spam, or switch to SES (§8) |
 | `terraform destroy` refuses: "Instance cannot be destroyed" | Working as intended (`prevent_destroy`) | Only remove the user pool deliberately: turn off deletion protection in the console first, then edit `cognito.tf` |

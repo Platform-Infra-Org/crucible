@@ -223,3 +223,63 @@ func TestSweepDoesNotKillALongPendingRequestOnceApproved(t *testing.T) {
 	close(release)
 	f.waitState(t, f.u, v.ID, Ready)
 }
+
+func TestEscalationClimbsTiersThenExpires(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	f.plat.Teams["forge"].Programs["forge-101"].Roles.Approvers = []string{"senior@crucible.local"}
+	v := f.request(t, f.u)
+	tier := func() string { got, _ := f.s.Get(ctx, f.u, v.ID); return got.Tier }
+	f.clk.Add(4*time.Hour - time.Minute)
+	f.s.Sweep(ctx)
+	if tier() != rbac.TierApprover {
+		t.Fatal("not due yet")
+	}
+	f.clk.Add(time.Minute)
+	f.s.Sweep(ctx)
+	if tier() != rbac.TierLeader {
+		t.Fatalf("after 4h: leader, got %s", tier())
+	}
+	if ev := f.notes.last(notify.LabEscalated); ev == nil || strings.Join(ev.To, ",") != "leader@crucible.local" {
+		t.Fatalf("leader notified: %+v", ev)
+	}
+	if list, _ := f.s.Approvals(ctx, f.other); len(list) != 1 {
+		t.Fatal("the original approver can still decide after escalation")
+	}
+	f.clk.Add(4 * time.Hour)
+	f.s.Sweep(ctx)
+	if tier() != rbac.TierAdmin {
+		t.Fatalf("after 8h: admin, got %s", tier())
+	}
+	if ev := f.notes.last(notify.LabEscalated); ev == nil || strings.Join(ev.To, ",") != "admin@crucible.local" {
+		t.Fatalf("admin notified: %+v", ev)
+	}
+	f.clk.Add(4 * time.Hour)
+	f.s.Sweep(ctx)
+	got, _ := f.s.Get(ctx, f.u, v.ID)
+	if got.State != Expired || got.EndReason != "unanswered" {
+		t.Fatalf("after 12h unanswered: %+v", got)
+	}
+	if ev := f.notes.last(notify.LabRejected); ev == nil || ev.To[0] != "trainee@crucible.local" {
+		t.Fatalf("trainee told it expired: %+v", ev)
+	}
+}
+
+func TestEscalationCountsBusinessHoursOnly(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	f.plat.Teams["forge"].Programs["forge-101"].Schedule = "business-hours" // Mon–Fri 08:00–19:00 Europe/Bucharest (UTC+3 in early October)
+	f.clk.Set(time.Date(2026, 10, 9, 14, 0, 0, 0, time.UTC))                // Friday 17:00 in Bucharest
+	v := f.request(t, f.u)
+	want := time.Date(2026, 10, 12, 7, 0, 0, 0, time.UTC) // Monday 10:00 in Bucharest: 2h Friday + 2h Monday
+	if v.EscalateAt == nil || !v.EscalateAt.Equal(want) {
+		t.Fatalf("escalate_at %v, want %v", v.EscalateAt, want)
+	}
+	f.clk.Set(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)) // Saturday
+	f.s.Sweep(ctx)
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.Tier != rbac.TierApprover {
+		t.Fatalf("no escalation over the weekend, got %s", got.Tier)
+	}
+}

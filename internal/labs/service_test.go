@@ -28,6 +28,7 @@ type clock struct {
 
 func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 func (c *clock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t = c.t.Add(d) }
+func (c *clock) Set(t time.Time)     { c.mu.Lock(); defer c.mu.Unlock(); c.t = t }
 
 type fakeRunner struct {
 	mu            sync.Mutex

@@ -282,3 +282,46 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 	}
 	return next, nil
 }
+
+// escalate moves an unanswered request one tier up (approver → leader → admin, skipping tiers with nobody but the
+// requester) or, after the admin tier also timed out, expires it (spec §9.1.5). Guarded by the current tier so a
+// concurrent decision or a second sweep never applies it twice.
+func (s *Service) escalate(ctx context.Context, inst *Instance) {
+	st, err := s.platform()
+	if err != nil {
+		return
+	}
+	p := st.Platform
+	email, _, err := s.requester(ctx, inst.UserID)
+	if err != nil {
+		s.Log.Error("escalation: requester lookup failed", "lab", inst.ID, "err", err)
+		return
+	}
+	now := s.Now()
+	next := rbac.NextTier(inst.Tier)
+	if next != "" {
+		next = rbac.Checker{P: p}.Route(next, inst.Team, inst.Training, email)
+	}
+	if next == "" {
+		tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'expired', end_reason = 'unanswered', destroyed_at = $2
+			WHERE id = $1 AND state = 'pending_approval' AND tier = $3`, inst.ID, now, inst.Tier)
+		if err != nil || tag.RowsAffected() == 0 {
+			return
+		}
+		s.event(ctx, inst.ID, "expired", "nobody answered at any tier")
+		s.notify(ctx, notify.Event{Kind: notify.LabRejected, To: []string{email},
+			Subject: fmt.Sprintf("Your %s lab request expired", inst.Training),
+			Text:    fmt.Sprintf("Nobody answered your request for the %s lab (%s/%s) in time. You can request it again.", inst.Module, inst.Team, inst.Training),
+			Link:    labLink(inst)})
+		return
+	}
+	at := p.ProgramSchedule(inst.Team, inst.Training).AddOpen(now, p.Settings.Escalation())
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET tier = $2, escalate_at = $3
+		WHERE id = $1 AND state = 'pending_approval' AND tier = $4`, inst.ID, next, at, inst.Tier)
+	if err != nil || tag.RowsAffected() == 0 {
+		return
+	}
+	s.event(ctx, inst.ID, "escalated", inst.Tier+" → "+next)
+	inst.Tier = next
+	s.notifyRequest(ctx, p, inst, email, notify.LabEscalated)
+}

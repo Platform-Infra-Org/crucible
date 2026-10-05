@@ -996,7 +996,8 @@ func (s *Service) Sweep(ctx context.Context) {
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
 		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 - interval '15 minutes')
-		   OR (state = 'destroying' AND destroyed_at < $1 - interval '10 minutes')`, now)
+		   OR (state = 'destroying' AND destroyed_at < $1 - interval '10 minutes')
+		   OR (state = 'pending_approval' AND escalate_at <= $1)`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)
 		return
@@ -1012,6 +1013,9 @@ func (s *Service) Sweep(ctx context.Context) {
 	for _, inst := range due {
 		reason := "idle"
 		switch {
+		case inst.State == PendingApproval:
+			s.escalate(ctx, inst)
+			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 			err := s.Runners[inst.Runtime].Destroy(ctx, inst)

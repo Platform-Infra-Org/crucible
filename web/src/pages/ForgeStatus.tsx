@@ -9,7 +9,8 @@ import { usd } from '../lib/money'
 export function ForgeStatusPage() {
   const plat = useFetch<PlatformView>('/api/admin/platform')
   const ks = useFetch<KillSwitch>('/api/kill-switch')
-  if (plat.error) return <ErrorBox error={plat.error} />
+  const err = plat.error ?? ks.error
+  if (err) return <ErrorBox error={err} />
   if (!plat.data || !ks.data) return <Loader label="Reading the gauges…" />
   const p = plat.data
   const k = ks.data

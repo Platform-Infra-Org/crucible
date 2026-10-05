@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,11 +22,12 @@ type echoPTY struct {
 	w       *io.PipeWriter
 	mu      sync.Mutex
 	resized [2]int
+	closed  atomic.Bool
 }
 
 func (e *echoPTY) Read(b []byte) (int, error)  { return e.r.Read(b) }
 func (e *echoPTY) Write(b []byte) (int, error) { return e.w.Write(b) }
-func (e *echoPTY) Close() error                { return e.w.Close() }
+func (e *echoPTY) Close() error                { e.closed.Store(true); return e.w.Close() }
 func (e *echoPTY) Resize(c, r int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -35,7 +37,8 @@ func (e *echoPTY) Resize(c, r int) error {
 
 type ptyRunner struct {
 	fakeRunner
-	pty *echoPTY
+	pty   *echoPTY
+	opens atomic.Int32
 }
 
 func (p *ptyRunner) OpenPTY(context.Context, *Instance, string, int, int) (PTY, error) {
@@ -84,4 +87,48 @@ func TestTerminalBridge(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("resize not forwarded")
+}
+
+func TestTerminalOriginAndCleanup(t *testing.T) {
+	f := setup(t, true)
+	r, w := io.Pipe()
+	pr := &ptyRunner{pty: &echoPTY{r: r, w: w}}
+	f.s.Runners["local"] = pr
+	v := f.start(t)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.u)))
+		})
+	})
+	f.s.Routes(router)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/labs/" + v.ID + "/terminals/shell/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"https://evil.example"}}}); err == nil {
+		ws.CloseNow()
+		t.Fatal("cross-origin dial accepted")
+	}
+	if n := pr.opens.Load(); n != 0 {
+		t.Fatalf("OpenPTY called %d times for cross-origin request", n)
+	}
+
+	ws, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Write(ctx, websocket.MessageBinary, []byte("x"))
+	if _, _, err := ws.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ws.CloseNow()
+	for i := 0; i < 200 && !pr.pty.closed.Load(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !pr.pty.closed.Load() {
+		t.Fatal("pty not closed after disconnect")
+	}
 }

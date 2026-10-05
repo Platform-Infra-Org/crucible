@@ -110,20 +110,22 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	if cols <= 0 || rows <= 0 {
 		cols, rows = 120, 32
 	}
-	pty, err := s.Runners[inst.Runtime].OpenPTY(r.Context(), inst, service, cols, rows)
-	if err != nil {
-		httpx.Error(w, s.runnerErr(err))
-		return
-	}
-	defer pty.Close()
-	ws, err := websocket.Accept(w, r, nil) // same-origin only (default)
+	ws, err := websocket.Accept(w, r, nil) // same-origin only (default); before any exec
 	if err != nil {
 		return
 	}
 	defer ws.CloseNow()
+	pty, err := s.Runners[inst.Runtime].OpenPTY(r.Context(), inst, service, cols, rows)
+	if err != nil {
+		_ = ws.Close(websocket.StatusTryAgainLater, s.runnerErr(err).Error())
+		return
+	}
+	ws.SetReadLimit(1 << 20)
 	ctx := r.Context()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := pty.Read(buf)
@@ -135,6 +137,11 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}()
+	defer func() {
+		_ = pty.Close()
+		ws.CloseNow()
+		<-done
 	}()
 	for {
 		typ, data, err := ws.Read(ctx)

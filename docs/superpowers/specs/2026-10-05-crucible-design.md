@@ -190,6 +190,12 @@ tasks:
     instructions: tasks/01-create-network.md
     check: { script: checks/01.sh, run_in: workstation, timeout: 30s }
     points: 2
+    hints:                  # revealed one at a time, in order (see §8.4)
+      - text: "Look at `docker network --help`."
+      - text: "You need the `create` subcommand with `--driver bridge`."
+        cost: 0.5           # points deducted if revealed (default from lab-level hint_cost, else 0)
+      - file: hints/01-solution.md   # final hint may be the full solution
+        cost: 1
   - id: t2
     instructions: tasks/02-inspect.md
     quiz: q2                # inline terminal quiz in the task panel
@@ -273,10 +279,18 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - **aws:** a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
 
 ### 8.3 Lab UI (KodeKloud-style)
-- **Left panel (≈40%):** task list with status pips; current task's Markdown; inline terminal-quiz input; **Check** button (spinner → spark burst on pass, shake + feedback on fail); hint reveal; TTL countdown + "extend" (if allowed).
+- **Left panel (≈40%):** task list with status pips; current task's Markdown; inline terminal-quiz input; **Check** button (spinner → spark burst on pass, shake + feedback on fail); **Hint** button (§8.4); TTL countdown + "extend" (if allowed).
 - **Right panel:** xterm.js terminal with **tabs**, one per `terminals` entry (plus "+" for extra shells on the same service); reconnect on drop; copy/paste; font size control.
 - Resizable splitter; collapse left panel; full-screen terminal mode.
 - Loading/provisioning screen: molten crucible animation + rotating quotes + live provisioning log stream.
+
+### 8.4 Hints
+- Each lab task may define an ordered list of **hints** (inline `text` or a Markdown `file`) in `lab.yaml`; authors typically escalate from a nudge to the full solution.
+- The **Hint** button reveals the next hint only; earlier hints stay visible. Before revealing a hint with a cost, the UI shows a confirm: "This hint costs 0.5 points."
+- **Cost:** per hint `cost`, falling back to lab-level `hint_cost`, else 0. Deductions apply to the task's points and never go below 0.
+- Hint text is fetched from the server on reveal, never shipped to the client in advance.
+- Every reveal is recorded in `hint_reveals`. Scorers see hints used next to check results; the journey view treats a revealed final hint as a "stuck" signal.
+- `crucible lint` checks that hint files exist and that each cost is ≥ 0 and ≤ the task's points.
 
 ---
 
@@ -318,7 +332,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 
 ## 11. Mentor & journey view
 - Each trainee may have a mentor (in `team.yaml`). Mentor dashboard: mentees' progress, pending submissions, recent lab failures.
-- **Journey view** (leader/mentor/manager): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, no activity for 5 business days, or a submission returned twice.
+- **Journey view** (leader/mentor/manager): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, the final (solution) hint revealed, no activity for 5 business days, or a submission returned twice.
 
 ---
 
@@ -335,7 +349,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 - **Accessibility:** keyboard-navigable everything (including terminal tab switching), focus rings, ARIA live regions for check results, contrast checked per theme.
 
 ## 13. Data model (Postgres, core tables)
-`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
+`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
 Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 
 ## 14. Errors, security, testing

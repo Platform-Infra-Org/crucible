@@ -4,6 +4,8 @@ import { motion } from 'motion/react'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { CheckResult, HintResult, LabView, ModuleLab, TaskDetail } from '../types'
+import { usd } from '../lib/money'
+import { tierLabel } from './Approvals'
 import { clockOffset } from '../lib/timer'
 import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
 import { Embers } from '../components/Embers'
@@ -20,6 +22,8 @@ const endMessages: Record<string, string> = {
   ttl: 'Time ran out on this lab.',
   user: 'You ended the lab.',
   provision_timeout: 'The lab took too long to start.',
+  schedule: "The program's schedule window closed.",
+  kill_switch: 'An admin paused all labs.',
   agent_restarted: 'Your laptop agent restarted — start the lab again.',
 }
 
@@ -42,7 +46,7 @@ export function LabPage() {
     setPoll(info.runtime_ready ? undefined : 3000)
   }, [info])
   useEffect(() => {
-    if (!lab || lab.state === 'destroyed' || lab.state === 'failed') return
+    if (!lab || ['destroyed', 'failed', 'rejected', 'expired'].includes(lab.state)) return
     const id = setInterval(async () => {
       try {
         setLab(await api<LabView>(`/api/labs/${lab.id}`))
@@ -68,6 +72,15 @@ export function LabPage() {
       setStarting(false)
     }
   }
+  const withdraw = async () => {
+    if (!lab) return
+    try {
+      setLab(await api<LabView>(`/api/labs/${lab.id}`, { method: 'DELETE' }))
+    } catch (e) {
+      setStartErr((e as Error).message)
+    }
+  }
+  const pending = lab?.state === 'pending_approval'
   const cooled = lab?.state === 'destroyed'
   return (
     <section className="page lobby">
@@ -85,15 +98,38 @@ export function LabPage() {
         </div>
       )}
       {lab?.state === 'failed' && <p className="error">The lab failed to start: {lab.error}</p>}
+      {pending && lab && (
+        <div className="request" role="status" data-testid="request-status">
+          <p>
+            Waiting for approval from {tierLabel[lab.tier]} · estimated {usd(lab.estimate_usd)}
+            {lab.escalate_at && <> · moves up a tier at {new Date(lab.escalate_at).toLocaleString()}</>}
+          </p>
+          {lab.over_cap && <p className="warn">This would pass a budget cap, so only an admin can approve it.</p>}
+          <button className="ghost" onClick={withdraw}>Withdraw request</button>
+        </div>
+      )}
+      {lab?.state === 'rejected' && (
+        <p className="error" data-testid="request-status">
+          Your request was rejected by {lab.decided_by}{lab.decision_note ? `: “${lab.decision_note}”` : '.'}
+        </p>
+      )}
+      {lab?.state === 'expired' && (
+        <p className="muted" data-testid="request-status">
+          {lab.end_reason === 'withdrawn' ? 'You withdrew your request.' : 'Nobody answered your request in time.'}
+        </p>
+      )}
       {!info.runtime_ready && (
         <p className="warn">
           {info.runtime_message} {info.runtime === 'local' && <Link to="/connect">Connect your laptop</Link>}
         </p>
       )}
+      {info.blocked && <p className="warn">{info.blocked}</p>}
       {startErr && <p className="error">{startErr}</p>}
-      <button className="primary big" disabled={!info.runtime_ready || starting} onClick={start}>
-        {cooled ? 'Ignite again' : 'Ignite the forge'}
-      </button>
+      {!pending && (
+        <button className="primary big" disabled={!info.runtime_ready || !!info.blocked || starting} onClick={start}>
+          {info.needs_approval ? `Request approval (${usd(info.estimate_usd)})` : cooled ? 'Ignite again' : 'Ignite the forge'}
+        </button>
+      )}
     </section>
   )
 }

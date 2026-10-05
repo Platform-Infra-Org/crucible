@@ -27,16 +27,36 @@ export type TaskView = {
   id: string; title: string; status: TaskStatus; kind: 'check' | 'quiz' | 'review'; points: number; awarded: number
   quiz_prompt?: string; has_setup: boolean; hints_total: number; hints_revealed: number; next_hint_cost: number
 }
-export type LabState = 'provisioning' | 'ready' | 'destroying' | 'destroyed' | 'failed'
+export type LabState = 'pending_approval' | 'provisioning' | 'ready' | 'destroying' | 'destroyed' | 'failed' | 'rejected' | 'expired'
+export type Tier = 'auto' | 'approver' | 'leader' | 'admin'
 export type LabView = {
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
   terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number
   can_extend: boolean; self_reported: boolean; complete: boolean; score: number; max_score: number
+  estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
 export type HintResult = { index: number; text: string; cost: number; lab: LabView }
-export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null }
+export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null
+  estimate_usd: number; needs_approval: boolean; blocked?: string }
 
 export type NotificationPrefs = { email_enabled: boolean; kinds: { kind: string; label: string; muted: boolean }[] }
+
+export type Spend = { spent_usd: number; committed_usd: number; budget_usd: number; cap_usd: number }
+export type ScheduleInfo = { name: string; text: string; open: boolean; closes_at?: string; next_open?: string }
+export type RecentLab = { module: string; state: LabState; end_reason?: string; estimate_usd: number; created_at: string }
+export type Approval = {
+  id: string; requester: string; requester_name: string; team: string; training: string; module: string; lab_title: string
+  runtime: string; hourly_usd: number; estimate_usd: number; ttl_s: number; tier: Tier; over_cap: boolean
+  requested_at: string; escalate_at?: string; team_spend: Spend; program_spend: Spend; recent: RecentLab[]; schedule: ScheduleInfo
+}
+export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
+export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
+export type TrainingStatus = { id: string; repo: string; branch: string; head: string; problems: string[] }
+export type PlatformView = {
+  platform_sha: string; platform_error?: string; synced_at: string
+  cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
+  escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
+}

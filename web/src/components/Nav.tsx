@@ -14,6 +14,8 @@ export function Nav() {
       </Link>
       <NavLink to="/" end>Hearth</NavLink>
       {(me.teams.length > 0 || me.is_admin) && <NavLink to="/teams">Team</NavLink>}
+      {me.can_approve && <NavLink to="/approvals">Approvals</NavLink>}
+      {me.is_admin && <NavLink to="/admin">Forge Status</NavLink>}
       <NavLink to="/connect">Connect your laptop</NavLink>
       <NavLink to="/settings">Settings</NavLink>
       <span className="spacer" />

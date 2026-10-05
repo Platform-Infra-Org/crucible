@@ -17,6 +17,8 @@ import { LabPage } from './pages/Lab'
 import { ConnectPage } from './pages/Connect'
 import { SettingsPage } from './pages/Settings'
 import { TeamPage, TeamsIndex } from './pages/Team'
+import { ApprovalsPage } from './pages/Approvals'
+import { ForgeStatusPage } from './pages/ForgeStatus'
 import { ProgramSettingsPage } from './pages/ProgramSettings'
 
 export { useMe }
@@ -65,6 +67,8 @@ export default function App() {
           <Route path="/teams" element={<TeamsIndex />} />
           <Route path="/teams/:team" element={<TeamPage />} />
           <Route path="/teams/:team/programs/:training" element={<ProgramSettingsPage />} />
+          <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/admin" element={<ForgeStatusPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>
         <Toaster />

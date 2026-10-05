@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -469,12 +470,34 @@ func localPath(p string) bool {
 
 // localCompose rejects compose settings that would give a local lab access to the trainee's laptop.
 func (l *loader) localCompose(file string) {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return // l.file in lab() already reported it
+	}
+	// docker compose merges every "---" document, so exactly one is allowed.
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var top map[string]yaml.Node
-	if err := yamlx.ReadLoose(file, &top); err != nil {
-		return // the services decode in lab() already reported it
+	if err := dec.Decode(&top); err != nil {
+		if err != io.EOF { // an empty file is reported by lab() as having no services
+			l.add(file, "%v", err)
+		}
+		return
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err != io.EOF {
+		l.add(file, "compose file: multiple YAML documents are not allowed for runtime: local")
+		return
 	}
 	bad := func(where, what string) {
 		l.add(file, "%s: %s is not allowed for runtime: local (it can reach the trainee's laptop); use runtime: cluster", where, what)
+	}
+	declared := map[string]bool{}
+	if vols, ok := top["volumes"]; ok {
+		var defs map[string]yaml.Node
+		_ = vols.Decode(&defs)
+		for name := range defs {
+			declared[name] = true
+		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(top)) {
 		v := top[k]
@@ -488,7 +511,7 @@ func (l *loader) localCompose(file string) {
 			}
 			for _, name := range slices.Sorted(maps.Keys(svcs)) {
 				n := svcs[name]
-				l.localService(file, name, &n, bad)
+				l.localService(file, name, &n, declared, bad)
 			}
 		case k == "volumes", k == "networks":
 			var defs map[string]map[string]yaml.Node
@@ -514,7 +537,7 @@ func (l *loader) localCompose(file string) {
 	}
 }
 
-func (l *loader) localService(file, name string, n *yaml.Node, bad func(where, what string)) {
+func (l *loader) localService(file, name string, n *yaml.Node, declared map[string]bool, bad func(where, what string)) {
 	var svc map[string]yaml.Node
 	if err := n.Decode(&svc); err != nil {
 		l.add(file, "service %q: %v", name, err)
@@ -524,9 +547,9 @@ func (l *loader) localService(file, name string, n *yaml.Node, bad func(where, w
 	for _, k := range slices.Sorted(maps.Keys(svc)) {
 		v := svc[k]
 		switch {
-		case k == "<<" || strings.HasPrefix(k, "x-"): // YAML merge keys and extensions; merged keys are checked too
+		case strings.HasPrefix(k, "x-"): // extensions; yaml.v3 resolves "<<" merges when decoding, so merged keys are checked too
 		case k == "volumes":
-			localVolumes(where, &v, bad)
+			localVolumes(where, &v, declared, bad)
 		case k == "env_file":
 			for _, p := range envFiles(&v) {
 				if !localPath(p) {
@@ -539,40 +562,69 @@ func (l *loader) localService(file, name string, n *yaml.Node, bad func(where, w
 	}
 }
 
-func localVolumes(where string, n *yaml.Node, bad func(where, what string)) {
+var volumeModes = map[string]bool{"ro": true, "rw": true, "z": true, "Z": true, "nocopy": true, "delegated": true,
+	"cached": true, "consistent": true, "shared": true, "slave": true, "private": true, "rshared": true, "rslave": true, "rprivate": true}
+
+// localVolumes allows named volumes (declared at the top level), tmpfs, and read-only binds inside the lab
+// directory. A writable bind would let the container plant symlinks or rewrite files the agent re-reads.
+func localVolumes(where string, n *yaml.Node, declared map[string]bool, bad func(where, what string)) {
 	if n.Kind != yaml.SequenceNode {
 		bad(where, "volumes that are not a list")
 		return
 	}
 	for _, v := range n.Content {
 		var src string
+		ro := false
 		if v.Kind == yaml.ScalarNode {
-			if parts := strings.Split(v.Value, ":"); len(parts) > 1 {
-				src = parts[0]
+			parts := strings.Split(v.Value, ":")
+			if len(parts) == 1 {
+				continue // anonymous volume
 			}
+			if last := parts[len(parts)-1]; len(parts) > 2 && func() bool {
+				for _, m := range strings.Split(last, ",") {
+					if !volumeModes[m] {
+						return false
+					}
+				}
+				return true
+			}() {
+				ro = slices.Contains(strings.Split(last, ","), "ro")
+				parts = parts[:len(parts)-1]
+			}
+			if len(parts) != 2 { // also catches Windows-style "C:\\x:/y"
+				bad(where, fmt.Sprintf("volume %q (unsupported syntax)", v.Value))
+				continue
+			}
+			src = parts[0]
 		} else {
 			var long struct {
-				Type   string `yaml:"type"`
-				Source string `yaml:"source"`
+				Type     string `yaml:"type"`
+				Source   string `yaml:"source"`
+				ReadOnly bool   `yaml:"read_only"`
 			}
 			_ = v.Decode(&long)
 			switch long.Type {
-			case "volume", "tmpfs":
+			case "tmpfs":
+				continue
+			case "volume":
+				if long.Source != "" && !declared[long.Source] {
+					bad(where, fmt.Sprintf("volume %q (not declared in top-level volumes)", long.Source))
+				}
 				continue
 			case "bind":
-				src = long.Source
+				src, ro = long.Source, long.ReadOnly
 			default:
 				bad(where, fmt.Sprintf("volume type %q", long.Type))
 				continue
 			}
 		}
-		if src == "" {
+		if declared[src] {
 			continue
 		}
-		if strings.HasPrefix(src, ".") || strings.ContainsAny(src, `/\~$`) { // a bind mount, not a named volume
-			if !localPath(src) {
-				bad(where, fmt.Sprintf("volume %q (a host path outside the lab)", src))
-			}
+		if !localPath(src) {
+			bad(where, fmt.Sprintf("volume %q (a host path outside the lab)", src))
+		} else if !ro {
+			bad(where, fmt.Sprintf("writable bind %q (binds must be read-only; use a named volume for state)", src))
 		}
 	}
 }

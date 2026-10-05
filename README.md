@@ -23,6 +23,10 @@ browser cannot infer answers from them. Set it to a random value in every real d
 restarts (changing it only reshuffles quizzes that are open at that moment). If it is unset the API logs a warning and
 uses a fixed development value; the local compose stack sets a dev value.
 
+## Local labs and your laptop
+
+`runtime: local` labs run in Docker on the trainee's laptop. Their compose file is checked against an allowlist (no privileged mode, host namespaces, published ports, writable binds, secrets), but the containers can still reach the internet and `host.docker.internal`. Use `runtime: cluster` labs when you need stricter isolation.
+
 ## Authoring
 
 Content lives in git: see `examples/forge-101` and the spec in `docs/superpowers/specs/`.

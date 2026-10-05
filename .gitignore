@@ -5,3 +5,8 @@ web/dist/
 e2e/node_modules/
 e2e/test-results/
 e2e/playwright-report/
+
+# terraform
+deploy/aws/**/.terraform/
+deploy/aws/**/terraform.tfstate*
+deploy/aws/main/*.tfvars

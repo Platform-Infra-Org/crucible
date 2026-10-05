@@ -1,0 +1,21 @@
+id: crucible-heat
+runtime: cluster            # runs on Crucible's cluster: nothing to install, checks run server-side
+ttl: 1h
+idle_timeout: 20m
+idle_warning: 5m
+task_order: linear
+terminals:
+  - { name: shell, service: shell }
+  - { name: web, service: web }
+tasks:
+  - id: t1-cast
+    instructions: tasks/01-cast.md
+    check: { script: checks/01-cast.sh, run_in: shell }
+    points: 2
+  - id: t2-relight
+    instructions: tasks/02-relight.md
+    setup: { script: setup/02-break-nginx.sh, run_in: web }
+    check: { script: checks/02-relight.sh, run_in: web }
+    points: 3
+    hints:
+      - text: "Look at the `listen` lines in `/etc/nginx/conf.d/default.conf`, then `nginx -s reload`."

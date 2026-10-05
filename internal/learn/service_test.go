@@ -54,7 +54,7 @@ func TestProgressionUnlocksModuleTwo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !o.Modules[0].Complete || o.Modules[1].Locked || o.Percent != 50 {
+	if !o.Modules[0].Complete || o.Modules[1].Locked || o.Percent != 40 {
 		t.Fatalf("outline after module 1: %+v", o)
 	}
 	_, md, err := s.Reading(ctx, u, "forge", "forge-101", "02-first-lab", "before-the-lab")

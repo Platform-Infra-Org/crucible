@@ -16,6 +16,21 @@ mock_provider "aws" {
   }
 }
 mock_provider "random" {}
+override_resource {
+  target          = random_password.db
+  override_during = plan
+  values          = { result = "dbpw-aaaaaaaa" }
+}
+override_resource {
+  target          = random_password.hook
+  override_during = plan
+  values          = { result = "hookpw-bbbbbbbb" }
+}
+override_resource {
+  target          = random_password.quiz
+  override_during = plan
+  values          = { result = "quizpw-cccccccc" }
+}
 
 variables {
   region               = "eu-west-1"
@@ -46,6 +61,10 @@ run "node_is_locked_down" {
   assert {
     condition     = !strcontains(aws_instance.node.user_data, "s3cret")
     error_message = "secrets must not appear in user data"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, random_password.db.result) && !strcontains(aws_instance.node.user_data, random_password.hook.result) && !strcontains(aws_instance.node.user_data, random_password.quiz.result)
+    error_message = "generated passwords must not appear in user data"
   }
 }
 

@@ -54,6 +54,11 @@ resource "random_password" "db" {
   special = false # used inside a postgres:// URL
 }
 
+resource "random_password" "quiz" {
+  length  = 48
+  special = false
+}
+
 resource "random_password" "hook" {
   length  = 32
   special = false
@@ -66,11 +71,12 @@ locals {
     git_credentials    = var.git_credentials == "" ? "none" : var.git_credentials # SSM rejects empty values
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
+    quiz_secret        = random_password.quiz.result
   }
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password"])
+  for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]
@@ -93,8 +99,12 @@ data "aws_iam_policy_document" "node" {
     resources = ["arn:aws:s3:::${var.data_bucket}"]
   }
   statement {
-    actions   = ["s3:GetObject", "s3:PutObject"]
+    actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::${var.data_bucket}/*"]
+  }
+  statement {
+    actions   = ["s3:PutObject"]
+    resources = ["arn:aws:s3:::${var.data_bucket}/snapshots/*"]
   }
   statement {
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
@@ -157,6 +167,8 @@ resource "aws_instance" "node" {
   })
 
   tags = { Name = var.name }
+
+  depends_on = [aws_ssm_parameter.secret, aws_iam_role_policy.node]
 
   lifecycle {
     ignore_changes = [ami, user_data] # never replace the node because Ubuntu published a new AMI

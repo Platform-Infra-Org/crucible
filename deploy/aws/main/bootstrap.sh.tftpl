@@ -1,17 +1,19 @@
 #!/bin/bash
 # Cloud-init user data: installs k3s + helm + aws cli, writes Crucible's node scripts, deploys the current release.
+# Writes /opt/crucible/.ready when done, or /opt/crucible/.failed if any step fails.
 set -euxo pipefail
 exec > >(tee -a /var/log/crucible-bootstrap.log) 2>&1
 export DEBIAN_FRONTEND=noninteractive
+mkdir -p /opt/crucible
+trap 'touch /opt/crucible/.failed' ERR
+
+retry() { for i in 1 2 3; do "$@" && return 0; sleep 10; done; return 1; }
 
 timedatectl set-timezone '${timezone}'
-apt-get update
-apt-get install -y unzip jq curl
-curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
+apt-get -o DPkg::Lock::Timeout=600 update
+apt-get -o DPkg::Lock::Timeout=600 install -y unzip curl
+retry curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
 unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --update
-
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${k3s_version}' sh -s - --write-kubeconfig-mode 600
-curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Traefik (bundled with k3s): Let's Encrypt via HTTP-01 and an HTTP→HTTPS redirect.
 mkdir -p /var/lib/rancher/k3s/server/manifests
@@ -53,6 +55,11 @@ spec:
             permanent: true
 YAML
 
+retry curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
+INSTALL_K3S_VERSION='${k3s_version}' sh /tmp/k3s-install.sh --write-kubeconfig-mode 600
+retry curl -fsSL https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz -o /tmp/helm.tgz
+tar -xzf /tmp/helm.tgz -C /tmp && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+
 cat > /etc/crucible.env <<'ENV'
 REGION=${region}
 NAME=${name}
@@ -65,16 +72,20 @@ BACKUP_CRON='${backup_cron}'
 TIMEZONE=${timezone}
 ENV
 
-mkdir -p /opt/crucible
 cat > /opt/crucible/deploy.sh <<'SH'
 #!/bin/bash
 # Imports the current release image into k3s and (re)installs the Helm release. Safe to re-run.
 set -euo pipefail
+exec 9>/run/crucible-deploy.lock
+flock 9
 source /etc/crucible.env
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml AWS_REGION=$REGION
-sha=$(aws s3 cp "s3://$DATA_BUCKET/current-release" - 2>/dev/null) || { echo "no release published yet"; exit 1; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+sha=$(aws s3 cp "s3://$DATA_BUCKET/current-release" - 2>"$work/err") || {
+  if grep -qE 'NoSuchKey|404|Not Found' "$work/err"; then echo "no release published yet"; else cat "$work/err" >&2; fi
+  exit 1
+}
 aws s3 cp "s3://$DATA_BUCKET/releases/$sha/crucible-image.tar.gz" "$work/image.tar.gz"
 aws s3 cp "s3://$DATA_BUCKET/releases/$sha/chart.tgz" "$work/chart.tgz"
 gunzip -c "$work/image.tar.gz" | k3s ctr images import -
@@ -84,14 +95,15 @@ kubectl -n crucible create secret generic crucible-secrets \
   --from-literal=OIDC_CLIENT_SECRET="$(param oidc_client_secret)" \
   --from-literal=CRUCIBLE_PLATFORM_REPO="$(param platform_repo)" \
   --from-literal=CRUCIBLE_GIT_HOOK_SECRET="$(param git_hook_secret)" \
+  --from-literal=CRUCIBLE_QUIZ_SECRET="$(param quiz_secret)" \
   --from-literal=POSTGRES_PASSWORD="$(param db_password)" \
   --from-literal=git-credentials="$(param git_credentials)" \
   --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade --install crucible "$work/chart.tgz" -n crucible \
-  --set image.tag="$sha" --set host="$DOMAIN" --set publicURL="https://$DOMAIN" \
-  --set platformBranch="$PLATFORM_BRANCH" --set oidc.issuer="$OIDC_ISSUER" --set oidc.clientId="$OIDC_CLIENT_ID" \
+  --set-string image.tag="$sha" --set host="$DOMAIN" --set publicURL="https://$DOMAIN" \
+  --set-string platformBranch="$PLATFORM_BRANCH" --set oidc.issuer="$OIDC_ISSUER" --set oidc.clientId="$OIDC_CLIENT_ID" \
   --set backup.bucket="$DATA_BUCKET" --set backup.region="$REGION" \
-  --set backup.schedule="$BACKUP_CRON" --set backup.timeZone="$TIMEZONE" \
+  --set-string backup.schedule="$BACKUP_CRON" --set-string backup.timeZone="$TIMEZONE" \
   --wait --timeout 10m
 echo "deployed $sha"
 SH
@@ -103,9 +115,14 @@ set -euo pipefail
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 job="crucible-backup-manual-$(date +%s)"
 kubectl -n crucible create job "$job" --from=cronjob/crucible-backup
-kubectl -n crucible wait --for=condition=complete "job/$job" --timeout=15m
+for _ in $(seq 180); do
+  [ "$(kubectl -n crucible get job "$job" -o jsonpath='{.status.succeeded}')" = 1 ] && exit 0
+  [ "$(kubectl -n crucible get job "$job" -o jsonpath='{.status.failed}')" -gt 0 ] 2>/dev/null && { echo "backup job failed" >&2; exit 1; }
+  sleep 5
+done
+echo "backup job timed out" >&2; exit 1
 SH
 chmod +x /opt/crucible/*.sh
-touch /opt/crucible/.ready
 
 /opt/crucible/deploy.sh || echo "no release yet: run 'crucible aws deploy'"
+touch /opt/crucible/.ready

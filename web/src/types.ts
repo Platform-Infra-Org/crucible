@@ -1,5 +1,18 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean }
+export type TeamSummary = { id: string; name: string; role: string }
+export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
+export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
+export type ProgramConfig = {
+  training: string; title: string; enrolled: string[]; roles: Roles; schedule: string
+  lab_defaults: LabDefaults; budget_usd_month: number; can_manage: boolean
+}
+export type TeamView = {
+  id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
+  mentors: Record<string, string>; budget?: { monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
+  available_trainings: { id: string; title: string }[]; schedules: string[]; platform_sha: string
+  can_edit_team: boolean; is_admin: boolean
+}
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }
 export type ItemView = { kind: 'reading' | 'quiz' | 'lab'; id: string; title: string; status: 'new' | 'in_progress' | 'complete' }
 export type ModuleView = { id: string; title: string; locked: boolean; complete: boolean; items: ItemView[] }

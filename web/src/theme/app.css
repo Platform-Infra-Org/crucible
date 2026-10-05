@@ -138,3 +138,10 @@ pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px
 .stack { display: grid; gap: 0.6rem; max-width: 44rem; border: 0; padding: 0; margin: 0 0 1.5rem; }
 .stack label { display: grid; gap: 0.25rem; }
 .stack label:has(> input[type='checkbox']) { display: flex; gap: 0.5rem; align-items: center; }
+
+.grid { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+.grid th, .grid td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }
+.facts dt { color: var(--muted); }
+.stack textarea, .stack input:not([type='checkbox']), .stack select { font: inherit; padding: 0.4rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
+.conflict { border: 1px solid var(--danger); border-radius: 6px; padding: 0.5rem 0.75rem; display: flex; gap: 0.75rem; align-items: center; }

@@ -16,6 +16,8 @@ import { QuizPage } from './pages/Quiz'
 import { LabPage } from './pages/Lab'
 import { ConnectPage } from './pages/Connect'
 import { SettingsPage } from './pages/Settings'
+import { TeamPage, TeamsIndex } from './pages/Team'
+import { ProgramSettingsPage } from './pages/ProgramSettings'
 
 export { useMe }
 
@@ -60,6 +62,9 @@ export default function App() {
           <Route path="/p/:team/:training/m/:module/lab" element={<LabPage />} />
           <Route path="/connect" element={<ConnectPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/teams" element={<TeamsIndex />} />
+          <Route path="/teams/:team" element={<TeamPage />} />
+          <Route path="/teams/:team/programs/:training" element={<ProgramSettingsPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>
         <Toaster />

@@ -13,6 +13,7 @@ export function Nav() {
         <span className="brand-mark">⚒</span> Crucible
       </Link>
       <NavLink to="/" end>Hearth</NavLink>
+      {(me.teams.length > 0 || me.is_admin) && <NavLink to="/teams">Team</NavLink>}
       <NavLink to="/connect">Connect your laptop</NavLink>
       <NavLink to="/settings">Settings</NavLink>
       <span className="spacer" />

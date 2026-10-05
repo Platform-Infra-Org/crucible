@@ -1,0 +1,414 @@
+// Package configapi lets leaders, managers and admins read and change platform config from the UI (spec §4.3, §5.3,
+// §6). Every change is a bot commit to the platform repo; git stays the source of truth.
+package configapi
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"maps"
+	"net/http"
+	"path"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"crucible/internal/apperr"
+	"crucible/internal/audit"
+	"crucible/internal/auth"
+	"crucible/internal/config"
+	"crucible/internal/gitsync"
+	"crucible/internal/httpx"
+	"crucible/internal/rbac"
+	"crucible/internal/yamlx"
+)
+
+type Service struct {
+	DB     *pgxpool.Pool
+	State  func() *gitsync.State
+	Writer *gitsync.Writer
+	Resync func(ctx context.Context) error // re-read git after a write so the page shows the change at once
+}
+
+type TeamSummary struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+type RolesView struct {
+	Manager   []string `json:"manager"`
+	Scorers   []string `json:"scorers"`
+	Approvers []string `json:"approvers"`
+}
+
+type LabDefaultsView struct {
+	TTL          string `json:"ttl"`
+	IdleTimeout  string `json:"idle_timeout"`
+	MaxExtension string `json:"max_extension"`
+}
+
+type ProgramView struct {
+	Training       string          `json:"training"`
+	Title          string          `json:"title"`
+	Enrolled       []string        `json:"enrolled"`
+	Roles          RolesView       `json:"roles"`
+	Schedule       string          `json:"schedule"`
+	LabDefaults    LabDefaultsView `json:"lab_defaults"`
+	BudgetUSDMonth float64         `json:"budget_usd_month"`
+	CanManage      bool            `json:"can_manage"`
+}
+
+type TrainingOption struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type TeamView struct {
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Leader             string            `json:"leader"`
+	Seniors            []string          `json:"seniors"`
+	Members            []string          `json:"members"`
+	Trainees           []string          `json:"trainees"`
+	Mentors            map[string]string `json:"mentors"`
+	Budget             config.Budget     `json:"budget"`
+	Programs           []ProgramView     `json:"programs"`
+	AvailableTrainings []TrainingOption  `json:"available_trainings"`
+	Schedules          []string          `json:"schedules"`
+	PlatformSHA        string            `json:"platform_sha"`
+	CanEditTeam        bool              `json:"can_edit_team"`
+	IsAdmin            bool              `json:"is_admin"`
+}
+
+type RosterBody struct {
+	BaseSHA  string            `json:"base_sha"`
+	Seniors  []string          `json:"seniors"`
+	Members  []string          `json:"members"`
+	Trainees []string          `json:"trainees"`
+	Mentors  map[string]string `json:"mentors"`
+}
+
+type ProgramBody struct {
+	BaseSHA        string          `json:"base_sha"`
+	Enrolled       []string        `json:"enrolled"`
+	Roles          RolesView       `json:"roles"`
+	Schedule       string          `json:"schedule"`
+	LabDefaults    LabDefaultsView `json:"lab_defaults"`
+	BudgetUSDMonth float64         `json:"budget_usd_month"`
+}
+
+type BudgetBody struct {
+	BaseSHA    string  `json:"base_sha"`
+	MonthlyUSD float64 `json:"monthly_usd"`
+	HardCapUSD float64 `json:"hard_cap_usd"`
+}
+
+type TrainingStatus struct {
+	ID       string   `json:"id"`
+	Repo     string   `json:"repo"`
+	Branch   string   `json:"branch"`
+	Head     string   `json:"head"`
+	Problems []string `json:"problems"`
+}
+
+type PlatformView struct {
+	PlatformSHA     string            `json:"platform_sha"`
+	PlatformErr     string            `json:"platform_error,omitempty"`
+	SyncedAt        time.Time         `json:"synced_at"`
+	CostTiers       *config.CostTiers `json:"cost_tiers"`
+	EscalationHours float64           `json:"escalation_hours"`
+	Schedules       map[string]string `json:"schedules"`
+	Admins          []string          `json:"admins"`
+	Trainings       []TrainingStatus  `json:"trainings"`
+	Audit           []audit.Entry     `json:"audit"`
+}
+
+func (s *Service) state() (*gitsync.State, error) {
+	st := s.State()
+	if st == nil || st.Platform == nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "config is still syncing, try again in a moment")
+	}
+	return st, nil
+}
+
+// emails lowercases, trims, drops blanks and duplicates; never nil (so YAML gets [] not null).
+func emails(in []string) []string {
+	out := []string{}
+	for _, e := range in {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" && !slices.Contains(out, e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (s *Service) Teams(u *auth.User) ([]TeamSummary, error) {
+	st, err := s.state()
+	if err != nil {
+		return nil, err
+	}
+	admin := rbac.Checker{P: st.Platform}.IsAdmin(u.Email)
+	out := []TeamSummary{}
+	for _, id := range slices.Sorted(maps.Keys(st.Platform.Teams)) {
+		t := st.Platform.Teams[id]
+		role := t.RoleOf(u.Email)
+		if role == "" && admin {
+			role = "admin"
+		}
+		if role != "" {
+			out = append(out, TeamSummary{ID: id, Name: t.Name, Role: role})
+		}
+	}
+	return out, nil
+}
+
+func trainingTitle(st *gitsync.State, team, id string) string {
+	if t, _ := st.ProgramTraining(team, id); t != nil {
+		return t.Title
+	}
+	if t := st.Training(id, st.Heads[id]); t != nil {
+		return t.Title
+	}
+	return id
+}
+
+func dur(d yamlx.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	s, _ := d.MarshalYAML()
+	return s.(string)
+}
+
+func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
+	st, err := s.state()
+	if err != nil {
+		return nil, err
+	}
+	c := rbac.Checker{P: st.Platform}
+	t := st.Platform.Teams[id]
+	if t == nil || (t.RoleOf(u.Email) == "" && !c.IsAdmin(u.Email)) {
+		return nil, apperr.Wrap(apperr.NotFound, "team not found")
+	}
+	v := &TeamView{ID: id, Name: t.Name, Leader: t.Leader, Seniors: emails(t.Seniors), Members: emails(t.Members),
+		Trainees: emails(t.Trainees), Mentors: t.Mentors, Budget: t.Budget, Programs: []ProgramView{}, AvailableTrainings: []TrainingOption{},
+		Schedules: slices.Sorted(maps.Keys(st.Platform.Settings.Schedules)), PlatformSHA: st.PlatformSHA,
+		CanEditTeam: c.Can(u.Email, rbac.EditTeam, id, "", ""), IsAdmin: c.IsAdmin(u.Email)}
+	if v.Schedules == nil {
+		v.Schedules = []string{}
+	}
+	if v.Mentors == nil {
+		v.Mentors = map[string]string{}
+	}
+	for _, tr := range slices.Sorted(maps.Keys(st.Platform.Trainings)) {
+		p := t.Programs[tr]
+		if p == nil {
+			v.AvailableTrainings = append(v.AvailableTrainings, TrainingOption{ID: tr, Title: trainingTitle(st, id, tr)})
+			continue
+		}
+		v.Programs = append(v.Programs, ProgramView{Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
+			Roles:    RolesView{Manager: emails(p.Roles.Manager), Scorers: emails(p.Roles.Scorers), Approvers: emails(p.Roles.Approvers)},
+			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
+			LabDefaults: LabDefaultsView{TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout), MaxExtension: dur(p.LabDefaults.MaxExtension)}})
+	}
+	return v, nil
+}
+
+// write commits one change, records it in the audit log with its commit, and re-reads git.
+func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, auditAction, target string, detail map[string]any) (string, error) {
+	ch.Actor = u.Email
+	sha, err := s.Writer.Apply(ctx, ch)
+	if err != nil {
+		return "", err
+	}
+	if err := audit.Log(ctx, s.DB, u.Email, auditAction, target, detail, sha); err != nil {
+		slog.Error("audit log failed", "action", auditAction, "err", err)
+	}
+	if s.Resync != nil {
+		if err := s.Resync(ctx); err != nil {
+			slog.Warn("re-sync after a config write failed; the poller will pick it up", "err", err)
+		}
+	}
+	return sha, nil
+}
+
+func (s *Service) team(id string) (*gitsync.State, *config.Team, error) {
+	st, err := s.state()
+	if err != nil {
+		return nil, nil, err
+	}
+	t := st.Platform.Teams[id]
+	if t == nil {
+		return nil, nil, apperr.Wrap(apperr.NotFound, "team not found")
+	}
+	return st, t, nil
+}
+
+func (s *Service) SetRoster(ctx context.Context, u *auth.User, team string, b RosterBody) (string, error) {
+	st, _, err := s.team(team)
+	if err != nil {
+		return "", err
+	}
+	if !(rbac.Checker{P: st.Platform}).Can(u.Email, rbac.EditTeam, team, "", "") {
+		return "", apperr.Wrap(apperr.Forbidden, "only the team leader or an admin can change the roster")
+	}
+	mentors := map[string]string{}
+	for k, v := range b.Mentors {
+		if k, v = strings.ToLower(strings.TrimSpace(k)), strings.ToLower(strings.TrimSpace(v)); k != "" && v != "" {
+			mentors[k] = v
+		}
+	}
+	rel := path.Join("teams", team, "team.yaml")
+	set := map[string]any{"seniors": emails(b.Seniors), "members": emails(b.Members), "trainees": emails(b.Trainees), "mentors": mentors}
+	return s.write(ctx, u, gitsync.Change{Action: "update roster " + team, Base: b.BaseSHA, Paths: []string{rel},
+		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, "team.roster", team, set)
+}
+
+func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training string, b ProgramBody) (string, error) {
+	st, t, err := s.team(team)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := st.Platform.Trainings[training]; !ok { // also keeps the id a safe file name
+		return "", apperr.Wrap(apperr.NotFound, "unknown training")
+	}
+	c := rbac.Checker{P: st.Platform}
+	exists := t.Programs[training] != nil
+	if (exists && !c.Can(u.Email, rbac.ManageProgram, team, training, "")) || (!exists && !c.Can(u.Email, rbac.EditTeam, team, "", "")) {
+		return "", apperr.Wrap(apperr.Forbidden, "only the team leader, the program's managers or an admin can change this program")
+	}
+	defaults := map[string]any{}
+	for k, v := range map[string]string{"ttl": b.LabDefaults.TTL, "idle_timeout": b.LabDefaults.IdleTimeout, "max_extension": b.LabDefaults.MaxExtension} {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return "", apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s must be a duration like 2h or 45m", k))
+		}
+		defaults[k] = yamlx.Duration(d)
+	}
+	if b.BudgetUSDMonth < 0 {
+		return "", apperr.Wrap(apperr.Invalid, "the program budget must not be negative")
+	}
+	set := map[string]any{"training": training, "enrolled": emails(b.Enrolled), "schedule": nil, "lab_defaults": nil, "budget_usd_month": nil,
+		"roles": map[string][]string{"manager": emails(b.Roles.Manager), "scorers": emails(b.Roles.Scorers), "approvers": emails(b.Roles.Approvers)}}
+	if b.Schedule != "" {
+		set["schedule"] = b.Schedule
+	}
+	if len(defaults) > 0 {
+		set["lab_defaults"] = defaults
+	}
+	if b.BudgetUSDMonth > 0 {
+		set["budget_usd_month"] = b.BudgetUSDMonth
+	}
+	rel := path.Join("teams", team, "programs", training+".yaml")
+	action, auditAction := "update program "+team+"/"+training, "program.update"
+	if !exists {
+		action, auditAction = "enroll "+team+" in "+training, "program.enroll"
+	}
+	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel},
+		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, auditAction, team+"/"+training, map[string]any{
+		"enrolled": set["enrolled"], "roles": set["roles"], "schedule": b.Schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
+}
+
+func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b BudgetBody) (string, error) {
+	st, _, err := s.team(team)
+	if err != nil {
+		return "", err
+	}
+	if !(rbac.Checker{P: st.Platform}).IsAdmin(u.Email) {
+		return "", apperr.Wrap(apperr.Forbidden, "only admins set team budgets")
+	}
+	set := map[string]any{"monthly_usd": b.MonthlyUSD, "hard_cap_usd": nil}
+	if b.HardCapUSD > 0 {
+		set["hard_cap_usd"] = b.HardCapUSD
+	}
+	rel := path.Join("teams", team, "budget.yaml")
+	return s.write(ctx, u, gitsync.Change{Action: "set budget " + team, Base: b.BaseSHA, Paths: []string{rel},
+		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, "team.budget", team, set)
+}
+
+// Platform is the admin's read-only view of platform.yaml, sync health and recent privileged actions.
+func (s *Service) Platform(u *auth.User) (*PlatformView, error) {
+	st, err := s.state()
+	if err != nil {
+		return nil, err
+	}
+	p := st.Platform
+	if !(rbac.Checker{P: p}).IsAdmin(u.Email) {
+		return nil, apperr.Wrap(apperr.Forbidden, "admins only")
+	}
+	v := &PlatformView{PlatformSHA: st.PlatformSHA, PlatformErr: st.PlatformErr, SyncedAt: st.SyncedAt, CostTiers: p.Settings.CostTiers,
+		EscalationHours: p.Settings.EscalationHours, Schedules: map[string]string{}, Admins: p.Admins, Trainings: []TrainingStatus{}}
+	for name, sc := range p.Settings.Schedules {
+		v.Schedules[name] = sc.String()
+	}
+	for _, id := range slices.Sorted(maps.Keys(p.Trainings)) {
+		ref := p.Trainings[id]
+		ts := TrainingStatus{ID: id, Repo: ref.Repo, Branch: ref.Branch, Head: st.Heads[id], Problems: []string{}}
+		for _, key := range []string{id, id + "@" + st.Heads[id]} {
+			for _, pr := range st.Problems[key] {
+				ts.Problems = append(ts.Problems, pr.String())
+			}
+		}
+		v.Trainings = append(v.Trainings, ts)
+	}
+	return v, nil
+}
+
+func (s *Service) Routes(r chi.Router) {
+	user := func(r *http.Request) *auth.User { return auth.UserFrom(r.Context()) }
+	reply := func(w http.ResponseWriter, v any, err error) {
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, v)
+	}
+	sha := func(w http.ResponseWriter, sha string, err error) { reply(w, map[string]string{"sha": sha}, err) }
+	r.Get("/api/teams", func(w http.ResponseWriter, r *http.Request) { v, err := s.Teams(user(r)); reply(w, v, err) })
+	r.Get("/api/teams/{team}", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Team(user(r), chi.URLParam(r, "team"))
+		reply(w, v, err)
+	})
+	r.Put("/api/teams/{team}/roster", func(w http.ResponseWriter, r *http.Request) {
+		var b RosterBody
+		if err := httpx.Read(r, &b); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SetRoster(r.Context(), user(r), chi.URLParam(r, "team"), b)
+		sha(w, v, err)
+	})
+	r.Put("/api/teams/{team}/programs/{training}", func(w http.ResponseWriter, r *http.Request) {
+		var b ProgramBody
+		if err := httpx.Read(r, &b); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SetProgram(r.Context(), user(r), chi.URLParam(r, "team"), chi.URLParam(r, "training"), b)
+		sha(w, v, err)
+	})
+	r.Put("/api/teams/{team}/budget", func(w http.ResponseWriter, r *http.Request) {
+		var b BudgetBody
+		if err := httpx.Read(r, &b); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SetBudget(r.Context(), user(r), chi.URLParam(r, "team"), b)
+		sha(w, v, err)
+	})
+	r.Get("/api/admin/platform", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Platform(user(r))
+		if err == nil {
+			v.Audit, err = audit.Recent(r.Context(), s.DB, 25)
+		}
+		reply(w, v, err)
+	})
+}

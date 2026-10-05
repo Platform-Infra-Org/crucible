@@ -7,6 +7,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +18,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
 	"crucible/internal/config"
+	"crucible/internal/configapi"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpx"
 	"crucible/internal/labs"
@@ -31,6 +34,7 @@ type Deps struct {
 	Learn      *learn.Service
 	Labs       *labs.Service
 	Notify     *notify.Service
+	Config     *configapi.Service
 	Hub        *agenthub.Hub
 	PublicURL  string
 	HookSecret string
@@ -76,11 +80,23 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme := false, "forge"
+			admin, theme, teams, canApprove := false, "forge", []string{}, false
 			if st := state(d); st != nil && st.Platform != nil {
-				admin, theme = (rbac.Checker{P: st.Platform}).IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
+				c := rbac.Checker{P: st.Platform}
+				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
+				canApprove = admin
+				for id, t := range st.Platform.Teams {
+					if t.RoleOf(u.Email) != "" {
+						teams = append(teams, id)
+					}
+					canApprove = canApprove || t.Leader == u.Email
+					for _, p := range t.Programs {
+						canApprove = canApprove || slices.Contains(p.Roles.Approvers, u.Email)
+					}
+				}
+				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme})
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
@@ -117,6 +133,9 @@ func NewRouter(d Deps) chi.Router {
 		d.Labs.Routes(r)
 		if d.Notify != nil {
 			d.Notify.Routes(r)
+		}
+		if d.Config != nil {
+			d.Config.Routes(r)
 		}
 	})
 

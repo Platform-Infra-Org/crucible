@@ -46,3 +46,39 @@ func TestStrictAndOptional(t *testing.T) {
 		t.Fatal("required missing file must error")
 	}
 }
+
+func TestDurationMarshalsLikePeopleWriteIt(t *testing.T) {
+	for d, want := range map[time.Duration]string{2 * time.Hour: "2h", 45 * time.Minute: "45m", 90 * time.Minute: "1h30m", 30 * time.Second: "30s"} {
+		got, _ := Duration(d).MarshalYAML()
+		if got != want {
+			t.Errorf("%v → %v, want %s", d, got, want)
+		}
+	}
+}
+
+func TestUpdateKeepsCommentsAndOrder(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "team.yaml")
+	_ = os.WriteFile(p, []byte("# The forge team\nname: The Forge # shown in the UI\nleader: l@x\nseniors: [a@x]\nmembers: []\n"), 0o644)
+	err := Update(p, map[string]any{"seniors": []string{"b@x"}, "members": nil, "trainees": []string{"t@x"},
+		"lab_defaults": map[string]any{"ttl": Duration(2 * time.Hour)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	got := string(b)
+	for _, want := range []string{"# The forge team", "name: The Forge # shown in the UI", "- b@x", "trainees:", "ttl: 2h"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "members") || strings.Index(got, "name:") > strings.Index(got, "seniors:") {
+		t.Fatalf("nil deletes, untouched keys keep their place:\n%s", got)
+	}
+	fresh := filepath.Join(t.TempDir(), "new", "p.yaml")
+	if err := Update(fresh, map[string]any{"training": "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(fresh); string(b) != "training: x\n" {
+		t.Fatalf("new file: %q", b)
+	}
+}

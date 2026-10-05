@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -17,6 +18,7 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
 	"crucible/internal/gitsync"
@@ -48,6 +50,9 @@ func run(ctx context.Context) error {
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial git sync failed; retrying in the background", "err", err)
 	}
+	writer := &gitsync.Writer{URL: must("CRUCIBLE_PLATFORM_REPO"), Branch: env("CRUCIBLE_PLATFORM_BRANCH", "main"),
+		Dir:  filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "writer"),
+		Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	every, err := time.ParseDuration(env("CRUCIBLE_SYNC_INTERVAL", "60s"))
 	if err != nil {
 		return fmt.Errorf("CRUCIBLE_SYNC_INTERVAL: %w", err)
@@ -76,6 +81,7 @@ func run(ctx context.Context) error {
 		slog.Warn("CRUCIBLE_QUIZ_SECRET is not set; using a fixed development value. Set it in production so learners cannot predict quiz choice ids")
 		quizSecret = "crucible-dev-quiz-secret"
 	}
+	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
@@ -118,7 +124,7 @@ func run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
-		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Notify: notifySvc, Hub: hub,
+		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -12,6 +12,8 @@ for name in platform forge-101; do
   git -C "$work" add -A
   git -C "$work" -c user.name=crucible -c user.email=crucible@local commit -qm "seed $name"
   git clone -q --bare "$work" "$out/$name.git"
+  git -C "$out/$name.git" config core.sharedRepository world
+  chmod -R a+rwX "$out/$name.git"   # the api container (uid 10001) pushes config commits here
   rm -rf "$work"
 done
 echo "seeded $out"

@@ -1,0 +1,2 @@
+monthly_usd: 200   # 80% sends an alert
+hard_cap_usd: 250  # requests that would pass this need an admin

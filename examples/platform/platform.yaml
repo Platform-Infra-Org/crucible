@@ -1,1 +1,9 @@
 default_theme: forge
+# Lab requests are routed by estimated cost in USD (spec §9.1). Crucible has no defaults: set these at install.
+cost_tiers: { auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25 }
+escalation_hours: 4   # business hours, counted inside the program's schedule
+schedules:
+  business-hours:
+    timezone: Europe/Bucharest
+    windows:
+      - { days: [mon, tue, wed, thu, fri], start: "08:00", end: "19:00" }

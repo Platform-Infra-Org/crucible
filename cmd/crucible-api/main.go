@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"

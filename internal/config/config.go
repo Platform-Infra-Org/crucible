@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"crucible/internal/yamlx"
 )
@@ -22,8 +23,35 @@ type Platform struct {
 }
 
 type Settings struct {
-	DefaultTheme string   `yaml:"default_theme"`
-	Quotes       []string `yaml:"-"`
+	DefaultTheme    string               `yaml:"default_theme"`
+	CostTiers       *CostTiers           `yaml:"cost_tiers"`
+	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
+	Schedules       map[string]*Schedule `yaml:"schedules"`
+	Quotes          []string             `yaml:"-"`
+}
+
+// CostTiers routes lab requests by estimate (spec §9.1). There are no built-in defaults: platform.yaml must set them.
+type CostTiers struct {
+	AutoApproveUSD float64 `yaml:"auto_approve_usd" json:"auto_approve_usd"`
+	Tier1USD       float64 `yaml:"tier1_usd" json:"tier1_usd"`
+	Tier2USD       float64 `yaml:"tier2_usd" json:"tier2_usd"`
+}
+
+// Escalation is how long a lab request may wait at one tier before it moves up.
+func (s Settings) Escalation() time.Duration {
+	return time.Duration(s.EscalationHours * float64(time.Hour))
+}
+
+// TeamNotifications are the team's Slack / Teams incoming webhooks (spec §10). Both must be https.
+type TeamNotifications struct {
+	SlackWebhook string `yaml:"slack_webhook"`
+	TeamsWebhook string `yaml:"teams_webhook"`
+}
+
+// Budget is teams/<team>/budget.yaml: the monthly lab budget (80% alert) and the hard cap that blocks requests.
+type Budget struct {
+	MonthlyUSD float64 `yaml:"monthly_usd" json:"monthly_usd"`
+	HardCapUSD float64 `yaml:"hard_cap_usd" json:"hard_cap_usd"` // defaults to monthly_usd; 0 = no cap
 }
 
 type TrainingRef struct {
@@ -40,6 +68,9 @@ type Team struct {
 	Trainees []string            `yaml:"trainees"`
 	Mentors  map[string]string   `yaml:"mentors"` // trainee email → mentor email
 	Programs map[string]*Program `yaml:"-"`       // by training id
+
+	Notifications TeamNotifications `yaml:"notifications"`
+	Budget        Budget            `yaml:"-"` // from budget.yaml
 }
 
 type Program struct {
@@ -48,6 +79,18 @@ type Program struct {
 	Roles       Roles       `yaml:"roles"`
 	Enrolled    []string    `yaml:"enrolled"`
 	LabDefaults LabDefaults `yaml:"lab_defaults"`
+
+	Schedule       string  `yaml:"schedule"`         // named schedule from platform.yaml; "" = any time
+	BudgetUSDMonth float64 `yaml:"budget_usd_month"` // the program's monthly budget and hard cap; 0 = none
+}
+
+// ProgramSchedule returns the schedule a program runs on, or nil for "any time".
+func (p *Platform) ProgramSchedule(team, training string) *Schedule {
+	t := p.Teams[team]
+	if t == nil || t.Programs[training] == nil {
+		return nil
+	}
+	return p.Settings.Schedules[t.Programs[training].Schedule]
 }
 
 type Roles struct {
@@ -89,6 +132,26 @@ func Load(dir string) (*Platform, error) {
 	}
 	if !slices.Contains(Themes, p.Settings.DefaultTheme) {
 		errs = append(errs, fmt.Errorf("platform.yaml: default_theme must be one of %v", Themes))
+	}
+	if t := p.Settings.CostTiers; t == nil {
+		errs = append(errs, errors.New("platform.yaml: cost_tiers is required (auto_approve_usd, tier1_usd, tier2_usd); Crucible has no built-in defaults"))
+	} else if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
+		errs = append(errs, errors.New("platform.yaml: cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0"))
+	}
+	if p.Settings.EscalationHours == 0 {
+		p.Settings.EscalationHours = 4
+	}
+	if p.Settings.EscalationHours < 0 {
+		errs = append(errs, errors.New("platform.yaml: escalation_hours must be positive"))
+	}
+	for name, s := range p.Settings.Schedules {
+		if s == nil {
+			errs = append(errs, fmt.Errorf("platform.yaml: schedules.%s is empty", name))
+			continue
+		}
+		if err := s.validate(); err != nil {
+			errs = append(errs, fmt.Errorf("platform.yaml: schedules.%s: %w", name, err))
+		}
 	}
 
 	var admins struct {
@@ -133,7 +196,7 @@ func Load(dir string) (*Platform, error) {
 		if !e.IsDir() {
 			continue
 		}
-		t, terrs := loadTeam(filepath.Join(dir, "teams", e.Name()), e.Name(), p.Trainings)
+		t, terrs := loadTeam(filepath.Join(dir, "teams", e.Name()), e.Name(), p.Trainings, p.Settings.Schedules)
 		errs = append(errs, terrs...)
 		if t != nil {
 			p.Teams[t.ID] = t
@@ -142,7 +205,7 @@ func Load(dir string) (*Platform, error) {
 	return p, errors.Join(errs...)
 }
 
-func loadTeam(dir, id string, trainings map[string]TrainingRef) (*Team, []error) {
+func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[string]*Schedule) (*Team, []error) {
 	t := &Team{ID: id, Programs: map[string]*Program{}}
 	if err := yamlx.ReadFile(filepath.Join(dir, "team.yaml"), t, true); err != nil {
 		return nil, []error{fmt.Errorf("teams/%s: %w", id, err)}
@@ -159,6 +222,21 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef) (*Team, []error)
 		mentors[strings.ToLower(trainee)] = strings.ToLower(mentor)
 	}
 	t.Mentors = mentors
+
+	for _, u := range []string{t.Notifications.SlackWebhook, t.Notifications.TeamsWebhook} {
+		if u != "" && !strings.HasPrefix(u, "https://") {
+			bad("notifications: webhook URLs must start with https://")
+		}
+	}
+	if err := yamlx.ReadFile(filepath.Join(dir, "budget.yaml"), &t.Budget, false); err != nil {
+		bad("%v", err)
+	}
+	if t.Budget.HardCapUSD == 0 {
+		t.Budget.HardCapUSD = t.Budget.MonthlyUSD
+	}
+	if t.Budget.MonthlyUSD < 0 || t.Budget.HardCapUSD < t.Budget.MonthlyUSD {
+		bad("budget.yaml: need 0 <= monthly_usd <= hard_cap_usd")
+	}
 
 	if t.Leader == "" {
 		bad("team has no leader")
@@ -213,6 +291,12 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef) (*Team, []error)
 			if t.RoleOf(e) == "" {
 				bad("programs/%s.yaml: %s is not a member of team %s", name, e, id)
 			}
+		}
+		if pr.Schedule != "" && schedules[pr.Schedule] == nil {
+			bad("programs/%s.yaml: unknown schedule %q (define it under schedules in platform.yaml)", name, pr.Schedule)
+		}
+		if pr.BudgetUSDMonth < 0 {
+			bad("programs/%s.yaml: budget_usd_month must not be negative", name)
 		}
 		t.Programs[pr.Training] = pr
 	}

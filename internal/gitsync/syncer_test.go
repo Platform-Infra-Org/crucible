@@ -49,7 +49,7 @@ var training = map[string]string{
 func setup(t *testing.T) (*Syncer, string, string) {
 	trainingRepo := newRepo(t, training)
 	platformRepo := newRepo(t, map[string]string{
-		"platform.yaml":            "default_theme: forge\n",
+		"platform.yaml":            "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n",
 		"trainings.yaml":           "trainings:\n  t1: {repo: " + trainingRepo + "}\n",
 		"teams/a/team.yaml":        "name: A\nleader: l@x\ntrainees: [u@x]\n",
 		"teams/a/programs/t1.yaml": "enrolled: [u@x]\n",

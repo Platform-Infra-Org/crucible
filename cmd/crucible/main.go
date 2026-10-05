@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
 	"crucible/internal/awsops"
 	"crucible/internal/config"

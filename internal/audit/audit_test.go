@@ -27,3 +27,19 @@ func TestLogAndRecent(t *testing.T) {
 		t.Fatalf("actor must be lowercased: %q", got[1].Actor)
 	}
 }
+
+func TestLogRollsBackWithTheTransaction(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.New(t)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Log(ctx, tx, "a@x", "lab.approve", "l1", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.Rollback(ctx)
+	if got, _ := Recent(ctx, pool, 10); len(got) != 0 {
+		t.Fatalf("entry survived the rollback: %v", got)
+	}
+}

@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"crucible/internal/apperr"
+	"github.com/go-chi/chi/v5"
+
 	"crucible/internal/auth"
+	"crucible/internal/content"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
 )
@@ -281,5 +286,65 @@ func TestEscalationCountsBusinessHoursOnly(t *testing.T) {
 	f.s.Sweep(ctx)
 	if got, _ := f.s.Get(ctx, f.u, v.ID); got.Tier != rbac.TierApprover {
 		t.Fatalf("no escalation over the weekend, got %s", got.Tier)
+	}
+}
+
+func TestWithdrawLosingTheRaceEndsTheApprovedLab(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	v := f.request(t, f.u)
+	stale, err := f.s.owned(ctx, f.u, v.ID) // the trainee's withdraw read the row while it was still pending…
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil { // …then an approver won
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+	got, err := f.s.withdraw(ctx, f.u, stale)
+	if err != nil || got.State != Destroyed || got.EndReason != "user" {
+		t.Fatalf("withdraw after approval: %+v %v", got, err)
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_events WHERE lab_id = $1 AND kind = 'withdrawn'`, v.ID).Scan(&n)
+	if n != 0 {
+		t.Fatal("no withdrawn event when the withdraw lost")
+	}
+}
+
+func TestDecisionBodyRequiresApprove(t *testing.T) {
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	v := f.request(t, f.u)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.leader)))
+		})
+	})
+	f.s.Routes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("POST", "/api/approvals/"+v.ID, strings.NewReader(`{}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("{} must be 400, got %d", rec.Code)
+	}
+	if got, _ := f.s.Get(context.Background(), f.u, v.ID); got.State != PendingApproval {
+		t.Fatalf("{} decided the request: %s", got.State)
+	}
+}
+
+type failingEstimator struct{}
+
+func (failingEstimator) HourlyUSD(context.Context, *content.Lab) (float64, error) {
+	return 0, errors.New("pricing db at 10.0.0.5 refused")
+}
+
+func TestModuleLabHidesInternalQuoteErrors(t *testing.T) {
+	f := setup(t, true)
+	f.s.Estimators["local"] = failingEstimator{}
+	ml, err := f.s.ModuleLab(context.Background(), f.u, "forge", "forge-101", "02-first-lab")
+	if err != nil || ml.Blocked == "" || strings.Contains(ml.Blocked, "10.0.0.5") {
+		t.Fatalf("blocked must be generic: %+v %v", ml, err)
 	}
 }

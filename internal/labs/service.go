@@ -408,7 +408,16 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 	}
 	if q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab); err != nil {
-		out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
+		// only our own user-facing messages reach the trainee; anything else (estimator, DB) is logged
+		switch {
+		case errors.Is(err, apperr.Unavailable):
+			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
+		case errors.Is(err, apperr.Conflict):
+			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Conflict.Error())
+		default:
+			s.Log.Error("lab quote failed", "team", team, "training", training, "module", module, "err", err)
+			out.Blocked = "the lab can't be requested right now"
+		}
 	} else {
 		out.EstimateUSD, out.NeedsApproval, out.Blocked = q.EstimateUSD, q.Tier != rbac.TierAuto, q.Blocked
 	}
@@ -945,15 +954,29 @@ func (s *Service) End(ctx context.Context, u *auth.User, labID string) (*View, e
 		return nil, err
 	}
 	if inst.State == PendingApproval {
-		if _, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'expired', end_reason = 'withdrawn', destroyed_at = $2
-			WHERE id = $1 AND state = 'pending_approval'`, inst.ID, s.Now()); err != nil {
-			return nil, err
-		}
-		s.event(ctx, inst.ID, "withdrawn", "")
-		return s.Get(ctx, u, labID)
+		return s.withdraw(ctx, u, inst)
 	}
 	s.destroy(ctx, inst, "user")
 	return s.Get(ctx, u, labID)
+}
+
+// withdraw cancels a pending request. If an approval won the race the row is no longer pending: re-read it and end the
+// lab it became like any other.
+func (s *Service) withdraw(ctx context.Context, u *auth.User, inst *Instance) (*View, error) {
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'expired', end_reason = 'withdrawn', destroyed_at = $2
+		WHERE id = $1 AND state = 'pending_approval'`, inst.ID, s.Now())
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() > 0 {
+		s.event(ctx, inst.ID, "withdrawn", "")
+		return s.Get(ctx, u, inst.ID)
+	}
+	if inst, err = s.owned(ctx, u, inst.ID); err != nil {
+		return nil, err
+	}
+	s.destroy(ctx, inst, "user")
+	return s.Get(ctx, u, inst.ID)
 }
 
 func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {

@@ -32,14 +32,18 @@ func (s *Service) Routes(r chi.Router) {
 	})
 	r.Post("/api/approvals/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Approve bool   `json:"approve"`
+			Approve *bool  `json:"approve"` // required: `{}` must never silently reject
 			Note    string `json:"note"`
 		}
 		if err := httpx.Read(r, &body); err != nil {
 			httpx.Error(w, err)
 			return
 		}
-		st, err := s.Decide(r.Context(), user(r), p(r, "id"), body.Approve, body.Note)
+		if body.Approve == nil {
+			httpx.Error(w, apperr.Wrap(apperr.Invalid, "approve (true or false) is required"))
+			return
+		}
+		st, err := s.Decide(r.Context(), user(r), p(r, "id"), *body.Approve, body.Note)
 		reply(w, map[string]State{"state": st}, err)
 	})
 	r.Get("/api/labs/{id}", func(w http.ResponseWriter, r *http.Request) {

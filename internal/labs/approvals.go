@@ -245,7 +245,20 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		next = Provisioning
 	}
 	now := s.Now()
-	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = $2, decided_by = $3, decided_at = $4, decision_note = $5,
+	action := "lab.reject"
+	if approve {
+		action = "lab.approve"
+		if inst.OverCap {
+			action = "lab.budget_override"
+		}
+	}
+	// the decision and its audit entry commit together: no unaudited approvals
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	tag, err := tx.Exec(ctx, `UPDATE lab_instances SET state = $2, decided_by = $3, decided_at = $4, decision_note = $5,
 		destroyed_at = CASE WHEN $2 = 'rejected' THEN $4::timestamptz END
 		WHERE id = $1 AND state = 'pending_approval'`, inst.ID, string(next), strings.ToLower(u.Email), now, note)
 	if err != nil {
@@ -254,16 +267,12 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 	if tag.RowsAffected() == 0 {
 		return "", apperr.Wrap(apperr.Conflict, "this request was already decided")
 	}
-	action := "lab.reject"
-	if approve {
-		action = "lab.approve"
-		if inst.OverCap {
-			action = "lab.budget_override"
-		}
-	}
-	if err := audit.Log(ctx, s.DB, u.Email, action, inst.ID, map[string]any{"requester": email, "team": inst.Team,
+	if err := audit.Log(ctx, tx, u.Email, action, inst.ID, map[string]any{"requester": email, "team": inst.Team,
 		"training": inst.Training, "module": inst.Module, "estimate_usd": inst.EstimateUSD, "note": note}, ""); err != nil {
-		s.Log.Error("audit log failed", "action", action, "lab", inst.ID, "err", err)
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
 	}
 	verb, kind := "rejected", notify.LabRejected
 	if approve {

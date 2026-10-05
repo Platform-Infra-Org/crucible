@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,7 +19,12 @@ type Entry struct {
 	CommitSHA string         `json:"commit_sha,omitempty"`
 }
 
-func Log(ctx context.Context, db *pgxpool.Pool, actor, action, target string, detail map[string]any, commitSHA string) error {
+// Execer is satisfied by *pgxpool.Pool and pgx.Tx, so an entry can be written in the same transaction as the action.
+type Execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func Log(ctx context.Context, db Execer, actor, action, target string, detail map[string]any, commitSHA string) error {
 	if detail == nil {
 		detail = map[string]any{}
 	}

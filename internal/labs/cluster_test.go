@@ -250,10 +250,41 @@ func TestDestroyAndLive(t *testing.T) {
 	if err := r.Destroy(ctx, &Instance{ID: testID}); err != nil {
 		t.Fatalf("destroying twice is fine: %v", err)
 	}
+	cs.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(corev1.Resource("namespaces"), "lab-"+testID, errors.New("namespace is terminating"))
+	})
+	if err := r.Destroy(ctx, &Instance{ID: testID}); err != nil {
+		t.Fatalf("a namespace still terminating is already being destroyed: %v", err)
+	}
 	if err := r.Destroy(ctx, &Instance{ID: "default"}); err == nil {
 		t.Fatal("only lab ids may be destroyed")
 	}
 	if _, err := cs.CoreV1().Namespaces().Get(ctx, "default", metav1.GetOptions{}); err != nil {
 		t.Fatal("default must survive")
+	}
+}
+
+func TestSweepRemovesOrphanLabNamespaces(t *testing.T) {
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	inst := func(module string, st State) *Instance {
+		return &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: module, SHA: "abc",
+			Runtime: "cluster", State: st, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+	}
+	live, over := inst("03-cluster-heat", Ready), inst("02-first-lab", Destroyed)
+	for _, in := range []*Instance{live, over} {
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stranger := newLabID() // a namespace with no lab row at all
+	cs := fake.NewClientset(labNS(live.ID, false), labNS(over.ID, false), labNS(stranger, false))
+	cr := &ClusterRunner{Client: cs}
+	f.s.Runners["cluster"] = cr
+	f.s.Sweep(ctx)
+	ids, err := cr.Live(ctx)
+	if err != nil || !slices.Equal(ids, []string{live.ID}) {
+		t.Fatalf("only the running lab keeps its namespace: %v %v", ids, err)
 	}
 }

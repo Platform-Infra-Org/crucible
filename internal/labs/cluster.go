@@ -108,7 +108,7 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 		for _, cs := range p.Status.ContainerStatuses {
 			if w := cs.State.Waiting; w != nil {
 				switch w.Reason {
-				case "ImagePullBackOff", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
+				case "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
 					return fmt.Errorf("the lab image could not be started (%s): %s", w.Reason, w.Message)
 				}
 			}
@@ -134,14 +134,15 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 	}
 }
 
-// Destroy deletes the lab namespace; Kubernetes removes everything in it. A missing namespace is success.
+// Destroy deletes the lab namespace; Kubernetes removes everything in it. A missing namespace is success, and so is
+// one already terminating (the API answers Conflict while it drains).
 func (c *ClusterRunner) Destroy(ctx context.Context, inst *Instance) error {
 	if !validLabID(inst.ID) {
 		return errors.New("invalid lab id")
 	}
 	err := c.Client.CoreV1().Namespaces().Delete(ctx, labNamespace(inst.ID),
 		metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
 		return nil
 	}
 	return err

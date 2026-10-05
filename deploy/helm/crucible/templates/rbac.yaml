@@ -1,0 +1,80 @@
+{{- if and .Values.clusterLabs.unsafePrivileged (not .Values.clusterLabs.iUnderstandPrivilegedLabsAreUnsafe) }}
+{{- fail "clusterLabs.unsafePrivileged runs lab pods privileged (dev/kind only). Also set clusterLabs.iUnderstandPrivilegedLabsAreUnsafe=true to confirm." }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crucible }
+automountServiceAccountToken: false   # the Deployment opts in only when cluster labs are on
+{{- if .Values.clusterLabs.enabled }}
+---
+# What the cluster runner does (internal/labs/cluster.go). RBAC cannot be scoped by namespace label, so the
+# ValidatingAdmissionPolicy below confines every write to lab-<id> namespaces.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: crucible-labs }
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]          # WebSocket exec authorizes get (and create on newer API servers); SPDY uses create
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [create]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: crucible-labs }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: crucible-labs }
+subjects:
+  - { kind: ServiceAccount, name: crucible, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: crucible-labs-only }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - { apiGroups: [""], apiVersions: [v1], operations: [CREATE, DELETE], resources: [namespaces] }
+      - { apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods, resourcequotas, limitranges] }
+      - { apiGroups: [""], apiVersions: [v1], operations: [CONNECT], resources: [pods/exec] }
+      - { apiGroups: [networking.k8s.io], apiVersions: [v1], operations: [CREATE], resources: [networkpolicies] }
+  matchConditions:
+    - name: crucible-api-only
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:crucible'"
+  variables:
+    - name: target
+      expression: "request.operation == 'CREATE' ? object : oldObject"
+  validations:
+    - expression: >-
+        request.resource.resource != 'namespaces' ||
+        (variables.target.metadata.name.startsWith('lab-') && has(variables.target.metadata.labels) &&
+         'crucible.io/lab' in variables.target.metadata.labels)
+      message: crucible-api may only create and delete lab-<id> namespaces
+    - expression: >-
+        request.resource.resource == 'namespaces' ||
+        (namespaceObject != null && has(namespaceObject.metadata.labels) && 'crucible.io/lab' in namespaceObject.metadata.labels)
+      message: crucible-api may only create lab pods, policies and terminals inside lab namespaces
+    {{- if not .Values.clusterLabs.unsafePrivileged }}
+    - expression: >-
+        request.resource.resource != 'namespaces' || request.operation != 'CREATE' ||
+        (has(object.metadata.labels) && 'pod-security.kubernetes.io/enforce' in object.metadata.labels &&
+         object.metadata.labels['pod-security.kubernetes.io/enforce'] == 'baseline')
+      message: lab namespaces must enforce Pod Security "baseline" (no privileged lab pods)
+    {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: crucible-labs-only }
+spec:
+  policyName: crucible-labs-only
+  validationActions: [Deny]
+{{- end }}

@@ -8,6 +8,8 @@ spec:
   template:
     metadata: { labels: { app: crucible } }
     spec:
+      serviceAccountName: crucible
+      automountServiceAccountToken: {{ .Values.clusterLabs.enabled }}
       initContainers:
         - name: restore
           image: {{ .Values.postgres.image }}
@@ -70,6 +72,12 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_USERNAME, optional: true } }
             - name: CRUCIBLE_SMTP_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_PASSWORD, optional: true } }
+            {{- if .Values.clusterLabs.enabled }}
+            - { name: CRUCIBLE_CLUSTER_LABS, value: "1" }
+            {{- if .Values.clusterLabs.unsafePrivileged }}
+            - { name: CRUCIBLE_CLUSTER_PRIVILEGED, value: "1" }
+            {{- end }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 5

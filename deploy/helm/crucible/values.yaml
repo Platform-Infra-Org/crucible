@@ -23,3 +23,7 @@ backup:
   region: ""
   schedule: "15 19 * * *"
   timeZone: Europe/Bucharest
+clusterLabs:
+  enabled: true            # runtime: cluster labs; nodes need the sysbox-runc RuntimeClass (docs/runbooks/aws.md)
+  unsafePrivileged: false  # dev clusters without sysbox only (kind): privileged lab pods. Never in production
+  iUnderstandPrivilegedLabsAreUnsafe: false  # must also be true to render unsafePrivileged

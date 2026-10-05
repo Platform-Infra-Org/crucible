@@ -21,5 +21,25 @@ need 's3://b/latest/crucible-latest.dump'                 # backup keeps a never
 need 'head-object --bucket "b" --key latest/crucible-latest.dump'
 need 'latest=latest/crucible-latest.dump'
 need 'cat /tmp/head.err >&2; exit 1'                      # other S3 errors fail loudly
+# Cluster labs (M4): least-privilege RBAC, confined by an admission policy to lab namespaces.
+need 'serviceAccountName: crucible'
+need 'kind: ClusterRole'
+need 'pods/exec'
+need 'kind: ValidatingAdmissionPolicy'
+need "system:serviceaccount:default:crucible"
+need 'pod-security.kubernetes.io/enforce'
+need 'name: CRUCIBLE_CLUSTER_LABS'
+base="--set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso"
+if grep -q CRUCIBLE_CLUSTER_PRIVILEGED <<<"$out"; then echo "privileged lab pods must be opt-in"; exit 1; fi
+rbac=$(helm template t "$chart" $base --show-only templates/rbac.yaml)
+if grep -qE 'secrets|"\*"|- \*$|\[\*\]' <<<"$rbac"; then echo "crucible-labs must not touch secrets or use wildcards"; exit 1; fi
+if grep -qE 'rolebindings|clusterroles|escalate|bind|impersonate' <<<"$rbac"; then echo "crucible-labs must not manage RBAC"; exit 1; fi
+if helm template t "$chart" $base --set clusterLabs.unsafePrivileged=true >/dev/null 2>&1; then echo "unsafePrivileged must require explicit acknowledgement"; exit 1; fi
+dev=$(helm template t "$chart" $base --set clusterLabs.unsafePrivileged=true --set clusterLabs.iUnderstandPrivilegedLabsAreUnsafe=true)
+grep -q 'name: CRUCIBLE_CLUSTER_PRIVILEGED' <<<"$dev" || { echo "missing: dev privileged env"; exit 1; }
+if grep -q 'pod-security.kubernetes.io/enforce' <<<"$dev"; then echo "dev policy must allow privileged lab pods"; exit 1; fi
+off=$(helm template t "$chart" $base --set clusterLabs.enabled=false)
+if grep -qE 'kind: ClusterRole|CRUCIBLE_CLUSTER_LABS' <<<"$off"; then echo "clusterLabs.enabled=false must not grant cluster access"; exit 1; fi
+grep -q 'automountServiceAccountToken: false' <<<"$off" || { echo "no API token without cluster labs"; exit 1; }
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
 echo "helm chart OK"

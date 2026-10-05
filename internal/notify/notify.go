@@ -5,17 +5,23 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/smtp"
+	"net/textproto"
 	neturl "net/url"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -77,7 +83,10 @@ type Service struct {
 	HTTP      *http.Client // webhooks; nil = guarded client (10 s timeout, no redirects, no private/loopback dials)
 	// AllowLoopback lets the default client dial loopback; tests only.
 	AllowLoopback bool
-	Log           *slog.Logger
+
+	once    sync.Once
+	guarded *http.Client
+	Log     *slog.Logger
 }
 
 // blockedIP reports addresses a webhook must never reach (SSRF): loopback, private, link-local, unspecified, multicast.
@@ -90,8 +99,17 @@ func blockedIP(ip net.IP, allowLoopback bool) bool {
 	if allowLoopback && a.IsLoopback() {
 		return false
 	}
-	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsMulticast() || a.IsUnspecified()
+	return !a.IsGlobalUnicast() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() ||
+		slices.ContainsFunc(deniedPrefixes, func(p netip.Prefix) bool { return p.Contains(a) })
 }
+
+// deniedPrefixes are non-public ranges the netip predicates miss (several embed IPv4 and so can reach private hosts).
+var deniedPrefixes = func() (out []netip.Prefix) {
+	for _, p := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4", "64:ff9b::/96", "2002::/16"} {
+		out = append(out, netip.MustParsePrefix(p))
+	}
+	return
+}()
 
 // guardedClient checks the resolved IP at dial time (Control runs after DNS), so DNS rebinding cannot bypass it.
 func guardedClient(allowLoopback bool) *http.Client {
@@ -113,7 +131,8 @@ func (s *Service) client() *http.Client {
 	if s.HTTP != nil {
 		return s.HTTP
 	}
-	return guardedClient(s.AllowLoopback)
+	s.once.Do(func() { s.guarded = guardedClient(s.AllowLoopback) })
+	return s.guarded
 }
 
 const maxAttempts = 8
@@ -203,16 +222,29 @@ func (s *Service) sendEmail(a EmailArgs) error {
 	if s.SMTP.Addr == "" {
 		return nil
 	}
-	msg := "From: " + s.SMTP.From + "\r\nTo: " + headerSafe.Replace(a.To) +
+	id := make([]byte, 12)
+	_, _ = rand.Read(id)
+	domain := "localhost"
+	if _, d, ok := strings.Cut(s.SMTP.From, "@"); ok {
+		domain = headerSafe.Replace(strings.Trim(d, "<> "))
+	}
+	body := strings.ReplaceAll(strings.ReplaceAll(a.Body, "\r\n", "\n"), "\n", "\r\n")
+	msg := "From: " + headerSafe.Replace(s.SMTP.From) + "\r\nDate: " + time.Now().Format(time.RFC1123Z) +
+		"\r\nMessage-ID: <" + hex.EncodeToString(id) + "@" + domain + ">\r\nTo: " + headerSafe.Replace(a.To) +
 		"\r\nSubject: " + mime.QEncoding.Encode("utf-8", headerSafe.Replace(a.Subject)) +
 		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" +
-		strings.ReplaceAll(a.Body, "\n", "\r\n")
+		body
 	var auth smtp.Auth
 	if s.SMTP.Username != "" {
 		host, _, _ := net.SplitHostPort(s.SMTP.Addr)
 		auth = smtp.PlainAuth("", s.SMTP.Username, s.SMTP.Password, host) // net/smtp refuses PLAIN without TLS except on localhost
 	}
-	return smtp.SendMail(s.SMTP.Addr, auth, s.SMTP.From, []string{a.To}, []byte(msg))
+	err := smtp.SendMail(s.SMTP.Addr, auth, s.SMTP.From, []string{a.To}, []byte(msg))
+	var te *textproto.Error
+	if errors.As(err, &te) && te.Code >= 500 {
+		return river.JobCancel(err) // permanent rejection (bad recipient, auth): retrying only repeats it
+	}
+	return err
 }
 
 type WebhookArgs struct {
@@ -238,6 +270,9 @@ func (s *Service) postWebhook(ctx context.Context, a WebhookArgs) error {
 	if url == "" {
 		return nil // removed from team.yaml since it was queued
 	}
+	if a.Flavor == "slack" {
+		a.Text = slackEscape.Replace(a.Text) // mrkdwn control sequences: <!channel>, <url|label>
+	}
 	if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" || u.Hostname() == "" {
 		return river.JobCancel(fmt.Errorf("%s webhook for team %s must be an https URL", a.Flavor, a.Team)) // retrying cannot fix config
 	}
@@ -255,14 +290,26 @@ func (s *Service) postWebhook(ctx context.Context, a WebhookArgs) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client().Do(req)
 	if err != nil {
-		return err
+		var ue *neturl.Error
+		if errors.As(err, &ue) {
+			err = ue.Err // never leak the secret webhook URL into logs or job errors
+		}
+		return fmt.Errorf("%s webhook for team %s: %w", a.Flavor, a.Team, err)
 	}
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("%s webhook for team %s: HTTP %d", a.Flavor, a.Team, resp.StatusCode)
+		err := fmt.Errorf("%s webhook for team %s: HTTP %d", a.Flavor, a.Team, resp.StatusCode)
+		c := resp.StatusCode
+		if c < 400 || (c < 500 && c != http.StatusRequestTimeout && c != http.StatusTooManyRequests) {
+			return river.JobCancel(err) // redirects and permanent client errors will not heal on retry
+		}
+		return err
 	}
 	return nil
 }
+
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 
 // teamsCard wraps text in the Adaptive Card envelope that Teams "Workflows" incoming webhooks accept.
 func teamsCard(text string) any {

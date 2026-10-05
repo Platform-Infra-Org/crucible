@@ -166,8 +166,12 @@ func TestWebhookSSRFGuard(t *testing.T) {
 	for _, u := range []string{"https://127.0.0.1/x", "https://169.254.169.254/latest", "https://10.0.0.1/x", "https://[::1]/x", "http://hooks.example/x"} {
 		plat.Teams["forge"].Notifications = config.TeamNotifications{SlackWebhook: u}
 		s := &Service{State: func() *gitsync.State { return st }} // default guarded client
-		if err := s.postWebhook(context.Background(), WebhookArgs{Team: "forge", Flavor: "slack", Text: "x"}); err == nil {
-			t.Fatalf("%s must be refused", u)
+		err := s.postWebhook(context.Background(), WebhookArgs{Team: "forge", Flavor: "slack", Text: "x"})
+		if err == nil || !(strings.Contains(err.Error(), "not a public address") || strings.Contains(err.Error(), "must be an https URL")) {
+			t.Fatalf("%s must be refused by the guard, got %v", u, err)
+		}
+		if strings.Contains(err.Error(), u) {
+			t.Fatalf("error leaks the webhook URL: %v", err)
 		}
 	}
 }
@@ -182,5 +186,31 @@ func TestGuardedClientAllowsLoopbackOnlyWhenTold(t *testing.T) {
 	c.Transport.(*http.Transport).TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
 	if _, err := c.Get(srv.URL); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBlockedIP(t *testing.T) {
+	for ip, want := range map[string]bool{"::ffff:127.0.0.1": true, "100.64.0.1": true, "0.1.2.3": true, "64:ff9b::a00:1": true, "2002:a00:1::1": true,
+		"192.0.0.5": true, "198.19.0.1": true, "250.0.0.1": true, "169.254.169.254": true, "10.0.0.1": true, "fe80::1": true, "fd00::1": true,
+		"8.8.8.8": false, "2606:4700::1111": false} {
+		if got := blockedIP(net.ParseIP(ip), false); got != want {
+			t.Errorf("blockedIP(%s) = %v, want %v", ip, got, want)
+		}
+	}
+}
+
+func TestSlackEscapesControlSequences(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = json.NewDecoder(r.Body).Decode(&got) }))
+	defer srv.Close()
+	plat, _ := config.Load("../../examples/platform")
+	plat.Teams["forge"].Notifications = config.TeamNotifications{SlackWebhook: srv.URL}
+	st := &gitsync.State{Platform: plat}
+	s := &Service{State: func() *gitsync.State { return st }, HTTP: srv.Client()}
+	if err := s.postWebhook(context.Background(), WebhookArgs{Team: "forge", Flavor: "slack", Text: "<!channel> a&b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got["text"] != "&lt;!channel&gt; a&amp;b" {
+		t.Fatalf("text %v", got["text"])
 	}
 }

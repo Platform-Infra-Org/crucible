@@ -1,0 +1,20 @@
+:root, [data-theme='forge'] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596;
+  --accent: #ff7a1a; --accent-2: #ffc24b; --danger: #ff5a4d; --ok: #7bd88f; --border: #3a302a;
+  --glow: 0 0 24px rgba(255, 122, 26, 0.45); --term-bg: #0f0c0a; --term-fg: #f3e9df;
+}
+[data-theme='anvil'] {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e;
+  --accent: #2f5d8a; --accent-2: #c26b1e; --danger: #c62828; --ok: #2e7d32; --border: #cbd3dc;
+  --glow: 0 0 18px rgba(47, 93, 138, 0.25); --term-bg: #1c232b; --term-fg: #eef1f4;
+}
+[data-theme='quench'] {
+  --bg: #0b1424; --surface: #111e33; --surface-2: #182a45; --text: #e6f1ff; --muted: #93a8c6;
+  --accent: #3cc8e8; --accent-2: #7fe3c5; --danger: #ff6b81; --ok: #7fe3c5; --border: #24395a;
+  --glow: 0 0 22px rgba(60, 200, 232, 0.4); --term-bg: #070e1a; --term-fg: #e6f1ff;
+}
+[data-theme='contrast'] {
+  --bg: #000; --surface: #000; --surface-2: #111; --text: #fff; --muted: #e6e6e6;
+  --accent: #ffd400; --accent-2: #00e5ff; --danger: #ff6b6b; --ok: #5dff7a; --border: #fff;
+  --glow: none; --term-bg: #000; --term-fg: #fff;
+}

@@ -106,6 +106,10 @@ func Load(dir string) (*Platform, error) {
 		errs = append(errs, err)
 	}
 	for id, ref := range reg.Trainings {
+		if id == "" || !filepath.IsLocal(id) || strings.ContainsAny(id, `/\`) { // ids become directory names
+			errs = append(errs, fmt.Errorf("trainings.yaml: invalid training id %q", id))
+			continue
+		}
 		if ref.Repo == "" {
 			errs = append(errs, fmt.Errorf("trainings.yaml: %s has no repo", id))
 			continue
@@ -144,7 +148,9 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef) (*Team, []error)
 		return nil, []error{fmt.Errorf("teams/%s: %w", id, err)}
 	}
 	var errs []error
-	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf("teams/%s: "+format, append([]any{id}, a...)...)) }
+	bad := func(format string, a ...any) {
+		errs = append(errs, fmt.Errorf("teams/%s: "+format, append([]any{id}, a...)...))
+	}
 
 	t.Leader = strings.ToLower(t.Leader)
 	t.Seniors, t.Members, t.Trainees = lower(t.Seniors), lower(t.Members), lower(t.Trainees)

@@ -69,8 +69,10 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 			"training: forge-999\n", "must match the file name"},
 		"enrolled outsider": {"teams/forge/programs/forge-101.yaml",
 			"training: forge-101\nenrolled: [stranger@x]\n", "not a member of team"},
-		"bad theme": {"platform.yaml", "default_theme: neon\n", "default_theme"},
-		"unknown key": {"platform.yaml", "default_theme: forge\ncolour: red\n", "colour"},
+		"training id dots":  {"trainings.yaml", "trainings:\n  \"..\": {repo: file:///x}\n", "invalid training id"},
+		"training id slash": {"trainings.yaml", "trainings:\n  a/b: {repo: file:///x}\n", "invalid training id"},
+		"bad theme":         {"platform.yaml", "default_theme: neon\n", "default_theme"},
+		"unknown key":       {"platform.yaml", "default_theme: forge\ncolour: red\n", "colour"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -11,13 +11,13 @@ import (
 
 func TestErrorMapsKinds(t *testing.T) {
 	cases := map[error]int{
-		apperr.Wrap(apperr.NotFound, "no lab"):      404,
-		apperr.Wrap(apperr.Forbidden, "nope"):       403,
-		apperr.Wrap(apperr.Locked, "finish first"):  423,
-		apperr.Wrap(apperr.Conflict, "busy"):        409,
-		apperr.Wrap(apperr.Unavailable, "offline"):  503,
-		apperr.Wrap(apperr.Invalid, "bad json"):     400,
-		errors.New("database exploded"):             500,
+		apperr.Wrap(apperr.NotFound, "no lab"):     404,
+		apperr.Wrap(apperr.Forbidden, "nope"):      403,
+		apperr.Wrap(apperr.Locked, "finish first"): 423,
+		apperr.Wrap(apperr.Conflict, "busy"):       409,
+		apperr.Wrap(apperr.Unavailable, "offline"): 503,
+		apperr.Wrap(apperr.Invalid, "bad json"):    400,
+		errors.New("database exploded"):            500,
 	}
 	for err, want := range cases {
 		w := httptest.NewRecorder()

@@ -17,7 +17,9 @@ func write(t *testing.T, body string) string {
 }
 
 func TestDuration(t *testing.T) {
-	var v struct{ TTL Duration `yaml:"ttl"` }
+	var v struct {
+		TTL Duration `yaml:"ttl"`
+	}
 	if err := ReadFile(write(t, "ttl: 90m\n"), &v, true); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,9 @@ func TestDuration(t *testing.T) {
 }
 
 func TestStrictAndOptional(t *testing.T) {
-	var v struct{ A string `yaml:"a"` }
+	var v struct {
+		A string `yaml:"a"`
+	}
 	err := ReadFile(write(t, "a: x\nb: y\n"), &v, true)
 	if err == nil || !strings.Contains(err.Error(), "b") {
 		t.Fatalf("expected unknown-field error, got %v", err)

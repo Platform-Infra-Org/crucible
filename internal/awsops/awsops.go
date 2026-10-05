@@ -21,6 +21,7 @@ type Ops struct {
 	Exec   func(ctx context.Context, dir, name string, args ...string) error
 	Output func(ctx context.Context, dir, name string, args ...string) (string, error)
 	Sleep  func(time.Duration)
+	Get    func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	Log    io.Writer
 }
 
@@ -103,6 +104,9 @@ func (o Ops) Deploy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := o.requireRunning(ctx, m); err != nil {
+		return err
+	}
 	sha, err := o.Output(ctx, o.Root, "git", "rev-parse", "--short=12", "HEAD")
 	if err != nil {
 		return err
@@ -128,11 +132,21 @@ func (o Ops) Deploy(ctx context.Context) error {
 	if err := gzipFile(img); err != nil {
 		return err
 	}
+	_ = os.Remove(chart) // never upload a stale chart under a new sha
+	for _, old := range globOrNil(filepath.Join(rel, "crucible-*.tgz")) {
+		_ = os.Remove(old)
+	}
 	if err := o.Exec(ctx, o.Root, "helm", "package", filepath.Join(o.Root, "deploy", "helm", "crucible"),
 		"-d", rel, "--app-version", sha); err != nil {
 		return err
 	}
-	_ = os.Rename(filepath.Join(rel, "crucible-0.1.0.tgz"), chart)
+	pkgs, _ := filepath.Glob(filepath.Join(rel, "crucible-*.tgz"))
+	if len(pkgs) != 1 {
+		return fmt.Errorf("helm package produced %d chart archives in %s, want 1", len(pkgs), rel)
+	}
+	if err := os.Rename(pkgs[0], chart); err != nil {
+		return err
+	}
 	if err := os.WriteFile(filepath.Join(rel, "current-release"), []byte(sha), 0o644); err != nil {
 		return err
 	}
@@ -147,7 +161,7 @@ func (o Ops) Deploy(ctx context.Context) error {
 		}
 	}
 	fmt.Fprintf(o.Log, "release %s published; rolling out…\n", sha)
-	wait := `i=0; while [ ! -f /opt/crucible/.ready ] && [ ! -f /opt/crucible/.failed ]; do i=$((i+1)); [ $i -gt 240 ] && { echo "timed out waiting for node bootstrap"; exit 1; }; sleep 5; done; ` +
+	wait := `i=0; while [ ! -f /opt/crucible/.ready ] && [ ! -f /opt/crucible/.failed ]; do i=$((i+1)); [ $i -gt 240 ] && { echo "timed out waiting for node bootstrap" >&2; exit 1; }; sleep 5; done; ` +
 		`if [ -f /opt/crucible/.failed ]; then echo "node bootstrap failed - see /var/log/crucible-bootstrap.log (aws ssm start-session --target ` + m["instance_id"] + `)" >&2; exit 1; fi; /opt/crucible/deploy.sh`
 	if err := o.ssm(ctx, m, wait); err != nil {
 		return err
@@ -159,10 +173,12 @@ func (o Ops) Deploy(ctx context.Context) error {
 	return nil
 }
 
+func globOrNil(pattern string) []string { m, _ := filepath.Glob(pattern); return m }
+
 func gzipFile(path string) error {
 	in, err := os.Open(path)
 	if err != nil {
-		return nil // tests run without a real image; Exec already reported failures
+		return err
 	}
 	defer in.Close()
 	out, err := os.Create(path + ".gz")
@@ -192,7 +208,7 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 	if err != nil {
 		return fmt.Errorf("node not reachable over SSM: %w", err)
 	}
-	deadline := time.Now().Add(30 * time.Minute)
+	deadline := time.Now().Add(45 * time.Minute)
 	for time.Now().Before(deadline) {
 		st, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
 			"--instance-id", m["instance_id"], "--query", "Status", "--output", "text")
@@ -214,13 +230,31 @@ func (o Ops) Snapshot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := o.requireRunning(ctx, m); err != nil {
+		return err
+	}
 	return o.ssm(ctx, m, "/opt/crucible/snapshot.sh")
 }
 
-func (o Ops) state(ctx context.Context, m map[string]string) string {
-	st, _ := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", m["region"], "--instance-ids", m["instance_id"],
+func (o Ops) state(ctx context.Context, m map[string]string) (string, error) {
+	st, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", m["region"], "--instance-ids", m["instance_id"],
 		"--query", "Reservations[0].Instances[0].State.Name", "--output", "text")
-	return st
+	if err != nil || st == "" {
+		return "", fmt.Errorf("cannot determine node state: %v", err)
+	}
+	return st, nil
+}
+
+// requireRunning fails fast instead of retrying SSM against a stopped node.
+func (o Ops) requireRunning(ctx context.Context, m map[string]string) error {
+	st, err := o.state(ctx, m)
+	if err != nil {
+		return err
+	}
+	if st == "stopped" {
+		return errors.New("node is stopped; run `crucible aws wake`")
+	}
+	return nil
 }
 
 // SleepNode snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
@@ -229,7 +263,11 @@ func (o Ops) SleepNode(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if o.state(ctx, m) == "running" {
+	st, err := o.state(ctx, m)
+	if err != nil {
+		return fmt.Errorf("not stopping: %w", err)
+	}
+	if st == "running" {
 		if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
 			return fmt.Errorf("snapshot failed, not stopping: %w", err)
 		}
@@ -256,12 +294,16 @@ func (o Ops) Wake(ctx context.Context) error {
 }
 
 func (o Ops) waitHealthy(ctx context.Context, url string) error {
-	if strings.Contains(url, "example.com") {
-		return nil // tests
+	get := o.Get
+	if get == nil {
+		c := &http.Client{Timeout: 10 * time.Second}
+		get = c.Get
 	}
 	for i := 0; i < 120; i++ {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url+"/healthz", nil)
-		if res, err := http.DefaultClient.Do(req); err == nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if res, err := get(url + "/healthz"); err == nil {
 			res.Body.Close()
 			if res.StatusCode == 200 {
 				fmt.Fprintf(o.Log, "🔥 the forge is lit: %s\n", url)
@@ -278,7 +320,11 @@ func (o Ops) Status(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\n", m["instance_id"], o.state(ctx, m), m["url"])
+	st, err := o.state(ctx, m)
+	if err != nil {
+		st = "unknown (" + err.Error() + ")"
+	}
+	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\n", m["instance_id"], st, m["url"])
 	return nil
 }
 
@@ -290,12 +336,19 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes bool) error {
 	if err != nil {
 		return err
 	}
-	if o.state(ctx, m) == "running" {
+	st, err := o.state(ctx, m)
+	if err != nil {
+		return fmt.Errorf("aborting teardown: %w", err)
+	}
+	switch st {
+	case "running":
 		if err := o.ssm(ctx, m, "/opt/crucible/snapshot.sh"); err != nil {
 			return fmt.Errorf("final snapshot failed, aborting teardown: %w", err)
 		}
-	} else {
-		fmt.Fprintln(o.Log, "node is not running; relying on the last nightly snapshot")
+	case "stopped":
+		fmt.Fprintln(o.Log, "warning: node is stopped; relying on the last snapshot taken before it slept")
+	default:
+		return fmt.Errorf("node is %s; wait until the node is stable (running or stopped) and retry", st)
 	}
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {

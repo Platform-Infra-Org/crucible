@@ -56,6 +56,9 @@ func awsCmd(args []string) int {
 	yes := fs.Bool("yes", false, "confirm teardown")
 	_ = fs.Parse(args[1:])
 	root, _ := os.Getwd()
+	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
+		root = strings.TrimSpace(string(top))
+	}
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()

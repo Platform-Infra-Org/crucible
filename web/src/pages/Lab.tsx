@@ -29,12 +29,16 @@ function firstOpen(lab: LabView): string {
 export function LabPage() {
   const { team, training, module } = useParams()
   const modPath = `/api/programs/${team}/${training}/modules/${module}/lab`
-  const { data: info, error } = useFetch<ModuleLab>(modPath)
   const [lab, setLab] = useState<LabView | null>(null)
+  // Re-ask while the runtime is not ready, so starting the agent enables "Ignite" without a reload.
+  const [poll, setPoll] = useState<number>()
+  const { data: info, error } = useFetch<ModuleLab>(modPath, poll)
   const [starting, setStarting] = useState(false)
   const [startErr, setStartErr] = useState<string>()
   useEffect(() => {
-    if (info) setLab(info.lab)
+    if (!info) return
+    setLab(info.lab)
+    setPoll(info.runtime_ready ? undefined : 3000)
   }, [info])
   useEffect(() => {
     if (!lab || lab.state === 'destroyed' || lab.state === 'failed') return

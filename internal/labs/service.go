@@ -33,6 +33,23 @@ type Service struct {
 
 	touchMu sync.Mutex
 	touched map[string]time.Time
+
+	setupMu    sync.Mutex
+	setupLocks map[string]*sync.Mutex // per lab: one setup decision at a time; dropped on destroy
+}
+
+// setupLock serialises setup runs for one lab so concurrent opens/resets cannot run a scenario twice.
+// ponytail: in-process lock; a second API replica would need a DB advisory lock.
+func (s *Service) setupLock(labID string) *sync.Mutex {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	if s.setupLocks == nil {
+		s.setupLocks = map[string]*sync.Mutex{}
+	}
+	if s.setupLocks[labID] == nil {
+		s.setupLocks[labID] = &sync.Mutex{}
+	}
+	return s.setupLocks[labID]
 }
 
 type TaskView struct {
@@ -525,17 +542,32 @@ func (s *Service) OpenTask(ctx context.Context, u *auth.User, labID, taskID stri
 	if statuses[taskID] == "locked" {
 		return nil, apperr.Wrap(apperr.Locked, "finish the earlier tasks first")
 	}
+	const prepFailed = "This scenario couldn't be prepared. You can skip this task without penalty, or restart the lab."
 	setupErr := ""
 	if statuses[taskID] == "open" && task.Setup != nil && statuses["_setup:"+taskID] == "" {
-		if err := s.runSetup(ctx, inst, lab, taskID, task.Setup); err != nil {
-			if errors.Is(err, apperr.Unavailable) {
-				return nil, err
-			}
-			setupErr = "This scenario couldn't be prepared. You can skip this task without penalty, or restart the lab."
+		mu := s.setupLock(inst.ID)
+		mu.Lock()
+		setups, err := s.setupStatus(ctx, inst.ID) // re-check: another request may have run it meanwhile
+		if err != nil {
+			mu.Unlock()
+			return nil, err
+		}
+		switch setups[taskID] {
+		case "":
+			err = s.runSetup(ctx, inst, lab, taskID, task.Setup)
+		case "failed":
+			setupErr = prepFailed
+		}
+		mu.Unlock()
+		if errors.Is(err, apperr.Unavailable) {
+			return nil, err
+		}
+		if err != nil {
+			setupErr = prepFailed
 		}
 	}
 	if statuses[taskID] == "setup_failed" {
-		setupErr = "This scenario couldn't be prepared. You can skip this task without penalty, or restart the lab."
+		setupErr = prepFailed
 	}
 	s.Touch(ctx, inst.ID)
 	v, err := s.view(ctx, inst)
@@ -687,6 +719,9 @@ func (s *Service) ResetTask(ctx context.Context, u *auth.User, labID, taskID str
 	if st := statuses[taskID]; st == "passed" || st == "skipped" || st == "locked" {
 		return nil, apperr.Wrap(apperr.Conflict, "only the current task can be reset")
 	}
+	mu := s.setupLock(inst.ID)
+	mu.Lock()
+	defer mu.Unlock()
 	var last time.Time
 	if err := s.DB.QueryRow(ctx, `SELECT coalesce(max(at), 'epoch') FROM setup_runs WHERE lab_id = $1 AND task = $2`,
 		inst.ID, taskID).Scan(&last); err != nil {
@@ -799,6 +834,9 @@ func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason stri
 	}
 	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3 WHERE id = $1`,
 		inst.ID, s.Now(), note)
+	s.setupMu.Lock()
+	delete(s.setupLocks, inst.ID)
+	s.setupMu.Unlock()
 	s.event(ctx, inst.ID, "destroyed", reason)
 }
 

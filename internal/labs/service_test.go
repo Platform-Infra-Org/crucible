@@ -36,6 +36,7 @@ type fakeRunner struct {
 	destroyed   []string
 	provision   func() // optional hook: blocks/observes Provision
 	output      string // script output (default "out")
+	slow        time.Duration
 }
 
 func (f *fakeRunner) Available(*Instance) error { return f.unavailable }
@@ -49,6 +50,7 @@ func (f *fakeRunner) OpenPTY(context.Context, *Instance, string, int, int) (PTY,
 	return nil, io.EOF
 }
 func (f *fakeRunner) RunScript(_ context.Context, _ *Instance, sp ScriptSpec) (ScriptResult, error) {
+	time.Sleep(f.slow)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scripts = append(f.scripts, sp)
@@ -399,5 +401,31 @@ func TestReconcileAgentEndsLostLabsAndRemovesStrays(t *testing.T) {
 	defer f.run.mu.Unlock()
 	if !slices.Contains(f.run.destroyed, "fedcba987654") {
 		t.Fatalf("stray lab not destroyed on the laptop: %v", f.run.destroyed)
+	}
+}
+
+func TestConcurrentOpenTaskRunsSetupOnce(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	v := f.start(t)
+	if _, err := f.s.Check(ctx, f.u, v.ID, "t1-forge-file", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.run.slow = 50 * time.Millisecond
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := f.s.OpenTask(ctx, f.u, v.ID, "t2-find-port"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	var runs int
+	_ = f.s.DB.QueryRow(ctx, "SELECT count(*) FROM setup_runs WHERE task = 't2-find-port'").Scan(&runs)
+	if runs != 1 {
+		t.Fatalf("setup must run once for concurrent opens, ran %d times", runs)
 	}
 }

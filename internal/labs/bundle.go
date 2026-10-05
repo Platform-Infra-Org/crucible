@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -12,7 +13,16 @@ import (
 )
 
 // Files the trainee's environment must never see: instructions, checks, setups and hints are sent per call.
-var bundleSkip = map[string]bool{"tasks": true, "checks": true, "setup": true, "hints": true, "lab.yaml": true}
+// quiz.yaml/module.yaml only matter if a lab sits in its module dir (the loader rejects that; this is defence in depth).
+var bundleSkip = map[string]bool{"tasks": true, "checks": true, "setup": true, "hints": true, "lab.yaml": true,
+	"quiz.yaml": true, "module.yaml": true}
+
+// maxBundleBytes caps the gzipped bundle (it travels over the agent websocket); a var so tests can lower it.
+var maxBundleBytes = 32 << 20
+
+func tooBig() error {
+	return fmt.Errorf("lab bundle exceeds %d MiB compressed; keep large files out of the lab directory (pull images instead)", maxBundleBytes>>20)
+}
 
 func Bundle(labDir string) ([]byte, error) {
 	var buf bytes.Buffer
@@ -21,6 +31,9 @@ func Bundle(labDir string) ([]byte, error) {
 	err := filepath.WalkDir(labDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if buf.Len() > maxBundleBytes {
+			return tooBig()
 		}
 		rel, _ := filepath.Rel(labDir, p)
 		if rel == "." {
@@ -70,6 +83,9 @@ func Bundle(labDir string) ([]byte, error) {
 	}
 	if err := gz.Close(); err != nil {
 		return nil, err
+	}
+	if buf.Len() > maxBundleBytes {
+		return nil, tooBig()
 	}
 	return buf.Bytes(), nil
 }

@@ -106,7 +106,7 @@ func NewRouter(d Deps) chi.Router {
 				return
 			}
 			httpx.JSON(w, http.StatusOK, map[string]string{"token": tok,
-				"command": "crucible-agent --server " + d.PublicURL + " --token " + tok})
+				"command": "CRUCIBLE_TOKEN=" + tok + " crucible-agent --server " + d.PublicURL}) // env, not argv: other local users can read argv
 		})
 		r.Get("/api/agent/status", func(w http.ResponseWriter, r *http.Request) {
 			httpx.JSON(w, http.StatusOK, map[string]bool{"online": d.Hub.Online(auth.UserFrom(r.Context()).ID)})

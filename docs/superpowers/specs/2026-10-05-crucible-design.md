@@ -43,6 +43,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Lab runtimes | Per lab: `cluster` (sysbox pod), `local` (trainee laptop via agent), `aws` |
 | AWS isolation | One shared account, tag + IAM permission boundary |
 | Lab checks | Script per task, exit 0 = pass, stdout = feedback |
+| Task setup | Optional per-task and lab-level setup scripts (break-fix scenarios), run out of band on first task open |
 | Progression | Configurable per training: `linear` (gated) or `free` |
 | Instant quiz types | single/multi choice, exact/regex, ordering/matching, terminal-inspection |
 | Human-scored items | free text, file/link uploads, lab submissions (incl. override), live sign-offs |
@@ -90,7 +91,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
       Provision(ctx, lab LabSpec, inst Instance) error
       Terminals(inst Instance) []TerminalSpec
       OpenPTY(ctx, inst Instance, terminal string) (PTY, error)
-      RunCheck(ctx, inst Instance, check CheckSpec, input string) (CheckResult, error)
+      RunScript(ctx, inst Instance, s ScriptSpec, env map[string]string) (ScriptResult, error) // checks + setups, out of band
       Destroy(ctx, inst Instance) error
   }
   ```
@@ -182,6 +183,7 @@ id: docker-networking
 runtime: cluster            # cluster | local | aws
 ttl: 2h
 idle_timeout: 30m
+task_order: linear         # linear (default) | free
 terminals:                  # one tab each
   - { name: host,  service: workstation }
   - { name: db,    service: postgres }
@@ -202,6 +204,11 @@ tasks:
   - id: t3
     instructions: tasks/03-design.md
     human_review: true      # scorer reviews / may override
+  - id: t4                  # break-fix task (see §8.5)
+    instructions: tasks/04-fix-nginx.md
+    setup: { script: setup/04-break-nginx.sh, run_in: workstation, timeout: 60s }
+    check: { script: checks/04.sh, run_in: workstation, timeout: 30s }
+    points: 3
 # aws only:
 aws:
   region: eu-west-1
@@ -292,6 +299,17 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - Every reveal is recorded in `hint_reveals`. Scorers see hints used next to check results; the journey view treats a revealed final hint as a "stuck" signal.
 - `crucible lint` checks that hint files exist and that each cost is ≥ 0 and ≤ the task's points.
 
+### 8.5 Task setup scripts (break-fix and scenario prep)
+- Any task may declare `setup: { script, run_in, timeout }`. The script prepares the scenario for that task, e.g. corrupting a config, stopping a service, filling a disk, or deleting a route. The trainee's job is to diagnose and fix it, and the task's check script verifies the fix.
+- A lab may also declare a lab-level `setup` that runs once, after the lab reaches `ready` and before the trainee gets the terminals.
+- **When a task's setup runs:** the first time the trainee opens that task. In a lab with `task_order: linear` (the default), a task opens only after the previous one passes, so breakage never collides with earlier work. With `task_order: free`, each task's setup still runs on first open, and authors must make setups independent of each other.
+- **Execution:** like checks, setup runs out of band (exec for `cluster`, agent for `local`, the workspace pod with lab credentials for `aws`), never inside the trainee's terminal session. Its output is hidden from the trainee and stored for scorers/maintainers. The task panel shows "Preparing scenario…" with the forge loader until it finishes; the Check button is disabled meanwhile.
+- **Rules for authors:** setup must be idempotent (safe to re-run) and must exit 0 on success.
+- **Failure:** a non-zero exit or timeout is retried once. If it still fails, the task is marked *setup failed*, the trainee sees "This scenario couldn't be prepared", maintainers are notified, and the trainee can skip the task without penalty or restart the lab.
+- **Reset scenario:** a per-task button re-runs the task's setup (only for tasks with `setup`, once per 5 min). It's for when the trainee has made things worse; it does not undo other changes, so authors should write setups that converge to the broken state rather than assume a clean one.
+- **Integrity:** setup scripts are never sent to the browser. In `local` labs the trainee could read them on their own machine, which is acceptable because local results are already flagged self-reported.
+- `crucible lint` checks that setup scripts exist and are executable, and that `run_in` names a service or terminal defined in the lab. `crucible preview` runs setups so authors can test their break-fix scenarios locally.
+
 ---
 
 ## 9. FinOps
@@ -349,7 +367,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 - **Accessibility:** keyboard-navigable everything (including terminal tab switching), focus rings, ARIA live regions for check results, contrast checked per theme.
 
 ## 13. Data model (Postgres, core tables)
-`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
+`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
 Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 
 ## 14. Errors, security, testing

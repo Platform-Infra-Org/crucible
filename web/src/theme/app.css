@@ -129,3 +129,8 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--s
 .lobby { text-align: center; }
 .cooled { margin: 1.5rem auto; max-width: 520px; padding: 1rem; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
 pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px; overflow: auto; }
+
+@media (prefers-reduced-motion: reduce) { .timer.cooling, .timer.critical { box-shadow: none; } }
+[data-calm='true'] .timer.cooling, [data-calm='true'] .timer.critical { box-shadow: none; }
+.spacer { flex: 1; }
+.tasks[hidden] { display: none; }

@@ -5,7 +5,7 @@ import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { CheckResult, HintResult, LabView, ModuleLab, TaskDetail } from '../types'
 import { clockOffset } from '../lib/timer'
-import { askNotifications, notificationsUndecided } from '../lib/alerts'
+import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
 import { Embers } from '../components/Embers'
 import { ErrorBox } from '../components/ErrorBox'
 import { IdleModal } from '../components/IdleModal'
@@ -95,6 +95,15 @@ export function LabPage() {
 
 function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: LabView) => void; title: string; back: string }) {
   const [split, setSplit] = useState(40)
+  const [collapsed, setCollapsed] = useState(false)
+  const [fontSize, setFontSize] = useState(() => {
+    try { return Math.min(20, Math.max(12, Number(localStorage.getItem('crucible-term-font')) || 14)) } catch { return 14 }
+  })
+  const bump = (d: number) => setFontSize((f) => {
+    const n = Math.min(20, Math.max(12, f + d))
+    try { localStorage.setItem('crucible-term-font', String(n)) } catch { /* ignore */ }
+    return n
+  })
   const [taskId, setTaskId] = useState(() => firstOpen(lab))
   const [active, setActive] = useState(lab.terminals[0].name)
   const [extra, setExtra] = useState<{ key: string; name: string }[]>([])
@@ -110,9 +119,19 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
   }
   const end = async () => {
     if (!confirm('End this lab? Your progress is kept.')) return
-    setLab(await api<LabView>(`/api/labs/${lab.id}`, { method: 'DELETE' }))
+    try {
+      setLab(await api<LabView>(`/api/labs/${lab.id}`, { method: 'DELETE' }))
+    } catch (e) {
+      toast((e as Error).message)
+    }
   }
-  const extend = async () => setLab(await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' }))
+  const extend = async () => {
+    try {
+      setLab(await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' }))
+    } catch (e) {
+      toast((e as Error).message)
+    }
+  }
   const addShell = () => {
     const name = tabs.find((t) => t.key === active)?.name ?? lab.terminals[0].name
     const key = `${name} #${extra.filter((e) => e.name === name).length + 2}`
@@ -142,6 +161,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
         <span className="badge">{lab.runtime === 'local' ? 'Your laptop' : lab.runtime}</span>
         {lab.self_reported && <span className="badge warn" title="Checks run on your own machine">self-reported</span>}
         <span className="spacer" />
+        <button className="ghost" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show tasks' : 'Hide tasks'}</button>
         <Timer lab={lab} offset={offset} onExtend={extend} />
         <button className="ghost" onClick={end}>End lab</button>
       </header>
@@ -155,8 +175,8 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           </div>
         )}
       </div>
-      <div className="lab-body" style={{ gridTemplateColumns: `${split}% 6px 1fr` }}>
-        <aside className="tasks" onPointerDown={beat} onKeyDown={beat} onScroll={beat}>
+      <div className="lab-body" style={{ gridTemplateColumns: collapsed ? '0 6px 1fr' : `${split}% 6px 1fr` }}>
+        <aside className="tasks" hidden={collapsed} onPointerDown={beat} onKeyDown={beat} onScroll={beat}>
           <ol className="task-pips">
             {lab.tasks.map((t, i) => (
               <li key={t.id}>
@@ -181,12 +201,21 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
             {tabs.map((t) => (
               <button key={t.key} role="tab" aria-selected={active === t.key} onClick={() => setActive(t.key)}>{t.key}</button>
             ))}
+            <span className="spacer" />
+            <button className="ghost" aria-label="Smaller text" onClick={() => bump(-1)}>A−</button>
+            <button className="ghost" aria-label="Larger text" onClick={() => bump(1)}>A+</button>
             <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>
           </div>
-          {tabs.map((t) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} active={active === t.key} />)}
+          {tabs.map((t) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
         </section>
       </div>
-      <IdleModal lab={lab} offset={offset} onHere={async () => setLab(await api<LabView>(`/api/labs/${lab.id}/activity`, { method: 'POST' }))} />
+      <IdleModal lab={lab} offset={offset} onHere={async () => {
+        try {
+          setLab(await api<LabView>(`/api/labs/${lab.id}/activity`, { method: 'POST' }))
+        } catch (e) {
+          toast((e as Error).message)
+        }
+      }} />
     </div>
   )
 }
@@ -203,8 +232,19 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
   const base = `/api/labs/${lab.id}/tasks/${taskId}`
 
   useEffect(() => {
-    api<TaskDetail>(base).then(setDetail).catch((e: Error) => setErr(e.message))
+    let live = true
+    api<TaskDetail>(base)
+      .then(async (d) => {
+        if (!live) return
+        setDetail(d)
+        if (d.setup_error) onLab(await api<LabView>(`/api/labs/${lab.id}`))
+      })
+      .catch((e: Error) => live && setErr(e.message))
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base])
+  const adv = useRef<number>(0)
+  useEffect(() => () => clearTimeout(adv.current), [])
 
   if (err) return <p className="error">{err}</p>
   if (!detail) return <Loader label={task.has_setup && task.status === 'open' ? 'Preparing scenario…' : 'Reading the runes…'} />
@@ -218,7 +258,7 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
       onLab(r.lab)
       if (r.passed) {
         setSpark((s) => s + 1)
-        setTimeout(() => onAdvance(r.lab), 1200)
+        adv.current = window.setTimeout(() => onAdvance(r.lab), 1200)
       } else setShake((s) => s + 1)
     } catch (e) {
       setOutput({ ok: false, text: (e as Error).message })
@@ -229,22 +269,32 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
   const hint = async () => {
     const cost = task.next_hint_cost
     if (cost > 0 && !confirm(`This hint costs ${cost} point${cost === 1 ? '' : 's'}. Reveal it?`)) return
-    const r = await api<HintResult>(`${base}/hint`, { method: 'POST' })
-    setDetail((d) => d && { ...d, hints: [...(d.hints ?? []), r.text] })
-    onLab(r.lab)
+    try {
+      const r = await api<HintResult>(`${base}/hint`, { method: 'POST' })
+      setDetail((d) => d && { ...d, hints: [...(d.hints ?? []), r.text] })
+      onLab(r.lab)
+    } catch (e) {
+      setOutput({ ok: false, text: (e as Error).message })
+    }
   }
   const reset = async () => {
     try {
-      onLab(await api<LabView>(`${base}/reset`, { method: 'POST' }))
-      setOutput({ ok: true, text: 'Scenario reset.' })
+      const l = await api<LabView>(`${base}/reset`, { method: 'POST' })
+      onLab(l)
+      const failed = l.tasks.find((t) => t.id === taskId)?.status === 'setup_failed'
+      setOutput({ ok: !failed, text: failed ? 'Scenario setup failed again.' : 'Scenario reset.' })
     } catch (e) {
       setOutput({ ok: false, text: (e as Error).message })
     }
   }
   const skip = async () => {
-    const l = await api<LabView>(`${base}/skip`, { method: 'POST' })
-    onLab(l)
-    onAdvance(l)
+    try {
+      const l = await api<LabView>(`${base}/skip`, { method: 'POST' })
+      onLab(l)
+      onAdvance(l)
+    } catch (e) {
+      setOutput({ ok: false, text: (e as Error).message })
+    }
   }
 
   return (
@@ -254,7 +304,7 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
       {task.kind === 'quiz' && (
         <label className="quiz-input">
           {task.quiz_prompt}
-          <input aria-label="Your answer" value={answer} disabled={done} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && check()} />
+          <input aria-label="Your answer" value={answer} disabled={done} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && !busy && check()} />
         </label>
       )}
       {(detail.hints ?? []).map((h, i) => (
@@ -268,7 +318,7 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
           <button className="primary" disabled={busy} onClick={check}>{busy ? 'Checking…' : 'Check'}</button>
         )}
         {task.kind === 'review' && <span className="muted">A scorer reviews this task.</span>}
-        {!done && task.hints_revealed < task.hints_total && (
+        {task.status === 'open' && task.hints_revealed < task.hints_total && (
           <button className="ghost" onClick={hint}>Hint {task.next_hint_cost > 0 ? `(−${task.next_hint_cost} pts)` : '(free)'}</button>
         )}
         {!done && task.has_setup && <button className="ghost" onClick={reset}>Reset scenario</button>}

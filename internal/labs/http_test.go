@@ -42,6 +42,7 @@ type ptyRunner struct {
 }
 
 func (p *ptyRunner) OpenPTY(context.Context, *Instance, string, int, int) (PTY, error) {
+	p.opens.Add(1)
 	return p.pty, nil
 }
 

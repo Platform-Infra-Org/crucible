@@ -99,6 +99,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	for _, t := range lab.Terminals {
 		if t.Name == chi.URLParam(r, "name") {
 			service = t.Service
+			break
 		}
 	}
 	if service == "" {
@@ -117,7 +118,11 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	defer ws.CloseNow()
 	pty, err := s.Runners[inst.Runtime].OpenPTY(r.Context(), inst, service, cols, rows)
 	if err != nil {
-		_ = ws.Close(websocket.StatusTryAgainLater, s.runnerErr(err).Error())
+		reason := s.runnerErr(err).Error()
+		if len(reason) > 120 {
+			reason = reason[:120] // close reason limit is 123 bytes
+		}
+		_ = ws.Close(websocket.StatusTryAgainLater, reason)
 		return
 	}
 	ws.SetReadLimit(1 << 20)

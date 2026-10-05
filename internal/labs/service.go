@@ -1,0 +1,814 @@
+package labs
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"crucible/internal/agenthub"
+	"crucible/internal/apperr"
+	"crucible/internal/auth"
+	"crucible/internal/content"
+	"crucible/internal/learn"
+)
+
+type Service struct {
+	DB      *pgxpool.Pool
+	Learn   *learn.Service
+	Runners map[string]Runner
+	Now     func() time.Time
+	Log     *slog.Logger
+
+	touchMu sync.Mutex
+	touched map[string]time.Time
+}
+
+type TaskView struct {
+	ID            string  `json:"id"`
+	Title         string  `json:"title"`
+	Status        string  `json:"status"` // locked | open | setup_failed | passed | skipped
+	Kind          string  `json:"kind"`   // check | quiz | review
+	Points        float64 `json:"points"`
+	Awarded       float64 `json:"awarded"`
+	QuizPrompt    string  `json:"quiz_prompt,omitempty"`
+	HasSetup      bool    `json:"has_setup"`
+	HintsTotal    int     `json:"hints_total"`
+	HintsRevealed int     `json:"hints_revealed"`
+	NextHintCost  float64 `json:"next_hint_cost"`
+}
+
+type View struct {
+	ID           string             `json:"id"`
+	State        State              `json:"state"`
+	Error        string             `json:"error,omitempty"`
+	Runtime      string             `json:"runtime"`
+	Team         string             `json:"team"`
+	Training     string             `json:"training"`
+	Module       string             `json:"module"`
+	Terminals    []content.Terminal `json:"terminals"`
+	TaskOrder    string             `json:"task_order"`
+	Tasks        []TaskView         `json:"tasks"`
+	ServerNow    time.Time          `json:"server_now"`
+	EndsAt       *time.Time         `json:"ends_at,omitempty"`
+	LimitReason  string             `json:"limit_reason,omitempty"`
+	EndReason    string             `json:"end_reason,omitempty"`
+	IdleDeadline *time.Time         `json:"idle_deadline,omitempty"`
+	IdleWarningS int                `json:"idle_warning_s"`
+	CanExtend    bool               `json:"can_extend"`
+	SelfReported bool               `json:"self_reported"`
+	Complete     bool               `json:"complete"`
+	Score        float64            `json:"score"`
+	MaxScore     float64            `json:"max_score"`
+}
+
+type TaskDetail struct {
+	TaskView
+	Instructions string   `json:"instructions"`
+	Hints        []string `json:"hints"`
+	SetupError   string   `json:"setup_error,omitempty"`
+}
+
+type CheckResult struct {
+	Passed   bool    `json:"passed"`
+	Output   string  `json:"output"`
+	TimedOut bool    `json:"timed_out"`
+	Awarded  float64 `json:"awarded"`
+	Lab      *View   `json:"lab"`
+}
+
+type HintResult struct {
+	Index int     `json:"index"`
+	Text  string  `json:"text"`
+	Cost  float64 `json:"cost"`
+	Lab   *View   `json:"lab"`
+}
+
+type ModuleLab struct {
+	Title          string `json:"title"`
+	Runtime        string `json:"runtime"`
+	RuntimeReady   bool   `json:"runtime_ready"`
+	RuntimeMessage string `json:"runtime_message,omitempty"`
+	Lab            *View  `json:"lab"`
+}
+
+const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
+	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended`
+
+func scanInst(row pgx.Row) (*Instance, error) {
+	var in Instance
+	var ttl, idle, warn, ext int
+	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
+		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	in.TTL, in.IdleTimeout = time.Duration(ttl)*time.Second, time.Duration(idle)*time.Second
+	in.IdleWarning, in.MaxExtension = time.Duration(warn)*time.Second, time.Duration(ext)*time.Second
+	return &in, nil
+}
+
+func newLabID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Service) event(ctx context.Context, labID, kind, detail string) {
+	_, _ = s.DB.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail) VALUES ($1, $2, $3)`, labID, kind, detail)
+}
+
+func (s *Service) runnerErr(err error) error {
+	if errors.Is(err, agenthub.ErrOffline) {
+		return errAgentOffline
+	}
+	return err
+}
+
+func (s *Service) labContent(inst *Instance) (*content.Lab, *content.Quiz, error) {
+	st := s.Learn.State()
+	if st == nil {
+		return nil, nil, apperr.Wrap(apperr.Unavailable, "content is still syncing")
+	}
+	t := st.Training(inst.Training, inst.SHA)
+	if t == nil {
+		return nil, nil, apperr.Wrap(apperr.Unavailable, "this lab's content is no longer available")
+	}
+	m := t.Module(inst.Module)
+	if m == nil || m.Lab == nil {
+		return nil, nil, apperr.Wrap(apperr.NotFound, "lab not found")
+	}
+	return m.Lab, m.Quiz, nil
+}
+
+func (s *Service) owned(ctx context.Context, u *auth.User, labID string) (*Instance, error) {
+	inst, err := scanInst(s.DB.QueryRow(ctx, `SELECT `+instCols+` FROM lab_instances WHERE id = $1`, labID))
+	if err != nil {
+		return nil, err
+	}
+	if inst.UserID != u.ID {
+		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
+	}
+	return inst, nil
+}
+
+type taskRow struct {
+	Status string
+	Points float64
+}
+
+func (s *Service) taskRows(ctx context.Context, inst *Instance) (map[string]taskRow, error) {
+	rows, err := s.DB.Query(ctx, `SELECT task, status, points FROM lab_task_progress
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`, inst.UserID, inst.Team, inst.Training, inst.Module)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]taskRow{}
+	for rows.Next() {
+		var id string
+		var r taskRow
+		if err := rows.Scan(&id, &r.Status, &r.Points); err != nil {
+			return nil, err
+		}
+		out[id] = r
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) hintCounts(ctx context.Context, inst *Instance) (map[string]int, map[string]float64, error) {
+	rows, err := s.DB.Query(ctx, `SELECT task, count(*), coalesce(sum(cost), 0) FROM hint_reveals
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 GROUP BY task`, inst.UserID, inst.Team, inst.Training, inst.Module)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	counts, costs := map[string]int{}, map[string]float64{}
+	for rows.Next() {
+		var id string
+		var n int
+		var c float64
+		if err := rows.Scan(&id, &n, &c); err != nil {
+			return nil, nil, err
+		}
+		counts[id], costs[id] = n, c
+	}
+	return counts, costs, rows.Err()
+}
+
+// setupStatus returns task → "ok" | "failed" from the latest setup run in this lab instance.
+func (s *Service) setupStatus(ctx context.Context, labID string) (map[string]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (task) task, exit_code FROM setup_runs
+		WHERE lab_id = $1 ORDER BY task, id DESC`, labID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var task string
+		var code int
+		if err := rows.Scan(&task, &code); err != nil {
+			return nil, err
+		}
+		out[task] = map[bool]string{true: "ok", false: "failed"}[code == 0]
+	}
+	return out, rows.Err()
+}
+
+func taskStatuses(lab *content.Lab, done map[string]taskRow, setups map[string]string) map[string]string {
+	out := map[string]string{}
+	opened := false
+	for _, t := range lab.Tasks {
+		if r, ok := done[t.ID]; ok {
+			out[t.ID] = r.Status
+			continue
+		}
+		if lab.TaskOrder == "linear" && opened {
+			out[t.ID] = "locked"
+			continue
+		}
+		opened = true
+		if setups[t.ID] == "failed" {
+			out[t.ID] = "setup_failed"
+		} else {
+			out[t.ID] = "open"
+		}
+	}
+	return out
+}
+
+func taskTitle(lab *content.Lab, t *content.Task) string {
+	b, _ := os.ReadFile(filepath.Join(lab.Dir, t.Instructions))
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "#") {
+			return strings.TrimSpace(strings.TrimLeft(line, "#"))
+		}
+	}
+	return t.ID
+}
+
+func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
+	lab, quiz, err := s.labContent(inst)
+	if err != nil {
+		return nil, err
+	}
+	done, err := s.taskRows(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	counts, _, err := s.hintCounts(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	setups, err := s.setupStatus(ctx, inst.ID)
+	if err != nil {
+		return nil, err
+	}
+	statuses := taskStatuses(lab, done, setups)
+	v := &View{ID: inst.ID, State: inst.State, Error: inst.Error, Runtime: inst.Runtime, Team: inst.Team,
+		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
+		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
+		IdleWarningS: int(inst.IdleWarning.Seconds()), SelfReported: inst.Runtime == "local", Complete: true}
+	for _, t := range lab.Tasks {
+		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
+			Awarded: done[t.ID].Points, HasSetup: t.Setup != nil, HintsTotal: len(t.Hints), HintsRevealed: counts[t.ID]}
+		switch {
+		case t.Quiz != "":
+			tv.Kind, tv.QuizPrompt = "quiz", quiz.Question(t.Quiz).Prompt
+		case t.Check != nil:
+			tv.Kind = "check"
+		default:
+			tv.Kind = "review" // human scoring arrives in M5
+		}
+		if n := counts[t.ID]; n < len(t.Hints) {
+			tv.NextHintCost = t.Hints[n].EffectiveCost(lab)
+		}
+		if tv.Status != "passed" && tv.Status != "skipped" {
+			v.Complete = false
+		}
+		v.Score += tv.Awarded
+		v.MaxScore += t.Points
+		v.Tasks = append(v.Tasks, tv)
+	}
+	if inst.State == Ready {
+		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
+		v.IdleDeadline = &dl
+		v.CanExtend = !inst.Extended && inst.MaxExtension > 0
+	}
+	return v, nil
+}
+
+func (s *Service) active(ctx context.Context, userID int64, team, training, module string) (*Instance, error) {
+	inst, err := scanInst(s.DB.QueryRow(ctx, `SELECT `+instCols+` FROM lab_instances
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 ORDER BY created_at DESC LIMIT 1`,
+		userID, team, training, module))
+	if errors.Is(err, apperr.NotFound) {
+		return nil, nil
+	}
+	return inst, err
+}
+
+func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, module string) (*ModuleLab, error) {
+	_, t, _, err := s.Learn.Program(u, team, training)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.Learn.EnsureUnlocked(ctx, u, team, t, module)
+	if err != nil {
+		return nil, err
+	}
+	if m.Lab == nil {
+		return nil, apperr.Wrap(apperr.NotFound, "this module has no lab")
+	}
+	out := &ModuleLab{Title: m.Title, Runtime: m.Lab.Runtime, RuntimeReady: true}
+	if r := s.Runners[m.Lab.Runtime]; r == nil {
+		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
+	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
+		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
+	}
+	inst, err := s.active(ctx, u.ID, team, training, module)
+	if err != nil {
+		return nil, err
+	}
+	if inst != nil {
+		if out.Lab, err = s.view(ctx, inst); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string) (*View, error) {
+	st, t, sha, err := s.Learn.Program(u, team, training)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.Learn.EnsureUnlocked(ctx, u, team, t, module)
+	if err != nil {
+		return nil, err
+	}
+	if m.Lab == nil {
+		return nil, apperr.Wrap(apperr.NotFound, "this module has no lab")
+	}
+	r := s.Runners[m.Lab.Runtime]
+	if r == nil {
+		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime))
+	}
+	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
+		return nil, err
+	} else if inst != nil && (inst.State == Provisioning || inst.State == Ready) {
+		return s.view(ctx, inst)
+	}
+	tm := ResolveTiming(m.Lab, st.Platform.Teams[team].Programs[training].LabDefaults)
+	now := s.Now()
+	inst := &Instance{ID: newLabID(), UserID: u.ID, Team: team, Training: training, Module: module, SHA: sha,
+		Runtime: m.Lab.Runtime, State: Provisioning, CreatedAt: now, LastActivityAt: now,
+		TTL: tm.TTL, IdleTimeout: tm.IdleTimeout, IdleWarning: tm.IdleWarning, MaxExtension: tm.MaxExtension}
+	if err := r.Available(inst); err != nil {
+		return nil, err
+	}
+	_, err = s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
+		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13)`,
+		inst.ID, inst.UserID, team, training, module, sha, inst.Runtime, inst.State, now,
+		int(tm.TTL.Seconds()), int(tm.IdleTimeout.Seconds()), int(tm.IdleWarning.Seconds()), int(tm.MaxExtension.Seconds()))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // a concurrent Start won the race
+		existing, err := s.active(ctx, u.ID, team, training, module)
+		if err != nil {
+			return nil, err
+		}
+		return s.view(ctx, existing)
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.event(ctx, inst.ID, "requested", "auto-approved: "+inst.Runtime)
+	go s.provision(context.WithoutCancel(ctx), inst, m.Lab)
+	return s.view(ctx, inst)
+}
+
+func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.Lab) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	bundle, err := Bundle(lab.Dir)
+	if err == nil {
+		err = s.Runners[inst.Runtime].Provision(ctx, inst, bundle, lab.Compose)
+	}
+	if err == nil && lab.Setup != nil {
+		err = s.runSetup(ctx, inst, lab, "", lab.Setup)
+	}
+	if err != nil {
+		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
+		_ = s.Runners[inst.Runtime].Destroy(ctx, inst)
+		_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3 WHERE id = $1`,
+			inst.ID, s.runnerErr(err).Error(), s.Now())
+		s.event(ctx, inst.ID, "failed", err.Error())
+		return
+	}
+	now := s.Now()
+	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"})
+	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
+		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
+	s.event(ctx, inst.ID, "ready", "")
+}
+
+func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.Lab, sc *content.Script, env map[string]string) (ScriptResult, error) {
+	body, err := os.ReadFile(filepath.Join(lab.Dir, sc.Script))
+	if err != nil {
+		return ScriptResult{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, sc.Timeout.D()+15*time.Second)
+	defer cancel()
+	return s.Runners[inst.Runtime].RunScript(ctx, inst, ScriptSpec{Service: sc.RunIn, Script: body, Env: env, Timeout: sc.Timeout.D()})
+}
+
+// runSetup runs a setup script, retrying once (spec §8.5). It returns an error if the scenario could not be prepared.
+func (s *Service) runSetup(ctx context.Context, inst *Instance, lab *content.Lab, taskID string, sc *content.Script) error {
+	var last error
+	for attempt := 1; attempt <= 2; attempt++ {
+		start := s.Now()
+		res, err := s.runScript(ctx, inst, lab, sc, nil)
+		if err != nil {
+			return s.runnerErr(err) // could not run at all: not a scenario failure
+		}
+		_, _ = s.DB.Exec(ctx, `INSERT INTO setup_runs (lab_id, task, attempt, exit_code, output, duration_ms, at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, inst.ID, taskID, attempt, res.ExitCode, res.Output,
+			s.Now().Sub(start).Milliseconds(), s.Now())
+		if res.ExitCode == 0 {
+			return nil
+		}
+		last = fmt.Errorf("setup exited with %d", res.ExitCode)
+	}
+	// ponytail: maintainers are notified by M3 notifications; until then this is logged.
+	s.Log.Warn("setup script failed twice", "lab", inst.ID, "task", taskID)
+	s.event(ctx, inst.ID, "setup_failed", taskID)
+	return last
+}
+
+// readyTask loads a lab the user owns, requires it to be ready, and resolves the task.
+func (s *Service) readyTask(ctx context.Context, u *auth.User, labID, taskID string) (*Instance, *content.Lab, *content.Quiz, *content.Task, map[string]string, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if inst.State != Ready {
+		return nil, nil, nil, nil, nil, apperr.Wrap(apperr.Conflict, "the lab is not ready")
+	}
+	lab, quiz, err := s.labContent(inst)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	task := lab.Task(taskID)
+	if task == nil {
+		return nil, nil, nil, nil, nil, apperr.Wrap(apperr.NotFound, "task not found")
+	}
+	done, err := s.taskRows(ctx, inst)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	setups, err := s.setupStatus(ctx, inst.ID)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	statuses := taskStatuses(lab, done, setups)
+	statuses["_setup:"+taskID] = setups[taskID]
+	return inst, lab, quiz, task, statuses, nil
+}
+
+func (s *Service) Get(ctx context.Context, u *auth.User, labID string) (*View, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	return s.view(ctx, inst)
+}
+
+func (s *Service) OpenTask(ctx context.Context, u *auth.User, labID, taskID string) (*TaskDetail, error) {
+	inst, lab, _, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if statuses[taskID] == "locked" {
+		return nil, apperr.Wrap(apperr.Locked, "finish the earlier tasks first")
+	}
+	setupErr := ""
+	if statuses[taskID] == "open" && task.Setup != nil && statuses["_setup:"+taskID] == "" {
+		if err := s.runSetup(ctx, inst, lab, taskID, task.Setup); err != nil {
+			if errors.Is(err, apperr.Unavailable) {
+				return nil, err
+			}
+			setupErr = "This scenario couldn't be prepared. You can skip this task without penalty, or restart the lab."
+		}
+	}
+	if statuses[taskID] == "setup_failed" {
+		setupErr = "This scenario couldn't be prepared. You can skip this task without penalty, or restart the lab."
+	}
+	s.Touch(ctx, inst.ID)
+	v, err := s.view(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	d := &TaskDetail{SetupError: setupErr}
+	for _, tv := range v.Tasks {
+		if tv.ID == taskID {
+			d.TaskView = tv
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(lab.Dir, task.Instructions))
+	if err != nil {
+		return nil, err
+	}
+	d.Instructions = string(b)
+	for i := 0; i < d.HintsRevealed && i < len(task.Hints); i++ {
+		d.Hints = append(d.Hints, hintText(lab, task.Hints[i]))
+	}
+	return d, nil
+}
+
+func hintText(lab *content.Lab, h *content.Hint) string {
+	if h.File == "" {
+		return h.Text
+	}
+	b, _ := os.ReadFile(filepath.Join(lab.Dir, h.File))
+	return string(b)
+}
+
+func (s *Service) Check(ctx context.Context, u *auth.User, labID, taskID, answer string) (*CheckResult, error) {
+	inst, lab, quiz, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	switch statuses[taskID] {
+	case "passed", "skipped":
+		v, err := s.view(ctx, inst)
+		return &CheckResult{Passed: statuses[taskID] == "passed", Lab: v}, err
+	case "locked":
+		return nil, apperr.Wrap(apperr.Locked, "finish the earlier tasks first")
+	case "setup_failed":
+		return nil, apperr.Wrap(apperr.Conflict, "this scenario couldn't be prepared; skip the task instead")
+	}
+	if task.Setup != nil && statuses["_setup:"+taskID] != "ok" {
+		return nil, apperr.Wrap(apperr.Conflict, "the scenario is still being prepared")
+	}
+	var sc *content.Script
+	env := map[string]string{}
+	switch {
+	case task.Quiz != "":
+		sc = quiz.Question(task.Quiz).Script
+		env["CRUCIBLE_ANSWER"] = answer
+	case task.Check != nil:
+		sc = task.Check
+	default:
+		return nil, apperr.Wrap(apperr.Conflict, "this task is reviewed by a scorer")
+	}
+	res, err := s.runScript(ctx, inst, lab, sc, env)
+	if err != nil {
+		return nil, s.runnerErr(err)
+	}
+	if _, err := s.DB.Exec(ctx, `INSERT INTO check_runs (lab_id, task, exit_code, output, answer, self_reported)
+		VALUES ($1, $2, $3, $4, $5, $6)`, inst.ID, taskID, res.ExitCode, res.Output, answer, inst.Runtime == "local"); err != nil {
+		return nil, err
+	}
+	s.Touch(ctx, inst.ID)
+	out := &CheckResult{Passed: res.ExitCode == 0, Output: res.Output, TimedOut: res.TimedOut}
+	if out.Passed {
+		_, costs, err := s.hintCounts(ctx, inst)
+		if err != nil {
+			return nil, err
+		}
+		out.Awarded = max(0, task.Points-costs[taskID])
+		if err := s.finishTask(ctx, inst, lab, taskID, "passed", out.Awarded); err != nil {
+			return nil, err
+		}
+	}
+	out.Lab, err = s.view(ctx, inst)
+	return out, err
+}
+
+func (s *Service) finishTask(ctx context.Context, inst *Instance, lab *content.Lab, taskID, status string, points float64) error {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO lab_task_progress (user_id, team, training, module, task, status, points)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+		inst.UserID, inst.Team, inst.Training, inst.Module, taskID, status, points); err != nil {
+		return err
+	}
+	done, err := s.taskRows(ctx, inst)
+	if err != nil {
+		return err
+	}
+	var score, maxScore float64
+	for _, t := range lab.Tasks {
+		r, ok := done[t.ID]
+		if !ok {
+			return nil // not finished yet
+		}
+		score += r.Points
+		maxScore += t.Points
+	}
+	s.event(ctx, inst.ID, "completed", fmt.Sprintf("%.2f/%.2f", score, maxScore))
+	return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "complete", score/maxScore)
+}
+
+func (s *Service) RevealHint(ctx context.Context, u *auth.User, labID, taskID string) (*HintResult, error) {
+	inst, lab, _, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if statuses[taskID] != "open" {
+		return nil, apperr.Wrap(apperr.Conflict, "hints are available for the current task only")
+	}
+	counts, _, err := s.hintCounts(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	n := counts[taskID]
+	if n >= len(task.Hints) {
+		return nil, apperr.Wrap(apperr.Conflict, "no more hints for this task")
+	}
+	h := task.Hints[n]
+	cost := h.EffectiveCost(lab)
+	if _, err := s.DB.Exec(ctx, `INSERT INTO hint_reveals (user_id, team, training, module, task, hint_index, cost, lab_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING`,
+		inst.UserID, inst.Team, inst.Training, inst.Module, taskID, n, cost, inst.ID); err != nil {
+		return nil, err
+	}
+	s.Touch(ctx, inst.ID)
+	v, err := s.view(ctx, inst)
+	return &HintResult{Index: n, Text: hintText(lab, h), Cost: cost, Lab: v}, err
+}
+
+func (s *Service) ResetTask(ctx context.Context, u *auth.User, labID, taskID string) (*View, error) {
+	inst, lab, _, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if task.Setup == nil {
+		return nil, apperr.Wrap(apperr.Conflict, "this task has no scenario to reset")
+	}
+	if st := statuses[taskID]; st == "passed" || st == "skipped" || st == "locked" {
+		return nil, apperr.Wrap(apperr.Conflict, "only the current task can be reset")
+	}
+	var last time.Time
+	if err := s.DB.QueryRow(ctx, `SELECT coalesce(max(at), 'epoch') FROM setup_runs WHERE lab_id = $1 AND task = $2`,
+		inst.ID, taskID).Scan(&last); err != nil {
+		return nil, err
+	}
+	if wait := 5*time.Minute - s.Now().Sub(last); wait > 0 {
+		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("you can reset this scenario again in %s", wait.Round(time.Second)))
+	}
+	if err := s.runSetup(ctx, inst, lab, taskID, task.Setup); errors.Is(err, apperr.Unavailable) {
+		return nil, err
+	}
+	s.Touch(ctx, inst.ID)
+	return s.view(ctx, inst)
+}
+
+func (s *Service) Skip(ctx context.Context, u *auth.User, labID, taskID string) (*View, error) {
+	inst, lab, _, _, statuses, err := s.readyTask(ctx, u, labID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if statuses[taskID] != "setup_failed" {
+		return nil, apperr.Wrap(apperr.Conflict, "only tasks whose scenario failed can be skipped")
+	}
+	if err := s.finishTask(ctx, inst, lab, taskID, "skipped", 0); err != nil {
+		return nil, err
+	}
+	return s.view(ctx, inst)
+}
+
+// Touch records trainee activity, at most every 30 seconds per lab.
+func (s *Service) Touch(ctx context.Context, labID string) {
+	now := s.Now()
+	s.touchMu.Lock()
+	if s.touched == nil {
+		s.touched = map[string]time.Time{}
+	}
+	if now.Sub(s.touched[labID]) < 30*time.Second {
+		s.touchMu.Unlock()
+		return
+	}
+	s.touched[labID] = now
+	s.touchMu.Unlock()
+	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET last_activity_at = $2 WHERE id = $1 AND state = 'ready'`, labID, now)
+}
+
+// Activity is the explicit "I'm here" from the idle prompt; it always writes.
+func (s *Service) Activity(ctx context.Context, u *auth.User, labID string) (*View, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	s.touchMu.Lock()
+	delete(s.touched, labID)
+	s.touchMu.Unlock()
+	s.Touch(ctx, labID)
+	return s.Get(ctx, u, inst.ID)
+}
+
+func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	if inst.State != Ready || inst.Extended || inst.MaxExtension == 0 || inst.EndsAt == nil {
+		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
+	}
+	// ponytail: M3 re-checks the schedule window and cost tier here (spec §8.6); local labs cost nothing.
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, extended = true, last_activity_at = $3
+		WHERE id = $1 AND NOT extended`, inst.ID, inst.EndsAt.Add(inst.MaxExtension), s.Now())
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
+	}
+	s.event(ctx, inst.ID, "extended", inst.MaxExtension.String())
+	return s.Get(ctx, u, labID)
+}
+
+func (s *Service) End(ctx context.Context, u *auth.User, labID string) (*View, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	s.destroy(ctx, inst, "user")
+	return s.Get(ctx, u, labID)
+}
+
+func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', end_reason = $2
+		WHERE id = $1 AND state IN ('provisioning', 'ready')`, inst.ID, reason)
+	if err != nil || tag.RowsAffected() == 0 {
+		return
+	}
+	note := ""
+	if err := s.Runners[inst.Runtime].Destroy(ctx, inst); err != nil {
+		note = "cleanup failed: " + err.Error()
+		if errors.Is(err, agenthub.ErrOffline) {
+			note = "agent offline; its containers are removed when the agent next starts or stops"
+		}
+		s.Log.Warn("lab destroy incomplete", "lab", inst.ID, "err", err)
+	}
+	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3 WHERE id = $1`,
+		inst.ID, s.Now(), note)
+	s.event(ctx, inst.ID, "destroyed", reason)
+}
+
+// Sweep destroys labs past their end time or idle deadline, and provisioning that hung.
+func (s *Service) Sweep(ctx context.Context) {
+	now := s.Now()
+	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
+		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
+		   OR (state = 'provisioning' AND created_at < $1 - interval '15 minutes')`, now)
+	if err != nil {
+		s.Log.Error("lab sweep query failed", "err", err)
+		return
+	}
+	var due []*Instance
+	for rows.Next() {
+		inst, err := scanInst(rows)
+		if err == nil {
+			due = append(due, inst)
+		}
+	}
+	rows.Close()
+	for _, inst := range due {
+		reason := "idle"
+		switch {
+		case inst.State == Provisioning:
+			reason = "provision_timeout"
+		case inst.EndsAt != nil && !inst.EndsAt.After(now):
+			reason = "ttl"
+		}
+		s.destroy(ctx, inst, reason)
+	}
+}
+
+func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Sweep(ctx)
+		}
+	}
+}

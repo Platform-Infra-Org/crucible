@@ -470,8 +470,24 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Tier = rbac.Checker{P: p}.Route(q.Tier, team, training, u.Email)
 		}
 	}
-	if sc := p.ProgramSchedule(team, training); !sc.Open(s.Now()) {
-		now := s.Now()
+	if q.EstimateUSD > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
+		over, err := s.overCap(ctx, p, team, training, q.EstimateUSD)
+		if err != nil {
+			return nil, err
+		}
+		if over {
+			q.OverCap, q.Tier = true, rbac.TierAdmin
+		}
+	}
+	// Blocked precedence: kill switch, then schedule window.
+	now := s.Now()
+	ks, err := s.KillSwitch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if ks.Enabled {
+		q.Blocked = "Labs are paused by an admin."
+	} else if sc := p.ProgramSchedule(team, training); !sc.Open(now) {
 		q.Blocked = "Labs for this program run " + sc.String() + "."
 		if n := sc.NextOpen(now); !n.IsZero() {
 			q.Blocked += " Next window opens " + n.In(sc.Location()).Format("Mon 15:04") + "."
@@ -1057,6 +1073,9 @@ func (s *Service) Sweep(ctx context.Context) {
 		return // a slow sweep is still running; the next periodic job picks up whatever it missed
 	}
 	defer s.sweepMu.Unlock()
+	if ks, err := s.KillSwitch(ctx); err == nil && ks.Enabled {
+		s.killAll(ctx)
+	}
 	now := s.Now()
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))

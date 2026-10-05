@@ -241,7 +241,24 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		if sc := p.ProgramSchedule(inst.Team, inst.Training); !sc.Open(s.Now()) {
 			return "", apperr.Wrap(apperr.Conflict, "The program's schedule window is closed; approve it when it opens.")
 		}
-		// Task 8 adds: kill switch off, cap re-check.
+		if ks, err := s.KillSwitch(ctx); err != nil {
+			return "", err
+		} else if ks.Enabled {
+			return "", apperr.Wrap(apperr.Conflict, "Labs are paused by an admin.")
+		}
+		if !inst.OverCap && inst.EstimateUSD > 0 {
+			over, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.EstimateUSD)
+			if err != nil {
+				return "", err
+			}
+			if over {
+				_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET over_cap = true, tier = 'admin' WHERE id = $1 AND state = 'pending_approval'`, inst.ID)
+				if !(rbac.Checker{P: p}).IsAdmin(u.Email) {
+					return "", apperr.Wrap(apperr.Conflict, "approving this would now pass a budget cap, so it has been passed to an admin")
+				}
+				inst.OverCap = true // an admin approving it now is an audited override
+			}
+		}
 		if lab, _, err = s.labContent(inst); err != nil {
 			return "", err
 		}

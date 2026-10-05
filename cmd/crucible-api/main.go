@@ -96,10 +96,11 @@ func run(ctx context.Context) error {
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})
+	river.AddWorker(workers, &labs.BudgetWorker{S: labSvc})
 	river.AddWorker(workers, &notify.EmailWorker{S: notifySvc})
 	river.AddWorker(workers, &notify.WebhookWorker{S: notifySvc})
 	riverLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}}, riverLog)
+	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}}}, riverLog)
 	if err != nil {
 		return err
 	}

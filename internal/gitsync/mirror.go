@@ -26,11 +26,14 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 }
 
 func (m Mirror) Fetch(ctx context.Context) error {
+	if strings.HasPrefix(m.URL, "-") {
+		return fmt.Errorf("invalid repo url %q", m.URL)
+	}
 	if _, err := os.Stat(filepath.Join(m.Dir, "HEAD")); err != nil {
 		if err := os.MkdirAll(filepath.Dir(m.Dir), 0o755); err != nil {
 			return err
 		}
-		_, err := git(ctx, "", "clone", "--mirror", "--quiet", m.URL, m.Dir)
+		_, err := git(ctx, "", "clone", "--mirror", "--quiet", "--", m.URL, m.Dir)
 		return err
 	}
 	_, err := git(ctx, m.Dir, "remote", "update", "--prune")
@@ -38,6 +41,9 @@ func (m Mirror) Fetch(ctx context.Context) error {
 }
 
 func (m Mirror) Resolve(ctx context.Context, ref string) (string, error) {
+	if strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("invalid ref %q", ref)
+	}
 	return git(ctx, m.Dir, "rev-parse", "--verify", ref+"^{commit}")
 }
 

@@ -98,3 +98,36 @@ func TestBadPlatformKeepsState(t *testing.T) {
 		t.Fatalf("state not kept: sha %s err %q", st.PlatformSHA, st.PlatformErr)
 	}
 }
+
+func TestBadPinKeepsLastGood(t *testing.T) {
+	s, platformRepo, _ := setup(t)
+	_, good := s.Current().ProgramTraining("a", "t1")
+	commit(t, platformRepo, map[string]string{"teams/a/programs/t1.yaml": "enrolled: [u@x]\npinned_ref: nope\n"})
+	if err := s.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, sha := s.Current().ProgramTraining("a", "t1"); sha != good {
+		t.Fatalf("want %s got %q", good, sha)
+	}
+}
+
+func TestExportFailureRetried(t *testing.T) {
+	s, _, trainingRepo := setup(t)
+	dir := filepath.Join(s.DataDir, "content", "t1")
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755)
+	commit(t, trainingRepo, map[string]string{"training.yaml": "id: t1\ntitle: T2\nmodules: [m1]\n"})
+	_ = s.SyncOnce(context.Background())
+	if tr, _ := s.Current().ProgramTraining("a", "t1"); tr.Title != "T1" {
+		t.Skip("export did not fail (running as root?)")
+	}
+	os.Chmod(dir, 0o755)
+	if err := s.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tr, _ := s.Current().ProgramTraining("a", "t1"); tr.Title != "T2" {
+		t.Fatalf("export failure was cached: %+v", s.Current().Problems)
+	}
+}

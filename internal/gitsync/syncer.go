@@ -25,6 +25,8 @@ type State struct {
 	ProgramSHAs map[string]string            // "team/training" → sha the program runs
 	Problems    map[string][]content.Problem // "id@sha" → why that version is invalid
 	SyncedAt    time.Time
+
+	validated map[string]bool // keys whose Problems come from content validation (permanent), not transient export errors
 }
 
 func (s *State) Training(id, sha string) *content.Training { return s.Trainings[id+"@"+sha] }
@@ -107,7 +109,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	}
 
 	st := &State{Platform: plat, PlatformSHA: psha, Trainings: map[string]*content.Training{},
-		Heads: map[string]string{}, ProgramSHAs: map[string]string{}, Problems: map[string][]content.Problem{}, SyncedAt: time.Now()}
+		Heads: map[string]string{}, ProgramSHAs: map[string]string{}, Problems: map[string][]content.Problem{}, SyncedAt: time.Now(), validated: map[string]bool{}}
 	if prev != nil {
 		// ponytail: every version ever loaded stays in memory so running labs keep their content after a pin bump.
 		// Ceiling: memory grows with commits; prune versions with no program and no live lab if it ever matters.
@@ -139,6 +141,9 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 			if p.PinnedRef != "" {
 				if sha, err = m.Resolve(ctx, p.PinnedRef); err != nil {
 					st.Problems[key] = []content.Problem{{File: "teams/" + teamID + "/programs/" + id + ".yaml", Msg: err.Error()}}
+					if old, ok := prev.programSHA(key); ok {
+						st.ProgramSHAs[key] = old
+					}
 					continue
 				}
 				s.load(ctx, st, prev, m, id, sha)
@@ -169,7 +174,8 @@ func (s *Syncer) load(ctx context.Context, st, prev *State, m Mirror, id, sha st
 	if st.Trainings[key] != nil || st.Problems[key] != nil {
 		return
 	}
-	if prev != nil && prev.Problems[key] != nil {
+	if prev != nil && prev.validated[key] && prev.Problems[key] != nil {
+		st.validated[key] = true
 		st.Problems[key] = prev.Problems[key]
 		return
 	}
@@ -184,8 +190,17 @@ func (s *Syncer) load(ctx context.Context, st, prev *State, m Mirror, id, sha st
 	}
 	if len(probs) > 0 {
 		st.Problems[key] = probs
+		st.validated[key] = true
 		s.Log.Warn("training version rejected", "training", id, "sha", sha[:7], "problems", len(probs))
 		return
 	}
 	st.Trainings[key] = t
+}
+
+func (s *State) programSHA(key string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	sha, ok := s.ProgramSHAs[key]
+	return sha, ok
 }

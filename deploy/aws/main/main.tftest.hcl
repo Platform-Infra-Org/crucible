@@ -112,7 +112,7 @@ run "cluster_labs_use_sysbox" {
   command = plan
 
   assert {
-    condition     = strcontains(aws_instance.node.user_data, "sysbox-ce_0.7.1.linux_amd64.deb") && strcontains(aws_instance.node.user_data, "config-v3.toml.tmpl") && strcontains(aws_instance.node.user_data, "sha256sum -c")
+    condition     = strcontains(aws_instance.node.user_data, "sysbox-ce_0.7.1.linux_amd64.deb") && strcontains(aws_instance.node.user_data, "config-v3.toml.tmpl") && strcontains(aws_instance.node.user_data, "sha256sum -c") && strcontains(aws_instance.node.user_data, "if install_sysbox; then")
     error_message = "the node installs a pinned, checksummed sysbox and registers it with k3s's containerd"
   }
   assert {

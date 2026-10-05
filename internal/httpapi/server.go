@@ -86,7 +86,7 @@ func NewRouter(d Deps) chi.Router {
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
 				canApprove = admin
 				for id, t := range st.Platform.Teams {
-					if t.RoleOf(u.Email) != "" {
+					if configapi.Role(t, u.Email) != "" { // team role or a program role in one of its programs
 						teams = append(teams, id)
 					}
 					canApprove = canApprove || t.Leader == u.Email

@@ -85,10 +85,14 @@ func Update(path string, set map[string]any) error {
 			return fmt.Errorf("%s: %w", filepath.Base(path), err)
 		}
 	}
-	if doc.Kind == 0 {
+	if doc.Kind == 0 || len(doc.Content) == 0 { // missing, empty or comment-only file
 		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
 	}
 	m := doc.Content[0]
+	if m.Kind == yaml.ScalarNode && m.ShortTag() == "!!null" { // "null" or "~" is an empty mapping
+		m = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		doc.Content[0] = m
+	}
 	if m.Kind != yaml.MappingNode {
 		return fmt.Errorf("%s: the top level is not a mapping", filepath.Base(path))
 	}

@@ -82,3 +82,21 @@ func TestUpdateKeepsCommentsAndOrder(t *testing.T) {
 		t.Fatalf("new file: %q", b)
 	}
 }
+
+func TestUpdateTreatsNullAndEmptyAsEmptyMapping(t *testing.T) {
+	for _, body := range []string{"null\n", "~\n", "# just a comment\n", ""} {
+		p := filepath.Join(t.TempDir(), "b.yaml")
+		_ = os.WriteFile(p, []byte(body), 0o644)
+		if err := Update(p, map[string]any{"monthly_usd": 5}); err != nil {
+			t.Fatalf("%q: %v", body, err)
+		}
+		if b, _ := os.ReadFile(p); !strings.Contains(string(b), "monthly_usd: 5") {
+			t.Fatalf("%q → %q", body, b)
+		}
+	}
+	p := filepath.Join(t.TempDir(), "list.yaml")
+	_ = os.WriteFile(p, []byte("- a\n"), 0o644)
+	if err := Update(p, map[string]any{"x": 1}); err == nil {
+		t.Fatal("a list at the top level is an error")
+	}
+}

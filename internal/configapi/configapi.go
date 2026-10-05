@@ -4,6 +4,7 @@ package configapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -76,7 +78,7 @@ type TeamView struct {
 	Members            []string          `json:"members"`
 	Trainees           []string          `json:"trainees"`
 	Mentors            map[string]string `json:"mentors"`
-	Budget             config.Budget     `json:"budget"`
+	Budget             *config.Budget    `json:"budget,omitempty"` // admin, leader, program managers and approvers
 	Programs           []ProgramView     `json:"programs"`
 	AvailableTrainings []TrainingOption  `json:"available_trainings"`
 	Schedules          []string          `json:"schedules"`
@@ -147,6 +149,44 @@ func emails(in []string) []string {
 	return out
 }
 
+func checkEmail(field, e string) error {
+	if !strings.Contains(e, "@") || strings.ContainsFunc(e, unicode.IsSpace) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s: %q is not an email address", field, e))
+	}
+	return nil
+}
+
+// validEmails is emails for user input: every entry must look like an email address.
+func validEmails(field string, in []string) ([]string, error) {
+	out := emails(in)
+	for _, e := range out {
+		if err := checkEmail(field, e); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// Role is the user's team role, or else their strongest program role in the team (manager, approver, scorer), which
+// lets them read the team page; "" means no role.
+func Role(t *config.Team, email string) string {
+	if r := t.RoleOf(email); r != "" {
+		return r
+	}
+	email, role := strings.ToLower(email), ""
+	for _, p := range t.Programs {
+		switch {
+		case slices.Contains(p.Roles.Manager, email):
+			return "manager"
+		case slices.Contains(p.Roles.Approvers, email):
+			role = "approver"
+		case role == "" && slices.Contains(p.Roles.Scorers, email):
+			role = "scorer"
+		}
+	}
+	return role
+}
+
 func (s *Service) Teams(u *auth.User) ([]TeamSummary, error) {
 	st, err := s.state()
 	if err != nil {
@@ -156,7 +196,7 @@ func (s *Service) Teams(u *auth.User) ([]TeamSummary, error) {
 	out := []TeamSummary{}
 	for _, id := range slices.Sorted(maps.Keys(st.Platform.Teams)) {
 		t := st.Platform.Teams[id]
-		role := t.RoleOf(u.Email)
+		role := Role(t, u.Email)
 		if role == "" && admin {
 			role = "admin"
 		}
@@ -192,11 +232,11 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 	}
 	c := rbac.Checker{P: st.Platform}
 	t := st.Platform.Teams[id]
-	if t == nil || (t.RoleOf(u.Email) == "" && !c.IsAdmin(u.Email)) {
+	if t == nil || (Role(t, u.Email) == "" && !c.IsAdmin(u.Email)) {
 		return nil, apperr.Wrap(apperr.NotFound, "team not found")
 	}
 	v := &TeamView{ID: id, Name: t.Name, Leader: t.Leader, Seniors: emails(t.Seniors), Members: emails(t.Members),
-		Trainees: emails(t.Trainees), Mentors: t.Mentors, Budget: t.Budget, Programs: []ProgramView{}, AvailableTrainings: []TrainingOption{},
+		Trainees: emails(t.Trainees), Mentors: t.Mentors, Programs: []ProgramView{}, AvailableTrainings: []TrainingOption{},
 		Schedules: slices.Sorted(maps.Keys(st.Platform.Settings.Schedules)), PlatformSHA: st.PlatformSHA,
 		CanEditTeam: c.Can(u.Email, rbac.EditTeam, id, "", ""), IsAdmin: c.IsAdmin(u.Email)}
 	if v.Schedules == nil {
@@ -205,26 +245,35 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 	if v.Mentors == nil {
 		v.Mentors = map[string]string{}
 	}
+	spend := c.Can(u.Email, rbac.ViewSpend, id, "", "") // admin or leader
 	for _, tr := range slices.Sorted(maps.Keys(st.Platform.Trainings)) {
 		p := t.Programs[tr]
 		if p == nil {
 			v.AvailableTrainings = append(v.AvailableTrainings, TrainingOption{ID: tr, Title: trainingTitle(st, id, tr)})
 			continue
 		}
+		spend = spend || c.Can(u.Email, rbac.ViewSpend, id, tr, "") // program managers and approvers
 		v.Programs = append(v.Programs, ProgramView{Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
 			Roles:    RolesView{Manager: emails(p.Roles.Manager), Scorers: emails(p.Roles.Scorers), Approvers: emails(p.Roles.Approvers)},
 			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
 			LabDefaults: LabDefaultsView{TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout), MaxExtension: dur(p.LabDefaults.MaxExtension)}})
 	}
+	if spend { // spec §5.3 "view team spend"
+		v.Budget = &t.Budget
+	}
 	return v, nil
 }
 
-// write commits one change, records it in the audit log with its commit, and re-reads git.
+// write commits one change, records it in the audit log with its commit, and re-reads git. A change that alters
+// nothing makes no commit and no audit entry, and returns the current sha.
 func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, auditAction, target string, detail map[string]any) (string, error) {
+	if ch.Base == "" { // the stale check also covers permissions decided on a snapshot that may lag git
+		return "", apperr.Wrap(apperr.Invalid, "base_sha is required")
+	}
 	ch.Actor = u.Email
-	sha, err := s.Writer.Apply(ctx, ch)
-	if err != nil {
-		return "", err
+	sha, changed, err := s.Writer.Apply(ctx, ch)
+	if err != nil || !changed {
+		return sha, err
 	}
 	if err := audit.Log(ctx, s.DB, u.Email, auditAction, target, detail, sha); err != nil {
 		slog.Error("audit log failed", "action", auditAction, "err", err)
@@ -235,6 +284,16 @@ func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, au
 		}
 	}
 	return sha, nil
+}
+
+// edit returns a Change.Edit that sets keys in one repo file, explaining a file it cannot edit.
+func edit(rel string, set map[string]any) func(dir string) error {
+	return func(dir string) error {
+		if err := yamlx.Update(filepath.Join(dir, rel), set); err != nil {
+			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s in the platform repo can't be edited (%v) — fix it in git", rel, err))
+		}
+		return nil
+	}
 }
 
 func (s *Service) team(id string) (*gitsync.State, *config.Team, error) {
@@ -254,19 +313,34 @@ func (s *Service) SetRoster(ctx context.Context, u *auth.User, team string, b Ro
 	if err != nil {
 		return "", err
 	}
-	if !(rbac.Checker{P: st.Platform}).Can(u.Email, rbac.EditTeam, team, "", "") {
-		return "", apperr.Wrap(apperr.Forbidden, "only the team leader or an admin can change the roster")
+	allow := func(p *config.Platform) error {
+		if !(rbac.Checker{P: p}).Can(u.Email, rbac.EditTeam, team, "", "") {
+			return apperr.Wrap(apperr.Forbidden, "only the team leader or an admin can change the roster")
+		}
+		return nil
+	}
+	if err := allow(st.Platform); err != nil {
+		return "", err
+	}
+	set := map[string]any{}
+	for field, list := range map[string][]string{"seniors": b.Seniors, "members": b.Members, "trainees": b.Trainees} {
+		if set[field], err = validEmails(field, list); err != nil {
+			return "", err
+		}
 	}
 	mentors := map[string]string{}
 	for k, v := range b.Mentors {
 		if k, v = strings.ToLower(strings.TrimSpace(k)), strings.ToLower(strings.TrimSpace(v)); k != "" && v != "" {
+			if err := errors.Join(checkEmail("mentors", k), checkEmail("mentors", v)); err != nil {
+				return "", err
+			}
 			mentors[k] = v
 		}
 	}
+	set["mentors"] = mentors
 	rel := path.Join("teams", team, "team.yaml")
-	set := map[string]any{"seniors": emails(b.Seniors), "members": emails(b.Members), "trainees": emails(b.Trainees), "mentors": mentors}
 	return s.write(ctx, u, gitsync.Change{Action: "update roster " + team, Base: b.BaseSHA, Paths: []string{rel},
-		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, "team.roster", team, set)
+		Allow: allow, Edit: edit(rel, set)}, "team.roster", team, set)
 }
 
 func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training string, b ProgramBody) (string, error) {
@@ -277,10 +351,19 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	if _, ok := st.Platform.Trainings[training]; !ok { // also keeps the id a safe file name
 		return "", apperr.Wrap(apperr.NotFound, "unknown training")
 	}
-	c := rbac.Checker{P: st.Platform}
 	exists := t.Programs[training] != nil
-	if (exists && !c.Can(u.Email, rbac.ManageProgram, team, training, "")) || (!exists && !c.Can(u.Email, rbac.EditTeam, team, "", "")) {
-		return "", apperr.Wrap(apperr.Forbidden, "only the team leader, the program's managers or an admin can change this program")
+	allow := func(p *config.Platform) error {
+		c, tt := rbac.Checker{P: p}, p.Teams[team]
+		if tt == nil || (tt.Programs[training] != nil) != exists {
+			return gitsync.ErrStale
+		}
+		if (exists && !c.Can(u.Email, rbac.ManageProgram, team, training, "")) || (!exists && !c.Can(u.Email, rbac.EditTeam, team, "", "")) {
+			return apperr.Wrap(apperr.Forbidden, "only the team leader, the program's managers or an admin can change this program")
+		}
+		return nil
+	}
+	if err := allow(st.Platform); err != nil {
+		return "", err
 	}
 	defaults := map[string]any{}
 	for k, v := range map[string]string{"ttl": b.LabDefaults.TTL, "idle_timeout": b.LabDefaults.IdleTimeout, "max_extension": b.LabDefaults.MaxExtension} {
@@ -296,8 +379,14 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	if b.BudgetUSDMonth < 0 {
 		return "", apperr.Wrap(apperr.Invalid, "the program budget must not be negative")
 	}
-	set := map[string]any{"training": training, "enrolled": emails(b.Enrolled), "schedule": nil, "lab_defaults": nil, "budget_usd_month": nil,
-		"roles": map[string][]string{"manager": emails(b.Roles.Manager), "scorers": emails(b.Roles.Scorers), "approvers": emails(b.Roles.Approvers)}}
+	lists := map[string][]string{}
+	for field, list := range map[string][]string{"enrolled": b.Enrolled, "manager": b.Roles.Manager, "scorers": b.Roles.Scorers, "approvers": b.Roles.Approvers} {
+		if lists[field], err = validEmails(field, list); err != nil {
+			return "", err
+		}
+	}
+	set := map[string]any{"training": training, "enrolled": lists["enrolled"], "schedule": nil, "lab_defaults": nil, "budget_usd_month": nil,
+		"roles": map[string][]string{"manager": lists["manager"], "scorers": lists["scorers"], "approvers": lists["approvers"]}}
 	if b.Schedule != "" {
 		set["schedule"] = b.Schedule
 	}
@@ -312,9 +401,9 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	if !exists {
 		action, auditAction = "enroll "+team+" in "+training, "program.enroll"
 	}
-	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel},
-		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, auditAction, team+"/"+training, map[string]any{
-		"enrolled": set["enrolled"], "roles": set["roles"], "schedule": b.Schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
+	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel}, Allow: allow, Edit: edit(rel, set)},
+		auditAction, team+"/"+training, map[string]any{
+			"enrolled": set["enrolled"], "roles": set["roles"], "schedule": b.Schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
 }
 
 func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b BudgetBody) (string, error) {
@@ -322,8 +411,14 @@ func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b Bu
 	if err != nil {
 		return "", err
 	}
-	if !(rbac.Checker{P: st.Platform}).IsAdmin(u.Email) {
-		return "", apperr.Wrap(apperr.Forbidden, "only admins set team budgets")
+	allow := func(p *config.Platform) error {
+		if !(rbac.Checker{P: p}).IsAdmin(u.Email) {
+			return apperr.Wrap(apperr.Forbidden, "only admins set team budgets")
+		}
+		return nil
+	}
+	if err := allow(st.Platform); err != nil {
+		return "", err
 	}
 	set := map[string]any{"monthly_usd": b.MonthlyUSD, "hard_cap_usd": nil}
 	if b.HardCapUSD > 0 {
@@ -331,7 +426,7 @@ func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b Bu
 	}
 	rel := path.Join("teams", team, "budget.yaml")
 	return s.write(ctx, u, gitsync.Change{Action: "set budget " + team, Base: b.BaseSHA, Paths: []string{rel},
-		Edit: func(dir string) error { return yamlx.Update(filepath.Join(dir, rel), set) }}, "team.budget", team, set)
+		Allow: allow, Edit: edit(rel, set)}, "team.budget", team, set)
 }
 
 // Platform is the admin's read-only view of platform.yaml, sync health and recent privileged actions.

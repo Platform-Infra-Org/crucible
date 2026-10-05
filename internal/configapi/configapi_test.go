@@ -175,3 +175,114 @@ func TestInvalidEditIsExplained(t *testing.T) {
 		t.Fatalf("unknown training id: %v", err)
 	}
 }
+
+// push commits files to the remote from another clone, as someone editing git directly.
+func (f *fx) push(t *testing.T, files map[string]string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "other")
+	sh(t, "", "clone", "-q", f.remote, dir)
+	for rel, body := range files {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755)
+		_ = os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o644)
+	}
+	sh(t, dir, "add", "-A")
+	sh(t, dir, "commit", "-qm", "edit in git")
+	sh(t, dir, "push", "-q", "origin", "HEAD:main")
+}
+
+func TestManagerUpdatesButCannotEnrol(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	body := emptyProgram(f.sha())
+	body.Enrolled = []string{"trainee@crucible.local"}
+	body.Roles.Manager = []string{"senior@crucible.local"}
+	body.Roles.Approvers = []string{"approver@elsewhere.local"}
+	if _, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", body); err != nil {
+		t.Fatal(err)
+	}
+	body.BaseSHA, body.Schedule = f.sha(), "business-hours"
+	if _, err := f.s.SetProgram(ctx, f.senior, "forge", "forge-101", body); err != nil {
+		t.Fatalf("a program manager updates their program: %v", err)
+	}
+	if _, err := f.s.SetProgram(ctx, f.senior, "forge", "forge-201", emptyProgram(f.sha())); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("a program manager enrols the team in another training: %v", err)
+	}
+	approver := &auth.User{Email: "approver@elsewhere.local"}
+	v, err := f.s.Team(approver, "forge")
+	if err != nil || v.CanEditTeam {
+		t.Fatalf("approver reads the team: %+v %v", v, err)
+	}
+	if v.Budget == nil {
+		t.Fatal("approvers see team spend")
+	}
+	if teams, _ := f.s.Teams(approver); len(teams) != 1 || teams[0].Role != "approver" {
+		t.Fatalf("approver's teams: %+v", teams)
+	}
+	if v, _ := f.s.Team(f.trainee, "forge"); v.Budget != nil {
+		t.Fatal("trainees do not see team spend")
+	}
+}
+
+func TestAdminEditsRosterAndBaseIsRequired(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	roster := RosterBody{BaseSHA: f.sha(), Seniors: []string{"senior@crucible.local"}, Members: []string{"new@crucible.local"},
+		Trainees: []string{"trainee@crucible.local"}}
+	if _, err := f.s.SetRoster(ctx, f.admin, "forge", roster); err != nil {
+		t.Fatalf("an admin who is not on the team edits the roster: %v", err)
+	}
+	roster.BaseSHA = ""
+	if _, err := f.s.SetRoster(ctx, f.admin, "forge", roster); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "base_sha is required") {
+		t.Fatalf("missing base_sha: %v", err)
+	}
+	roster.BaseSHA, roster.Members = f.sha(), []string{"not an email"}
+	if _, err := f.s.SetRoster(ctx, f.admin, "forge", roster); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("bad email: %v", err)
+	}
+}
+
+func TestLeaderRemovedInGitCannotWrite(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	old := f.sha() // the page (and the syncer snapshot) still show leader@ as the leader
+	f.push(t, map[string]string{"teams/forge/team.yaml": "name: The Forge\nleader: boss@crucible.local\nseniors: [senior@crucible.local]\n" +
+		"members: [leader@crucible.local]\ntrainees: [trainee@crucible.local]\nmentors: {trainee@crucible.local: senior@crucible.local}\n"})
+	body := emptyProgram(old)
+	body.Enrolled = []string{"trainee@crucible.local"}
+	if _, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", body); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("permission is re-checked at the tip: %v", err)
+	}
+}
+
+func TestNoOpSaveMakesNoCommit(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	body := emptyProgram(f.sha())
+	body.Enrolled = []string{"trainee@crucible.local"}
+	first, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.BaseSHA = f.sha()
+	again, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", body)
+	if err != nil || again != first || sh(t, f.remote, "rev-parse", "main") != first {
+		t.Fatalf("no-op save: %s vs %s, %v", again, first, err)
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("audit entries: %d", n)
+	}
+}
+
+func TestBrokenRepoIsNamed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	old := f.sha()
+	f.push(t, map[string]string{"teams/forge/programs/forge-101.yaml": "enrolled: [trainee@crucible.local]\nschedule: nope\n"})
+	roster := RosterBody{BaseSHA: old, Seniors: []string{"senior@crucible.local"}, Trainees: []string{"trainee@crucible.local"}}
+	_, err := f.s.SetRoster(ctx, f.leader, "forge", roster)
+	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "currently has errors in teams/forge/programs/forge-101.yaml") {
+		t.Fatalf("pre-existing error: %v", err)
+	}
+}

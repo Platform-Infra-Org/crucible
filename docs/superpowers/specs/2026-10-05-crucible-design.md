@@ -152,7 +152,7 @@ roles:
   approvers: [alice@corp]      # defaults: team leader
 enrolled: [dave@corp, erin@corp]
 schedule: business-hours       # named schedule from platform.yaml, or inline windows
-lab_defaults: { ttl: 4h, idle_timeout: 45m }
+lab_defaults: { ttl: 4h, idle_timeout: 45m, max_extension: 1h }
 budget_usd_month: 150
 ```
 

@@ -21,7 +21,7 @@ spec:
                 echo "database already initialised; no restore"; exit 0
               fi
               apk add --no-cache aws-cli >/dev/null
-              latest=$(aws s3api list-objects-v2 --bucket "{{ .Values.backup.bucket }}" --prefix snapshots/crucible- --query 'sort_by(Contents,&Key)[-1].Key' --output text)
+              latest=$(aws s3api list-objects-v2 --bucket "{{ .Values.backup.bucket }}" --prefix snapshots/crucible- --query 'max_by(Contents || `[]`, &Key).Key' --output text)
               if [ "$latest" = "None" ]; then echo "no snapshot found: fresh install"; exit 0; fi
               aws s3 cp "s3://{{ .Values.backup.bucket }}/$latest" /tmp/db.dump
               pg_restore -h postgres -U crucible -d crucible --no-owner --single-transaction --exit-on-error /tmp/db.dump

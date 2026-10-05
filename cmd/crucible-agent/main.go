@@ -27,6 +27,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: crucible-agent --server URL --token TOKEN")
 		os.Exit(2)
 	}
+	if !strings.HasPrefix(*server, "http://") && !strings.HasPrefix(*server, "https://") {
+		fmt.Fprintln(os.Stderr, "--server must start with http:// or https://")
+		os.Exit(2)
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		fmt.Fprintln(os.Stderr, "crucible-agent needs Docker with the compose plugin on your PATH")
 		os.Exit(1)

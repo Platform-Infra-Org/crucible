@@ -25,7 +25,27 @@ func (e *echo) Write(b []byte) (int, error) { return e.w.Write(b) }
 func (e *echo) Close() error                { return e.w.Close() }
 func (e *echo) Resize(int, int) error       { return nil }
 
+// fakeSess: eof sessions end immediately; others block in Write until Close.
+type fakeSess struct {
+	closed  chan struct{}
+	unblock chan struct{}
+	once    sync.Once
+	eof     bool
+}
+
+func (s *fakeSess) Read([]byte) (int, error) {
+	if s.eof {
+		return 0, io.EOF
+	}
+	<-s.closed
+	return 0, io.EOF
+}
+func (s *fakeSess) Write(b []byte) (int, error) { <-s.closed; return 0, io.ErrClosedPipe }
+func (s *fakeSess) Close() error                { s.once.Do(func() { close(s.closed) }); return nil }
+func (s *fakeSess) Resize(int, int) error       { return nil }
+
 type fakeExec struct {
+	sess            *fakeSess
 	mu              sync.Mutex
 	provisioned     map[string]string
 	destroyAllCalls int
@@ -45,7 +65,18 @@ func (f *fakeExec) RunScript(_ context.Context, _, service string, script []byte
 	}
 	return ap.Msg{ExitCode: code, Data: []byte("ran in " + service)}, nil
 }
-func (f *fakeExec) StartPTY(string, string, int, int) (agent.Session, error) {
+func (f *fakeExec) StartPTY(_, service string, _, _ int) (agent.Session, error) {
+	switch service {
+	case "exit":
+		s := &fakeSess{closed: make(chan struct{}), unblock: make(chan struct{}), eof: true}
+		f.mu.Lock()
+		f.sess = s
+		f.mu.Unlock()
+		return s, nil
+	case "stuck":
+		s := &fakeSess{closed: make(chan struct{}), unblock: make(chan struct{})}
+		return s, nil
+	}
 	r, w := io.Pipe()
 	return &echo{r, w}, nil
 }
@@ -101,5 +132,60 @@ func TestClientServesHubRequests(t *testing.T) {
 	<-done
 	if fx.destroyAllCalls != 2 {
 		t.Fatalf("agent must clean up on start and on shutdown, got %d calls", fx.destroyAllCalls)
+	}
+}
+
+func startAgent(t *testing.T, fx *fakeExec) (*agenthub.Hub, func()) {
+	t.Helper()
+	hub := agenthub.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.Serve(w, r, 1) }))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: fx, Log: slog.Default()}).Run(ctx)
+		close(done)
+	}()
+	for i := 0; i < 200 && !hub.Online(1); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return hub, func() { cancel(); <-done; srv.Close() }
+}
+
+func TestExitedPTYIsClosed(t *testing.T) {
+	fx := &fakeExec{provisioned: map[string]string{}}
+	hub, stop := startAgent(t, fx)
+	defer stop()
+	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c()
+	if _, err := hub.OpenPTY(ctx, 1, "lab1", "exit", 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	fx.mu.Lock()
+	s := fx.sess
+	fx.mu.Unlock()
+	select {
+	case <-s.closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("session Close not called after EOF")
+	}
+}
+
+func TestStuckPTYWriteDoesNotBlockAgent(t *testing.T) {
+	fx := &fakeExec{provisioned: map[string]string{}}
+	hub, stop := startAgent(t, fx)
+	defer stop()
+	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+	defer c()
+	p, err := hub.OpenPTY(ctx, 1, "lab1", "stuck", 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		_, _ = p.Write([]byte("x"))
+	}
+	rctx, rc := context.WithTimeout(context.Background(), 2*time.Second)
+	defer rc()
+	if _, err := hub.Call(rctx, 1, ap.Msg{Type: ap.TRunScript, LabID: "lab1", Service: "web", Data: []byte("ok")}); err != nil {
+		t.Fatalf("agent blocked by stuck PTY write: %v", err)
 	}
 }

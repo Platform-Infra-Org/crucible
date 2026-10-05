@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -15,6 +16,8 @@ import (
 
 	ap "crucible/internal/agentproto"
 )
+
+var errRejected = errors.New("pairing token rejected — generate a new one")
 
 type Client struct {
 	Server string // e.g. https://crucible.example.com
@@ -37,6 +40,9 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, errRejected) {
+			return err
+		}
 		c.Log.Warn("disconnected from Crucible, retrying in 3s", "err", err)
 		select {
 		case <-time.After(3 * time.Second):
@@ -48,17 +54,20 @@ func (c *Client) Run(ctx context.Context) error {
 
 func (c *Client) runOnce(ctx context.Context) error {
 	url := "ws" + strings.TrimPrefix(c.Server, "http") + "/api/agent/ws"
-	ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+	ws, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + c.Token}},
 	})
 	if err != nil {
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			return errRejected
+		}
 		return err
 	}
 	defer ws.CloseNow()
 	ws.SetReadLimit(64 << 20) // lab bundles
 	c.Log.Info("connected. The forge is lit", "server", c.Server)
 
-	s := &session{ws: ws, exec: c.Exec, ptys: map[string]Session{}}
+	s := &session{ws: ws, exec: c.Exec, ptys: map[string]*ptyEntry{}}
 	defer s.closeAll()
 	for {
 		_, data, err := ws.Read(ctx)
@@ -71,16 +80,12 @@ func (c *Client) runOnce(ctx context.Context) error {
 		}
 		switch m.Type { // PTY traffic is handled in order; everything else may take long, so it runs concurrently
 		case ap.TPTYData:
-			if p := s.pty(m.ID); p != nil {
-				_, _ = p.Write(m.Data)
-			}
+			s.enqueue(m)
 		case ap.TPTYResize:
-			if p := s.pty(m.ID); p != nil {
-				_ = p.Resize(m.Cols, m.Rows)
-			}
+			s.enqueue(m)
 		case ap.TPTYClose:
 			if p := s.drop(m.ID); p != nil {
-				_ = p.Close()
+				p.close()
 			}
 		default:
 			go s.handle(ctx, m)
@@ -92,7 +97,51 @@ type session struct {
 	ws   *websocket.Conn
 	exec Executor
 	mu   sync.Mutex
-	ptys map[string]Session
+	ptys map[string]*ptyEntry
+}
+
+// ptyEntry gives each PTY its own writer goroutine so a stuck tty never blocks the websocket read loop.
+type ptyEntry struct {
+	sess Session
+	q    chan ap.Msg
+	done chan struct{}
+	once sync.Once
+}
+
+func newEntry(sess Session) *ptyEntry {
+	e := &ptyEntry{sess: sess, q: make(chan ap.Msg, 256), done: make(chan struct{})}
+	go func() {
+		for {
+			select {
+			case m := <-e.q:
+				if m.Type == ap.TPTYData {
+					_, _ = sess.Write(m.Data)
+				} else {
+					_ = sess.Resize(m.Cols, m.Rows)
+				}
+			case <-e.done:
+				return
+			}
+		}
+	}()
+	return e
+}
+
+func (e *ptyEntry) close() {
+	e.once.Do(func() {
+		close(e.done)
+		_ = e.sess.Close() // also unblocks a stuck Write
+	})
+}
+
+// enqueue never blocks; on overflow the chunk is dropped (the program is not reading its stdin).
+func (s *session) enqueue(m ap.Msg) {
+	if e := s.pty(m.ID); e != nil {
+		select {
+		case e.q <- m:
+		default:
+		}
+	}
 }
 
 func (s *session) send(ctx context.Context, m ap.Msg) {
@@ -108,13 +157,13 @@ func (s *session) reply(ctx context.Context, id string, res ap.Msg, err error) {
 	s.send(ctx, res)
 }
 
-func (s *session) pty(id string) Session {
+func (s *session) pty(id string) *ptyEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ptys[id]
 }
 
-func (s *session) drop(id string) Session {
+func (s *session) drop(id string) *ptyEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.ptys[id]
@@ -126,7 +175,7 @@ func (s *session) closeAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, p := range s.ptys {
-		_ = p.Close()
+		p.close()
 		delete(s.ptys, id)
 	}
 }
@@ -146,15 +195,16 @@ func (s *session) handle(ctx context.Context, m ap.Msg) {
 			s.reply(ctx, m.ID, ap.Msg{}, err)
 			return
 		}
+		e := newEntry(p)
 		s.mu.Lock()
-		s.ptys[m.ID] = p
+		s.ptys[m.ID] = e
 		s.mu.Unlock()
 		s.reply(ctx, m.ID, ap.Msg{}, nil)
-		go s.pump(ctx, m.ID, p)
+		go s.pump(ctx, m.ID, p, e)
 	}
 }
 
-func (s *session) pump(ctx context.Context, id string, p Session) {
+func (s *session) pump(ctx context.Context, id string, p Session, e *ptyEntry) {
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := p.Read(buf)
@@ -164,6 +214,7 @@ func (s *session) pump(ctx context.Context, id string, p Session) {
 		if err != nil {
 			s.send(ctx, ap.Msg{Type: ap.TPTYClose, ID: id})
 			s.drop(id)
+			e.close()
 			return
 		}
 	}

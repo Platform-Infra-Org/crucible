@@ -36,6 +36,13 @@ type Compose struct{ Dir string }
 
 const composeMarker = ".crucible-compose"
 
+func validID(id string) error {
+	if !filepath.IsLocal(id) || strings.ContainsAny(id, `/\`) {
+		return errors.New("invalid lab id")
+	}
+	return nil
+}
+
 func (c Compose) labDir(labID string) string { return filepath.Join(c.Dir, labID) }
 
 func (c Compose) args(labID string, rest ...string) []string {
@@ -45,7 +52,7 @@ func (c Compose) args(labID string, rest ...string) []string {
 }
 
 func (c Compose) Provision(ctx context.Context, labID string, bundle []byte, compose string) error {
-	if !filepath.IsLocal(labID) || !filepath.IsLocal(compose) {
+	if validID(labID) != nil || !filepath.IsLocal(compose) {
 		return errors.New("invalid lab id or compose file name")
 	}
 	dir := c.labDir(labID)
@@ -67,6 +74,9 @@ func (c Compose) Provision(ctx context.Context, labID string, bundle []byte, com
 }
 
 func (c Compose) Destroy(ctx context.Context, labID string) error {
+	if err := validID(labID); err != nil {
+		return err
+	}
 	dir := c.labDir(labID)
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -88,6 +98,9 @@ func (c Compose) DestroyAll(ctx context.Context) {
 }
 
 func (c Compose) RunScript(ctx context.Context, labID, service string, script []byte, env map[string]string, timeout time.Duration) (ap.Msg, error) {
+	if err := validID(labID); err != nil {
+		return ap.Msg{}, err
+	}
 	args := c.args(labID, "exec", "-T")
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
@@ -99,6 +112,9 @@ func (c Compose) RunScript(ctx context.Context, labID, service string, script []
 }
 
 func (c Compose) StartPTY(labID, service string, cols, rows int) (Session, error) {
+	if err := validID(labID); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command("docker", c.args(labID, "exec", service, "sh", "-c",
 		"if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi")...)
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})

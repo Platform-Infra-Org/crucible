@@ -61,7 +61,7 @@ variable "git_credentials" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com"
+  description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com. The token needs push (write) access to the platform repo: the UI commits config changes."
 }
 # Set by `crucible aws up` from the persistent stack's Cognito outputs.
 variable "oidc_issuer" { type = string }

@@ -6,6 +6,9 @@ host: crucible.example.com
 publicURL: https://crucible.example.com
 platformBranch: main
 syncInterval: 60s
+gitBot:                       # author of config commits the UI pushes; use an address your git host accepts
+  name: Crucible Bot
+  email: crucible-bot@example.com
 oidc:
   issuer: ""
   clientId: crucible

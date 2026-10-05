@@ -286,3 +286,23 @@ func TestBrokenRepoIsNamed(t *testing.T) {
 		t.Fatalf("pre-existing error: %v", err)
 	}
 }
+
+func TestWriterRefusesSymlinks(t *testing.T) {
+	dir, outside := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "teams"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Symlink(outside, filepath.Join(dir, "linkdir"))
+	_ = os.Symlink(filepath.Join(outside, "x.yaml"), filepath.Join(dir, "teams", "budget.yaml"))
+	for _, rel := range []string{"linkdir/budget.yaml", "teams/budget.yaml"} {
+		if err := edit(rel, map[string]any{"a": 1})(dir); err == nil {
+			t.Fatalf("%s: symlink followed", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outside, "x.yaml")); err == nil {
+		t.Fatal("wrote outside the clone")
+	}
+	if err := edit("teams/new.yaml", map[string]any{"a": 1})(dir); err != nil {
+		t.Fatalf("plain file: %v", err)
+	}
+}

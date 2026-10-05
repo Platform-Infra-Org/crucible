@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -289,11 +291,33 @@ func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, au
 // edit returns a Change.Edit that sets keys in one repo file, explaining a file it cannot edit.
 func edit(rel string, set map[string]any) func(dir string) error {
 	return func(dir string) error {
+		if err := noSymlinks(dir, rel); err != nil {
+			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s in the platform repo can't be edited (%v) — fix it in git", rel, err))
+		}
 		if err := yamlx.Update(filepath.Join(dir, rel), set); err != nil {
 			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s in the platform repo can't be edited (%v) — fix it in git", rel, err))
 		}
 		return nil
 	}
+}
+
+// noSymlinks refuses a write through a symlink: a committer could point a config file (or a folder) outside the clone.
+func noSymlinks(dir, rel string) error {
+	p := dir
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		p = filepath.Join(p, part)
+		fi, err := os.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // nothing below a missing component can be a link
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink", part)
+		}
+	}
+	return nil
 }
 
 func (s *Service) team(id string) (*gitsync.State, *config.Team, error) {

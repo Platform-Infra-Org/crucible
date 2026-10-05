@@ -348,3 +348,27 @@ func TestModuleLabHidesInternalQuoteErrors(t *testing.T) {
 		t.Fatalf("blocked must be generic: %+v %v", ml, err)
 	}
 }
+
+func TestDecideRefusesWhilePausedAndWhenNoLongerEnrolled(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	v := f.request(t, f.u)
+	if _, err := f.s.SetKillSwitch(ctx, f.admin, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "paused") {
+		t.Fatalf("approving while paused: %v", err)
+	}
+	if _, err := f.s.SetKillSwitch(ctx, f.admin, false); err != nil {
+		t.Fatal(err)
+	}
+	prog := f.plat.Teams["forge"].Programs["forge-101"]
+	prog.Enrolled = nil
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "no longer enrolled") {
+		t.Fatalf("approving an un-enrolled requester: %v", err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, false, ""); err != nil {
+		t.Fatalf("rejecting is still fine: %v", err)
+	}
+}

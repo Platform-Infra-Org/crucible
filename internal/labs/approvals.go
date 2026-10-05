@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -252,9 +253,14 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		if sc := p.ProgramSchedule(inst.Team, inst.Training); !sc.Open(s.Now()) {
 			return "", apperr.Wrap(apperr.Conflict, "The program's schedule window is closed; approve it when it opens.")
 		}
-		if ks, err := s.KillSwitch(ctx); err != nil {
+		if tp := p.Teams[inst.Team]; tp == nil || tp.Programs[inst.Training] == nil || !slices.Contains(tp.Programs[inst.Training].Enrolled, strings.ToLower(email)) {
+			return "", apperr.Wrap(apperr.Conflict, "This person is no longer enrolled in the program.")
+		}
+		// FOR SHARE conflicts with SetKillSwitch's FOR UPDATE, so a pause and this approval can't interleave
+		var paused bool
+		if err := tx.QueryRow(ctx, `SELECT enabled FROM kill_switch FOR SHARE`).Scan(&paused); err != nil {
 			return "", err
-		} else if ks.Enabled {
+		} else if paused {
 			return "", apperr.Wrap(apperr.Conflict, "Labs are paused by an admin.")
 		}
 		if !inst.OverCap && inst.EstimateUSD > 0 {

@@ -3,7 +3,9 @@ package learn
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -33,7 +35,15 @@ func (s *Service) Routes(r chi.Router) {
 			httpx.Error(w, apperr.Wrap(apperr.Invalid, "bad asset path"))
 			return
 		}
-		http.ServeFile(w, r, filepath.Join(t.Dir, "assets", rel))
+		p := filepath.Join(t.Dir, "assets", rel)
+		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || !assetTypes[strings.ToLower(filepath.Ext(p))] {
+			httpx.Error(w, apperr.Wrap(apperr.NotFound, "asset not found"))
+			return
+		}
+		// Assets are author-controlled: never let one run script in our origin.
+		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeFile(w, r, p)
 	})
 	r.Get(p+"/modules/{module}/reading/{item}", func(w http.ResponseWriter, r *http.Request) {
 		title, md, err := s.Reading(r.Context(), auth.UserFrom(r.Context()), param(r, "team"), param(r, "training"), param(r, "module"), param(r, "item"))
@@ -59,6 +69,9 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, res, err)
 	})
 }
+
+// assetTypes are the only files served from a training's assets/ (images and fonts).
+var assetTypes = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true, ".ico": true, ".woff2": true}
 
 func param(r *http.Request, k string) string { return chi.URLParam(r, k) }
 

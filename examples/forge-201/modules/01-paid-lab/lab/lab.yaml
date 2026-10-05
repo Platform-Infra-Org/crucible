@@ -1,0 +1,10 @@
+id: paid-heat
+runtime: local
+ttl: 1h
+idle_timeout: 20m
+terminals:
+  - { name: shell, service: shell }
+tasks:
+  - id: t1-mark
+    instructions: tasks/01-mark.md
+    check: { script: checks/01-mark.sh, run_in: shell }

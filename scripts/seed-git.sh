@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Turns examples/{platform,forge-101} into bare git repos under .local/git (mounted at /git in the api container).
+# Turns examples/{platform,forge-101,forge-201} into bare git repos under .local/git (mounted at /git in the api container).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out="$root/.local/git"
 rm -rf "$out"
 mkdir -p "$out"
-for name in platform forge-101; do
+for name in platform forge-101 forge-201; do
   work=$(mktemp -d)
   cp -R "$root/examples/$name/." "$work/"
   git -C "$work" init -q -b main

@@ -1,0 +1,6 @@
+id: forge-201
+title: "Forge 201: Paid Heat"
+description: One small lab. The local check gives it a test price so the approval flow runs end to end.
+maintainers: [senior@crucible.local]
+progression: free
+modules: [01-paid-lab]

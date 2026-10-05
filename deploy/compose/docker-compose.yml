@@ -30,6 +30,7 @@ services:
       CRUCIBLE_PUBLIC_URL: http://localhost:8080
       CRUCIBLE_SYNC_INTERVAL: 10s
       CRUCIBLE_QUIZ_SECRET: crucible-dev-quiz-secret
+      CRUCIBLE_DEV_LAB_USD_PER_HOUR: "paid-heat=0.5"   # test price: makes the Forge 201 lab need approval
       OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/crucible
       OIDC_DISCOVERY_URL: http://keycloak:8080/realms/crucible
       OIDC_CLIENT_ID: crucible

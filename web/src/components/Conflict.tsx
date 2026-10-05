@@ -3,8 +3,9 @@ import { toast } from '../lib/alerts'
 
 // reportSaveError toasts the failure; a 409 (git moved on) also returns true so the caller can offer Reload.
 export function reportSaveError(err: unknown): boolean {
-  toast((err as Error).message)
-  return err instanceof ApiError && err.status === 409
+  const stale = err instanceof ApiError && err.status === 409
+  if (!stale) toast((err as Error).message) // the 409 banner is announced by itself
+  return stale
 }
 
 export function Conflict({ onReload }: { onReload: () => void }) {

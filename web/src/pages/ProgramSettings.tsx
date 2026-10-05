@@ -20,15 +20,16 @@ export function ProgramSettingsPage() {
     <section className="page">
       <Link to={`/teams/${data.id}`}>← {data.name}</Link>
       <h1>Program settings: {prog.title}</h1>
-      {saved && <p role="status" className="pass">Saved to git ({saved})</p>}
-      <ProgramForm key={data.platform_sha} team={data} prog={prog} onReload={reload} onSaved={(sha) => { setSaved(sha.slice(0, 7)); reload() }} />
+      <p role="status" className="pass">{saved ? `Saved to git (${saved})` : ''}</p>
+      <ProgramForm key={data.platform_sha} team={data} prog={prog} onReload={reload} onStart={() => setSaved(undefined)} onSaved={(sha) => { setSaved(sha.slice(0, 7)); reload() }} />
     </section>
   )
 }
 
-function ProgramForm({ team, prog, onSaved, onReload }: { team: TeamView; prog: ProgramConfig; onSaved: (sha: string) => void; onReload: () => void }) {
-  const people = [...new Set([team.leader, ...team.seniors, ...team.members, ...team.trainees])]
-  const [enrolled, setEnrolled] = useState(() => new Set(prog.enrolled))
+function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () => void; team: TeamView; prog: ProgramConfig; onSaved: (sha: string) => void; onReload: () => void }) {
+  // Enrolled people who left the roster stay listed so they can be removed.
+  const people = [...new Set([team.leader, ...team.seniors, ...team.members, ...team.trainees, ...prog.enrolled].map((p) => p.toLowerCase()))]
+  const [enrolled, setEnrolled] = useState(() => new Set(prog.enrolled.map((p) => p.toLowerCase())))
   const [managers, setManagers] = useState(prog.roles.manager.join('\n'))
   const [scorers, setScorers] = useState(prog.roles.scorers.join('\n'))
   const [approvers, setApprovers] = useState(prog.roles.approvers.join('\n'))
@@ -47,7 +48,10 @@ function ProgramForm({ team, prog, onSaved, onReload }: { team: TeamView; prog: 
   }
   const save = async (e: FormEvent) => {
     e.preventDefault()
+    if (busy) return
     setBusy(true)
+    setConflict(false)
+    onStart()
     try {
       const res = await api<{ sha: string }>(`/api/teams/${team.id}/programs/${prog.training}`, { method: 'PUT', json: {
         base_sha: team.platform_sha, enrolled: [...enrolled],
@@ -64,6 +68,7 @@ function ProgramForm({ team, prog, onSaved, onReload }: { team: TeamView; prog: 
   return (
     <form className="stack" onSubmit={save}>
       {conflict && <Conflict onReload={onReload} />}
+      {!prog.can_manage && <p className="muted">Read-only — only the team leader or a program manager can change this.</p>}
       <fieldset className="stack" disabled={off}>
         <legend>Enrolled</legend>
         {people.map((p) => (

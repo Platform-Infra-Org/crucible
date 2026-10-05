@@ -39,7 +39,7 @@ export function TeamPage() {
       <h1>{data.name}</h1>
       <p className="lede">Led by {data.leader}</p>
       <Roster key={`r-${data.platform_sha}`} team={data} onSaved={reload} />
-      <Programs team={data} onConflict={reload} />
+      <Programs key={`p-${data.platform_sha}`} team={data} onConflict={reload} />
       <Budget key={`b-${data.platform_sha}`} team={data} onSaved={reload} />
     </section>
   )
@@ -96,7 +96,9 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
 
 function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void }) {
   const navigate = useNavigate()
-  const [pick, setPick] = useState(team.available_trainings[0]?.id ?? '')
+  const [picked, setPick] = useState('')
+  // Derive from the current list so a stale choice can never overwrite an existing program.
+  const pick = team.available_trainings.some((t) => t.id === picked) ? picked : (team.available_trainings[0]?.id ?? '')
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const enroll = async () => {
@@ -149,6 +151,7 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
   const [monthly, setMonthly] = useState(String(team.budget?.monthly_usd ?? 0))
   const [cap, setCap] = useState(String(team.budget?.hard_cap_usd ?? 0))
   const [conflict, setConflict] = useState(false)
+  const [busy, setBusy] = useState(false)
   // The server only sends the budget to people who may see it.
   if (!team.budget) return null
   const summary = team.budget.monthly_usd
@@ -157,12 +160,16 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
   if (!team.is_admin) return (<><h2>Budget</h2><p>{summary}</p></>)
   const save = async (e: FormEvent) => {
     e.preventDefault()
+    if (busy) return
+    setBusy(true)
     try {
       await api(`/api/teams/${team.id}/budget`, { method: 'PUT', json: { base_sha: team.platform_sha, monthly_usd: Number(monthly) || 0, hard_cap_usd: Number(cap) || 0 } })
       toast('Saved to git')
       onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))
+    } finally {
+      setBusy(false)
     }
   }
   return (
@@ -172,7 +179,7 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
       {conflict && <Conflict onReload={onSaved} />}
       <label>Monthly budget (USD) <input type="number" min={0} step="0.01" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></label>
       <label>Hard cap (USD, empty = the budget) <input type="number" min={0} step="0.01" value={cap} onChange={(e) => setCap(e.target.value)} /></label>
-      <button className="primary">Save budget</button>
+      <button className="primary" disabled={busy}>Save budget</button>
     </form>
   )
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -17,6 +18,13 @@ import (
 )
 
 var ErrOffline = errors.New("agent offline")
+
+// Heartbeat and write timing; vars so tests can shorten them.
+var (
+	pingInterval = 15 * time.Second
+	pingTimeout  = 10 * time.Second
+	writeTimeout = 30 * time.Second
+)
 
 type Hub struct {
 	mu     sync.Mutex
@@ -39,8 +47,12 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
-func (c *conn) send(ctx context.Context, m ap.Msg) error {
+// send writes with the connection's own context, never a caller's: coder/websocket closes the
+// whole connection if the write context fires mid-frame.
+func (c *conn) send(m ap.Msg) error {
 	b, _ := json.Marshal(m)
+	ctx, cancel := context.WithTimeout(c.ctx, writeTimeout)
+	defer cancel()
 	return c.ws.Write(ctx, websocket.MessageText, b)
 }
 
@@ -55,11 +67,31 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 	c := &conn{ws: ws, ctx: ctx, pending: map[string]chan ap.Msg{}, ptys: map[string]*PTY{}}
 
 	h.mu.Lock()
-	if old := h.agents[userID]; old != nil {
-		_ = old.ws.Close(websocket.StatusPolicyViolation, "replaced by a newer agent")
-	}
+	old := h.agents[userID]
 	h.agents[userID] = c
 	h.mu.Unlock()
+	if old != nil { // closed outside h.mu: a half-open peer must not freeze the hub
+		go func() { _ = old.ws.Close(websocket.StatusPolicyViolation, "replaced by a newer agent") }()
+	}
+
+	go func() { // heartbeat: a failed ping drops the conn, which ends the read loop below
+		t := time.NewTicker(pingInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, pcancel := context.WithTimeout(ctx, pingTimeout)
+				err := ws.Ping(pctx)
+				pcancel()
+				if err != nil {
+					_ = ws.CloseNow()
+					return
+				}
+			}
+		}
+	}()
 
 	defer func() {
 		cancel()
@@ -142,11 +174,14 @@ func (h *Hub) Call(ctx context.Context, userID int64, m ap.Msg) (ap.Msg, error) 
 	if m.ID == "" {
 		m.ID = newID()
 	}
+	if err := ctx.Err(); err != nil {
+		return ap.Msg{}, err
+	}
 	ch := make(chan ap.Msg, 1)
 	c.mu.Lock()
 	c.pending[m.ID] = ch
 	c.mu.Unlock()
-	if err := c.send(ctx, m); err != nil {
+	if err := c.send(m); err != nil {
 		c.mu.Lock()
 		delete(c.pending, m.ID)
 		c.mu.Unlock()
@@ -188,6 +223,7 @@ func (h *Hub) OpenPTY(ctx context.Context, userID int64, labID, service string, 
 }
 
 // PTY is a terminal session on the agent, read/written like a stream.
+// Read is single-reader: do not call it from multiple goroutines. Write, Resize and Close are safe concurrently.
 type PTY struct {
 	c      *conn
 	id     string
@@ -228,14 +264,14 @@ func (p *PTY) Read(b []byte) (int, error) {
 }
 
 func (p *PTY) Write(b []byte) (int, error) {
-	if err := p.c.send(p.c.ctx, ap.Msg{Type: ap.TPTYData, ID: p.id, Data: b}); err != nil {
+	if err := p.c.send(ap.Msg{Type: ap.TPTYData, ID: p.id, Data: b}); err != nil {
 		return 0, err
 	}
 	return len(b), nil
 }
 
 func (p *PTY) Resize(cols, rows int) error {
-	return p.c.send(p.c.ctx, ap.Msg{Type: ap.TPTYResize, ID: p.id, Cols: cols, Rows: rows})
+	return p.c.send(ap.Msg{Type: ap.TPTYResize, ID: p.id, Cols: cols, Rows: rows})
 }
 
 func (p *PTY) Close() error {
@@ -243,5 +279,5 @@ func (p *PTY) Close() error {
 	delete(p.c.ptys, p.id)
 	p.c.mu.Unlock()
 	p.closeRemote()
-	return p.c.send(p.c.ctx, ap.Msg{Type: ap.TPTYClose, ID: p.id})
+	return p.c.send(ap.Msg{Type: ap.TPTYClose, ID: p.id})
 }

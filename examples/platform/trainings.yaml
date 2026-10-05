@@ -1,0 +1,4 @@
+trainings:
+  forge-101:
+    repo: file:///git/forge-101.git   # local check mounts seeded bare repos at /git
+    branch: main

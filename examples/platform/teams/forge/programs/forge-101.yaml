@@ -1,0 +1,3 @@
+training: forge-101
+enrolled: [trainee@crucible.local]
+lab_defaults: { ttl: 2h, idle_timeout: 30m, max_extension: 30m }

@@ -29,6 +29,9 @@ var (
 type Hub struct {
 	mu     sync.Mutex
 	agents map[int64]*conn
+
+	// OnHello, if set before serving, is called (in its own goroutine) with the lab ids an agent reports on connect.
+	OnHello func(userID int64, liveIDs []string)
 }
 
 func New() *Hub { return &Hub{agents: map[int64]*conn{}} }
@@ -111,6 +114,13 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 		}
 		var m ap.Msg
 		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.Type == ap.THello {
+			var ids []string
+			if h.OnHello != nil && json.Unmarshal(m.Data, &ids) == nil {
+				go h.OnHello(userID, ids) // it may Call this agent, which needs this read loop running
+			}
 			continue
 		}
 		c.dispatch(m)

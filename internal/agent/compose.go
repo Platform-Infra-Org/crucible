@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type Executor interface {
 	RunScript(ctx context.Context, labID, service string, script []byte, env map[string]string, timeout time.Duration) (ap.Msg, error)
 	StartPTY(labID, service string, cols, rows int) (Session, error)
 	DestroyAll(ctx context.Context)
+	Labs() []string // ids of labs currently on this machine
 }
 
 // Compose runs each lab as a docker compose project named crucible-<labID> under Dir/<labID>.
@@ -36,8 +38,11 @@ type Compose struct{ Dir string }
 
 const composeMarker = ".crucible-compose"
 
+// labIDPattern matches the server's lab ids (12 hex chars); anything else could name a path.
+var labIDPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
 func validID(id string) error {
-	if !filepath.IsLocal(id) || strings.ContainsAny(id, `/\`) {
+	if !labIDPattern.MatchString(id) {
 		return errors.New("invalid lab id")
 	}
 	return nil
@@ -89,12 +94,20 @@ func (c Compose) Destroy(ctx context.Context, labID string) error {
 }
 
 func (c Compose) DestroyAll(ctx context.Context) {
+	for _, id := range c.Labs() {
+		_ = c.Destroy(ctx, id)
+	}
+}
+
+func (c Compose) Labs() []string {
 	entries, _ := os.ReadDir(c.Dir)
+	ids := []string{}
 	for _, e := range entries {
-		if e.IsDir() {
-			_ = c.Destroy(ctx, e.Name())
+		if e.IsDir() && validID(e.Name()) == nil {
+			ids = append(ids, e.Name())
 		}
 	}
+	return ids
 }
 
 func (c Compose) RunScript(ctx context.Context, labID, service string, script []byte, env map[string]string, timeout time.Duration) (ap.Msg, error) {

@@ -840,6 +840,48 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 }
 
+// ReconcileAgent runs when a user's laptop agent connects and reports the labs it has (agentproto.THello).
+// Labs the server thinks are running but the laptop lost (the agent removes all labs when it starts) end with
+// "agent_restarted"; labs on the laptop the server no longer runs are destroyed there.
+// ponytail: a lab started in the instant between connect and this call could be ended too; the window is one round trip.
+func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []string) {
+	live := map[string]bool{}
+	for _, id := range liveIDs {
+		live[id] = true
+	}
+	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
+		WHERE user_id = $1 AND runtime = 'local' AND state IN ('provisioning', 'ready')`, userID)
+	if err != nil {
+		s.Log.Error("agent reconcile query failed", "user", userID, "err", err)
+		return
+	}
+	var lost []*Instance
+	active := map[string]bool{}
+	for rows.Next() {
+		inst, err := scanInst(rows)
+		if err != nil {
+			continue
+		}
+		active[inst.ID] = true
+		if !live[inst.ID] {
+			lost = append(lost, inst)
+		}
+	}
+	rows.Close()
+	for _, inst := range lost {
+		s.destroy(ctx, inst, "agent_restarted")
+	}
+	for id := range live {
+		if !active[id] {
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			if err := s.Runners["local"].Destroy(dctx, &Instance{ID: id, UserID: userID, Runtime: "local"}); err != nil {
+				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
+			}
+			cancel()
+		}
+	}
+}
+
 func (s *Service) RunSweeper(ctx context.Context, every time.Duration) {
 	t := time.NewTicker(every)
 	defer t.Stop()

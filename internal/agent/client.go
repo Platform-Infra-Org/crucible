@@ -69,6 +69,8 @@ func (c *Client) runOnce(ctx context.Context) error {
 
 	s := &session{ws: ws, exec: c.Exec, ptys: map[string]*ptyEntry{}}
 	defer s.closeAll()
+	live, _ := json.Marshal(c.Exec.Labs()) // lets the server reconcile labs that drifted while we were away
+	s.send(ctx, ap.Msg{Type: ap.THello, Data: live})
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {

@@ -20,6 +20,7 @@ const endMessages: Record<string, string> = {
   ttl: 'Time ran out on this lab.',
   user: 'You ended the lab.',
   provision_timeout: 'The lab took too long to start.',
+  agent_restarted: 'Your laptop agent restarted — start the lab again.',
 }
 
 function firstOpen(lab: LabView): string {
@@ -111,7 +112,9 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
   const [taskId, setTaskId] = useState(() => firstOpen(lab))
   const [active, setActive] = useState(lab.terminals[0].name)
   const [extra, setExtra] = useState<{ key: string; name: string }[]>([])
-  const [askAlerts, setAskAlerts] = useState(() => notificationsUndecided() && localStorage.getItem('crucible-alerts') !== 'no')
+  const [askAlerts, setAskAlerts] = useState(() => {
+    try { return notificationsUndecided() && localStorage.getItem('crucible-alerts') !== 'no' } catch { return notificationsUndecided() }
+  })
   const offset = useMemo(() => clockOffset(lab.server_now, Date.now()), [lab.server_now])
   const tabs = [...lab.terminals.map((t) => ({ key: t.name, name: t.name })), ...extra]
 
@@ -175,7 +178,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           <div className="banner">
             Get a heads-up when your lab is about to cool down, even from another tab.{' '}
             <button className="ghost" onClick={async () => { await askNotifications(); setAskAlerts(false) }}>Enable alerts</button>
-            <button className="ghost" onClick={() => { localStorage.setItem('crucible-alerts', 'no'); setAskAlerts(false) }}>No thanks</button>
+            <button className="ghost" onClick={() => { try { localStorage.setItem('crucible-alerts', 'no') } catch { /* storage blocked */ } setAskAlerts(false) }}>No thanks</button>
           </div>
         )}
       </div>

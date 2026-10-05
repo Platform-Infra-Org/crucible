@@ -80,6 +80,7 @@ func (f *fakeExec) StartPTY(_, service string, _, _ int) (agent.Session, error) 
 	r, w := io.Pipe()
 	return &echo{r, w}, nil
 }
+func (f *fakeExec) Labs() []string { return []string{"0123456789ab"} }
 func (f *fakeExec) DestroyAll(context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -88,6 +89,12 @@ func (f *fakeExec) DestroyAll(context.Context) {
 
 func TestClientServesHubRequests(t *testing.T) {
 	hub := agenthub.New()
+	hello := make(chan []string, 1)
+	hub.OnHello = func(uid int64, ids []string) {
+		if uid == 1 {
+			hello <- ids
+		}
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
 			http.Error(w, "nope", 401)
@@ -106,6 +113,15 @@ func TestClientServesHubRequests(t *testing.T) {
 	}()
 	for i := 0; i < 200 && !hub.Online(1); i++ {
 		time.Sleep(10 * time.Millisecond)
+	}
+
+	select {
+	case ids := <-hello:
+		if len(ids) != 1 || ids[0] != "0123456789ab" {
+			t.Fatalf("hello must list the labs on the laptop, got %v", ids)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent never said hello")
 	}
 
 	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)

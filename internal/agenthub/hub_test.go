@@ -167,3 +167,32 @@ func TestCancelledCallKeepsConnection(t *testing.T) {
 		t.Fatalf("call after cancel: %+v %v", res, err)
 	}
 }
+
+func TestHelloReachesCallback(t *testing.T) {
+	h := New()
+	got := make(chan []string, 1)
+	h.OnHello = func(uid int64, ids []string) {
+		if uid == 7 {
+			got <- ids
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, server(t, h), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+	b, _ := json.Marshal(ap.Msg{Type: ap.THello, Data: []byte(`["aaaaaaaaaaaa"]`)})
+	if err := ws.Write(ctx, websocket.MessageText, b); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ids := <-got:
+		if len(ids) != 1 || ids[0] != "aaaaaaaaaaaa" {
+			t.Fatalf("ids = %v", ids)
+		}
+	case <-ctx.Done():
+		t.Fatal("OnHello not called")
+	}
+}

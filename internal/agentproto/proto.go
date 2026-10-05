@@ -10,6 +10,7 @@ const (
 	TPTYResize = "pty_resize" // API → agent
 	TPTYClose  = "pty_close"  // both ways
 	TResult    = "result"     // agent → API: answer to a request with the same ID
+	THello     = "hello"      // agent → API right after connecting: Data = JSON array of lab IDs present on the laptop
 )
 
 // MaxOutput caps script output kept and sent back (spec: 64 KiB).

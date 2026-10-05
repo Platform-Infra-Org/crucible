@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -375,5 +376,28 @@ func TestBinaryScriptOutputIsStored(t *testing.T) {
 	}
 	if res, err := f.s.Check(ctx, f.u, v.ID, "t2-find-port", "8081"); err != nil || !res.Passed {
 		t.Fatalf("task must not be stuck being prepared: %+v %v", res, err)
+	}
+}
+
+func TestReconcileAgentEndsLostLabsAndRemovesStrays(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	v := f.start(t)
+	before := f.run.destroyedN()
+
+	f.s.ReconcileAgent(ctx, f.u.ID, []string{v.ID}) // agent still has it: nothing changes
+	if got, _ := f.s.Get(ctx, f.u, v.ID); got.State != Ready || f.run.destroyedN() != before {
+		t.Fatalf("a live lab must be left alone: %s", got.State)
+	}
+
+	f.s.ReconcileAgent(ctx, f.u.ID, []string{"fedcba987654"}) // agent restarted: lab gone, a stray dir present
+	got, _ := f.s.Get(ctx, f.u, v.ID)
+	if got.State != Destroyed || got.EndReason != "agent_restarted" {
+		t.Fatalf("lost lab: %+v", got)
+	}
+	f.run.mu.Lock()
+	defer f.run.mu.Unlock()
+	if !slices.Contains(f.run.destroyed, "fedcba987654") {
+		t.Fatalf("stray lab not destroyed on the laptop: %v", f.run.destroyed)
 	}
 }

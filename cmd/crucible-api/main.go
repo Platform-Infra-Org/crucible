@@ -74,6 +74,7 @@ func run(ctx context.Context) error {
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, QuizSecret: quizSecret}
 	labSvc := &labs.Service{DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
 		Now: time.Now, Log: slog.Default()}
+	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	go labSvc.RunSweeper(ctx, 15*time.Second)
 
 	srv := &http.Server{

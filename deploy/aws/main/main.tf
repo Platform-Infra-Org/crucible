@@ -177,6 +177,9 @@ resource "aws_instance" "node" {
     acme_email  = var.acme_email
     k3s_version = var.k3s_version
     timezone    = var.schedule_timezone
+
+    sysbox_version      = var.sysbox_version
+    sysbox_sha256_amd64 = var.sysbox_sha256_amd64
   })
 
   tags = { Name = var.name }

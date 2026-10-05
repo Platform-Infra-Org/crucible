@@ -56,6 +56,31 @@ spec:
             permanent: true
 YAML
 
+# Sysbox: cluster labs run dockerd in a sysbox pod, never a privileged pod (spec §8.2, §14).
+# k3s reads config-v3.toml.tmpl (containerd 2.x) at start; the base template keeps every k3s default.
+retry curl -fsSL "https://github.com/nestybox/sysbox/releases/download/v${sysbox_version}/sysbox-ce_${sysbox_version}.linux_amd64.deb" -o /tmp/sysbox.deb
+echo "${sysbox_sha256_amd64}  /tmp/sysbox.deb" | sha256sum -c -
+apt-get -o DPkg::Lock::Timeout=600 install -y /tmp/sysbox.deb
+systemctl enable --now sysbox
+mkdir -p /var/lib/rancher/k3s/agent/etc/containerd
+cat > /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl <<'TOML'
+{{ template "base" . }}
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'sysbox-runc']
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.'sysbox-runc'.options]
+  BinaryName = "/usr/bin/sysbox-runc"
+  SystemdCgroup = {{ .SystemdCgroup }}
+TOML
+cat > /var/lib/rancher/k3s/server/manifests/sysbox-runtimeclass.yaml <<'YAML'
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: sysbox-runc
+handler: sysbox-runc
+YAML
+
 retry curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh
 INSTALL_K3S_VERSION='${k3s_version}' sh /tmp/k3s-install.sh --write-kubeconfig-mode 600
 retry curl -fsSL https://get.helm.sh/helm-v3.18.4-linux-amd64.tar.gz -o /tmp/helm.tgz

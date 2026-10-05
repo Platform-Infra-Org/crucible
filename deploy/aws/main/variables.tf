@@ -28,6 +28,16 @@ variable "k3s_version" {
   type    = string
   default = "v1.34.1+k3s1"
 }
+variable "sysbox_version" {
+  type        = string
+  default     = "0.7.1"
+  description = "Sysbox CE release for cluster labs (needs containerd >= 2.0.5, i.e. k3s >= 1.32; 0.7.1 fixes sysfs mounts on Ubuntu 24.04 + containerd 2.x)"
+}
+variable "sysbox_sha256_amd64" {
+  type        = string
+  default     = "9d6d5484f980d0a17f86c492c1262015c2afb66280bdb97215b79fde6a0261c5"
+  description = "sha256 of sysbox-ce_<sysbox_version>.linux_amd64.deb (GitHub release digest); update together with sysbox_version. amd64 only: the node is x86_64 (t3a)"
+}
 variable "schedule_enabled" {
   type    = bool
   default = true

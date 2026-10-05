@@ -107,3 +107,20 @@ run "schedule_can_be_disabled" {
     error_message = "no schedules when disabled"
   }
 }
+
+run "cluster_labs_use_sysbox" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "sysbox-ce_0.7.1.linux_amd64.deb") && strcontains(aws_instance.node.user_data, "config-v3.toml.tmpl") && strcontains(aws_instance.node.user_data, "sha256sum -c")
+    error_message = "the node installs a pinned, checksummed sysbox and registers it with k3s's containerd"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "kind: RuntimeClass") && strcontains(aws_instance.node.user_data, "handler: sysbox-runc")
+    error_message = "the sysbox-runc RuntimeClass is auto-deployed by k3s"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "unsafePrivileged") && !strcontains(aws_instance.node.user_data, "CRUCIBLE_CLUSTER_PRIVILEGED")
+    error_message = "production never runs privileged lab pods"
+  }
+}

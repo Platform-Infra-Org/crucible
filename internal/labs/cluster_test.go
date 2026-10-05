@@ -3,6 +3,8 @@ package labs
 import (
 	"context"
 	"errors"
+
+	"crucible/internal/apperr"
 	"io"
 	"slices"
 	"strings"
@@ -286,5 +288,48 @@ func TestSweepRemovesOrphanLabNamespaces(t *testing.T) {
 	ids, err := cr.Live(ctx)
 	if err != nil || !slices.Equal(ids, []string{live.ID}) {
 		t.Fatalf("only the running lab keeps its namespace: %v %v", ids, err)
+	}
+}
+
+func TestApproveWithoutClusterRunnerStaysPending(t *testing.T) {
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	esc := now.Add(time.Hour)
+	in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+		Runtime: "cluster", State: PendingApproval, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute,
+		Tier: "approver", EscalateAt: &esc}
+	if err := f.s.insert(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, in.ID, true, ""); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("want Unavailable, got %v", err)
+	}
+	var st string
+	if err := f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, in.ID).Scan(&st); err != nil || st != string(PendingApproval) {
+		t.Fatalf("must stay pending: %q %v", st, err)
+	}
+}
+
+func TestSweepSkipsClusterRowsWithoutRunner(t *testing.T) {
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	past := now.Add(-time.Minute)
+	mk := func(module, rt string) *Instance {
+		in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: module, SHA: "abc",
+			Runtime: rt, State: Ready, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto", EndsAt: &past}
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		return in
+	}
+	c, l := mk("03-cluster-heat", "cluster"), mk("02-first-lab", "local")
+	f.s.Sweep(ctx)
+	for _, id := range []string{c.ID, l.ID} {
+		var st string
+		if err := f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, id).Scan(&st); err != nil || st != string(Destroyed) {
+			t.Fatalf("%s: %q %v", id, st, err)
+		}
 	}
 }

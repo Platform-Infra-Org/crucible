@@ -609,12 +609,24 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	return s.view(ctx, inst)
 }
 
+// runner is the one way to reach a runtime: a row can outlive its runtime (cluster labs switched off after rows exist).
+func (s *Service) runner(runtime string) (Runner, error) {
+	if r := s.Runners[runtime]; r != nil {
+		return r, nil
+	}
+	return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("%s labs are not enabled on this server", runtime))
+}
+
 func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.Lab) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	bundle, err := Bundle(lab.Dir)
+	r, err := s.runner(inst.Runtime)
+	var bundle []byte
 	if err == nil {
-		err = s.Runners[inst.Runtime].Provision(ctx, inst, bundle, lab.Compose)
+		bundle, err = Bundle(lab.Dir)
+	}
+	if err == nil {
+		err = r.Provision(ctx, inst, bundle, lab.Compose)
 	}
 	if err == nil && lab.Setup != nil {
 		err = s.runSetup(ctx, inst, lab, "", lab.Setup)
@@ -624,7 +636,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		// a fresh ctx: after a provisioning timeout ctx is already expired and would leak the namespace
 		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer dcancel()
-		_ = s.Runners[inst.Runtime].Destroy(dctx, inst)
+		if r != nil {
+			_ = r.Destroy(dctx, inst)
+		}
 		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
 			WHERE id = $1 AND state = 'provisioning'`,
 			inst.ID, s.runnerErr(err).Error(), s.Now())
@@ -639,7 +653,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		// the lab was ended while provisioning: nobody else will clean these containers up
 		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer dcancel()
-		_ = s.Runners[inst.Runtime].Destroy(dctx, inst)
+		if r != nil {
+			_ = r.Destroy(dctx, inst)
+		}
 		return
 	}
 	s.event(ctx, inst.ID, "ready", "")
@@ -652,7 +668,11 @@ func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.La
 	}
 	ctx, cancel := context.WithTimeout(ctx, sc.Timeout.D()+15*time.Second)
 	defer cancel()
-	res, err := s.Runners[inst.Runtime].RunScript(ctx, inst, ScriptSpec{Service: sc.RunIn, Script: body, Env: env, Timeout: sc.Timeout.D()})
+	r, err := s.runner(inst.Runtime)
+	if err != nil {
+		return ScriptResult{}, err
+	}
+	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: sc.RunIn, Script: body, Env: env, Timeout: sc.Timeout.D()})
 	res.Output = cleanText(res.Output) // every runner: output is inserted into TEXT columns
 	return res, err
 }
@@ -1064,11 +1084,21 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 	s.finishDestroy(ctx, inst, reason)
 }
 
+func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
+	r, err := s.runner(inst.Runtime)
+	if err != nil {
+		return err
+	}
+	return r.Destroy(ctx, inst)
+}
+
 func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason string) {
 	note := ""
-	if err := s.Runners[inst.Runtime].Destroy(ctx, inst); err != nil {
+	if err := s.destroyRuntime(ctx, inst); err != nil {
 		note = "cleanup failed: " + err.Error()
-		if errors.Is(err, agenthub.ErrOffline) {
+		if errors.Is(err, apperr.Unavailable) {
+			note = "cleanup skipped: " + err.Error() + "; delete the lab namespace by hand"
+		} else if errors.Is(err, agenthub.ErrOffline) {
 			note = "agent offline; its containers are removed when the agent next starts or stops"
 		}
 		s.Log.Warn("lab destroy incomplete", "lab", inst.ID, "err", err)
@@ -1120,9 +1150,13 @@ func (s *Service) Sweep(ctx context.Context) {
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-			err := s.Runners[inst.Runtime].Destroy(ctx, inst)
+			err := s.destroyRuntime(ctx, inst)
+			note := map[bool]string{true: "cleanup timed out", false: ""}[err != nil]
+			if errors.Is(err, apperr.Unavailable) {
+				note = "cleanup skipped: " + err.Error() + "; delete the lab namespace by hand"
+			}
 			_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
-				WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), map[bool]string{true: "cleanup timed out", false: ""}[err != nil])
+				WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), note)
 			cancel()
 			continue
 		case inst.State == Provisioning:
@@ -1210,7 +1244,7 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 	for id := range live {
 		if !active[id] {
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-			if err := s.Runners["local"].Destroy(dctx, &Instance{ID: id, UserID: userID, Runtime: "local"}); err != nil {
+			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: "local"}); err != nil {
 				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
 			}
 			cancel()

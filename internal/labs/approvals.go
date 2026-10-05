@@ -288,6 +288,9 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		if lab, _, err = s.labContent(inst); err != nil {
 			return "", err
 		}
+		if _, err := s.runner(inst.Runtime); err != nil {
+			return "", err // stays pending: nothing can provision it
+		}
 		next = Provisioning
 	}
 	action := "lab.reject"

@@ -152,7 +152,11 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ws.CloseNow()
-	pty, err := s.Runners[inst.Runtime].OpenPTY(r.Context(), inst, service, cols, rows)
+	rn, err := s.runner(inst.Runtime)
+	var pty PTY
+	if err == nil {
+		pty, err = rn.OpenPTY(r.Context(), inst, service, cols, rows)
+	}
 	if err != nil {
 		reason := s.runnerErr(err).Error()
 		if len(reason) > 120 {

@@ -1,0 +1,88 @@
+{
+  "realm": "crucible",
+  "enabled": true,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "crucible",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "crucible-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/auth/callback",
+        "http://localhost:5173/auth/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "trainee",
+      "email": "trainee@crucible.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Tara",
+      "lastName": "Trainee",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "trainee",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "leader",
+      "email": "leader@crucible.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Leo",
+      "lastName": "Leader",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "leader",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "senior",
+      "email": "senior@crucible.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Sam",
+      "lastName": "Senior",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "senior",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "admin",
+      "email": "admin@crucible.local",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

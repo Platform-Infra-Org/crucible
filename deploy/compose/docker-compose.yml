@@ -1,0 +1,43 @@
+name: crucible-local
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment: { POSTGRES_USER: crucible, POSTGRES_PASSWORD: crucible, POSTGRES_DB: crucible }
+    volumes: [pgdata:/var/lib/postgresql]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U crucible"], interval: 2s, retries: 30 }
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8081            # what the browser uses
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"       # the API reaches it as http://keycloak:8080
+      KC_HEALTH_ENABLED: "true"
+    ports: ["8081:8080"]
+    volumes: ["./keycloak:/opt/keycloak/data/import:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      retries: 60
+
+  api:
+    build: { context: ../.., dockerfile: Dockerfile }
+    environment:
+      DATABASE_URL: postgres://crucible:crucible@postgres:5432/crucible?sslmode=disable
+      CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
+      CRUCIBLE_PUBLIC_URL: http://localhost:8080
+      CRUCIBLE_SYNC_INTERVAL: 10s
+      OIDC_ISSUER: http://localhost:8081/realms/crucible
+      OIDC_DISCOVERY_URL: http://keycloak:8080/realms/crucible
+      OIDC_CLIENT_ID: crucible
+      OIDC_CLIENT_SECRET: crucible-dev-secret
+    ports: ["8080:8080"]
+    volumes: ["../../.local/git:/git:ro", "apidata:/data"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    healthcheck: { test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"], interval: 3s, retries: 40 }
+
+volumes: { pgdata: {}, apidata: {} }

@@ -1,0 +1,6 @@
+bin
+.local
+web/node_modules
+web/dist
+e2e
+docs

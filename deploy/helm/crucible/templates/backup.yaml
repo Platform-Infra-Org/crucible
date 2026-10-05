@@ -25,6 +25,8 @@ spec:
                   pg_dump -h postgres -U crucible -Fc crucible > /tmp/db.dump
                   aws s3 cp /tmp/db.dump "s3://{{ .Values.backup.bucket }}/snapshots/crucible-$ts.dump"
                   echo "snapshot crucible-$ts.dump uploaded"
+                  # latest/ never expires: a node torn down longer than the snapshot retention still restores
+                  aws s3 cp /tmp/db.dump "s3://{{ .Values.backup.bucket }}/latest/crucible-latest.dump"
               env:
                 - name: PGPASSWORD
                   valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }

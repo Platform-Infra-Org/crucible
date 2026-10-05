@@ -17,5 +17,9 @@ need 'list-objects-v2'
 need 'max_by(Contents || `\[\]`, &Key).Key'
 need -- '--single-transaction'
 need 'inited=$(psql'
+need 's3://b/latest/crucible-latest.dump'                 # backup keeps a never-expiring copy
+need 'head-object --bucket "b" --key latest/crucible-latest.dump'
+need 'latest=latest/crucible-latest.dump'
+need 'cat /tmp/head.err >&2; exit 1'                      # other S3 errors fail loudly
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
 echo "helm chart OK"

@@ -22,7 +22,15 @@ spec:
               fi
               apk add --no-cache aws-cli >/dev/null
               latest=$(aws s3api list-objects-v2 --bucket "{{ .Values.backup.bucket }}" --prefix snapshots/crucible- --query 'max_by(Contents || `[]`, &Key).Key' --output text)
-              if [ "$latest" = "None" ]; then echo "no snapshot found: fresh install"; exit 0; fi
+              if [ "$latest" = "None" ]; then
+                if aws s3api head-object --bucket "{{ .Values.backup.bucket }}" --key latest/crucible-latest.dump >/dev/null 2>/tmp/head.err; then
+                  latest=latest/crucible-latest.dump
+                elif grep -qE '\(404\)|Not Found' /tmp/head.err; then
+                  echo "no snapshot found: fresh install"; exit 0
+                else
+                  cat /tmp/head.err >&2; exit 1
+                fi
+              fi
               aws s3 cp "s3://{{ .Values.backup.bucket }}/$latest" /tmp/db.dump
               pg_restore -h postgres -U crucible -d crucible --no-owner --single-transaction --exit-on-error /tmp/db.dump
               echo "restored $latest"

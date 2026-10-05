@@ -66,7 +66,12 @@ func run(ctx context.Context) error {
 	}
 
 	hub := agenthub.New()
-	learnSvc := &learn.Service{DB: pool, State: syncer.Current}
+	quizSecret := os.Getenv("CRUCIBLE_QUIZ_SECRET")
+	if quizSecret == "" {
+		slog.Warn("CRUCIBLE_QUIZ_SECRET is not set; using a fixed development value. Set it in production so learners cannot predict quiz choice ids")
+		quizSecret = "crucible-dev-quiz-secret"
+	}
+	learnSvc := &learn.Service{DB: pool, State: syncer.Current, QuizSecret: quizSecret}
 	labSvc := &labs.Service{DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
 		Now: time.Now, Log: slog.Default()}
 	go labSvc.RunSweeper(ctx, 15*time.Second)

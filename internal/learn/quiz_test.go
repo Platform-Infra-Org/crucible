@@ -19,6 +19,36 @@ func forge101(t *testing.T) *content.Training {
 	return tr
 }
 
+// asPublic rewrites answers written in authored indices into the public ids a browser would send for seed.
+func asPublic(q *content.Quiz, seed uint64, answers map[string]json.RawMessage) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for _, x := range q.Questions {
+		a, ok := answers[x.ID]
+		if !ok {
+			continue
+		}
+		n := len(x.Options)
+		if x.Type == "match" {
+			n = len(x.Pairs)
+		}
+		perm := idPerm(seed, x.ID, n)
+		var one int
+		var many []int
+		switch {
+		case x.Type == "single" && json.Unmarshal(a, &one) == nil && one >= 0 && one < n:
+			a, _ = json.Marshal(perm[one])
+		case (x.Type == "multi" || x.Type == "order" || x.Type == "match") && json.Unmarshal(a, &many) == nil:
+			for i := range many {
+				many[i] = perm[many[i]]
+			}
+			a, _ = json.Marshal(many)
+		}
+		out[x.ID] = a
+	}
+	return out
+}
+
+// correctAnswers is the right answer to 01-welcome in authored indices (see asPublic).
 func correctAnswers() map[string]json.RawMessage {
 	return map[string]json.RawMessage{
 		"q-ps": raw(`0`), "q-registries": raw(`[3,0,1]`), "q-port": raw(`" 80 "`),
@@ -28,24 +58,26 @@ func correctAnswers() map[string]json.RawMessage {
 
 func TestScore(t *testing.T) {
 	q := forge101(t).Module("01-welcome").Quiz
-	res := Score(q, correctAnswers())
+	const seed = 99
+	score := func(a map[string]json.RawMessage) Result { return Score(q, seed, asPublic(q, seed, a)) }
+	res := score(correctAnswers())
 	if res.Score != 6 || res.Max != 6 || !res.Passed {
 		t.Fatalf("all correct: %+v", res)
 	}
 
 	one := correctAnswers()
 	one["q-port"] = raw(`"8080"`)
-	if res := Score(q, one); !res.Passed || res.Correct["q-port"] {
+	if res := score(one); !res.Passed || res.Correct["q-port"] {
 		t.Fatalf("5/6 = 83%% should pass the 80%% threshold: %+v", res)
 	}
 
 	two := correctAnswers()
 	two["q-port"], two["q-order"] = raw(`"8080"`), raw(`[1,0,2,3]`)
-	if res := Score(q, two); res.Passed {
+	if res := score(two); res.Passed {
 		t.Fatalf("4/6 must fail: %+v", res)
 	}
 
-	if res := Score(q, map[string]json.RawMessage{"q-ps": raw(`"not a number"`)}); res.Score != 0 {
+	if res := Score(q, seed, map[string]json.RawMessage{"q-ps": raw(`"not a number"`)}); res.Score != 0 {
 		t.Fatalf("garbage answers score 0: %+v", res)
 	}
 }
@@ -66,5 +98,56 @@ func TestPublicQuizHidesAnswers(t *testing.T) {
 	b2, _ := json.Marshal(PublicQuiz(tr.Module("01-welcome").Quiz, 7))
 	if string(a) != string(b2) {
 		t.Fatal("shuffle must be deterministic per seed")
+	}
+}
+
+// The authored order is the answer for order/match questions, so public ids must not encode it.
+func TestPublicIDsDoNotRevealOrderOrMatch(t *testing.T) {
+	q := forge101(t).Module("01-welcome").Quiz
+	const seed = 12345
+	pub := PublicQuiz(q, seed)
+	byID := map[string]PublicQuestion{}
+	for _, p := range pub {
+		byID[p.ID] = p
+	}
+	for _, x := range q.Questions {
+		if x.Type != "order" && x.Type != "match" {
+			continue
+		}
+		p := byID[x.ID]
+		texts, choices := x.Options, p.Options
+		if x.Type == "match" {
+			texts, choices = nil, p.Right
+			for _, pair := range x.Pairs {
+				texts = append(texts, pair[1])
+			}
+		}
+		// A correct answer built only from what the browser sees (texts → ids) passes.
+		ids := []int{}
+		for _, txt := range texts {
+			for _, c := range choices {
+				if c.Text == txt {
+					ids = append(ids, c.ID)
+				}
+			}
+		}
+		good, _ := json.Marshal(ids)
+		if res := Score(q, seed, map[string]json.RawMessage{x.ID: good}); !res.Correct[x.ID] {
+			t.Fatalf("%s: answer built from texts %s must be correct", x.ID, good)
+		}
+		// Sorting the public ids ([0..n-1]) must not be the answer.
+		sorted := make([]int, len(texts))
+		identity := true
+		for i := range sorted {
+			sorted[i] = i
+			identity = identity && ids[i] == i
+		}
+		if identity {
+			t.Fatalf("%s: seed %d gives the identity permutation; pick another seed", x.ID, seed)
+		}
+		bad, _ := json.Marshal(sorted)
+		if res := Score(q, seed, map[string]json.RawMessage{x.ID: bad}); res.Correct[x.ID] {
+			t.Fatalf("%s: submitting sorted public ids must fail", x.ID)
+		}
 	}
 }

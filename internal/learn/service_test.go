@@ -2,6 +2,7 @@ package learn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -28,7 +29,12 @@ func fixture(t *testing.T) (*Service, *auth.User, *auth.User) {
 	store := auth.Store{DB: pool}
 	trainee, _ := store.UpsertUser(ctx, "s1", "trainee@crucible.local", "Tara")
 	leader, _ := store.UpsertUser(ctx, "s2", "leader@crucible.local", "Leo")
-	return &Service{DB: pool, State: func() *gitsync.State { return st }}, trainee, leader
+	return &Service{DB: pool, QuizSecret: "test-secret", State: func() *gitsync.State { return st }}, trainee, leader
+}
+
+// welcomeAnswers converts authored-index answers into the public ids this user would see.
+func welcomeAnswers(s *Service, u *auth.User, a map[string]json.RawMessage) map[string]json.RawMessage {
+	return asPublic(s.State().Trainings["forge-101@abc"].Module("01-welcome").Quiz, s.seedFor(u.ID, "forge", "forge-101", "01-welcome"), a)
 }
 
 func TestProgressionUnlocksModuleTwo(t *testing.T) {
@@ -40,7 +46,7 @@ func TestProgressionUnlocksModuleTwo(t *testing.T) {
 	if err := s.MarkRead(ctx, u, "forge", "forge-101", "01-welcome", "how-we-work"); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", correctAnswers())
+	res, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, correctAnswers()))
 	if err != nil || !res.Passed {
 		t.Fatalf("quiz: %+v %v", res, err)
 	}
@@ -63,15 +69,15 @@ func TestFailedQuizKeepsLockAndPassedQuizStaysPassed(t *testing.T) {
 	_ = s.MarkRead(ctx, u, "forge", "forge-101", "01-welcome", "how-we-work")
 	bad := correctAnswers()
 	bad["q-port"], bad["q-version"] = raw(`"1"`), raw(`"nope"`)
-	if res, _ := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", bad); res.Passed {
+	if res, _ := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)); res.Passed {
 		t.Fatal("should fail")
 	}
 	o, _ := s.Outline(ctx, u, "forge", "forge-101")
 	if !o.Modules[1].Locked {
 		t.Fatal("module 2 must stay locked after a failed quiz")
 	}
-	_, _ = s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", correctAnswers())
-	_, _ = s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", bad) // a later failed retry
+	_, _ = s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, correctAnswers()))
+	_, _ = s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)) // a later failed retry
 	o, _ = s.Outline(ctx, u, "forge", "forge-101")
 	if o.Modules[1].Locked {
 		t.Fatal("a later failed attempt must not re-lock a passed module")

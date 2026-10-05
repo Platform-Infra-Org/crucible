@@ -29,6 +29,7 @@ services:
       CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
       CRUCIBLE_PUBLIC_URL: http://localhost:8080
       CRUCIBLE_SYNC_INTERVAL: 10s
+      CRUCIBLE_QUIZ_SECRET: crucible-dev-quiz-secret
       OIDC_ISSUER: http://localhost:${KEYCLOAK_PORT:-8081}/realms/crucible
       OIDC_DISCOVERY_URL: http://keycloak:8080/realms/crucible
       OIDC_CLIENT_ID: crucible

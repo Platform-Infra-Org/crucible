@@ -19,6 +19,8 @@ import (
 type Service struct {
 	DB    *pgxpool.Pool
 	State func() *gitsync.State
+	// QuizSecret is mixed into quiz choice-id seeds so learners cannot predict them; it must be stable across restarts.
+	QuizSecret string
 }
 
 type ProgramCard struct {
@@ -240,9 +242,9 @@ func (s *Service) MarkRead(ctx context.Context, u *auth.User, team, training, mo
 	return s.SetItem(ctx, u.ID, team, training, module, item, "complete", 1)
 }
 
-func seedFor(userID int64, team, training, module string) uint64 {
+func (s *Service) seedFor(userID int64, team, training, module string) uint64 {
 	h := fnv.New64a()
-	fmt.Fprintf(h, "%d/%s/%s/%s", userID, team, training, module)
+	fmt.Fprintf(h, "%s\x00%d/%s/%s/%s", s.QuizSecret, userID, team, training, module)
 	return h.Sum64()
 }
 
@@ -274,7 +276,7 @@ func (s *Service) Quiz(ctx context.Context, u *auth.User, team, training, module
 	if status == "" {
 		status = "new"
 	}
-	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: PublicQuiz(m.Quiz, seedFor(u.ID, team, training, module)), Status: status}, nil
+	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: PublicQuiz(m.Quiz, s.seedFor(u.ID, team, training, module)), Status: status}, nil
 }
 
 func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, module string, answers map[string]json.RawMessage) (*Result, error) {
@@ -282,7 +284,7 @@ func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, 
 	if err != nil {
 		return nil, err
 	}
-	res := Score(m.Quiz, answers)
+	res := Score(m.Quiz, s.seedFor(u.ID, team, training, module), answers)
 	stored, _ := json.Marshal(answers)
 	if _, err := s.DB.Exec(ctx, `INSERT INTO quiz_attempts (user_id, team, training, module, sha, answers, score, max_score, passed)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, u.ID, team, t.ID, module, sha, stored, res.Score, res.Max, res.Passed); err != nil {

@@ -3,6 +3,7 @@ package learn
 
 import (
 	"encoding/json"
+	"hash/fnv"
 	"math/rand/v2"
 	"regexp"
 	"slices"
@@ -36,10 +37,25 @@ type Result struct {
 	PendingHuman bool            `json:"pending_human"`
 }
 
-// PublicQuiz is what the browser receives: no answers, and terminal questions are left to labs.
+// idPerm returns the opaque public ids for one question's n choices: perm[original index] = public id.
+// It depends on the per-user seed (which mixes in the server's quiz secret) and the question id, so the
+// browser cannot recover the authored order (= the answer for order/match) from the ids it receives.
+func idPerm(seed uint64, questionID string, n int) []int {
+	h := fnv.New64a()
+	h.Write([]byte(questionID))
+	return rand.New(rand.NewPCG(seed, h.Sum64())).Perm(n)
+}
+
+// PublicQuiz is what the browser receives: no answers, opaque choice ids, and terminal questions are left to labs.
+// Choices are listed in ascending public-id order, which for order/match is a seeded shuffle.
 func PublicQuiz(q *content.Quiz, seed uint64) []PublicQuestion {
-	r := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
-	shuffle := func(c []Choice) { r.Shuffle(len(c), func(i, j int) { c[i], c[j] = c[j], c[i] }) }
+	choices := func(texts []string, perm []int) []Choice {
+		c := make([]Choice, len(texts))
+		for i, t := range texts {
+			c[perm[i]] = Choice{ID: perm[i], Text: t}
+		}
+		return c
+	}
 	out := []PublicQuestion{}
 	for _, x := range q.Questions {
 		if x.Type == "terminal" {
@@ -48,25 +64,29 @@ func PublicQuiz(q *content.Quiz, seed uint64) []PublicQuestion {
 		pq := PublicQuestion{ID: x.ID, Type: x.Type, Prompt: x.Prompt, Points: x.Points, Human: content.IsHuman(x.Type)}
 		switch x.Type {
 		case "single", "multi", "order":
-			for i, o := range x.Options {
-				pq.Options = append(pq.Options, Choice{ID: i, Text: o})
-			}
 			if x.Type == "order" {
-				shuffle(pq.Options)
+				pq.Options = choices(x.Options, idPerm(seed, x.ID, len(x.Options)))
+			} else { // authored display order, opaque ids
+				perm := idPerm(seed, x.ID, len(x.Options))
+				for i, o := range x.Options {
+					pq.Options = append(pq.Options, Choice{ID: perm[i], Text: o})
+				}
 			}
 		case "match":
+			right := make([]string, len(x.Pairs))
 			for i, p := range x.Pairs {
 				pq.Left = append(pq.Left, p[0])
-				pq.Right = append(pq.Right, Choice{ID: i, Text: p[1]})
+				right[i] = p[1]
 			}
-			shuffle(pq.Right)
+			pq.Right = choices(right, idPerm(seed, x.ID, len(x.Pairs)))
 		}
 		out = append(out, pq)
 	}
 	return out
 }
 
-func Score(q *content.Quiz, answers map[string]json.RawMessage) Result {
+// Score grades answers given in public ids; seed must be the one PublicQuiz was called with.
+func Score(q *content.Quiz, seed uint64, answers map[string]json.RawMessage) Result {
 	res := Result{Correct: map[string]bool{}}
 	for _, x := range q.Questions {
 		if x.Type == "terminal" {
@@ -77,7 +97,7 @@ func Score(q *content.Quiz, answers map[string]json.RawMessage) Result {
 			continue
 		}
 		res.Max += x.Points
-		ok := correct(x, answers[x.ID])
+		ok := correct(x, toOriginal(x, seed, answers[x.ID]))
 		res.Correct[x.ID] = ok
 		if ok {
 			res.Score += x.Points
@@ -88,6 +108,45 @@ func Score(q *content.Quiz, answers map[string]json.RawMessage) Result {
 	}
 	res.Passed = res.Max > 0 && !res.PendingHuman && res.Percent >= q.PassThreshold-1e-9
 	return res
+}
+
+// toOriginal rewrites public choice ids in an answer back to authored indices (unknown ids become -1).
+func toOriginal(x *content.Question, seed uint64, raw json.RawMessage) json.RawMessage {
+	n := len(x.Options)
+	switch x.Type {
+	case "match":
+		n = len(x.Pairs)
+	case "single", "multi", "order":
+	default:
+		return raw
+	}
+	inv := make([]int, n)
+	for orig, pub := range idPerm(seed, x.ID, n) {
+		inv[pub] = orig
+	}
+	back := func(id int) int {
+		if id < 0 || id >= n {
+			return -1
+		}
+		return inv[id]
+	}
+	if x.Type == "single" {
+		var id int
+		if json.Unmarshal(raw, &id) != nil {
+			return nil
+		}
+		b, _ := json.Marshal(back(id))
+		return b
+	}
+	var ids []int
+	if json.Unmarshal(raw, &ids) != nil {
+		return nil
+	}
+	for i := range ids {
+		ids[i] = back(ids[i])
+	}
+	b, _ := json.Marshal(ids)
+	return b
 }
 
 func correct(x *content.Question, raw json.RawMessage) bool {

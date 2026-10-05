@@ -16,14 +16,15 @@ spec:
             - |
               set -eu
               until pg_isready -h postgres -U crucible; do sleep 2; done
-              if [ "$(psql -h postgres -U crucible -d crucible -tAc "select to_regclass('public.users') is not null")" = "t" ]; then
+              inited=$(psql -h postgres -U crucible -d crucible -tAc "select to_regclass('public.users') is not null")
+              if [ "$inited" = "t" ]; then
                 echo "database already initialised; no restore"; exit 0
               fi
               apk add --no-cache aws-cli >/dev/null
-              latest=$(aws s3 ls "s3://{{ .Values.backup.bucket }}/snapshots/" | awk '{print $4}' | sort | tail -n1)
-              if [ -z "$latest" ]; then echo "no snapshot found: fresh install"; exit 0; fi
-              aws s3 cp "s3://{{ .Values.backup.bucket }}/snapshots/$latest" /tmp/db.dump
-              pg_restore -h postgres -U crucible -d crucible --no-owner /tmp/db.dump
+              latest=$(aws s3api list-objects-v2 --bucket "{{ .Values.backup.bucket }}" --prefix snapshots/crucible- --query 'sort_by(Contents,&Key)[-1].Key' --output text)
+              if [ "$latest" = "None" ]; then echo "no snapshot found: fresh install"; exit 0; fi
+              aws s3 cp "s3://{{ .Values.backup.bucket }}/$latest" /tmp/db.dump
+              pg_restore -h postgres -U crucible -d crucible --no-owner --single-transaction --exit-on-error /tmp/db.dump
               echo "restored $latest"
           env:
             - name: PGPASSWORD

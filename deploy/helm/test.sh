@@ -13,5 +13,8 @@ need 'host: crucible.example.com'
 need 'imagePullPolicy: Never'
 need 'type: Recreate'
 need 'CRUCIBLE_QUIZ_SECRET'
+need 'list-objects-v2'
+need -- '--single-transaction'
+need 'inited=$(psql'
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
 echo "helm chart OK"

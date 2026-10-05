@@ -57,7 +57,8 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Architecture | Go modular monolith + React SPA (§3); Educates rejected (§3) |
 | Git access | All repos on one git server, one bot credential |
 | Score privacy | Trainees cannot see other trainees' scores |
-| Cluster | Bring-your-own cluster supported; optional shipped EKS terraform module |
+| Cluster | Default: single-node k3s on one EC2 instance (cheapest, §9.4). Bring-your-own cluster supported; EKS optional |
+| AWS cost | ~$50/month on business-hours schedule, ~$130 24/7 (§9.4) |
 | Snapshots | Separate persistent S3 bucket (own terraform stack, never touched by teardown) |
 | Escalation default | 4 business hours (counted inside schedule window) |
 | Cost tiers | No defaults — set at install in `platform.yaml` |
@@ -69,7 +70,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 
 ```
                  ┌───────────────────────── Kubernetes ─────────────────────────┐
- Browser ──HTTPS─┤  crucible-web (React SPA, static)                            │
+ Browser ──HTTPS─┤  Traefik ingress (k3s bundled, Let's Encrypt)                 │
    │             │  crucible-api (Go monolith) ── Postgres                       │
    │  WS (PTY)   │     modules: auth · rbac · gitsync · content · assessment ·   │
    └─────────────┤              labs · finops · notify · journey · platform      │
@@ -85,7 +86,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 
 - **One Go binary** (`crucible-api`) with internal modules that talk only through Go interfaces; each module owns its tables. Monolith because <100 users; module boundaries let us split later if ever needed.
 - **Postgres** for runtime data; **River** (Postgres-backed job queue) for async work: sync, provisioning, TTL sweeps, escalations, notifications, cost ingestion.
-- **React + Vite SPA**, xterm.js for terminals, Framer Motion for animation, CSS custom-property design tokens for themes.
+- **React + Vite SPA**, served as static files by `crucible-api` (one container image), xterm.js for terminals, Framer Motion for animation, CSS custom-property design tokens for themes.
 - **Lab runners** behind one interface:
   ```go
   type Runner interface {
@@ -222,7 +223,7 @@ aws:
 ## 5. Identity & RBAC
 
 ### 5.1 Authentication
-OIDC authorization-code + PKCE against the configured IdP. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` uses OIDC device-code flow. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
+OIDC authorization-code + PKCE against the configured IdP. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` authenticates with a **pairing token** the trainee generates on the *Connect your laptop* page (shown once, stored hashed, revocable). This works with any OIDC provider, including those without device-code support. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
 
 ### 5.2 Roles
 - **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views.
@@ -356,13 +357,32 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - Live spend = runtime estimates per running lab. Actual AWS spend = Cost Explorer daily ingestion grouped by cost-allocation tags (`crucible:*`), reconciled against estimates (~24 h lag shown explicitly).
 - **FinOps page** (themed, in-app): spend by team / training / lab over time, budget burn-down, running labs with cost-so-far and time-to-death, top spenders, estimate-vs-actual accuracy, reaper findings.
 
-### 9.4 Hibernate & restore
-- **Sleep (in-app, admin or schedule):** kill switch → `pg_dump` to the snapshot bucket → scale API/web to zero, leaving a tiny `crucible-waker` pod serving the "The forge is cold" page with a **Wake** button (admin login) → scale back up.
-- **Cluster ownership — both supported:** Crucible installs via Helm into any cluster (bring-your-own). Optionally, `deploy/eks/` terraform creates a dedicated EKS cluster.
-- **Persistent stack:** `deploy/persistent/` terraform creates the snapshot S3 bucket (versioned, KMS-encrypted) and terraform-state bucket once; teardown never touches it.
-- **Full teardown (CLI, run outside the cluster):** `crucible hibernate --full` = sleep + `helm uninstall` + (if the EKS module was used) `terraform destroy` of `deploy/eks/`. On bring-your-own clusters it removes Crucible, lab namespaces and its CRDs/PVCs only.
-- **Restore:** `crucible up` = (EKS mode: terraform apply) → helm install → restore latest snapshot from the persistent bucket → gitsync. Config and content come from git, so only the snapshot is needed for progress data.
-- Snapshots also run nightly regardless (retain 30 days).
+### 9.4 Deployment, hibernate & restore
+**Default AWS deployment (cost-optimised, < 100 users):** one EC2 instance running single-node **k3s** (still Kubernetes, same Helm chart), in the default VPC's public subnet, with no NAT gateway, load balancer, EKS control plane or RDS.
+
+| Component | Choice | ≈ USD/month (eu-west-1) |
+|---|---|---|
+| Node | `t3a.xlarge` (4 vCPU, 16 GiB) on-demand; runs Crucible, Postgres, Traefik and `cluster` labs | 24/7: ~119 · business hours only (11 h × 22 d): ~40 |
+| Disk | 60 GiB gp3 root (k3s, Postgres data, lab images) | ~5.3 |
+| Public IP | 1 Elastic IP (public IPv4 is billed hourly) | ~3.7 |
+| TLS + ingress | k3s's bundled Traefik with built-in Let's Encrypt (ACME) | 0 |
+| Database | Postgres 18 StatefulSet on the node's disk | 0 |
+| Snapshots + uploads | S3 (SSE-S3, 30-day lifecycle) | < 1 |
+| Access | SSM Session Manager, no SSH port | 0 |
+| Start/stop | EventBridge Scheduler calling EC2 Start/StopInstances directly | ~0 |
+| **Total** | | **~50 business hours · ~130 24/7** |
+
+For comparison, an EKS-based setup (control plane ~73 + ALB ~20 + NAT ~35 + RDS ~15 + nodes) starts above ~200/month. Upgrade path when one node is not enough: add k3s agent nodes (spot) for `cluster` labs, or move to the optional EKS module.
+
+**Instance role and IMDS:** the instance profile can write to the snapshot bucket. IMDSv2 is required with hop limit 2 so the backup CronJob can use the role. As a result, `cluster` lab pods must be blocked from `169.254.169.254` by NetworkPolicy (enforced when the cluster runner ships).
+
+**Hibernate levels**
+- **Sleep (scheduled, default for the AWS deployment):** labs are already destroyed at schedule-window end (§9.2). 30 minutes later, EventBridge Scheduler stops the instance and starts it again before the next window opens. While stopped, only disk, Elastic IP and S3 cost money (~10/month). `crucible aws wake` / `crucible aws sleep` do the same on demand.
+- **Full teardown:** `crucible aws teardown` takes a final snapshot, then runs `terraform destroy` on `deploy/aws/main`. Only the persistent stack is left.
+- **Restore:** `crucible aws up` runs `terraform apply` on `deploy/aws/main`. Cloud-init installs k3s, sysbox and the Helm release. On first start, an empty database is restored from the latest snapshot in the persistent bucket, then gitsync loads config and content.
+- **Persistent stack:** `deploy/aws/persistent/` creates the snapshot bucket (versioned, SSE-S3) and the terraform-state bucket once. Teardown never touches it.
+- **Other clusters:** the Helm chart installs into any Kubernetes cluster (bring-your-own). There, teardown removes only Crucible, lab namespaces and its PVCs.
+- Snapshots run nightly regardless (pg_dump CronJob, 30-day retention).
 
 ---
 

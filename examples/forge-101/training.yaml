@@ -1,0 +1,6 @@
+id: forge-101
+title: "Forge 101: First Heat"
+description: Your first steps in the crucible — read, prove it, then get your hands dirty.
+maintainers: [senior@crucible.local]
+progression: linear
+modules: [01-welcome, 02-first-lab]

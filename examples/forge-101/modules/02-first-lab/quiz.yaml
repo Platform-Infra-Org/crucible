@@ -1,0 +1,6 @@
+questions:
+  - id: q-broken-port
+    type: terminal
+    prompt: The web server was knocked off its port. Which port is nginx listening on now?
+    check: checks/q-broken-port.sh
+    run_in: web

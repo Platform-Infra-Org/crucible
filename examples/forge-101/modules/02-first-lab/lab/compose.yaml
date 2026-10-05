@@ -1,0 +1,6 @@
+services:
+  shell:
+    image: alpine:3.22
+    command: ["sleep", "infinity"]
+  web:
+    image: nginx:1.29-alpine

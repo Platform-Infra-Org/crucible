@@ -1,0 +1,31 @@
+pass_threshold: 0.8
+questions:
+  - id: q-ps
+    type: single
+    prompt: Which command lists running containers?
+    options: ["docker ps", "docker ls", "docker run"]
+    answer: 0
+  - id: q-registries
+    type: multi
+    prompt: Which of these are container image registries?
+    options: ["Docker Hub", "GitHub Container Registry", "crontab", "Amazon ECR"]
+    answer: [0, 1, 3]
+  - id: q-port
+    type: exact
+    prompt: What TCP port does plain HTTP use by default?
+    answer: "80"
+  - id: q-version
+    type: regex
+    prompt: Type any semantic version, for example 1.2.3
+    answer: '\d+\.\d+\.\d+'
+  - id: q-order
+    type: order
+    prompt: Put the forging steps in order.
+    options: ["Heat", "Hammer", "Quench", "Temper"]
+  - id: q-match
+    type: match
+    prompt: Match each tool to its job.
+    pairs:
+      - ["git", "version control"]
+      - ["docker", "containers"]
+      - ["terraform", "infrastructure as code"]

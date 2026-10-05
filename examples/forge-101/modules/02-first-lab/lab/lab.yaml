@@ -1,0 +1,31 @@
+id: first-heat
+runtime: local
+ttl: 1h
+idle_timeout: 20m
+idle_warning: 5m
+task_order: linear
+hint_cost: 0.25
+terminals:
+  - { name: shell, service: shell }
+  - { name: web, service: web }
+tasks:
+  - id: t1-forge-file
+    instructions: tasks/01-forge-file.md
+    check: { script: checks/01-forge-file.sh, run_in: shell }
+    points: 2
+    hints:
+      - text: "Use `echo` and output redirection (`>`)."
+      - text: "Try: `echo 'hello forge' > /tmp/forged.txt`"
+        cost: 1
+  - id: t2-find-port
+    instructions: tasks/02-find-port.md
+    setup: { script: setup/02-break-nginx.sh, run_in: web }
+    quiz: q-broken-port
+  - id: t3-fix-nginx
+    instructions: tasks/03-fix-nginx.md
+    check: { script: checks/03-fix-nginx.sh, run_in: web }
+    points: 3
+    hints:
+      - text: "Look at the `listen` lines in `/etc/nginx/conf.d/default.conf`."
+      - file: hints/03-solution.md
+        cost: 1.5

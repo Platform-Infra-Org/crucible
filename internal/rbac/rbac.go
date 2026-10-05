@@ -98,3 +98,87 @@ func (c Checker) Enrollments(email string) []Enrollment {
 	})
 	return out
 }
+
+// Approval tiers, lowest first (spec §9.1).
+const (
+	TierAuto     = "auto"
+	TierApprover = "approver"
+	TierLeader   = "leader"
+	TierAdmin    = "admin"
+)
+
+// Tier routes a lab request by its estimate: local/cluster at or under auto_approve_usd start at once (aws never
+// does); up to tier1 a program approver decides; up to tier2 the team leader; above that an admin.
+func Tier(runtime string, estimateUSD float64, t config.CostTiers) string {
+	switch {
+	case runtime != "aws" && estimateUSD <= t.AutoApproveUSD:
+		return TierAuto
+	case estimateUSD <= t.Tier1USD:
+		return TierApprover
+	case estimateUSD <= t.Tier2USD:
+		return TierLeader
+	}
+	return TierAdmin
+}
+
+// NextTier is one escalation step: approver → leader → admin → "" (nobody left: the request expires).
+func NextTier(tier string) string {
+	switch tier {
+	case TierApprover:
+		return TierLeader
+	case TierLeader:
+		return TierAdmin
+	}
+	return ""
+}
+
+// TierApprovers lists who decides at a tier, never the requester. Used to route and to notify.
+func (c Checker) TierApprovers(tier, team, training, requester string) []string {
+	requester = strings.ToLower(requester)
+	var list []string
+	t := c.P.Teams[team]
+	switch {
+	case tier == TierApprover && t != nil && t.Programs[training] != nil:
+		list = t.Programs[training].Roles.Approvers
+	case tier == TierLeader && t != nil:
+		list = []string{t.Leader}
+	case tier == TierAdmin:
+		list = c.P.Admins
+	}
+	return slices.DeleteFunc(slices.Clone(list), func(e string) bool { return e == requester || e == "" })
+}
+
+// Route returns the first tier at or above tier with someone other than the requester to decide. Admin is the
+// last stop even when it is empty; such a request expires unanswered.
+func (c Checker) Route(tier, team, training, requester string) string {
+	for t := tier; t != ""; t = NextTier(t) {
+		if t == TierAdmin || len(c.TierApprovers(t, team, training, requester)) > 0 {
+			return t
+		}
+	}
+	return TierAdmin
+}
+
+// MayApprove: admins approve any amount and over-cap overrides; the team leader up to tier2; program approvers up
+// to tier1; nobody their own request (spec §5.3). Eligibility follows the amount, not the request's current tier:
+// escalation adds deciders, it never removes them.
+func (c Checker) MayApprove(actor, requester, team, training string, estimateUSD float64, overCap bool) bool {
+	actor = strings.ToLower(actor)
+	if actor == strings.ToLower(requester) {
+		return false
+	}
+	if c.IsAdmin(actor) {
+		return true
+	}
+	tiers, t := c.P.Settings.CostTiers, c.P.Teams[team]
+	if overCap || tiers == nil || t == nil {
+		return false
+	}
+	if t.Leader == actor {
+		return estimateUSD <= tiers.Tier2USD
+	}
+	if p := t.Programs[training]; p != nil && slices.Contains(p.Roles.Approvers, actor) {
+		return estimateUSD <= tiers.Tier1USD
+	}
+	return false
+}

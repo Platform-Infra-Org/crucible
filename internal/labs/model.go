@@ -3,7 +3,10 @@ package labs
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"crucible/internal/config"
@@ -13,11 +16,14 @@ import (
 type State string
 
 const (
-	Provisioning State = "provisioning"
-	Ready        State = "ready"
-	Destroying   State = "destroying"
-	Destroyed    State = "destroyed"
-	Failed       State = "failed"
+	PendingApproval State = "pending_approval"
+	Provisioning    State = "provisioning"
+	Ready           State = "ready"
+	Destroying      State = "destroying"
+	Destroyed       State = "destroyed"
+	Failed          State = "failed"
+	Rejected        State = "rejected"
+	Expired         State = "expired" // unanswered at every tier, or withdrawn by the trainee
 )
 
 type Instance struct {
@@ -32,6 +38,11 @@ type Instance struct {
 	LastActivityAt                              time.Time
 	TTL, IdleTimeout, IdleWarning, MaxExtension time.Duration
 	Extended                                    bool
+	HourlyUSD, EstimateUSD                      float64
+	Tier                                        string
+	OverCap                                     bool
+	EscalateAt, DecidedAt                       *time.Time
+	DecidedBy, DecisionNote                     string
 }
 
 // Limit is one candidate end time for a lab (TTL now; schedule window and budget cap arrive in M3/M6).
@@ -100,4 +111,35 @@ type Runner interface {
 	OpenPTY(ctx context.Context, inst *Instance, service string, cols, rows int) (PTY, error)
 	RunScript(ctx context.Context, inst *Instance, s ScriptSpec) (ScriptResult, error)
 	Destroy(ctx context.Context, inst *Instance) error
+}
+
+// Estimator prices one hour of a lab for approval routing and budgets (spec §9.1). local labs are free; cluster
+// (M4: internal rate card from platform.yaml) and aws (M6: infracost on the module) plug in here per runtime.
+type Estimator interface {
+	HourlyUSD(ctx context.Context, lab *content.Lab) (float64, error)
+}
+
+// FixedRates prices labs by lab id; unlisted labs are free. Production uses it empty for local labs; the local
+// e2e check sets CRUCIBLE_DEV_LAB_USD_PER_HOUR so a laptop lab exercises the approval path.
+type FixedRates map[string]float64
+
+func (f FixedRates) HourlyUSD(_ context.Context, lab *content.Lab) (float64, error) {
+	return f[lab.ID], nil
+}
+
+// ParseRates reads "lab-id=0.5,other=1".
+func ParseRates(s string) (FixedRates, error) {
+	out := FixedRates{}
+	for _, kv := range strings.Split(s, ",") {
+		if kv = strings.TrimSpace(kv); kv == "" {
+			continue
+		}
+		id, v, ok := strings.Cut(kv, "=")
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if !ok || err != nil || f < 0 || strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("bad lab rate %q (want lab-id=usd-per-hour)", kv)
+		}
+		out[strings.TrimSpace(id)] = f
+	}
+	return out, nil
 }

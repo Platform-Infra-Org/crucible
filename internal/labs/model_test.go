@@ -83,3 +83,18 @@ func TestBundleSizeLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestParseRates(t *testing.T) {
+	r, err := ParseRates(" paid-heat=0.5, other=2 ")
+	if err != nil || r["paid-heat"] != 0.5 || r["other"] != 2 {
+		t.Fatalf("%v %v", r, err)
+	}
+	if r, err := ParseRates(""); err != nil || len(r) != 0 {
+		t.Fatalf("empty: %v %v", r, err)
+	}
+	for _, bad := range []string{"x", "x=-1", "x=abc"} {
+		if _, err := ParseRates(bad); err == nil {
+			t.Errorf("%q must be rejected", bad)
+		}
+	}
+}

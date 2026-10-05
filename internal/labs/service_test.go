@@ -30,14 +30,15 @@ func (c *clock) Now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return 
 func (c *clock) Add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t = c.t.Add(d) }
 
 type fakeRunner struct {
-	mu          sync.Mutex
-	unavailable error
-	scripts     []ScriptSpec
-	exit        func(ScriptSpec) int
-	destroyed   []string
-	provision   func() // optional hook: blocks/observes Provision
-	output      string // script output (default "out")
-	slow        time.Duration
+	mu            sync.Mutex
+	unavailable   error
+	scripts       []ScriptSpec
+	exit          func(ScriptSpec) int
+	destroyed     []string
+	provision     func() // optional hook: blocks/observes Provision
+	output        string // script output (default "out")
+	slow          time.Duration
+	failProvision error
 }
 
 func (f *fakeRunner) Available(*Instance) error { return f.unavailable }
@@ -45,7 +46,9 @@ func (f *fakeRunner) Provision(context.Context, *Instance, []byte, string) error
 	if f.provision != nil {
 		f.provision()
 	}
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failProvision
 }
 func (f *fakeRunner) OpenPTY(context.Context, *Instance, string, int, int) (PTY, error) {
 	return nil, io.EOF
@@ -98,12 +101,14 @@ func (n *fakeNotifier) last(kind notify.Kind) *notify.Event {
 }
 
 type fx struct {
-	notes *fakeNotifier
-	s     *Service
-	run   *fakeRunner
-	clk   *clock
-	u     *auth.User
-	other *auth.User
+	s             *Service
+	run           *fakeRunner
+	clk           *clock
+	u, other      *auth.User
+	leader, admin *auth.User
+	notes         *fakeNotifier
+	rates         FixedRates
+	plat          *config.Platform
 }
 
 func setup(t *testing.T, unlock bool) *fx {
@@ -124,6 +129,10 @@ func setup(t *testing.T, unlock bool) *fx {
 	store := auth.Store{DB: pool}
 	u, _ := store.UpsertUser(ctx, "s1", "trainee@crucible.local", "Tara")
 	other, _ := store.UpsertUser(ctx, "s2", "senior@crucible.local", "Sam")
+	leader, _ := store.UpsertUser(ctx, "s3", "leader@crucible.local", "Lee")
+	admin, _ := store.UpsertUser(ctx, "s4", "admin@crucible.local", "Ada")
+	rates := FixedRates{}
+
 	if unlock {
 		_ = ls.SetItem(ctx, u.ID, "forge", "forge-101", "01-welcome", "how-we-work", "complete", 1)
 		_ = ls.SetItem(ctx, u.ID, "forge", "forge-101", "01-welcome", "quiz", "complete", 1)
@@ -131,8 +140,9 @@ func setup(t *testing.T, unlock bool) *fx {
 	run := &fakeRunner{}
 	clk := &clock{t: time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)}
 	notes := &fakeNotifier{}
-	s := &Service{DB: pool, Learn: ls, Runners: map[string]Runner{"local": run}, Now: clk.Now, Log: slog.Default(), Notify: notes}
-	return &fx{notes: notes, s: s, run: run, clk: clk, u: u, other: other}
+	s := &Service{DB: pool, Learn: ls, Runners: map[string]Runner{"local": run}, Now: clk.Now, Log: slog.Default(), Notify: notes,
+		Estimators: map[string]Estimator{"local": rates}}
+	return &fx{s: s, run: run, clk: clk, u: u, other: other, leader: leader, admin: admin, notes: notes, rates: rates, plat: plat}
 }
 
 func (f *fx) start(t *testing.T) *View {

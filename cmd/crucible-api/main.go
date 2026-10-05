@@ -83,8 +83,16 @@ func run(ctx context.Context) error {
 	if notifySvc.SMTP.Addr == "" {
 		slog.Warn("CRUCIBLE_SMTP_ADDR is not set: email notifications are off (Slack/Teams webhooks still work)")
 	}
+	rates, err := labs.ParseRates(os.Getenv("CRUCIBLE_DEV_LAB_USD_PER_HOUR"))
+	if err != nil {
+		return fmt.Errorf("CRUCIBLE_DEV_LAB_USD_PER_HOUR: %w", err)
+	}
+	if len(rates) > 0 {
+		slog.Warn("CRUCIBLE_DEV_LAB_USD_PER_HOUR is set: these local labs are priced for testing approvals", "rates", rates)
+	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}},
-		Now: time.Now, Log: slog.Default()}
+		Estimators: map[string]labs.Estimator{"local": rates},
+		Now:        time.Now, Log: slog.Default()}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})

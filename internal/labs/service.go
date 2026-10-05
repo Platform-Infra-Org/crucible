@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,9 +21,11 @@ import (
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/config"
 	"crucible/internal/content"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/rbac"
 )
 
 // Notifier queues notifications (implemented by *notify.Service).
@@ -31,12 +34,13 @@ type Notifier interface {
 }
 
 type Service struct {
-	Notify  Notifier
-	DB      *pgxpool.Pool
-	Learn   *learn.Service
-	Runners map[string]Runner
-	Now     func() time.Time
-	Log     *slog.Logger
+	Notify     Notifier
+	DB         *pgxpool.Pool
+	Learn      *learn.Service
+	Runners    map[string]Runner
+	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
+	Now        func() time.Time
+	Log        *slog.Logger
 
 	sweepMu sync.Mutex // one sweep at a time in this process
 
@@ -97,6 +101,12 @@ type View struct {
 	Complete     bool               `json:"complete"`
 	Score        float64            `json:"score"`
 	MaxScore     float64            `json:"max_score"`
+	EstimateUSD  float64            `json:"estimate_usd"`
+	Tier         string             `json:"tier"`
+	OverCap      bool               `json:"over_cap"`
+	EscalateAt   *time.Time         `json:"escalate_at,omitempty"`
+	DecidedBy    string             `json:"decided_by,omitempty"`
+	DecisionNote string             `json:"decision_note,omitempty"`
 }
 
 type TaskDetail struct {
@@ -122,21 +132,26 @@ type HintResult struct {
 }
 
 type ModuleLab struct {
-	Title          string `json:"title"`
-	Runtime        string `json:"runtime"`
-	RuntimeReady   bool   `json:"runtime_ready"`
-	RuntimeMessage string `json:"runtime_message,omitempty"`
-	Lab            *View  `json:"lab"`
+	Title          string  `json:"title"`
+	Runtime        string  `json:"runtime"`
+	RuntimeReady   bool    `json:"runtime_ready"`
+	RuntimeMessage string  `json:"runtime_message,omitempty"`
+	EstimateUSD    float64 `json:"estimate_usd"`
+	NeedsApproval  bool    `json:"needs_approval"`
+	Blocked        string  `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
+	Lab            *View   `json:"lab"`
 }
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
-	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended`
+	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
+	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note`
 
 func scanInst(row pgx.Row) (*Instance, error) {
 	var in Instance
 	var ttl, idle, warn, ext int
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
-		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended)
+		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
+		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
 	}
@@ -146,6 +161,10 @@ func scanInst(row pgx.Row) (*Instance, error) {
 	in.TTL, in.IdleTimeout = time.Duration(ttl)*time.Second, time.Duration(idle)*time.Second
 	in.IdleWarning, in.MaxExtension = time.Duration(warn)*time.Second, time.Duration(ext)*time.Second
 	return &in, nil
+}
+
+func collectInst(rows pgx.Rows) ([]*Instance, error) {
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*Instance, error) { return scanInst(r) })
 }
 
 func newLabID() string {
@@ -327,7 +346,8 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	v := &View{ID: inst.ID, State: inst.State, Error: inst.Error, Runtime: inst.Runtime, Team: inst.Team,
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
-		IdleWarningS: int(inst.IdleWarning.Seconds()), SelfReported: inst.Runtime == "local", Complete: true}
+		IdleWarningS: int(inst.IdleWarning.Seconds()),
+		EstimateUSD:  inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
 			Awarded: done[t.ID].Points, HasSetup: t.Setup != nil, HintsTotal: len(t.Hints), HintsRevealed: counts[t.ID]}
@@ -370,7 +390,7 @@ func (s *Service) active(ctx context.Context, userID int64, team, training, modu
 }
 
 func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, module string) (*ModuleLab, error) {
-	_, t, _, err := s.Learn.Program(u, team, training)
+	st, t, _, err := s.Learn.Program(u, team, training)
 	if err != nil {
 		return nil, err
 	}
@@ -387,6 +407,11 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
 		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 	}
+	if q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab); err != nil {
+		out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
+	} else {
+		out.EstimateUSD, out.NeedsApproval, out.Blocked = q.EstimateUSD, q.Tier != rbac.TierAuto, q.Blocked
+	}
 	inst, err := s.active(ctx, u.ID, team, training, module)
 	if err != nil {
 		return nil, err
@@ -399,6 +424,66 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 	return out, nil
 }
 
+// quote is what a request for this lab would cost and who would decide it. The lobby preview and the real request
+// use the same function so they never disagree. Tasks 7 and 8 add the schedule, cap and kill-switch checks here.
+type quote struct {
+	Timing      Timing
+	HourlyUSD   float64
+	EstimateUSD float64
+	Tier        string
+	OverCap     bool   // would pass a team or program hard cap (Task 8)
+	Blocked     string // why no request can be made right now (Tasks 7, 8); "" = it can
+}
+
+func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, team, training, module string, lab *content.Lab) (*quote, error) {
+	est := s.Estimators[lab.Runtime]
+	if est == nil {
+		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("no cost estimate is available for %s labs", lab.Runtime))
+	}
+	if p.Settings.CostTiers == nil { // config.Load requires them; guards hand-built states
+		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured")
+	}
+	hourly, err := est.HourlyUSD(ctx, lab)
+	if err != nil {
+		return nil, fmt.Errorf("estimating lab cost: %w", err)
+	}
+	q := &quote{Timing: ResolveTiming(lab, p.Teams[team].Programs[training].LabDefaults), HourlyUSD: hourly}
+	q.EstimateUSD = math.Round(hourly*q.Timing.TTL.Hours()*100) / 100
+	q.Tier = rbac.Tier(lab.Runtime, q.EstimateUSD, *p.Settings.CostTiers)
+	if q.Tier != rbac.TierAuto {
+		again, err := s.recentlyApproved(ctx, u.ID, team, training, module)
+		if err != nil {
+			return nil, err
+		}
+		if again {
+			q.Tier = rbac.TierAuto // spec §14: re-request after a failed start needs no re-approval within 1 h
+		} else {
+			q.Tier = rbac.Checker{P: p}.Route(q.Tier, team, training, u.Email)
+		}
+	}
+	return q, nil
+}
+
+func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, training, module string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_instances WHERE user_id = $1 AND team = $2 AND training = $3
+		AND module = $4 AND state = 'failed' AND decided_by <> '' AND decided_at > $5)`,
+		userID, team, training, module, s.Now().Add(-time.Hour)).Scan(&ok)
+	return ok, err
+}
+
+func (s *Service) insert(ctx context.Context, in *Instance) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
+		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s,
+		hourly_usd, estimate_usd, tier, over_cap, escalate_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		in.ID, in.UserID, in.Team, in.Training, in.Module, in.SHA, in.Runtime, in.State, in.CreatedAt,
+		int(in.TTL.Seconds()), int(in.IdleTimeout.Seconds()), int(in.IdleWarning.Seconds()), int(in.MaxExtension.Seconds()),
+		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt)
+	return err
+}
+
+// Start requests a lab: free labs within auto_approve_usd start at once; others wait for an approver (spec §9.1).
 func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string) (*View, error) {
 	st, t, sha, err := s.Learn.Program(u, team, training)
 	if err != nil {
@@ -417,22 +502,34 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	}
 	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
 		return nil, err
-	} else if inst != nil && (inst.State == Provisioning || inst.State == Ready) {
+	} else if inst != nil && (inst.State == PendingApproval || inst.State == Provisioning || inst.State == Ready) {
 		return s.view(ctx, inst)
 	}
-	tm := ResolveTiming(m.Lab, st.Platform.Teams[team].Programs[training].LabDefaults)
+	q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab)
+	if err != nil {
+		return nil, err
+	}
+	if q.Blocked != "" {
+		return nil, apperr.Wrap(apperr.Conflict, q.Blocked)
+	}
 	now := s.Now()
 	inst := &Instance{ID: newLabID(), UserID: u.ID, Team: team, Training: training, Module: module, SHA: sha,
 		Runtime: m.Lab.Runtime, State: Provisioning, CreatedAt: now, LastActivityAt: now,
-		TTL: tm.TTL, IdleTimeout: tm.IdleTimeout, IdleWarning: tm.IdleWarning, MaxExtension: tm.MaxExtension}
-	if err := r.Available(inst); err != nil {
-		return nil, err
+		TTL: q.Timing.TTL, IdleTimeout: q.Timing.IdleTimeout, IdleWarning: q.Timing.IdleWarning, MaxExtension: q.Timing.MaxExtension,
+		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap}
+	if q.Tier == rbac.TierAuto {
+		if err := r.Available(inst); err != nil {
+			return nil, err
+		}
+	} else {
+		inst.State = PendingApproval
+		at := st.Platform.ProgramSchedule(team, training).AddOpen(now, st.Platform.Settings.Escalation())
+		if at.IsZero() { // the schedule never opens for long enough
+			return nil, apperr.Wrap(apperr.Unavailable, "this program's schedule leaves no time to escalate a request")
+		}
+		inst.EscalateAt = &at
 	}
-	_, err = s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
-		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13)`,
-		inst.ID, inst.UserID, team, training, module, sha, inst.Runtime, inst.State, now,
-		int(tm.TTL.Seconds()), int(tm.IdleTimeout.Seconds()), int(tm.IdleWarning.Seconds()), int(tm.MaxExtension.Seconds()))
+	err = s.insert(ctx, inst)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // a concurrent Start won the race
 		existing, err := s.active(ctx, u.ID, team, training, module)
@@ -447,8 +544,13 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	if err != nil {
 		return nil, err
 	}
-	s.event(ctx, inst.ID, "requested", "auto-approved: "+inst.Runtime)
-	go s.provision(context.WithoutCancel(ctx), inst, m.Lab)
+	s.event(ctx, inst.ID, "requested", fmt.Sprintf("%s, estimate $%.2f, tier %s", inst.Runtime, inst.EstimateUSD, inst.Tier))
+	if inst.State == Provisioning {
+		s.event(ctx, inst.ID, "approved", "auto")
+		go s.provision(context.WithoutCancel(ctx), inst, m.Lab) // ponytail: a goroutine, not a River job, until provisioning gets long (M4)
+	} else {
+		s.notifyRequest(ctx, st.Platform, inst, u.Email, notify.LabPending)
+	}
 	return s.view(ctx, inst)
 }
 
@@ -842,6 +944,14 @@ func (s *Service) End(ctx context.Context, u *auth.User, labID string) (*View, e
 	if err != nil {
 		return nil, err
 	}
+	if inst.State == PendingApproval {
+		if _, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'expired', end_reason = 'withdrawn', destroyed_at = $2
+			WHERE id = $1 AND state = 'pending_approval'`, inst.ID, s.Now()); err != nil {
+			return nil, err
+		}
+		s.event(ctx, inst.ID, "withdrawn", "")
+		return s.Get(ctx, u, labID)
+	}
 	s.destroy(ctx, inst, "user")
 	return s.Get(ctx, u, labID)
 }
@@ -885,7 +995,7 @@ func (s *Service) Sweep(ctx context.Context) {
 	now := s.Now()
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
-		   OR (state = 'provisioning' AND created_at < $1 - interval '15 minutes')
+		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 - interval '15 minutes')
 		   OR (state = 'destroying' AND destroyed_at < $1 - interval '10 minutes')`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)

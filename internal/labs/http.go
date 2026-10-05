@@ -26,6 +26,22 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Start(r.Context(), user(r), p(r, "team"), p(r, "training"), p(r, "module"))
 		reply(w, v, err)
 	})
+	r.Get("/api/approvals", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Approvals(r.Context(), user(r))
+		reply(w, v, err)
+	})
+	r.Post("/api/approvals/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Approve bool   `json:"approve"`
+			Note    string `json:"note"`
+		}
+		if err := httpx.Read(r, &body); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		st, err := s.Decide(r.Context(), user(r), p(r, "id"), body.Approve, body.Note)
+		reply(w, map[string]State{"state": st}, err)
+	})
 	r.Get("/api/labs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Get(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)

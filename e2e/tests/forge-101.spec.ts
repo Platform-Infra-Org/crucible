@@ -39,7 +39,8 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await page.getByRole('button', { name: 'Generate pairing token' }).click()
   const token = (await page.getByTestId('pairing-token').textContent())!.trim()
   agent = spawn(process.env.CRUCIBLE_AGENT!, ['--server', 'http://localhost:8080', '--token', token], { stdio: 'inherit' })
-  await expect(page.getByText('Agent connected')).toBeVisible({ timeout: 30_000 })
+  // Case-sensitive: getByText('Agent connected') would also match "No agent connected yet."
+  await expect(page.getByRole('status').filter({ hasText: /Agent connected/ })).toBeVisible({ timeout: 30_000 })
 
   // Module 1: read + quiz; module 2 starts locked
   await page.getByRole('link', { name: 'Hearth', exact: true }).click()

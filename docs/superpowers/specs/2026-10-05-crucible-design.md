@@ -43,6 +43,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Lab runtimes | Per lab: `cluster` (sysbox pod), `local` (trainee laptop via agent), `aws` |
 | AWS isolation | One shared account, tag + IAM permission boundary |
 | Lab checks | Script per task, exit 0 = pass, stdout = feedback |
+| Lab timer & idle | Countdown to the earliest of TTL / schedule end / budget cap; "Are you still there?" modal before idle destroy; browser notifications when tab is hidden |
 | Task setup | Optional per-task and lab-level setup scripts (break-fix scenarios), run out of band on first task open |
 | Progression | Configurable per training: `linear` (gated) or `free` |
 | Instant quiz types | single/multi choice, exact/regex, ordering/matching, terminal-inspection |
@@ -183,6 +184,7 @@ id: docker-networking
 runtime: cluster            # cluster | local | aws
 ttl: 2h
 idle_timeout: 30m
+idle_warning: 5m            # "Are you still there?" shown this long before idle destroy
 task_order: linear         # linear (default) | free
 terminals:                  # one tab each
   - { name: host,  service: workstation }
@@ -286,7 +288,8 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - **aws:** a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
 
 ### 8.3 Lab UI (KodeKloud-style)
-- **Left panel (≈40%):** task list with status pips; current task's Markdown; inline terminal-quiz input; **Check** button (spinner → spark burst on pass, shake + feedback on fail); **Hint** button (§8.4); TTL countdown + "extend" (if allowed).
+- **Left panel (≈40%):** task list with status pips; current task's Markdown; inline terminal-quiz input; **Check** button (spinner → spark burst on pass, shake + feedback on fail); **Hint** button (§8.4).
+- **Header bar:** lab timer (§8.6), lab name, runtime badge, "End lab" button.
 - **Right panel:** xterm.js terminal with **tabs**, one per `terminals` entry (plus "+" for extra shells on the same service); reconnect on drop; copy/paste; font size control.
 - Resizable splitter; collapse left panel; full-screen terminal mode.
 - Loading/provisioning screen: molten crucible animation + rotating quotes + live provisioning log stream.
@@ -310,6 +313,24 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - **Integrity:** setup scripts are never sent to the browser. In `local` labs the trainee could read them on their own machine, which is acceptable because local results are already flagged self-reported.
 - `crucible lint` checks that setup scripts exist and are executable, and that `run_in` names a service or terminal defined in the lab. `crucible preview` runs setups so authors can test their break-fix scenarios locally.
 
+### 8.6 Lab timer and idle check
+**Timer**
+- Always visible in the lab header. It counts down to the lab's **effective end** = the earliest of: TTL expiry, the end of the program's schedule window, and the team/program hard budget cap being reached (AWS labs, projected from the hourly estimate).
+- A tooltip/label says which limit applies ("Ends at schedule close, 19:00").
+- The server is authoritative: the client receives `ends_at` plus the server time and corrects for clock skew; the countdown re-syncs on every WebSocket reconnect. Multiple open tabs show the same value.
+- **States:** normal (> 15 min) → **cooling** (≤ 15 min: amber, ember glow) → **critical** (≤ 5 min: red, slow pulse). Under reduced motion the colours change without the glow/pulse.
+- **Warnings** at 15 and 5 min: an in-page toast, plus a browser notification and a title-bar badge ("⏳ 5 min · Crucible") if the tab is in the background. Browser notification permission is requested on the trainee's first lab, with an explanation; denying it only drops the background notification.
+- **Extend:** a button beside the timer while extension is allowed (once per lab, up to the program's `max_extension`, never past the schedule window or hard cap). Extensions that push the estimate over the approver's tier go back through approval, and the timer shows "Extension pending".
+- **At zero:** terminals freeze, a "The forge has cooled" screen appears with a summary (tasks passed, points, hints used), and the lab is destroyed. Scores and task results are kept. Requesting the same lab again creates a fresh environment; passed tasks stay passed, and the trainee resumes at the first unfinished task (its setup runs again).
+
+**Idle check ("Are you still there?")**
+- **Activity** = keystrokes in any terminal, Check/Hint/quiz actions, or task-panel interaction (scroll, task switch) — tracked client-side and sent as a heartbeat at most once a minute. Merely having the tab open is not activity. A long-running command producing output does not count either, so authors of labs with long waits should raise `idle_timeout`.
+- When `idle_warning` (default 5 min) remains before `idle_timeout`, a modal appears: **"Are you still there? The forge is cooling…"** with a countdown and an **"I'm here"** button. If the tab is in the background, the same browser notification and title badge are used.
+- "I'm here" (or any activity) resets the idle clock and dismisses the modal in all open tabs.
+- If the countdown runs out: `cluster`/`aws` labs are destroyed exactly as at TTL zero, with "Your lab was closed after N minutes of inactivity". `local` labs have their containers stopped (no cloud cost, but frees the trainee's machine).
+- Idle and timer warnings are in-app/browser only. No email or Slack, since they would arrive too late to act on.
+- Lab-level settings in `lab.yaml`: `idle_timeout`, `idle_warning`; program-level `max_extension` in the program file. Lint rejects `idle_warning >= idle_timeout`.
+
 ---
 
 ## 9. FinOps
@@ -326,7 +347,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 5. **Escalation:** unanswered after `escalation_hours` (default **4 business hours**, counted only inside the program's schedule window) → escalates one tier up (approver → leader → admin) with notification; trainee sees status throughout.
 
 ### 9.2 Cost controls
-- **TTL** (hard max lifetime) and **idle timeout** (no PTY input + no check runs) per lab; warnings at 15 and 5 min; trainee may extend once within program limits.
+- **TTL** (hard max lifetime) and **idle timeout** per lab, surfaced to the trainee as the lab timer and the "Are you still there?" prompt (§8.6).
 - **Schedules:** named windows (e.g. `business-hours: Mon–Fri 08:00–19:00 Europe/Bucharest`). Labs can't be requested outside windows; running labs are destroyed at window end (warned 15 min ahead).
 - **Budgets:** monthly per team and per program; 80% alert, 100% hard cap.
 - **Global kill switch** (admin): destroys all running labs immediately and blocks new requests until re-enabled.
@@ -346,7 +367,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 ---
 
 ## 10. Notifications
-Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; lab TTL warnings; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to trainee + mentor). Users can mute per event type (email) in settings.
+Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to trainee + mentor). Users can mute per event type (email) in settings.
 
 ## 11. Mentor & journey view
 - Each trainee may have a mentor (in `team.yaml`). Mentor dashboard: mentees' progress, pending submissions, recent lab failures.

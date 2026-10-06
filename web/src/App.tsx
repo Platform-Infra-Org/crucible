@@ -18,6 +18,7 @@ import { ConnectPage } from './pages/Connect'
 import { SettingsPage } from './pages/Settings'
 import { TeamPage, TeamsIndex } from './pages/Team'
 import { ApprovalsPage } from './pages/Approvals'
+import { LedgerPage } from './pages/Ledger'
 import { AnvilDetailPage, AnvilPage } from './pages/Anvil'
 import { ForgeStatusPage } from './pages/ForgeStatus'
 import { ProgramSettingsPage } from './pages/ProgramSettings'
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="/teams/:team" element={<TeamPage />} />
           <Route path="/teams/:team/programs/:training" element={<ProgramSettingsPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/ledger" element={<LedgerPage />} />
           <Route path="/anvil" element={<AnvilPage />} />
           <Route path="/anvil/:id" element={<AnvilDetailPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />

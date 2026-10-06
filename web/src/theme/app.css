@@ -168,3 +168,12 @@ meter { width: 8rem; vertical-align: middle; }
 .score-form { display: grid; gap: 0.5rem; margin-top: 1rem; }
 .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .check-output { white-space: pre-wrap; overflow-x: auto; max-height: 12rem; }
+
+.burn { display: grid; grid-template-columns: minmax(10rem, max-content) minmax(8rem, 1fr) max-content; gap: 0.75rem; align-items: center; margin: 0.25rem 0; }
+.burn meter { width: 100%; }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.bar-day { flex: 1; display: flex; align-items: flex-end; gap: 1px; height: 100%; }
+.bar { flex: 1; min-height: 1px; border-radius: 2px 2px 0 0; }
+.bar.est, .swatch.est { background: var(--accent); opacity: 0.55; }
+.bar.act, .swatch.act { background: var(--accent-2); }
+.swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; vertical-align: middle; }

@@ -60,6 +60,7 @@ export function LabPage() {
   if (error) return <ErrorBox error={error} />
   if (!info) return <Loader label="Opening the workshop…" />
   if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" />
+  if (lab?.state === 'destroying' && lab.runtime === 'aws') return <Loader label="Quenching: terraform is tearing down your cloud resources…" />
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
   const start = async () => {

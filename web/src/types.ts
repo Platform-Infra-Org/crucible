@@ -1,5 +1,5 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
@@ -44,7 +44,7 @@ export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean
 
 export type NotificationPrefs = { email_enabled: boolean; kinds: { kind: string; label: string; muted: boolean }[] }
 
-export type Spend = { spent_usd: number; committed_usd: number; budget_usd: number; cap_usd: number }
+export type Spend = { spent_usd: number; committed_usd: number; actual_usd: number; budget_usd: number; cap_usd: number }
 export type ScheduleInfo = { name: string; text: string; open: boolean; closes_at?: string; next_open?: string }
 export type RecentLab = { module: string; state: LabState; end_reason?: string; estimate_usd: number; created_at: string }
 export type Approval = {
@@ -82,3 +82,17 @@ export type TranscriptInfo = { id: number; lab_id: string; terminal: string; byt
 export type LabEvidence = { runtime: string; self_reported: boolean; tasks: TaskEvidence[]; transcripts: TranscriptInfo[] }
 export type AnvilDetail = { submission: Submission; history: Submission[]; lab?: LabEvidence }
 export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string }
+
+export type LedgerLab = {
+  id: string; team: string; training: string; module: string; requester: string; runtime: string; state: LabState
+  hourly_usd: number; estimate_usd: number; cost_usd: number; actual_usd?: number; settled: boolean; created_at: string; ends_at?: string
+}
+export type Finding = { source: 'destroy' | 'reaper' | 'trail'; lab_id: string; arn: string; action: 'deleted' | 'failed' | 'reported'; detail: string; first_at: string; last_at: string }
+export type Accuracy = { labs: number; estimate_usd: number; actual_usd: number }
+export type Ledger = {
+  month: string; aws: boolean; actuals_as_of?: string; actuals_stale: boolean; reaper_stale: boolean; reaper_error?: string; actuals_error?: string; reaped_at?: string; can_refresh: boolean
+  teams: { id: string; name: string; spend: Spend; programs: { training: string; spend: Spend }[] }[]
+  daily: { day: string; estimate_usd: number; actual_usd: number }[]
+  running: LedgerLab[]; labs: LedgerLab[]; top_spenders: { requester: string; team: string; usd: number }[]
+  accuracy: Accuracy; findings?: Finding[]
+}

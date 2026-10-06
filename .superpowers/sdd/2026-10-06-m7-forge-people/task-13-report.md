@@ -1,0 +1,5 @@
+# Task 13 report
+Built: Syncer.Changes (commit list + diff --stat, full SHAs only, --end-of-options), Syncer.CheckPin (40-hex, ancestor of the tracked branch head via merge-base --is-ancestor so unmerged edit branches/other refs are refused, and content must load via Version), configapi ProgramChanges/SetPin + routes (GET .../changes, PUT .../pin), ProgramView running/head/pinned, audit "program.pin", ProgramSettings "Content version" section.
+Access: both endpoints and the UI section need ManageProgram (leader/program manager/admin); stat shows file names only, never content.
+Tests: TestChangesAndCheckPin (gitsync), TestPinBump (configapi; unmerged edit sha, "main", option strings refused; unpin; audit count). go vet clean, go test -race ./... all ok, web npm test + build ok.
+Deviations: added Service.CheckPin hook (brief only validated against in-memory versions, which would accept any ever-loaded sha); running/head/pinned types are defined locally in ProgramSettings.tsx, not types.ts, because Task 12 has uncommitted edits in types.ts. gofmt flags cmd/crucible/preview.go (Task 14's, not touched).

@@ -2,6 +2,7 @@ package gitsync
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"crucible/internal/apperr"
 	"crucible/internal/content"
 )
 
@@ -183,5 +185,37 @@ func TestVersionLoadsAnOldSHAAfterARestart(t *testing.T) {
 	}
 	if _, err := os.Stat(out); err == nil {
 		t.Fatal("a sha must never reach git as an option")
+	}
+}
+
+func TestChangesAndCheckPin(t *testing.T) {
+	ctx := context.Background()
+	s, _, repo := setup(t)
+	first := s.Current().Heads["t1"]
+	run(t, repo, "checkout", "-qb", "side")
+	commit(t, repo, map[string]string{"modules/m1/r.md": "# side\n"})
+	side := strings.TrimSpace(gitOut(t, repo, "rev-parse", "HEAD"))
+	run(t, repo, "checkout", "-q", "main")
+	commit(t, repo, map[string]string{"modules/m1/r.md": "# Two\n"})
+	run(t, repo, "commit", "-q", "--amend", "-m", "second change")
+	if err := s.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := s.Current().Heads["t1"]
+	ch, err := s.Changes(ctx, "t1", first, second)
+	if err != nil || len(ch.Commits) != 1 || !strings.HasSuffix(ch.Commits[0], "second change") || !strings.Contains(ch.Stat, "r.md") {
+		t.Fatalf("changes: %+v %v", ch, err)
+	}
+	if _, err := s.Changes(ctx, "t1", "HEAD~1", second); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("only full commit ids: %v", err)
+	}
+	if _, err := s.Changes(ctx, "nope", first, second); !errors.Is(err, apperr.NotFound) {
+		t.Fatalf("unknown training: %v", err)
+	}
+	if err := s.CheckPin(ctx, "t1", first); err != nil {
+		t.Fatalf("an older commit on the branch can be pinned: %v", err)
+	}
+	if err := s.CheckPin(ctx, "t1", side); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("a commit off the branch must be refused: %v", err)
 	}
 }

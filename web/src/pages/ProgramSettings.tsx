@@ -8,6 +8,10 @@ import { Loader } from '../components/Loader'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { parseEmails } from '../lib/lists'
 
+// Kept here, not in types.ts, so this page owns its own shapes.
+type Pin = { running_sha: string; head_sha: string; pinned_ref: string }
+type Changes = { commits: string[]; stat: string }
+
 export function ProgramSettingsPage() {
   const { team, training } = useParams()
   const { data, error, reload } = useFetch<TeamView>(`/api/teams/${team}`)
@@ -16,11 +20,13 @@ export function ProgramSettingsPage() {
   if (!data) return <Loader label="Unrolling the blueprint…" />
   const prog = data.programs.find((p) => p.training === training)
   if (!prog) return <ErrorBox error={new ApiError(404, 'This team is not enrolled in that training.')} />
+  const pv = prog as ProgramConfig & Pin
   return (
     <section className="page">
       <Link to={`/teams/${data.id}`}>← {data.name}</Link>
       <h1>Program settings: {prog.title}</h1>
       <p role="status" className="pass">{saved ? `Saved to git (${saved})` : ''}</p>
+      {prog.can_manage && <ContentVersion key={pv.running_sha + pv.head_sha + pv.pinned_ref} team={data} prog={pv} onDone={reload} />}
       <ProgramForm key={data.platform_sha} team={data} prog={prog} onReload={reload} onStart={() => setSaved(undefined)} onSaved={(sha) => { setSaved(sha.slice(0, 7)); reload() }} />
     </section>
   )
@@ -99,5 +105,42 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
       </fieldset>
       <button className="primary" disabled={off}>Save program</button>
     </form>
+  )
+}
+
+function ContentVersion({ team, prog, onDone }: { team: TeamView; prog: ProgramConfig & Pin; onDone: () => void }) {
+  const [changes, setChanges] = useState<Changes>()
+  const [err, setErr] = useState<string>()
+  const [busy, setBusy] = useState(false)
+  const base = `/api/teams/${team.id}/programs/${prog.training}`
+  const act = async (fn: () => Promise<void>) => {
+    if (busy) return
+    setBusy(true)
+    setErr(undefined)
+    try { await fn() } catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  const pin = (ref: string) => act(async () => {
+    await api(`${base}/pin`, { method: 'PUT', json: { base_sha: team.platform_sha, ref } })
+    onDone()
+  })
+  return (
+    <section className="stack">
+      <h2>Content version</h2>
+      <p>Runs <code>{prog.running_sha.slice(0, 7)}</code> {prog.pinned_ref ? '(pinned)' : '(follows the branch head)'}</p>
+      {prog.running_sha !== prog.head_sha && (
+        <>
+          <button type="button" disabled={busy} onClick={() => act(async () => setChanges(await api<Changes>(`${base}/changes`)))}>Show changes</button>
+          {changes && (
+            <>
+              <ul>{changes.commits.map((c) => <li key={c}>{c}</li>)}</ul>
+              <pre>{changes.stat}</pre>
+              <button type="button" className="primary" disabled={busy} onClick={() => pin(prog.head_sha)}>Pin to {prog.head_sha.slice(0, 7)}</button>
+            </>
+          )}
+        </>
+      )}
+      {prog.pinned_ref && <button type="button" className="ghost" disabled={busy} onClick={() => pin('')}>Follow the branch head</button>}
+      {err && <p role="alert" className="fail">{err}</p>}
+    </section>
   )
 }

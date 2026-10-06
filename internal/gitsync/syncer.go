@@ -9,10 +9,12 @@ import (
 	"maps"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/content"
 )
@@ -250,4 +252,72 @@ func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training 
 	s.load(ctx, &next, cur, s.mirror(ref.Repo), id, sha)
 	s.cur.Store(&next)
 	return next.Training(id, sha)
+}
+
+// Changes summarises what moved in a training between two commits, shown to a manager before a pin bump (spec §6).
+type Changes struct {
+	From    string   `json:"from"`
+	To      string   `json:"to"`
+	Commits []string `json:"commits"` // "abc1234 subject", newest first, at most 50
+	Stat    string   `json:"stat"`    // git diff --stat: file names and line counts, never content
+}
+
+func (s *Syncer) trainingMirror(training string) (Mirror, error) {
+	st := s.Current()
+	if st == nil || st.Platform == nil {
+		return Mirror{}, apperr.Wrap(apperr.Unavailable, "content is still syncing")
+	}
+	ref, ok := st.Platform.Trainings[training]
+	if !ok {
+		return Mirror{}, apperr.Wrap(apperr.NotFound, "unknown training")
+	}
+	return s.mirror(ref.Repo), nil
+}
+
+func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Changes, error) {
+	m, err := s.trainingMirror(training)
+	if err != nil {
+		return nil, err
+	}
+	if !commitSHA.MatchString(from) || !commitSHA.MatchString(to) {
+		return nil, apperr.Wrap(apperr.Invalid, "from and to must be 40-character commit ids")
+	}
+	out := &Changes{From: from, To: to, Commits: []string{}}
+	if from == to {
+		return out, nil
+	}
+	log, err := git(ctx, m.Dir, "log", "--format=%h %s", "-n", "50", "--end-of-options", from+".."+to)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.Invalid, "those versions are not in the training's history")
+	}
+	for _, l := range strings.Split(log, "\n") {
+		if l != "" {
+			out.Commits = append(out.Commits, l)
+		}
+	}
+	if out.Stat, err = git(ctx, m.Dir, "diff", "--stat", "--end-of-options", from, to); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CheckPin says whether sha may be pinned for training: a commit on the tracked branch (not another branch, an
+// unmerged edit or an arbitrary object) whose content loads cleanly.
+func (s *Syncer) CheckPin(ctx context.Context, training, sha string) error {
+	m, err := s.trainingMirror(training)
+	if err != nil {
+		return err
+	}
+	bad := apperr.Wrap(apperr.Invalid, "only a validated commit on the training's branch can be pinned; pick the current head")
+	if !commitSHA.MatchString(sha) {
+		return bad
+	}
+	head := s.Current().Heads[training]
+	if _, err := git(ctx, m.Dir, "merge-base", "--is-ancestor", sha, head); err != nil {
+		return bad
+	}
+	if s.Version(ctx, training, sha) == nil {
+		return bad
+	}
+	return nil
 }

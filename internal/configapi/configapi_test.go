@@ -48,7 +48,7 @@ func bareFrom(t *testing.T, src string, rewrite map[string]string) string {
 type fx struct {
 	s                              *Service
 	sync                           *gitsync.Syncer
-	remote                         string
+	remote, content                string
 	admin, leader, senior, trainee *auth.User
 }
 
@@ -62,10 +62,10 @@ func setup(t *testing.T) *fx {
 		t.Fatal(err)
 	}
 	pool := dbtest.New(t)
-	s := &Service{DB: pool, State: syncer.Current, Resync: syncer.SyncOnce,
+	s := &Service{DB: pool, State: syncer.Current, Resync: syncer.SyncOnce, Changes: syncer.Changes, CheckPin: syncer.CheckPin,
 		Writer: &gitsync.Writer{URL: remote, Branch: "main", Dir: filepath.Join(t.TempDir(), "w"), Name: "Crucible", Email: "bot@x"}}
 	u := func(e string) *auth.User { return &auth.User{Email: e} }
-	return &fx{s: s, sync: syncer, remote: remote, admin: u("admin@crucible.local"), leader: u("leader@crucible.local"),
+	return &fx{s: s, sync: syncer, remote: remote, content: content, admin: u("admin@crucible.local"), leader: u("leader@crucible.local"),
 		senior: u("senior@crucible.local"), trainee: u("trainee@crucible.local")}
 }
 
@@ -366,5 +366,63 @@ func TestSetProgramRefusesToReplaceInlineSchedule(t *testing.T) {
 	got := sh(t, "", "--git-dir", f.remote, "show", "main:teams/forge/programs/forge-101.yaml")
 	if !strings.Contains(got, "timezone: Europe/Bucharest") {
 		t.Fatalf("inline windows must survive the refused save:\n%s", got)
+	}
+}
+
+func TestPinBump(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	head := f.sync.Current().Heads["forge-101"]
+	if _, err := f.s.SetPin(ctx, f.trainee, "forge", "forge-101", PinBody{BaseSHA: f.sha(), Ref: head}); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("trainees can't pin: %v", err)
+	}
+	if _, err := f.s.ProgramChanges(ctx, f.trainee, "forge", "forge-101"); err == nil {
+		t.Fatal("trainees can't see the diff")
+	}
+	if _, err := f.s.SetPin(ctx, f.leader, "forge", "forge-101", PinBody{BaseSHA: f.sha(), Ref: head}); err != nil {
+		t.Fatal(err)
+	}
+	// Someone pushes new content, and an unmerged edit branch; the program stays on its pin.
+	work := t.TempDir()
+	sh(t, "", "clone", "-q", f.content, work)
+	sh(t, work, "checkout", "-qb", "crucible/edit-x")
+	_ = os.WriteFile(filepath.Join(work, "modules/01-welcome/reading/how-we-work.md"), []byte("# Unmerged\n"), 0o644)
+	sh(t, work, "commit", "-qam", "unmerged")
+	unmerged := sh(t, work, "rev-parse", "HEAD")
+	sh(t, work, "push", "-q", "origin", "HEAD:crucible/edit-x")
+	sh(t, work, "checkout", "-q", "main")
+	_ = os.WriteFile(filepath.Join(work, "modules/01-welcome/reading/how-we-work.md"), []byte("# How We Work\n\nNew words.\n"), 0o644)
+	sh(t, work, "commit", "-qam", "new words")
+	sh(t, work, "push", "-q", "origin", "HEAD:main")
+	if err := f.sync.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tv, _ := f.s.Team(f.leader, "forge")
+	pv := tv.Programs[0]
+	if pv.RunningSHA != head || pv.HeadSHA == head || pv.PinnedRef != head {
+		t.Fatalf("pinned program view: %+v", pv)
+	}
+	ch, err := f.s.ProgramChanges(ctx, f.leader, "forge", "forge-101")
+	if err != nil || len(ch.Commits) != 1 || !strings.Contains(ch.Commits[0], "new words") {
+		t.Fatalf("diff summary: %+v %v", ch, err)
+	}
+	for _, bad := range []string{strings.Repeat("a", 40), unmerged, "main", "--output=x"} {
+		if _, err := f.s.SetPin(ctx, f.leader, "forge", "forge-101", PinBody{BaseSHA: f.sha(), Ref: bad}); !errors.Is(err, apperr.Invalid) {
+			t.Fatalf("%q must not be pinnable: %v", bad, err)
+		}
+	}
+	if _, err := f.s.SetPin(ctx, f.leader, "forge", "forge-101", PinBody{BaseSHA: f.sha(), Ref: pv.HeadSHA}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.sync.Current().ProgramSHAs["forge/forge-101"]; got != pv.HeadSHA {
+		t.Fatalf("bumped: running %s", got)
+	}
+	if _, err := f.s.SetPin(ctx, f.leader, "forge", "forge-101", PinBody{BaseSHA: f.sha()}); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action='program.pin'`).Scan(&n)
+	if n != 3 || f.sync.Current().Platform.Teams["forge"].Programs["forge-101"].PinnedRef != "" {
+		t.Fatalf("unpin / audit: %d", n)
 	}
 }

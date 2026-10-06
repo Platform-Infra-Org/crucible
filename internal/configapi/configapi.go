@@ -30,10 +30,12 @@ import (
 )
 
 type Service struct {
-	DB     *pgxpool.Pool
-	State  func() *gitsync.State
-	Writer *gitsync.Writer
-	Resync func(ctx context.Context) error // re-read git after a write so the page shows the change at once
+	DB       *pgxpool.Pool
+	State    func() *gitsync.State
+	Writer   *gitsync.Writer
+	Resync   func(ctx context.Context) error // re-read git after a write so the page shows the change at once
+	Changes  func(ctx context.Context, training, from, to string) (*gitsync.Changes, error)
+	CheckPin func(ctx context.Context, training, sha string) error // a loadable commit on the tracked branch
 }
 
 type TeamSummary struct {
@@ -65,6 +67,9 @@ type ProgramView struct {
 	BudgetUSDMonth     float64         `json:"budget_usd_month"`
 	ReviewSelfReported bool            `json:"review_self_reported"`
 	CanManage          bool            `json:"can_manage"`
+	RunningSHA         string          `json:"running_sha"`
+	HeadSHA            string          `json:"head_sha"`
+	PinnedRef          string          `json:"pinned_ref"`
 }
 
 type TrainingOption struct {
@@ -263,6 +268,7 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 		v.Programs = append(v.Programs, ProgramView{InlineSchedule: inline, Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
 			Roles:    RolesView{Manager: emails(p.Roles.Manager), Scorers: emails(p.Roles.Scorers), Approvers: emails(p.Roles.Approvers)},
 			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
+			RunningSHA: st.ProgramSHAs[id+"/"+tr], HeadSHA: st.Heads[tr], PinnedRef: p.PinnedRef,
 			LabDefaults: LabDefaultsView{TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout), MaxExtension: dur(p.LabDefaults.MaxExtension)}})
 	}
 	if spend { // spec §5.3 "view team spend"
@@ -497,6 +503,19 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Team(user(r), chi.URLParam(r, "team"))
 		reply(w, v, err)
 	})
+	r.Get("/api/teams/{team}/programs/{training}/changes", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.ProgramChanges(r.Context(), user(r), chi.URLParam(r, "team"), chi.URLParam(r, "training"))
+		reply(w, v, err)
+	})
+	r.Put("/api/teams/{team}/programs/{training}/pin", func(w http.ResponseWriter, r *http.Request) {
+		var b PinBody
+		if err := httpx.Read(r, &b); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SetPin(r.Context(), user(r), chi.URLParam(r, "team"), chi.URLParam(r, "training"), b)
+		sha(w, v, err)
+	})
 	r.Put("/api/teams/{team}/roster", func(w http.ResponseWriter, r *http.Request) {
 		var b RosterBody
 		if err := httpx.Read(r, &b); err != nil {
@@ -531,4 +550,63 @@ func (s *Service) Routes(r chi.Router) {
 		}
 		reply(w, v, err)
 	})
+}
+
+type PinBody struct {
+	BaseSHA string `json:"base_sha"`
+	Ref     string `json:"ref"` // "" = track the branch head
+}
+
+var errCantBump = apperr.Wrap(apperr.Forbidden, "only the team leader, the program's managers or an admin can bump content")
+
+func (s *Service) manageable(u *auth.User, team, training string) (*gitsync.State, error) {
+	st, t, err := s.team(team)
+	if err != nil {
+		return nil, err
+	}
+	if t.Programs[training] == nil {
+		return nil, apperr.Wrap(apperr.NotFound, "this team is not enrolled in that training")
+	}
+	if !(rbac.Checker{P: st.Platform}).Can(u.Email, rbac.ManageProgram, team, training, "") {
+		return nil, errCantBump
+	}
+	return st, nil
+}
+
+// ProgramChanges is the diff summary from the version a program runs to its training's branch head. Only people who
+// can bump see it.
+func (s *Service) ProgramChanges(ctx context.Context, u *auth.User, team, training string) (*gitsync.Changes, error) {
+	st, err := s.manageable(u, team, training)
+	if err != nil {
+		return nil, err
+	}
+	return s.Changes(ctx, training, st.ProgramSHAs[team+"/"+training], st.Heads[training])
+}
+
+// SetPin pins a program to a validated content version, or back to tracking the branch head (spec §6).
+func (s *Service) SetPin(ctx context.Context, u *auth.User, team, training string, b PinBody) (string, error) {
+	st, err := s.manageable(u, team, training)
+	if err != nil {
+		return "", err
+	}
+	allow := func(p *config.Platform) error {
+		if !(rbac.Checker{P: p}).Can(u.Email, rbac.ManageProgram, team, training, "") {
+			return errCantBump
+		}
+		return nil
+	}
+	ref := strings.ToLower(strings.TrimSpace(b.Ref))
+	if ref != "" {
+		if err := s.CheckPin(ctx, training, ref); err != nil {
+			return "", err
+		}
+	}
+	set := map[string]any{"pinned_ref": nil}
+	action := "track the head of " + training + " in " + team
+	if ref != "" {
+		set["pinned_ref"], action = ref, "pin "+team+"/"+training+" to "+ref[:7]
+	}
+	rel := path.Join("teams", team, "programs", training+".yaml")
+	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel}, Allow: allow, Edit: edit(rel, set)},
+		"program.pin", team+"/"+training, map[string]any{"from": st.ProgramSHAs[team+"/"+training], "to": ref})
 }

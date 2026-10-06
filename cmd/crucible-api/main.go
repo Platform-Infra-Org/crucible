@@ -72,18 +72,26 @@ func run(ctx context.Context) error {
 	public := strings.TrimRight(env("CRUCIBLE_PUBLIC_URL", "http://localhost:8080"), "/")
 	store := auth.Store{DB: pool}
 	var oidcH *auth.OIDC
-	for attempt := 1; ; attempt++ { // the IdP may still be starting
-		oidcH, err = auth.NewOIDC(ctx, auth.OIDCConfig{Issuer: must("OIDC_ISSUER"), DiscoveryURL: os.Getenv("OIDC_DISCOVERY_URL"),
-			ClientID: must("OIDC_CLIENT_ID"), ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), RedirectURL: public + "/auth/callback"},
-			store, strings.HasPrefix(public, "https://"))
-		if err == nil || attempt == 30 {
-			break
+	previewToken := os.Getenv("CRUCIBLE_PREVIEW_TOKEN")
+	if previewToken != "" {
+		if err := auth.PreviewAllowed(public, previewToken); err != nil {
+			return fmt.Errorf("preview mode: %w", err)
 		}
-		slog.Info("waiting for the identity provider", "attempt", attempt, "err", err)
-		time.Sleep(2 * time.Second)
-	}
-	if err != nil {
-		return err
+		slog.Warn("PREVIEW MODE: OIDC is off and /auth/preview signs in with the preview token. Only crucible preview sets this")
+	} else {
+		for attempt := 1; ; attempt++ { // the IdP may still be starting
+			oidcH, err = auth.NewOIDC(ctx, auth.OIDCConfig{Issuer: must("OIDC_ISSUER"), DiscoveryURL: os.Getenv("OIDC_DISCOVERY_URL"),
+				ClientID: must("OIDC_CLIENT_ID"), ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), RedirectURL: public + "/auth/callback"},
+				store, strings.HasPrefix(public, "https://"))
+			if err == nil || attempt == 30 {
+				break
+			}
+			slog.Info("waiting for the identity provider", "attempt", attempt, "err", err)
+			time.Sleep(2 * time.Second)
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	hub := agenthub.New()
@@ -92,7 +100,8 @@ func run(ctx context.Context) error {
 		slog.Warn("CRUCIBLE_QUIZ_SECRET is not set; using a fixed development value. Set it in production so learners cannot predict quiz choice ids")
 		quizSecret = "crucible-dev-quiz-secret"
 	}
-	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce}
+	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce,
+		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
@@ -230,7 +239,7 @@ func run(ctx context.Context) error {
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
 			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc,
-			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
+			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

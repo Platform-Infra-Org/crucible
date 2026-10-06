@@ -25,6 +25,7 @@ import (
 	"crucible/internal/learn"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/scoring"
 )
 
 type Deps struct {
@@ -33,6 +34,7 @@ type Deps struct {
 	Sync       *gitsync.Syncer
 	Learn      *learn.Service
 	Labs       *labs.Service
+	Scoring    *scoring.Service
 	Notify     *notify.Service
 	Config     *configapi.Service
 	Hub        *agenthub.Hub
@@ -80,11 +82,11 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme, teams, canApprove := false, "forge", []string{}, false
+			admin, theme, teams, canApprove, scorer := false, "forge", []string{}, false, false
 			if st := state(d); st != nil && st.Platform != nil {
 				c := rbac.Checker{P: st.Platform}
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
-				canApprove = admin
+				canApprove, scorer = admin, canScore(st.Platform, u.Email)
 				for id, t := range st.Platform.Teams {
 					if configapi.Role(t, u.Email) != "" { // team role or a program role in one of its programs
 						teams = append(teams, id)
@@ -96,7 +98,7 @@ func NewRouter(d Deps) chi.Router {
 				}
 				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove})
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
@@ -131,6 +133,9 @@ func NewRouter(d Deps) chi.Router {
 		})
 		d.Learn.Routes(r)
 		d.Labs.Routes(r)
+		if d.Scoring != nil {
+			d.Scoring.Routes(r)
+		}
 		if d.Notify != nil {
 			d.Notify.Routes(r)
 		}
@@ -173,4 +178,19 @@ func spa(dir string) http.HandlerFunc {
 		}
 		files.ServeHTTP(w, r)
 	}
+}
+
+// canScore: admins, and anyone listed as a scorer of some program (the Anvil link in the nav).
+func canScore(p *config.Platform, email string) bool {
+	if (rbac.Checker{P: p}).IsAdmin(email) {
+		return true
+	}
+	for _, t := range p.Teams {
+		for _, pr := range t.Programs {
+			if slices.Contains(pr.Roles.Scorers, strings.ToLower(email)) {
+				return true
+			}
+		}
+	}
+	return false
 }

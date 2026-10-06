@@ -85,15 +85,16 @@ run "node_settings_come_from_ssm" {
   }
 }
 
-run "backups_may_write_only_snapshots_and_latest" {
+run "node_may_write_only_snapshots_latest_and_uploads" {
   command = plan
 
   assert {
     condition = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "s3:PutObject")])) == toset([
       "arn:aws:s3:::crucible-123456789012-data/snapshots/*",
       "arn:aws:s3:::crucible-123456789012-data/latest/crucible-latest.dump",
+      "arn:aws:s3:::crucible-123456789012-data/uploads/*",
     ])
-    error_message = "node may PutObject only on snapshots/* and latest/crucible-latest.dump"
+    error_message = "node may PutObject only on snapshots/*, latest/crucible-latest.dump and uploads/*"
   }
 }
 

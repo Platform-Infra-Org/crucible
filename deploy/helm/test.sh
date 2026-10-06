@@ -44,4 +44,6 @@ off=$(helm template t "$chart" $base --set clusterLabs.enabled=false)
 if grep -qE 'kind: ClusterRole|CRUCIBLE_CLUSTER_LABS' <<<"$off"; then echo "clusterLabs.enabled=false must not grant cluster access"; exit 1; fi
 grep -q 'automountServiceAccountToken: false' <<<"$off" || { echo "no API token without cluster labs"; exit 1; }
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
+need 'CRUCIBLE_BLOB_BUCKET, value: "b"'                    # uploads go to the data bucket, not the emptyDir
+need 'CRUCIBLE_BLOB_REGION, value: "eu-west-1"'
 echo "helm chart OK"

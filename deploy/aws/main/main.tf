@@ -123,7 +123,7 @@ data "aws_iam_policy_document" "node" {
   }
   statement {
     actions   = ["s3:PutObject"]
-    resources = ["arn:aws:s3:::${var.data_bucket}/snapshots/*", "arn:aws:s3:::${var.data_bucket}/latest/crucible-latest.dump"]
+    resources = ["arn:aws:s3:::${var.data_bucket}/snapshots/*", "arn:aws:s3:::${var.data_bucket}/latest/crucible-latest.dump", "arn:aws:s3:::${var.data_bucket}/uploads/*"]
   }
   statement {
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]

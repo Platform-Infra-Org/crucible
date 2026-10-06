@@ -19,6 +19,7 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/blob"
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
@@ -28,6 +29,7 @@ import (
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/scoring"
 )
 
 func main() {
@@ -120,6 +122,20 @@ func run(ctx context.Context) error {
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
 		Now: time.Now, Log: slog.Default()}
+	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
+	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
+		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))
+		if err != nil {
+			return fmt.Errorf("blob storage: %w", err)
+		}
+		blobs = s3store
+	} else {
+		slog.Warn("CRUCIBLE_BLOB_BUCKET is not set: uploads and terminal transcripts are kept under CRUCIBLE_DATA_DIR/blobs; use a persistent volume or S3 in production")
+	}
+	scoreSvc := &scoring.Service{DB: pool, Blobs: blobs, State: syncer.Current, Notify: notifySvc, Quiz: learnSvc, Labs: labSvc,
+		Log: slog.Default(), Now: time.Now}
+	learnSvc.Scoring = scoreSvc
+	labSvc.Scoring, labSvc.Blobs = scoreSvc, blobs
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})
@@ -145,7 +161,7 @@ func run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
-		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
+		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -177,3 +193,8 @@ func must(k string) string {
 	}
 	return v
 }
+
+var (
+	_ scoring.Labs     = (*labs.Service)(nil)
+	_ scoring.Progress = (*learn.Service)(nil)
+)

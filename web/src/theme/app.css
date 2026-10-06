@@ -160,3 +160,11 @@ meter { width: 8rem; vertical-align: middle; }
 .question.human textarea, .review-form textarea { width: 100%; }
 .review-form { display: grid; gap: 0.5rem; margin: 0.75rem 0; }
 .small { font-size: 0.8rem; }
+.queue { list-style: none; padding: 0; display: grid; gap: 0.75rem; }
+.queue a { color: inherit; text-decoration: none; display: block; }
+.rubric { border-left: 3px solid var(--accent); padding-left: 0.75rem; }
+.evidence .checks { padding-left: 1.2rem; }
+.transcript { height: 24rem; margin: 0.5rem 0; }
+.score-form { display: grid; gap: 0.5rem; margin-top: 1rem; }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.check-output { white-space: pre-wrap; overflow-x: auto; max-height: 12rem; }

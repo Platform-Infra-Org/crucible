@@ -13,7 +13,7 @@ Detailed task-by-task plans exist for **M1** and **M2**. M3–M7 get their own p
 | M3 | **Approvals & FinOps core**: River job queue; lab request → cost-tiered approval → escalation after 4 business hours; schedules (lab windows + effective end); budgets and hard caps; kill switch; email + Slack/Teams notifications; config write-back to the platform repo (program roles, schedules) | `2026-10-06-m3-approvals-finops.md` (12 tasks) | A cloud-tier request needs an approver, escalates when ignored, is blocked over the cap; labs die at window close |
 | M4 | **Cluster runtime**: sysbox on k3s; namespace per lab with quota and default-deny NetworkPolicy (blocks IMDS); exec-based PTYs and tamper-proof checks | `2026-10-06-m4-cluster-runtime.md` (9 tasks) | Forge 101's lab runs with `runtime: cluster` and checks are not self-reported |
 | M5 | **Human scoring**: text/upload/sign-off questions; review tasks; Anvil scoring queue with rubric, feedback, return-for-rework, audited overrides; terminal transcripts; S3 uploads (local disk in dev); progression waits on pending scores; Forge 301 fixture | `2026-10-06-m5-human-scoring.md` (11 tasks) | A scorer grades a free-text answer and a lab submission; the trainee sees the feedback |
-| M6 | **AWS labs & Ledger**: shared lab account roles with permission boundary + session tags; terraform runner Jobs + workspace pod; infracost estimates; nightly reaper; Cost Explorer ingestion; FinOps dashboard | written at M6 start | An AWS lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger |
+| M6 | **AWS labs & Ledger**: shared lab account roles with permission boundary + session tags; terraform runner pods + workspace pod; infracost estimates; reaper; Cost Explorer ingestion; Ledger (FinOps) page | `2026-10-06-m6-aws-labs-ledger.md` (14 tasks) | An AWS lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger |
 | M7 | **Forge & people**: forge ranks (Ore → Masterwork) and badges; mentor dashboard; journey heat map with stuck signals; in-app content edit + maintainer review; `crucible preview`; Forge Status page; motion polish | written at M7 start | Release candidate: every spec section is checked off in the coverage table below |
 
 ## Spec coverage
@@ -32,7 +32,7 @@ Detailed task-by-task plans exist for **M1** and **M2**. M3–M7 get their own p
 | §8.3 Lab UI | M1 |
 | §8.4 Hints | M1 |
 | §8.5 Task setup scripts | M1 (maintainer notification in M3) |
-| §8.6 Lab timer and idle check | M1 for TTL; schedule and budget limits feed the same timer in M3 and M6 |
+| §8.6 Lab timer and idle check | M1 for TTL; schedule and budget limits feed the same timer in M3 and M6; "Extension pending" re-approval deferred from M6 to the M7 coverage pass |
 | §9.1–9.2 Approvals, tiers, escalation, schedules, budgets, kill switch | M3 |
 | §9.3 Cost data and dashboard | M6 |
 | §9.4 Deployment, hibernate, restore | M2 |

@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultTerraformImage = "hashicorp/terraform:1.16.5" // the node pulls it once
+	DefaultTerraformImage = "hashicorp/terraform:1.16.5@sha256:c7926feace05d0f7e73542842bf3945924e955a1f782cf000ccbb8d18fa42d77" // tag 1.16.5 (multi-arch index); bump deliberately
 
 	awsSecret    = "aws-creds" // the lab's STS credentials file; mounted at /aws in the workspace and runner pods
 	tfConfigMap  = "tf-module" // module.tgz (terraform/ + crucible.tf + tfvars) and backend.hcl
@@ -75,6 +75,7 @@ func tfPod(id, name, image, script string) *corev1.Pod {
 					{Name: "HOME", Value: "/tmp"},
 					{Name: "TF_IN_AUTOMATION", Value: "1"},
 					{Name: "TF_INPUT", Value: "0"},
+					{Name: "CHECKPOINT_DISABLE", Value: "1"}, // no phone-home to checkpoint-api.hashicorp.com
 				},
 				Resources:                corev1.ResourceRequirements{Requests: runnerRequests, Limits: runnerLimits},
 				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
@@ -109,9 +110,9 @@ func tfScript(action string, dryRun bool) string {
 	if dryRun {
 		return s + "terraform version\nls /w\necho 'dry run (CRUCIBLE_AWS_LABS=dryrun): nothing was applied or destroyed'\n"
 	}
-	s += "terraform init -input=false -backend-config=/module/backend.hcl\n"
+	s += "terraform init -input=false -no-color -backend-config=/module/backend.hcl\n"
 	if action == "destroy" {
-		return s + "terraform destroy -input=false -auto-approve -lock=false -var-file=" + tfVarsFile + "\n"
+		return s + "terraform destroy -input=false -no-color -auto-approve -lock=false -var-file=" + tfVarsFile + "\n"
 	}
-	return s + "terraform apply -input=false -auto-approve -var-file=" + tfVarsFile + "\n"
+	return s + "terraform apply -input=false -no-color -auto-approve -var-file=" + tfVarsFile + "\n"
 }

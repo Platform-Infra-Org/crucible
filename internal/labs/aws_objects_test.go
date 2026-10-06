@@ -55,13 +55,25 @@ func TestTFPodIsLockedDown(t *testing.T) {
 	case len(c.EnvFrom) != 0 || slices.ContainsFunc(c.Env, func(e corev1.EnvVar) bool { return e.ValueFrom != nil }):
 		t.Fatal("credentials come only from the mounted file, never env")
 	}
+	if s.HostNetwork || s.HostPID || s.HostIPC {
+		t.Fatal("no host namespaces")
+	}
+	if !slices.ContainsFunc(c.Env, func(e corev1.EnvVar) bool { return e.Name == "CHECKPOINT_DISABLE" && e.Value == "1" }) {
+		t.Fatal("no checkpoint phone-home")
+	}
+	if !strings.Contains(DefaultTerraformImage, "@sha256:") {
+		t.Fatal("the runner image is pinned by digest")
+	}
 	var mounts []string
 	for _, v := range s.Volumes {
 		switch {
+		case v.EmptyDir != nil:
 		case v.Secret != nil:
 			mounts = append(mounts, "secret:"+v.Secret.SecretName)
 		case v.ConfigMap != nil:
 			mounts = append(mounts, "configmap:"+v.ConfigMap.Name)
+		default:
+			t.Fatalf("volume %s is neither emptyDir, configMap nor secret", v.Name)
 		}
 	}
 	if !slices.Equal(mounts, []string{"secret:" + awsSecret, "configmap:" + tfConfigMap}) {
@@ -74,14 +86,17 @@ func TestTFPodIsLockedDown(t *testing.T) {
 
 func TestTFScripts(t *testing.T) {
 	apply, destroy, dry := tfScript("apply", false), tfScript("destroy", false), tfScript("destroy", true)
-	if !strings.Contains(apply, "terraform init -input=false -backend-config=/module/backend.hcl") ||
-		!strings.Contains(apply, "terraform apply -input=false -auto-approve") || strings.Contains(apply, "-lock=false") {
+	if !strings.Contains(apply, "terraform init -input=false -no-color -backend-config=/module/backend.hcl") ||
+		!strings.Contains(apply, "terraform apply -input=false -no-color -auto-approve") || strings.Contains(apply, "-lock=false") {
 		t.Fatalf("apply:\n%s", apply)
 	}
-	if !strings.Contains(destroy, "terraform destroy -input=false -auto-approve -lock=false") {
+	if !strings.Contains(destroy, "terraform destroy -input=false -no-color -auto-approve -lock=false") {
 		t.Fatalf("destroy runs after the apply pod is gone, so a stale lock must not block it:\n%s", destroy)
 	}
 	for _, sc := range []string{apply, destroy} {
+		if strings.Count(sc, "-no-color") != 2 { // init + the action: terraform colours even off a TTY
+			t.Fatalf("init and the action need -no-color:\n%s", sc)
+		}
 		if strings.Count(sc, "-var-file=/w/crucible.auto.tfvars.json") != 1 || strings.Contains(sc, "-force-copy") {
 			t.Fatalf("crucible_* variables go on the command line (highest precedence), no state migration:\n%s", sc)
 		}
@@ -127,7 +142,20 @@ func TestWaitDoneAndDeletePod(t *testing.T) {
 		return corev1.PodStatus{Phase: phase, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{Message: msg}}}}}
 	}
+	killed := func(phase corev1.PodPhase, reason, msg string) corev1.PodStatus {
+		st := term(phase, msg)
+		st.ContainerStatuses[0].State.Terminated.Reason = reason
+		return st
+	}
+	deadline := term(corev1.PodFailed, "tail")
+	deadline.Reason = "DeadlineExceeded"
+	empty := corev1.PodStatus{Phase: corev1.PodFailed, Reason: "DeadlineExceeded", Message: "Pod was active too long"}
 	cs := fake.NewClientset(
+		pod("esc", term(corev1.PodFailed, "\x1b[31mError\x1b[0m\x07: bad\n\tdetail\r\x00")),
+		pod("oom", killed(corev1.PodFailed, "OOMKilled", "tail")),
+		pod("exit", killed(corev1.PodFailed, "Error", "Error: x")),
+		pod("dl", deadline),
+		pod("empty", empty),
 		pod("ok", term(corev1.PodSucceeded, "Apply complete!")),
 		pod("bad", term(corev1.PodFailed, "Error: AccessDenied")),
 		pod("img", corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{
@@ -136,7 +164,10 @@ func TestWaitDoneAndDeletePod(t *testing.T) {
 	for name, want := range map[string]struct {
 		ok  bool
 		msg string
-	}{"ok": {true, "Apply complete!"}, "bad": {false, "Error: AccessDenied"}, "img": {false, "ImagePullBackOff: no such image"}} {
+	}{"esc": {false, "[31mError[0m: bad\n\tdetail"},
+		"oom": {false, "OOMKilled: tail"}, "exit": {false, "Error: x"}, "dl": {false, "DeadlineExceeded: tail"},
+		"empty": {false, "DeadlineExceeded Pod was active too long"},
+		"ok":    {true, "Apply complete!"}, "bad": {false, "Error: AccessDenied"}, "img": {false, "ImagePullBackOff: no such image"}} {
 		ok, msg, err := r.waitDone(ctx, ns, name)
 		if err != nil || ok != want.ok || msg != want.msg {
 			t.Fatalf("%s: %v %q %v", name, ok, msg, err)

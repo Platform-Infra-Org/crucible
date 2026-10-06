@@ -175,9 +175,26 @@ func (c *ClusterRunner) waitDone(ctx context.Context, ns, name string) (ok bool,
 					msg = t.Message
 				}
 			}
-			if msg == "" { // killed before the container ran, e.g. activeDeadlineSeconds
-				msg = strings.TrimSpace(p.Status.Reason + " " + p.Status.Message)
+			// The kill reason (OOMKilled, DeadlineExceeded) goes ahead of the log tail; Completed/Error say nothing.
+			reason := p.Status.Reason
+			for _, cs := range p.Status.ContainerStatuses {
+				if t := cs.State.Terminated; t != nil && t.Reason != "Completed" && t.Reason != "Error" && reason == "" {
+					reason = t.Reason
+				}
 			}
+			switch {
+			case msg == "": // killed before the container ran, e.g. activeDeadlineSeconds
+				msg = strings.TrimSpace(reason + " " + p.Status.Message)
+			case reason != "":
+				msg = reason + ": " + msg
+			}
+			// The tail is hostile-influenced (module code, terraform output): drop terminal control bytes.
+			msg = strings.Map(func(r rune) rune {
+				if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
+					return -1
+				}
+				return r
+			}, msg)
 			return p.Status.Phase == corev1.PodSucceeded, msg, nil
 		}
 		select {

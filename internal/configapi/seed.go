@@ -47,10 +47,12 @@ func BootstrapAdmin(ctx context.Context, db *pgxpool.Pool, w *gitsync.Writer, em
 	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = 'admin.bootstrap')`).Scan(&done); err != nil || done {
 		return false, err
 	}
-	ok, err := SeedAdmin(ctx, w, email)
+	sctx, cancel := context.WithTimeout(ctx, gitWriteTimeout)
+	defer cancel()
+	ok, err := SeedAdmin(sctx, w, email)
 	if err != nil {
 		return false, err // no marker: the next start tries again
 	}
 	// also recorded when admins.yaml already named admins (seeded=false): the first start has happened either way
-	return ok, audit.Log(ctx, db, "bootstrap", "admin.bootstrap", email, map[string]any{"seeded": ok}, "")
+	return ok, audit.Log(context.WithoutCancel(ctx), db, "bootstrap", "admin.bootstrap", email, map[string]any{"seeded": ok}, "")
 }

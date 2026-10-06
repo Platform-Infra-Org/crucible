@@ -99,16 +99,18 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	defer s.mu.Unlock()
 	prev := s.cur.Load()
 
+	pctx, cancel := context.WithTimeout(ctx, repoTimeout)
+	defer cancel()
 	pm := s.mirror(s.PlatformRepo)
-	if err := pm.Fetch(ctx); err != nil {
+	if err := pm.Fetch(pctx); err != nil {
 		return err
 	}
-	psha, err := pm.Resolve(ctx, s.PlatformBranch)
+	psha, err := pm.Resolve(pctx, s.PlatformBranch)
 	if err != nil {
 		return err
 	}
 	pdir := filepath.Join(s.DataDir, "platform", psha)
-	if err := pm.Export(ctx, psha, pdir); err != nil {
+	if err := pm.Export(pctx, psha, pdir); err != nil {
 		return err
 	}
 	plat, err := config.Load(pdir)
@@ -135,42 +137,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	}
 
 	for id, ref := range plat.Trainings {
-		m := s.mirror(ref.Repo)
-		if err := m.Fetch(ctx); err != nil {
-			st.Problems[id] = []content.Problem{{File: ref.Repo, Msg: err.Error()}}
-			s.keepPrevPrograms(st, prev, plat, id)
-			continue
-		}
-		head, err := m.Resolve(ctx, ref.Branch)
-		if err != nil {
-			st.Problems[id] = []content.Problem{{File: ref.Repo, Msg: err.Error()}}
-			s.keepPrevPrograms(st, prev, plat, id)
-			continue
-		}
-		st.Heads[id] = head
-		s.load(ctx, st, prev, m, id, head)
-		for teamID, team := range plat.Teams {
-			p, ok := team.Programs[id]
-			if !ok {
-				continue
-			}
-			key := teamID + "/" + id
-			sha := head
-			if p.PinnedRef != "" {
-				if sha, err = m.Resolve(ctx, p.PinnedRef); err != nil {
-					st.Problems[key] = []content.Problem{{File: "teams/" + teamID + "/programs/" + id + ".yaml", Msg: err.Error()}}
-					if old, ok := prev.programSHA(key); ok {
-						st.ProgramSHAs[key] = old
-					}
-					continue
-				}
-				s.load(ctx, st, prev, m, id, sha)
-			}
-			st.ProgramSHAs[key] = sha
-			if st.Training(id, sha) == nil && prev != nil && prev.Training(id, prev.ProgramSHAs[key]) != nil {
-				st.ProgramSHAs[key] = prev.ProgramSHAs[key] // invalid new version: stay on the last good one
-			}
-		}
+		s.syncTraining(ctx, st, prev, plat, id, ref.Repo, ref.Branch)
 	}
 	if prev != nil && s.OnProblem != nil {
 		for key, probs := range st.Problems {
@@ -181,6 +148,49 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	}
 	s.cur.Store(st)
 	return nil
+}
+
+// syncTraining fetches one training's mirror and loads its head and pinned versions, bounded by repoTimeout so one
+// hung remote can't hold the sync lock (and with it Version, pin checks and the webhook) indefinitely.
+func (s *Syncer) syncTraining(ctx context.Context, st, prev *State, plat *config.Platform, id, repo, branch string) {
+	ctx, cancel := context.WithTimeout(ctx, repoTimeout)
+	defer cancel()
+	m := s.mirror(repo)
+	if err := m.Fetch(ctx); err != nil {
+		st.Problems[id] = []content.Problem{{File: repo, Msg: err.Error()}}
+		s.keepPrevPrograms(st, prev, plat, id)
+		return
+	}
+	head, err := m.Resolve(ctx, branch)
+	if err != nil {
+		st.Problems[id] = []content.Problem{{File: repo, Msg: err.Error()}}
+		s.keepPrevPrograms(st, prev, plat, id)
+		return
+	}
+	st.Heads[id] = head
+	s.load(ctx, st, prev, m, id, head)
+	for teamID, team := range plat.Teams {
+		p, ok := team.Programs[id]
+		if !ok {
+			continue
+		}
+		key := teamID + "/" + id
+		sha := head
+		if p.PinnedRef != "" {
+			if sha, err = m.Resolve(ctx, p.PinnedRef); err != nil {
+				st.Problems[key] = []content.Problem{{File: "teams/" + teamID + "/programs/" + id + ".yaml", Msg: err.Error()}}
+				if old, ok := prev.programSHA(key); ok {
+					st.ProgramSHAs[key] = old
+				}
+				continue
+			}
+			s.load(ctx, st, prev, m, id, sha)
+		}
+		st.ProgramSHAs[key] = sha
+		if st.Training(id, sha) == nil && prev != nil && prev.Training(id, prev.ProgramSHAs[key]) != nil {
+			st.ProgramSHAs[key] = prev.ProgramSHAs[key] // invalid new version: stay on the last good one
+		}
+	}
 }
 
 func (s *Syncer) keepPrevPrograms(st, prev *State, plat *config.Platform, id string) {
@@ -252,7 +262,11 @@ func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training 
 	}
 	next := *cur
 	next.Trainings, next.Problems, next.validated = maps.Clone(cur.Trainings), maps.Clone(cur.Problems), maps.Clone(cur.validated)
-	s.load(ctx, &next, cur, s.mirror(ref.Repo), id, sha)
+	// ponytail: exported under the sync lock (load and store must see one state), bounded by gitTimeout; export
+	// outside the lock and merge if a slow archive ever stalls syncs.
+	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	s.load(gctx, &next, cur, s.mirror(ref.Repo), id, sha)
 	s.cur.Store(&next)
 	return next.Training(id, sha)
 }
@@ -279,8 +293,9 @@ func (s *Syncer) trainingMirror(training string) (Mirror, error) {
 }
 
 const (
-	maxCommits = 50
-	gitTimeout = 30 * time.Second
+	maxCommits  = 50
+	gitTimeout  = 30 * time.Second
+	repoTimeout = 2 * time.Minute // one repo's fetch and exports in a sync
 )
 
 // gitErr tells a git that could not run (timeout, cancelled, not started) from one that answered no (unknown object,

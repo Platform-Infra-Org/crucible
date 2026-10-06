@@ -87,12 +87,15 @@ func run(ctx context.Context) error {
 		Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	if email := strings.ToLower(strings.TrimSpace(os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))); email != "" {
 		// Once per deployment, only while admins.yaml names no admin; sign-in still needs the IdP to verify this email.
-		if ok, err := configapi.BootstrapAdmin(ctx, pool, writer, email); err != nil {
-			slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
-		} else if ok {
-			slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
-			_ = syncer.SyncOnce(ctx)
-		}
+		// In the background (bounded by its own git timeout) so a slow remote never keeps the server from listening.
+		go func() {
+			if ok, err := configapi.BootstrapAdmin(ctx, pool, writer, email); err != nil {
+				slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
+			} else if ok {
+				slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
+				_ = syncer.SyncOnce(ctx)
+			}
+		}()
 	}
 	every, err := time.ParseDuration(env("CRUCIBLE_SYNC_INTERVAL", "60s"))
 	if err != nil {

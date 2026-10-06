@@ -165,7 +165,7 @@ M5 and M6 are planned but not built at the time of writing. This plan builds on 
    - two progress writes land at once;
    - a trainee has no enrolments, or only unavailable content.
 
-   Expected: the rank never drops, the % is shown honestly, exactly one rank-up notification and one unseen animation per level crossed, Ore at 0% with no division by zero, and no notification goes to a team webhook. Pinned by `TestRankIsNeverLost`, `TestRankUpNotifiesOnceTraineeAndMentor`, `TestForgeWithNoEnrolments` (Task 4) and `TestRankLadderFromConfig` (Task 1).
+   Expected: the rank never drops, the % is shown honestly, exactly one rank-up notification and one unseen animation per rank raise, naming the top rank crossed (one notice even when a single update crosses several levels), Ore at 0% with no division by zero, and no notification goes to a team webhook. Pinned by `TestRankIsNeverLost`, `TestRankUpNotifiesOnceTraineeAndMentor`, `TestForgeWithNoEnrolments` (Task 4) and `TestRankLadderFromConfig` (Task 1).
 4. **An extension request decided by the wrong person or at the wrong time:**
    - the requester approves their own;
    - two approvers press at once;

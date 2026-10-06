@@ -300,6 +300,9 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 	return v, nil
 }
 
+// gitWriteTimeout bounds one config commit and push (and the startup bootstrap seed).
+const gitWriteTimeout = 2 * time.Minute
+
 // write commits one change, records it in the audit log with its commit, and re-reads git. A change that alters
 // nothing makes no commit and no audit entry, and returns the current sha.
 func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, auditAction, target string, detail map[string]any) (string, error) {
@@ -307,7 +310,12 @@ func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, au
 		return "", apperr.Wrap(apperr.Invalid, "base_sha is required")
 	}
 	ch.Actor = u.Email
-	sha, changed, err := s.Writer.Apply(ctx, ch)
+	// A hung remote must not hold the Writer for as long as the client waits, and a client that leaves after the push
+	// landed must not cost the audit row (as edits.decide does).
+	ctx = context.WithoutCancel(ctx)
+	wctx, cancel := context.WithTimeout(ctx, gitWriteTimeout)
+	defer cancel()
+	sha, changed, err := s.Writer.Apply(wctx, ch)
 	if err != nil || !changed {
 		return sha, err
 	}

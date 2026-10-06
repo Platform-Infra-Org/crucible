@@ -12,7 +12,7 @@ Detailed task-by-task plans exist for **M1** and **M2**. M3–M7 get their own p
 | **M2** | **AWS Deploy**: single-node k3s on EC2 (~$50/month on schedule); Cognito sign-in; S3 backups and restore; scheduled sleep/wake; `crucible aws` CLI | `2026-10-05-m2-aws-deploy.md` (6 tasks) | Sandbox acceptance A1–A6: live HTTPS URL, sleep/wake, teardown → rebuild restores data |
 | M3 | **Approvals & FinOps core**: River job queue; lab request → cost-tiered approval → escalation after 4 business hours; schedules (lab windows + effective end); budgets and hard caps; kill switch; email + Slack/Teams notifications; config write-back to the platform repo (program roles, schedules) | `2026-10-06-m3-approvals-finops.md` (12 tasks) | A cloud-tier request needs an approver, escalates when ignored, is blocked over the cap; labs die at window close |
 | M4 | **Cluster runtime**: sysbox on k3s; namespace per lab with quota and default-deny NetworkPolicy (blocks IMDS); exec-based PTYs and tamper-proof checks | `2026-10-06-m4-cluster-runtime.md` (9 tasks) | Forge 101's lab runs with `runtime: cluster` and checks are not self-reported |
-| M5 | **Human scoring**: text/upload/sign-off questions; review tasks; Anvil scoring queue with rubric, feedback, return-for-rework, audited overrides; terminal transcripts; S3 uploads | written at M5 start | A scorer grades a free-text answer and a lab submission; the trainee sees the feedback |
+| M5 | **Human scoring**: text/upload/sign-off questions; review tasks; Anvil scoring queue with rubric, feedback, return-for-rework, audited overrides; terminal transcripts; S3 uploads (local disk in dev); progression waits on pending scores; Forge 301 fixture | `2026-10-06-m5-human-scoring.md` (11 tasks) | A scorer grades a free-text answer and a lab submission; the trainee sees the feedback |
 | M6 | **AWS labs & Ledger**: shared lab account roles with permission boundary + session tags; terraform runner Jobs + workspace pod; infracost estimates; nightly reaper; Cost Explorer ingestion; FinOps dashboard | written at M6 start | An AWS lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger |
 | M7 | **Forge & people**: forge ranks (Ore → Masterwork) and badges; mentor dashboard; journey heat map with stuck signals; in-app content edit + maintainer review; `crucible preview`; Forge Status page; motion polish | written at M7 start | Release candidate: every spec section is checked off in the coverage table below |
 
@@ -28,7 +28,7 @@ Detailed task-by-task plans exist for **M1** and **M2**. M3–M7 get their own p
 | §6 Git sync, last-good fallback, lint | M1; UI content edits + review and `preview` in M7 |
 | §7 Reading, instant quizzes, progression | M1; human scoring in M5; forge ranks in M7 |
 | §8.1 Lifecycle | M1 (provisioning → ready → destroyed); approval states in M3 |
-| §8.2 Runtimes | `local` in M1, `cluster` in M4, `aws` in M6 |
+| §8.2 Runtimes | `local` in M1, `cluster` in M4, `aws` in M6; "require human review for self-reported results" deferred from M5 to the M7 coverage pass |
 | §8.3 Lab UI | M1 |
 | §8.4 Hints | M1 |
 | §8.5 Task setup scripts | M1 (maintainer notification in M3) |

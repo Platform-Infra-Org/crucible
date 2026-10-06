@@ -716,8 +716,10 @@ var (
 const (
 	maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
 	maxTFFileBytes = 128 << 10
-	maxTFDepth     = 64 // HCL's parsers recurse per nesting level; deep input overflows the stack (a fatal error)
-	maxTFOpeners   = 20000
+	maxTFDepth     = 64    // HCL's parsers recurse per nesting level; deep input overflows the stack (a fatal error)
+	maxTFOpeners   = 4000  // splats and calls recurse too; a lab module needs a few hundred at most
+	maxTFTokens    = 50000 // bounds all parser work per file; real lab files are a few thousand tokens
+	maxTFUnaryRun  = 64    // !!!… and ---… recurse once per operator with no bracket to count
 	maxTFFiles     = 200
 )
 
@@ -994,7 +996,15 @@ func tfShape(b []byte, isJSON bool) string {
 		isCloser[c] = true
 	}
 	var stack []hclsyntax.TokenType // expected closers, innermost last
+	run := 0                        // consecutive ! and - tokens
 	for _, t := range toks {
+		if t.Type == hclsyntax.TokenBang || t.Type == hclsyntax.TokenMinus {
+			if run++; run > maxTFUnaryRun {
+				return fmt.Sprintf("too many operators in a row at line %d (keep it under %d)", t.Range.Start.Line, maxTFUnaryRun)
+			}
+		} else {
+			run = 0
+		}
 		if c, ok := closes[t.Type]; ok {
 			stack = append(stack, c)
 			open()
@@ -1011,6 +1021,9 @@ func tfShape(b []byte, isJSON bool) string {
 	}
 	if len(stack) > 0 {
 		return "unbalanced brackets: unclosed at end of file"
+	}
+	if len(toks) > maxTFTokens { // checked last so the specific problems above win; lexing is bounded by the size cap
+		return fmt.Sprintf("too many tokens (%d; keep it under %d)", len(toks), maxTFTokens)
 	}
 	return ""
 }

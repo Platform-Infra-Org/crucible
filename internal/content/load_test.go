@@ -427,6 +427,11 @@ func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
 		// HCL's JSON scanner accepts 01 and keeps going where encoding/json stopped
 		"lenient json":    {"d.tf.json", `{"a": 01, "b": ` + strings.Repeat("[", 131000) + "}", "invalid JSON"},
 		"two json values": {"d.tf.json", `{} {}`, "invalid JSON"},
+		// fix round 4: unary operators recurse in the parser without any bracket to count
+		"bang chain":  {"d.tf", "x = " + strings.Repeat("!", 130000) + "true\n", "operators in a row"},
+		"minus chain": {"d.tf", "x = " + strings.Repeat("-", 130000) + "1\n", "operators in a row"},
+		"splat chain": {"d.tf", "x = a" + strings.Repeat("[*]", 19990) + "\n", "brackets"},
+		"token flood": {"d.tf", "x = [" + strings.Repeat("1,", 60000) + "]\n", "tokens"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

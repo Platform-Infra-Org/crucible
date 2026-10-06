@@ -187,7 +187,6 @@ func spa(dir string) http.HandlerFunc {
 	}
 }
 
-// canScore: admins, and anyone listed as a scorer of some program (the Anvil link in the nav).
 // isMentor: someone in team.yaml mentors a trainee (spec §11); they get the mentor dashboard.
 func isMentor(p *config.Platform, email string) bool {
 	for _, t := range p.Teams {
@@ -200,6 +199,7 @@ func isMentor(p *config.Platform, email string) bool {
 	return false
 }
 
+// canScore: admins, and anyone listed as a scorer of some program (the Anvil link in the nav).
 func canScore(p *config.Platform, email string) bool {
 	if (rbac.Checker{P: p}).IsAdmin(email) {
 		return true

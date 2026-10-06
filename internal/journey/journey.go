@@ -84,9 +84,8 @@ type Mentee struct {
 type want struct{ training, email string }
 
 type person struct {
-	id      int64
-	name    string
-	created time.Time
+	id   int64
+	name string
 }
 
 func (s *Service) state() (*gitsync.State, error) {
@@ -130,7 +129,7 @@ func (s *Service) people(ctx context.Context, ws []want) (map[string]person, err
 	for _, w := range ws {
 		emails = append(emails, w.email)
 	}
-	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (email) email, id, name, created_at FROM users
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (email) email, id, name FROM users
 		WHERE email = ANY($1) ORDER BY email, id DESC`, emails)
 	if err != nil {
 		return nil, err
@@ -138,7 +137,7 @@ func (s *Service) people(ctx context.Context, ws []want) (map[string]person, err
 	out := map[string]person{}
 	var e string
 	var p person
-	_, err = pgx.ForEachRow(rows, []any{&e, &p.id, &p.name, &p.created}, func() error { out[e] = p; return nil })
+	_, err = pgx.ForEachRow(rows, []any{&e, &p.id, &p.name}, func() error { out[e] = p; return nil })
 	return out, err
 }
 
@@ -195,12 +194,13 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, team string, ws [
 		r.Percent = sd.Percent
 		r.Flags = append(r.Flags, sig.flags[k]...)
 		r.LastActive = sig.last[k]
-		since := p.created
-		if r.LastActive != nil {
-			since = *r.LastActive
-		}
-		if n := BusinessDays(since, s.Now()); sd.Percent < 100 && n >= 5 {
-			r.Flags = append(r.Flags, inactive(n, r.LastActive))
+		// Enrolment time is not stored, so with no activity the honest statement is "not started", not a day count.
+		if sd.Percent < 100 && !sig.wait[k] {
+			if r.LastActive == nil {
+				r.Flags = append(r.Flags, notStarted())
+			} else if n := BusinessDays(*r.LastActive, s.Now()); n >= 5 {
+				r.Flags = append(r.Flags, inactive(n, r.LastActive))
+			}
 		}
 		out = append(out, r)
 	}

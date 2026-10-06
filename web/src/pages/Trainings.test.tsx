@@ -1,0 +1,28 @@
+import { describe, expect, test, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
+import { TrainingsPage } from './Trainings'
+import type { CatalogEntry } from '../types'
+
+let data: CatalogEntry[] = []
+vi.mock('../useFetch', () => ({ useFetch: () => ({ data, error: undefined }) }))
+
+const entry: CatalogEntry = { id: 'forge-101', title: 'Forge 101', description: '', estimated_hours: 2, modules: 3, enrolled: [{ id: 'forge', name: 'Forge' }], available: true }
+const html = () => renderToStaticMarkup(<MemoryRouter><TrainingsPage /></MemoryRouter>)
+
+describe('Trainings catalog', () => {
+  test('empty state', () => {
+    data = []
+    expect(html()).toContain('No trainings are available yet.')
+  })
+  test('an available training links to its program', () => {
+    data = [entry]
+    expect(html()).toContain('href="/p/forge/forge-101"')
+  })
+  test('unavailable content shows a notice and no link', () => {
+    data = [{ ...entry, available: false }]
+    const h = html()
+    expect(h).toContain('Content unavailable right now')
+    expect(h).not.toContain('href=')
+  })
+})

@@ -103,6 +103,19 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Override(r.Context(), user(r), n, body.Task, *body.Points, body.Reason)
 		reply(w, v, err)
 	})
+	r.Post("/api/anvil/{id}/reset", func(w http.ResponseWriter, r *http.Request) {
+		var in ResetInput
+		n, err := id(r)
+		if err == nil {
+			err = httpx.Read(r, &in)
+		}
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.Reset(r.Context(), user(r), n, in)
+		replyScorer(w, v, err)
+	})
 	r.Get("/api/submissions/{id}/files/{n}", func(w http.ResponseWriter, r *http.Request) {
 		sid, err := id(r)
 		if err != nil {

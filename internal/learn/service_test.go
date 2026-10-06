@@ -97,3 +97,21 @@ func TestNotEnrolledIsForbidden(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestFreeProgressionNeverLocks(t *testing.T) {
+	ctx := context.Background()
+	s, u, _ := fixture(t)
+	s.State().Trainings["forge-101@abc"].Progression = "free"
+	o, err := s.Outline(ctx, u, "forge", "forge-101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range o.Modules {
+		if m.Locked {
+			t.Fatalf("free progression locked %s", m.ID)
+		}
+	}
+	if _, _, err := s.Reading(ctx, u, "forge", "forge-101", "02-first-lab", "before-the-lab"); err != nil {
+		t.Fatalf("module 2 must open without module 1: %v", err)
+	}
+}

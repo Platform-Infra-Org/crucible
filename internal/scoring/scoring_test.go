@@ -430,3 +430,33 @@ func TestStatusAndKindAreConstrained(t *testing.T) {
 		}
 	}
 }
+
+func TestAdminResetIsAdminOnlyAuditedAndTellsTheTrainee(t *testing.T) {
+	ctx := context.Background()
+	f := fixture(t)
+	sub := f.submitText(t)
+	if _, err := f.s.Score(ctx, f.senior, sub.ID, 4, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	in := ResetInput{Reason: "rubric was wrong", Score: true}
+	for _, u := range []*auth.User{f.senior, f.leader, f.trainee} {
+		if _, err := f.s.Reset(ctx, u, sub.ID, in); !errors.Is(err, apperr.Forbidden) {
+			t.Fatalf("%s: %v", u.Email, err)
+		}
+	}
+	got, err := f.s.Reset(ctx, f.admin, sub.ID, in)
+	if err != nil || got.Status != Pending || got.Points != 0 {
+		t.Fatalf("reset: %+v %v", got, err)
+	}
+	if ev := f.notes.last(notify.SubmissionScored); ev == nil || ev.To[0] != "trainee@crucible.local" || !strings.Contains(ev.Text, "rubric was wrong") || ev.Team != "" {
+		t.Fatalf("the trainee is told by email only: %+v", ev)
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'submission.reset' AND actor = 'admin@crucible.local'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("audit entries: %d", n)
+	}
+	if again, err := f.s.Score(ctx, f.senior, sub.ID, 5, "redo"); err != nil || again.Points != 5 {
+		t.Fatalf("a reopened submission can be scored again: %+v %v", again, err)
+	}
+}

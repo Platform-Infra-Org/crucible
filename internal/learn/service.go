@@ -586,6 +586,32 @@ func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
 	return err
 }
 
+// Reset implements the admin reset (scoring.resetter): recompute the quiz item and write it exactly, even downwards.
+// Ranks are untouched: UpdateForge only raises them.
+func (s *Service) Reset(ctx context.Context, sub *scoring.Submission) error {
+	st, err := s.state()
+	if err != nil {
+		return err
+	}
+	t, _ := st.ProgramTraining(sub.Team, sub.Training)
+	if t == nil || t.Module(sub.Module) == nil {
+		t = s.Version(ctx, sub.Training, sub.SHA)
+	}
+	if t == nil || t.Module(sub.Module) == nil {
+		return apperr.Wrap(apperr.Unavailable, "this training's content is unavailable right now")
+	}
+	status, pct, err := s.refreshQuiz(ctx, sub.UserID, sub.Team, t, sub.Module) // creates the row if missing
+	if err != nil {
+		return err
+	}
+	if _, err := s.DB.Exec(ctx, `UPDATE item_progress SET status = $6, score = $7, updated_at = now()
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 AND item = $5`, sub.UserID, sub.Team, t.ID, sub.Module, "quiz", status, pct); err != nil {
+		return err
+	}
+	s.afterWrite(ctx, sub.UserID)
+	return nil
+}
+
 // ForceScore sets an item's score exactly. SetItem only ever raises it; an override may lower it (labs).
 func (s *Service) ForceScore(ctx context.Context, userID int64, team, training, module, item string, score float64) error {
 	_, err := s.DB.Exec(ctx, `UPDATE item_progress SET score = $6, updated_at = now()

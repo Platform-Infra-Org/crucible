@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/netip"
 	"net/smtp"
 	"net/textproto"
@@ -250,7 +251,11 @@ func (s *Service) sendEmail(a EmailArgs) error {
 		host, _, _ := net.SplitHostPort(s.SMTP.Addr)
 		auth = smtp.PlainAuth("", s.SMTP.Username, s.SMTP.Password, host) // net/smtp refuses PLAIN without TLS except on localhost
 	}
-	err := smtp.SendMail(s.SMTP.Addr, auth, s.SMTP.From, []string{a.To}, []byte(msg))
+	from := s.SMTP.From // the envelope sender is the bare address; From: may be "Name <addr>"
+	if p, perr := mail.ParseAddress(from); perr == nil {
+		from = p.Address
+	}
+	err := smtp.SendMail(s.SMTP.Addr, auth, from, []string{a.To}, []byte(msg))
 	var te *textproto.Error
 	if errors.As(err, &te) && te.Code >= 500 {
 		return river.JobCancel(err) // permanent rejection (bad recipient, auth): retrying only repeats it

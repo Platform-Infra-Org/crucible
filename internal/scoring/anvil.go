@@ -16,6 +16,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/audit"
 	"crucible/internal/auth"
+	"crucible/internal/notify"
 	"crucible/internal/rbac"
 )
 
@@ -243,4 +244,92 @@ func (s *Service) File(ctx context.Context, u *auth.User, id int64, n int) (io.R
 		return nil, "", fmt.Errorf("opening %s: %w", sub.Files[n].Name, err)
 	}
 	return rc, sub.Files[n].Name, nil
+}
+
+// ResetInput says what an admin clears for one trainee's quiz item: instant attempts, a final human score, or both.
+type ResetInput struct {
+	Reason   string `json:"reason"`
+	Attempts bool   `json:"attempts"`
+	Score    bool   `json:"score"`
+}
+
+// resetter is implemented by *learn.Service: it recomputes the item and may lower it (SetItem only ever raises).
+type resetter interface {
+	Reset(ctx context.Context, sub *Submission) error
+}
+
+// Reset is the admin escape hatch for "scores are final" (spec §7): it clears the trainee's instant quiz attempts for
+// the submission's module and/or reopens the scored submission for scoring, audited in the same transaction, and
+// tells the trainee. Admin only (spec §5.3: nobody else holds a power over another person's final score). Forge
+// ranks are never lowered: UpdateForge only raises them.
+func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInput) (*Submission, error) {
+	c, _, err := s.checker()
+	if err != nil {
+		return nil, err
+	}
+	if !c.IsAdmin(u.Email) {
+		return nil, apperr.Wrap(apperr.Forbidden, "only an admin can reset a trainee's item")
+	}
+	reason := Clean(strings.TrimSpace(in.Reason))
+	switch {
+	case reason == "":
+		return nil, apperr.Wrap(apperr.Invalid, "a reset needs a reason")
+	case utf8.RuneCountInString(reason) > 500:
+		return nil, apperr.Wrap(apperr.Invalid, "keep the reason under 500 characters")
+	case !in.Attempts && !in.Score:
+		return nil, apperr.Wrap(apperr.Invalid, "choose what to reset")
+	}
+	sub, err := s.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if sub.Kind != KindQuestion {
+		return nil, apperr.Wrap(apperr.Conflict, "only quiz items can be reset")
+	}
+	if in.Score && sub.Status != Scored {
+		return nil, apperr.Wrap(apperr.Conflict, "only a scored submission can be reopened")
+	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	var cleared int64
+	if in.Attempts {
+		tag, err := tx.Exec(ctx, `DELETE FROM quiz_attempts WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`,
+			sub.UserID, sub.Team, sub.Training, sub.Module)
+		if err != nil {
+			return nil, err
+		}
+		cleared = tag.RowsAffected()
+	}
+	if in.Score {
+		tag, err := tx.Exec(ctx, `UPDATE submissions SET status = 'pending', points = 0, scored_by = '', scored_at = NULL WHERE id = $1 AND status = 'scored'`, id)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, apperr.Wrap(apperr.Conflict, "this submission changed, reload it")
+		}
+	}
+	if err := audit.Log(ctx, tx, u.Email, "submission.reset", fmt.Sprintf("submission/%d", id), map[string]any{"trainee": sub.Email,
+		"item": sub.Team + "/" + sub.Training + "/" + sub.Module + "/" + sub.Item, "attempts_cleared": cleared, "score_reopened": in.Score,
+		"previous_points": sub.Points, "reason": reason}, ""); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if in.Score {
+		sub.Status, sub.Points, sub.ScoredBy, sub.ScoredAt = Pending, 0, "", nil
+	}
+	if r, ok := s.Quiz.(resetter); ok {
+		if err := r.Reset(ctx, sub); err != nil { // stored and audited: the next scoring decision recomputes anyway
+			s.log().Error("recomputing progress after a reset failed", "submission", sub.ID, "err", err)
+		}
+	}
+	s.send(ctx, notify.Event{Kind: notify.SubmissionScored, To: []string{sub.Email}, Subject: "Reset by an admin: " + sub.Training,
+		Text: fmt.Sprintf("An admin reset your quiz item %q (%s / %s). Reason: %s", short(sub.Prompt), sub.Training, sub.Module, reason),
+		Link: fmt.Sprintf("/p/%s/%s/m/%s/quiz", sub.Team, sub.Training, sub.Module)})
+	return sub, nil
 }

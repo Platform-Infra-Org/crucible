@@ -11,18 +11,20 @@ export function TrainingsPage() {
   return (
     <section className="page">
       <h1>Trainings</h1>
+      {data.length === 0 && <p className="muted">No trainings are available yet.</p>}
       <div className="cards">
         {data.map((c) => (
           <article key={c.id} className="card" data-testid={`catalog-${c.id}`}>
             <h2>{c.title}</h2>
             {c.description && <p>{c.description}</p>}
-            <p className="muted">
+            {!c.available && <p className="warn">Content unavailable right now</p>}
+            {c.available && <p className="muted">
               {c.estimated_hours > 0 && <>≈ {c.estimated_hours} h · </>}
               {c.modules} {c.modules === 1 ? 'module' : 'modules'}
-            </p>
-            {c.enrolled.length > 0
+            </p>}
+            {c.available && (c.enrolled.length > 0
               ? c.enrolled.map((t) => <p key={t.id}><Link to={`/p/${t.id}/${c.id}`}>Open ({t.name})</Link></p>)
-              : <p className="muted">Ask your team leader to enrol you.</p>}
+              : <p className="muted">Ask your team leader to enrol you.</p>)}
           </article>
         ))}
       </div>

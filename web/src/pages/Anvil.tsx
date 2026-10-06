@@ -7,6 +7,7 @@ import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { TranscriptView } from '../components/Transcript'
 import { toast } from '../lib/alerts'
+import { useMe } from '../me'
 
 const typeLabel: Record<SubmissionType, string> = { text: 'Written answer', upload: 'Upload', signoff: 'Live sign-off', review: 'Lab review', self_reported: 'Self-reported lab' }
 const kb = (n: number) => (n < 1024 ? `${n} B` : `${Math.ceil(n / 1024)} KiB`)
@@ -94,6 +95,7 @@ export function AnvilDetailPage() {
   const [points, setPoints] = useState('')
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState(false)
+  const { me } = useMe()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Laying the piece on the anvil…" />
   const s = data.submission
@@ -159,6 +161,7 @@ export function AnvilDetailPage() {
       ) : (
         <p className="muted">Already {s.status}{s.scored_by ? ` by ${s.scored_by}` : ''}.</p>
       )}
+      {me.is_admin && s.kind === 'question' && <ResetPanel s={s} onDone={reload} />}
     </section>
   )
 }
@@ -225,6 +228,42 @@ function TaskEvidenceView({ id, t, onChange }: { id: number; t: TaskEvidence; on
           <button className="ghost" disabled={busy || !reason.trim() || !validPoints(points, t.points)} onClick={override}>Override</button>
         </div>
       )}
+    </section>
+  )
+}
+
+// Admin escape hatch for "scores are final": clear the trainee's quiz attempts and/or reopen this scored answer.
+function ResetPanel({ s, onDone }: { s: Submission; onDone: () => void }) {
+  const [attempts, setAttempts] = useState(false)
+  const [score, setScore] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const go = async () => {
+    setBusy(true)
+    try {
+      await api(`/api/anvil/${s.id}/reset`, { method: 'POST', json: { attempts, score, reason } })
+      toast('Reset and audited. The trainee has been told.')
+      setAttempts(false); setScore(false); setReason('')
+      onDone()
+    } catch (e) {
+      toast((e as Error).message)
+      if (lostRace(e)) onDone()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="card" aria-label="Admin reset">
+      <h2>Reset (admin)</h2>
+      <p className="muted">Forge ranks are never lowered by a reset.</p>
+      <div className="row">
+        <label><input type="checkbox" checked={attempts} onChange={(e) => setAttempts(e.target.checked)} /> Clear this module&apos;s quiz attempts</label>
+        <label><input type="checkbox" checked={score} disabled={s.status !== 'scored'} onChange={(e) => setScore(e.target.checked)} /> Reopen this score</label>
+      </div>
+      <div className="row">
+        <label>Reason <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>
+        <button className="ghost" disabled={busy || !reason.trim() || (!attempts && !score)} onClick={go}>Reset</button>
+      </div>
     </section>
   )
 }

@@ -239,3 +239,73 @@ func TestAnswerChecksEnrolmentBeforeReadingTheBody(t *testing.T) {
 		t.Fatalf("not enrolled: %d", w.Code)
 	}
 }
+
+// An admin reset lowers the item, reopens the score and keeps the forge rank (spec §7: ranks are never lost).
+func TestAdminResetRecomputesProgressAndKeepsRank(t *testing.T) {
+	ctx := context.Background()
+	s, sc, u, senior := fixture301(t)
+	admin, _ := auth.Store{DB: s.DB}.UpsertUser(ctx, "s9", "admin@crucible.local", "Ada")
+	quiz := s.State().Trainings["forge-301@abc"].Module(temper).Quiz
+	if _, err := s.SubmitQuiz(ctx, u, team, f301, temper, asPublic(quiz, s.seedFor(u.ID, team, f301, temper), map[string]json.RawMessage{"q-quench": raw("0")})); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.AnswerHuman(ctx, u, team, f301, temper, "q-why", "Quenched steel is brittle; tempering makes it tough.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := submissionIDs(v)["q-why"]
+	if v, err = s.AnswerHuman(ctx, u, team, f301, temper, "q-log", "https://logs.example.com/run/42", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		id int64
+		p  float64
+	}{{id, 5}, {submissionIDs(v)["q-log"], 2}} {
+		if _, err := sc.Score(ctx, senior, x.id, x.p, "good"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sc.SignOff(ctx, senior, scoring.SignOffInput{Team: team, Training: f301, Module: temper, Question: "q-demo", Trainee: u.Email}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.Standing(ctx, u.ID, team, f301)
+	f0, err := s.UpdateForge(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Percent == 0 {
+		t.Fatalf("expected progress before the reset: %+v", before)
+	}
+	if _, err := sc.Reset(ctx, senior, id, scoring.ResetInput{Reason: "x", Score: true}); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("a scorer may not reset: %v", err)
+	}
+	if _, err := sc.Reset(ctx, admin, id, scoring.ResetInput{Score: true}); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("a reason is required: %v", err)
+	}
+	if _, err := sc.Reset(ctx, admin, id, scoring.ResetInput{Reason: "rubric changed", Attempts: true, Score: true}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.Standing(ctx, u.ID, team, f301)
+	if after.Percent >= before.Percent || after.Status[temper+"/quiz"] == "complete" {
+		t.Fatalf("progress must drop: before %d after %+v", before.Percent, after)
+	}
+	var n int
+	_ = s.DB.QueryRow(ctx, `SELECT count(*) FROM quiz_attempts WHERE user_id = $1`, u.ID).Scan(&n)
+	var st string
+	_ = s.DB.QueryRow(ctx, `SELECT status FROM submissions WHERE id = $1`, id).Scan(&st)
+	var audits int
+	_ = s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'submission.reset' AND detail->>'reason' = 'rubric changed'`).Scan(&audits)
+	if n != 0 || st != "pending" || audits != 1 {
+		t.Fatalf("attempts %d, status %s, audits %d", n, st, audits)
+	}
+	if _, err := sc.Reset(ctx, admin, id, scoring.ResetInput{Reason: "again", Score: true}); !errors.Is(err, apperr.Conflict) {
+		t.Fatalf("a pending submission cannot be reopened: %v", err)
+	}
+	f, err := s.UpdateForge(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Level != f0.Level || f.Percent >= f0.Percent {
+		t.Fatalf("percent drops, the rank stays: before %+v after %+v", f0, f)
+	}
+}

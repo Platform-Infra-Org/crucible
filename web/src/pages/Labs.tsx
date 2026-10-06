@@ -22,7 +22,7 @@ export function LabsPage() {
               <tr key={l.id}>
                 <td>{l.title}</td>
                 <td>{l.training}</td>
-                <td><span className="badge">{l.state.replace('_', ' ')}</span></td>
+                <td><span className="badge">{l.state.replaceAll('_', ' ')}</span></td>
                 <td>{when(l.created_at)}</td>
                 <td>{l.ends_at && active.includes(l.state) ? when(l.ends_at) : ''}</td>
                 <td><Link to={l.link}>Open</Link></td>

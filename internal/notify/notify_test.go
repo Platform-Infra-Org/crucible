@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 	"crucible/internal/auth"
 	"crucible/internal/config"
+	"crucible/internal/content"
 	"crucible/internal/db/dbtest"
 	"crucible/internal/gitsync"
 	"crucible/internal/jobs"
@@ -212,5 +214,85 @@ func TestSlackEscapesControlSequences(t *testing.T) {
 	}
 	if got["text"] != "&lt;!channel&gt; a&amp;b" {
 		t.Fatalf("text %v", got["text"])
+	}
+}
+
+func TestSMTPEnvelopeSenderIsTheBareAddress(t *testing.T) {
+	var mail string
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		tp := textproto.NewConn(c)
+		_ = tp.PrintfLine("220 fake ESMTP")
+		for {
+			line, err := tp.ReadLine()
+			if err != nil {
+				return
+			}
+			switch strings.ToUpper(strings.Fields(line + " x")[0]) {
+			case "MAIL":
+				mail = line
+				_ = tp.PrintfLine("250 ok")
+			case "DATA":
+				_ = tp.PrintfLine("354 go ahead")
+				_, _ = tp.ReadDotBytes()
+				_ = tp.PrintfLine("250 ok")
+			case "QUIT":
+				_ = tp.PrintfLine("221 bye")
+				return
+			case "EHLO", "HELO":
+				_ = tp.PrintfLine("250 fake")
+			default:
+				_ = tp.PrintfLine("250 ok")
+			}
+		}
+	}()
+	s := &Service{SMTP: SMTPConfig{Addr: ln.Addr().String(), From: `"Crucible, Forge" <crucible@example.com>`}}
+	if err := s.sendEmail(EmailArgs{To: "t@crucible.local", Subject: "x", Body: "y"}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if !strings.Contains(mail, "<crucible@example.com>") || strings.Contains(mail, "Forge") {
+		t.Fatalf("MAIL FROM must carry only the address: %q", mail)
+	}
+}
+
+func TestSyncProblemReachesMaintainersAndAdmins(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.New(t)
+	plat, _ := config.Load("../../examples/platform")
+	plat.Admins = []string{"admin@crucible.local"}
+	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"forge-101@abc": {ID: "forge-101", Maintainers: []string{"maint@crucible.local"}}}}
+	s := &Service{DB: pool, State: func() *gitsync.State { return st }, PublicURL: "https://crucible.example",
+		SMTP: SMTPConfig{Addr: "127.0.0.1:1", From: "c@x"}, Log: slog.Default()}
+	workers := river.NewWorkers()
+	river.AddWorker(workers, &EmailWorker{S: s})
+	client, err := jobs.New(pool, workers, nil, slog.Default()) // never started: insert only
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Jobs = client
+	s.ReportSyncProblem(ctx, "forge-101@def", []content.Problem{{File: "training.yaml", Msg: "bad"}})
+	rows, _ := pool.Query(ctx, `SELECT args FROM river_job WHERE kind = 'notify_email'`)
+	defer rows.Close()
+	var to []string
+	for rows.Next() {
+		var args map[string]any
+		_ = rows.Scan(&args)
+		to = append(to, anyStr(args["to"]))
+	}
+	slices.Sort(to)
+	if strings.Join(to, ",") != "admin@crucible.local,maint@crucible.local" {
+		t.Fatalf("recipients %v", to)
 	}
 }

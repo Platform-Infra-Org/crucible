@@ -99,8 +99,12 @@ func (f *Fake) Tagged(_ context.Context, region, labID string) ([]Resource, erro
 	}
 	var out []Resource
 	for _, x := range f.resources {
-		if x.region == region && (labID == "" || x.r.LabID == labID) {
-			out = append(out, x.r)
+		r := x.r
+		if id, ok := bucketLab(r.ARN); ok { // like Client: a lab bucket belongs to the lab its name says
+			r.LabID = id
+		}
+		if x.region == region && (labID == "" || r.LabID == labID) {
+			out = append(out, r)
 		}
 	}
 	slices.SortFunc(out, func(a, b Resource) int { return strings.Compare(a.ARN, b.ARN) })
@@ -120,7 +124,11 @@ func (f *Fake) Delete(_ context.Context, region string, c Credentials, arn strin
 	if !ok || x.region != region {
 		return false, nil
 	}
-	if c.SessionToken != token(x.r.LabID) {
+	owner := x.r.LabID
+	if id, ok := bucketLab(arn); ok {
+		owner = id
+	}
+	if c.SessionToken != token(owner) {
 		return false, errors.New("AccessDenied: not this lab's resource")
 	}
 	if f.notYet[arn] > 0 {

@@ -82,6 +82,19 @@ func ValidLabID(id string) bool { return labIDRe.MatchString(id) }
 
 func SessionName(labID string) string { return "crucible-lab-" + labID }
 
+// BucketPrefix starts every lab bucket's name (the lab role may only touch crucible-lab-<id>*).
+const BucketPrefix = "crucible-lab-"
+
+// bucketLab is the lab a bucket belongs to by name ("" when the name is not a lab bucket's). A bucket's tags are
+// the lab's to change (PutBucketTagging has no tag condition keys); its name is what IAM scopes, so it decides.
+func bucketLab(arnOrName string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimPrefix(arnOrName, "arn:aws:s3:::"), BucketPrefix)
+	if !ok || strings.Contains(rest, "/") {
+		return "", false
+	}
+	return rest[:min(len(rest), 12)], true
+}
+
 // kind is the resource type Delete knows how to remove, and its id; "" when it does not.
 func kind(s string) (typ, id string) {
 	a, err := arn.Parse(s)

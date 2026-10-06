@@ -86,15 +86,26 @@ func TestAssumeLabTagsTheSession(t *testing.T) {
 
 func TestTaggedUsesTheOpsRoleAndFiltersByLab(t *testing.T) {
 	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		if c.method == "GET" && c.path == "/" { // S3 ListBuckets
+			return 200, "application/xml", `<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Buckets>
+				<Bucket><Name>crucible-lab-aaaaaaaaaaaa</Name><BucketRegion>eu-west-1</BucketRegion></Bucket>
+				<Bucket><Name>crucible-lab-aaaaaaaaaaaa-untagged</Name><BucketRegion>eu-west-1</BucketRegion></Bucket></Buckets></ListAllMyBucketsResult>`
+		}
 		if c.target != "ResourceGroupsTaggingAPI_20170126.GetResources" {
 			return 400, "text/plain", "unexpected " + c.target
 		}
 		return 200, "application/x-amz-json-1.1", `{"PaginationToken":"","ResourceTagMappingList":[
-			{"ResourceARN":"arn:aws:s3:::crucible-lab-aaaaaaaaaaaa","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"},{"Key":"app","Value":"x"}]}]}`
+			{"ResourceARN":"arn:aws:s3:::crucible-lab-aaaaaaaaaaaa","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"},{"Key":"app","Value":"x"}]},
+			{"ResourceARN":"arn:aws:s3:::crucible-lab-bbbbbbbbbbbb","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"}]}]}`
 	})
 	got, err := cl.Tagged(context.Background(), "eu-west-1", "aaaaaaaaaaaa")
-	if err != nil || len(got) != 1 || got[0].LabID != "aaaaaaaaaaaa" || got[0].ARN != "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa" {
+	// lab b tagged its bucket with a's id: by name it is b's, so a's sweep skips it; a's untagged bucket is found by name
+	if err != nil || len(got) != 2 || got[0].LabID != "aaaaaaaaaaaa" || got[0].ARN != "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa" ||
+		got[1] != (Resource{ARN: "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa-untagged", LabID: "aaaaaaaaaaaa"}) {
 		t.Fatalf("tagged: %+v %v", got, err)
+	}
+	if last := calls()[len(calls())-1]; !strings.Contains(last.query, "prefix=crucible-lab-aaaaaaaaaaaa") || !strings.Contains(last.query, "bucket-region=eu-west-1") {
+		t.Fatalf("lab buckets are listed by name prefix in the region: %+v", last)
 	}
 	all := calls()
 	if all[0].form.Get("RoleSessionName") != "crucible-ops" || all[0].form.Get("RoleArn") != "arn:aws:iam::444455556666:role/crucible-lab-ops" {
@@ -195,6 +206,38 @@ func TestLabWritesKeepsUntaggedCreatesOnly(t *testing.T) {
 	}
 	if last := calls()[len(calls())-1]; last.target != "CloudTrail_20131101.LookupEvents" || !strings.Contains(last.body, `"AttributeKey":"ReadOnly"`) {
 		t.Fatalf("lookup: %+v", last)
+	}
+}
+
+func TestDeleteTurnsTerminationProtectionOff(t *testing.T) {
+	protected := true
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", `<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><reservationSet><item><instancesSet><item><instanceId>i-1</instanceId><instanceState><code>16</code><name>running</name></instanceState></item></instancesSet></item></reservationSet></DescribeInstancesResponse>`
+		case "TerminateInstances":
+			if protected {
+				return 400, "text/xml", `<Response><Errors><Error><Code>OperationNotPermitted</Code><Message>disableApiTermination</Message></Error></Errors><RequestID>r</RequestID></Response>`
+			}
+			return 200, "text/xml", `<TerminateInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><instancesSet/></TerminateInstancesResponse>`
+		case "ModifyInstanceAttribute":
+			if c.form.Get("DisableApiTermination.Value") == "false" {
+				protected = false
+			}
+			return 200, "text/xml", `<ModifyInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><return>true</return></ModifyInstanceAttributeResponse>`
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	creds := Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}
+	if ok, err := cl.Delete(context.Background(), "eu-west-1", creds, "arn:aws:ec2:eu-west-1:1:instance/i-1"); !ok || err != nil {
+		t.Fatalf("a protected instance is unprotected, then terminated: %v %v", ok, err)
+	}
+	var actions []string
+	for _, c := range calls() {
+		actions = append(actions, c.form.Get("Action"))
+	}
+	if got := strings.Join(actions, " "); got != "DescribeInstances TerminateInstances ModifyInstanceAttribute TerminateInstances" {
+		t.Fatalf("calls: %s", got)
 	}
 }
 

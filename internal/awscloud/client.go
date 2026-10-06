@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
 	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	tagging "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	tagtypes "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -115,10 +116,41 @@ func (c *Client) Tagged(ctx context.Context, region, labID string) ([]Resource, 
 					r.LabID = aws.ToString(t.Value)
 				}
 			}
-			out = append(out, r)
+			if id, ok := bucketLab(r.ARN); ok {
+				r.LabID = id
+			}
+			if labID == "" || r.LabID == labID {
+				out = append(out, r)
+			}
 		}
 	}
-	return out, nil
+	return c.labBuckets(ctx, region, labID, out)
+}
+
+// labBuckets adds the region's lab buckets found by name to res: an untagged (or retagged) bucket is swept too.
+func (c *Client) labBuckets(ctx context.Context, region, labID string, res []Resource) ([]Resource, error) {
+	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
+		o.Region, o.BaseEndpoint, o.UsePathStyle = region, c.endpoint(), c.cfg.Endpoint != ""
+	})
+	seen := map[string]bool{}
+	for _, r := range res {
+		seen[r.ARN] = true
+	}
+	p := s3.NewListBucketsPaginator(cl, &s3.ListBucketsInput{Prefix: aws.String(BucketPrefix + labID), BucketRegion: aws.String(region)})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range page.Buckets {
+			arn := "arn:aws:s3:::" + aws.ToString(b.Name)
+			if id, _ := bucketLab(arn); !seen[arn] {
+				seen[arn] = true
+				res = append(res, Resource{ARN: arn, LabID: id})
+			}
+		}
+	}
+	return res, nil
 }
 
 func (c *Client) Delete(ctx context.Context, region string, cr Credentials, s string) (bool, error) {
@@ -146,7 +178,7 @@ func (c *Client) Delete(ctx context.Context, region string, cr Credentials, s st
 				}
 			}
 			if err = derr; err == nil {
-				_, err = e.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{id}})
+				err = terminate(ctx, e, id)
 			}
 		case "volume":
 			_, err = e.DeleteVolume(ctx, &ec2.DeleteVolumeInput{VolumeId: aws.String(id)})
@@ -164,6 +196,23 @@ func (c *Client) Delete(ctx context.Context, region string, cr Credentials, s st
 		}
 	}
 	return err == nil, err
+}
+
+// terminate turns termination protection off first when the lab set it (allowed by the labs stack's
+// UnprotectOwnTermination, for the lab's own instances only).
+func terminate(ctx context.Context, e *ec2.Client, id string) error {
+	in := &ec2.TerminateInstancesInput{InstanceIds: []string{id}}
+	_, err := e.TerminateInstances(ctx, in)
+	var api smithy.APIError
+	if !errors.As(err, &api) || api.ErrorCode() != "OperationNotPermitted" {
+		return err
+	}
+	if _, err := e.ModifyInstanceAttribute(ctx, &ec2.ModifyInstanceAttributeInput{InstanceId: aws.String(id),
+		DisableApiTermination: &ec2types.AttributeBooleanValue{Value: aws.Bool(false)}}); err != nil {
+		return err
+	}
+	_, err = e.TerminateInstances(ctx, in)
+	return err
 }
 
 // notYet are the error codes of a dependency that goes away by itself (an instance terminating, a writer finishing).

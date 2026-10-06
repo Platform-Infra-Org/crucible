@@ -166,4 +166,8 @@ run "aws_labs_wiring" {
     condition     = !strcontains(aws_instance.node.user_data, "ico-test") && aws_ssm_parameter.secret["infracost_api_key"].type == "SecureString"
     error_message = "the infracost key is a SecureString, never in user data"
   }
+  assert {
+    condition     = output.lab_role_arn == "arn:aws:iam::444455556666:role/crucible-lab"
+    error_message = "main records the lab role it is wired to, so `up` can refuse to drop it silently"
+  }
 }

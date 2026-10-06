@@ -68,3 +68,18 @@ func TestFakeNotYet(t *testing.T) {
 		t.Fatalf("then deleted: %v %v", ok, err)
 	}
 }
+
+// task-13-review I3: a lab bucket is the lab's by name, whatever its tags say.
+func TestFakeFindsLabBucketsByName(t *testing.T) {
+	ctx, f := context.Background(), &Fake{}
+	f.Add("eu-west-1", Resource{ARN: "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa-x"})                      // untagged
+	f.Add("eu-west-1", Resource{ARN: "arn:aws:s3:::crucible-lab-bbbbbbbbbbbb", LabID: "aaaaaaaaaaaa"}) // retagged
+	got, _ := f.Tagged(ctx, "eu-west-1", "aaaaaaaaaaaa")
+	if len(got) != 1 || got[0] != (Resource{ARN: "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa-x", LabID: "aaaaaaaaaaaa"}) {
+		t.Fatalf("by name: %+v", got)
+	}
+	a, _ := f.AssumeLab(ctx, Session{LabID: "aaaaaaaaaaaa"})
+	if ok, err := f.Delete(ctx, "eu-west-1", a, got[0].ARN); !ok || err != nil {
+		t.Fatalf("the owning lab deletes its untagged bucket: %v %v", ok, err)
+	}
+}

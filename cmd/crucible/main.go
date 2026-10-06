@@ -24,7 +24,7 @@ const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible aws init --region REGION --domain HOSTNAME
   crucible aws labs-init --region REGION [--crucible-account ID]
-  crucible aws up [--var-file FILE] [--no-snapshot]
+  crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
   crucible aws sleep [--no-snapshot]
   crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
@@ -64,6 +64,7 @@ func awsCmd(args []string) int {
 	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
 	yes := fs.Bool("yes", false, "confirm teardown")
 	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
+	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	_ = fs.Parse(args[1:])
 	root, _ := os.Getwd()
 	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
@@ -90,7 +91,7 @@ func awsCmd(args []string) int {
 		}
 		err = ops.LabsInit(ctx, *region, *crucibleAccount)
 	case "up":
-		err = ops.Up(ctx, *varFile, *noSnapshot)
+		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs)
 	case "deploy":
 		err = ops.Deploy(ctx)
 	case "snapshot":

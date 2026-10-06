@@ -34,6 +34,11 @@ variable "allowed_instance_types" {
   type    = list(string)
   default = ["t3.nano", "t3.micro", "t3a.nano", "t3a.micro", "t4g.nano", "t4g.micro"]
 }
+variable "max_volume_gib" {
+  type        = number
+  default     = 50
+  description = "Largest EBS volume a lab may create (gp2/gp3 only, baseline IOPS and throughput)"
+}
 
 data "aws_caller_identity" "me" {}
 
@@ -44,7 +49,14 @@ locals {
   regions   = length(var.allowed_regions) == 0 ? [var.region] : var.allowed_regions
   lab       = "$${aws:PrincipalTag/crucible:lab-id}" # an IAM policy variable, not a Terraform one
   state     = "arn:aws:s3:::${aws_s3_bucket.state.bucket}"
-  creates   = ["RunInstances", "CreateVolume", "CreateSecurityGroup", "CreateNetworkInterface"]
+  # ponytail: no standalone CreateNetworkInterface: RunInstances exposes no aws:ResourceTag for an existing ENI, so a
+  # lab could launch on another lab's detached ENI. Instances still get their own ENIs. Add it back with a guard.
+  creates = ["RunInstances", "CreateVolume", "CreateSecurityGroup"]
+  volume  = "arn:aws:ec2:*:*:volume/*"
+  # S3 calls that lock a bucket against the sweep (which runs as the lab role) or hand it to someone else.
+  s3_locks = ["s3:PutBucketObjectLockConfiguration", "s3:PutObjectRetention", "s3:PutObjectLegalHold",
+    "s3:BypassGovernanceRetention", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:PutBucketAcl", "s3:PutObjectAcl",
+  "s3:PutObjectVersionAcl", "s3:PutBucketOwnershipControls", "s3:DeleteBucketTagging"]
   # Trust the node role by ARN through the account root, so the trust works before the role exists.
   trust = { Effect = "Allow", Principal = { AWS = "arn:aws:iam::${local.crucible}:root" } }
 }
@@ -88,7 +100,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "state" {
     status = "Enabled"
     filter { prefix = "labs/" }
     noncurrent_version_expiration { noncurrent_days = 7 }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
   }
+}
+
+resource "aws_s3_bucket_policy" "state" {
+  bucket = aws_s3_bucket.state.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{ Sid = "TLSOnly", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [local.state, "${local.state}/*"],
+    Condition = { Bool = { "aws:SecureTransport" = "false" } } }]
+  })
 }
 
 # The ceiling for every lab session: EC2 and S3 only, allowed regions only, small instances only.
@@ -102,6 +124,20 @@ resource "aws_iam_policy" "boundary" {
       Resource = "*", Condition = { StringNotEquals = { "aws:RequestedRegion" = local.regions } } },
       { Sid = "SmallInstancesOnly", Effect = "Deny", Action = "ec2:RunInstances", Resource = "arn:aws:ec2:*:*:instance/*",
       Condition = { StringNotEquals = { "ec2:InstanceType" = var.allowed_instance_types } } },
+      { Sid = "SharedTenancyOnly", Effect = "Deny", Action = "ec2:RunInstances", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringNotEquals = { "ec2:Tenancy" = "default" } } },
+      { Sid = "NoMarketplaceImages", Effect = "Deny", Action = "ec2:RunInstances", Resource = "arn:aws:ec2:*::image/*",
+      Condition = { StringEquals = { "ec2:Owner" = "aws-marketplace" } } },
+      # Conditions in one statement are ANDed, so each volume limit is its own Deny.
+      { Sid = "SmallVolumesOnly", Effect = "Deny", Action = ["ec2:CreateVolume", "ec2:RunInstances"], Resource = local.volume,
+      Condition = { NumericGreaterThan = { "ec2:VolumeSize" = var.max_volume_gib } } },
+      { Sid = "GeneralPurposeVolumesOnly", Effect = "Deny", Action = ["ec2:CreateVolume", "ec2:RunInstances"], Resource = local.volume,
+      Condition = { StringNotEquals = { "ec2:VolumeType" = ["gp2", "gp3"] } } },
+      { Sid = "BaselineIopsOnly", Effect = "Deny", Action = ["ec2:CreateVolume", "ec2:RunInstances"], Resource = local.volume,
+      Condition = { NumericGreaterThan = { "ec2:VolumeIops" = 3000 } } },
+      { Sid = "BaselineThroughputOnly", Effect = "Deny", Action = ["ec2:CreateVolume", "ec2:RunInstances"], Resource = local.volume,
+      Condition = { NumericGreaterThan = { "ec2:VolumeThroughput" = 125 } } },
+      { Sid = "NoBucketLocks", Effect = "Deny", Action = local.s3_locks, Resource = "*" },
     ]
   })
 }
@@ -129,11 +165,15 @@ resource "aws_iam_role_policy" "lab" {
       Action = ["ec2:Describe*", "s3:ListAllMyBuckets", "s3:GetBucketLocation", "sts:GetCallerIdentity", "tag:GetResources"] },
       { Sid      = "CreateTagged", Effect = "Allow", Action = [for a in local.creates : "ec2:${a}"],
         Resource = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*"],
-      Condition = { StringEquals = { "aws:RequestTag/crucible:lab-id" = local.lab } } },
+        # TagKeys pins the exact-case key: IAM matches the key in aws:RequestTag/<key> case-insensitively, EC2 does not.
+      Condition = { StringEquals = { "aws:RequestTag/crucible:lab-id" = local.lab }, "ForAnyValue:StringEquals" = { "aws:TagKeys" = ["crucible:lab-id"] } } },
       { Sid = "LaunchFromShared", Effect = "Allow", Action = "ec2:RunInstances",
       Resource = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:key-pair/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*"] },
-      { Sid = "CreateInShared", Effect = "Allow", Action = ["ec2:CreateSecurityGroup", "ec2:CreateNetworkInterface"],
-      Resource = ["arn:aws:ec2:*:*:vpc/*", "arn:aws:ec2:*:*:subnet/*"] },
+      { Sid = "CreateInShared", Effect = "Allow", Action = "ec2:CreateSecurityGroup", Resource = "arn:aws:ec2:*:*:vpc/*" },
+      # Untagged shared ones (the VPC default security group) stay usable; another lab's do not.
+      { Sid      = "NotOtherLabsNetwork", Effect = "Deny", Action = ["ec2:RunInstances", "ec2:CreateNetworkInterface", "ec2:AttachNetworkInterface"],
+        Resource = ["arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*"],
+      Condition = { Null = { "aws:ResourceTag/crucible:lab-id" = "false" }, StringNotEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
       { Sid = "TagOnCreate", Effect = "Allow", Action = "ec2:CreateTags", Resource = "*",
       Condition = { StringEquals = { "ec2:CreateAction" = local.creates } } },
       { Sid = "ManageOwn", Effect = "Allow", Resource = "*",
@@ -144,7 +184,20 @@ resource "aws_iam_role_policy" "lab" {
       Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
       { Sid = "KeepCrucibleTags", Effect = "Deny", Action = ["ec2:CreateTags", "ec2:DeleteTags"], Resource = "*",
       Condition = { "ForAnyValue:StringLike" = { "aws:TagKeys" = ["crucible:*"] }, Null = { "ec2:CreateAction" = "true" } } },
-      { Sid = "OwnBuckets", Effect = "Allow", Action = "s3:*",
+      # delete-tags without --tags removes every tag and carries no aws:TagKeys, so KeepCrucibleTags never sees it.
+      { Sid = "NoBlankDeleteTags", Effect = "Deny", Action = "ec2:DeleteTags", Resource = "*", Condition = { Null = { "aws:TagKeys" = "true" } } },
+      # EC2 has no launch-time key to forbid --disable-api-termination, so the sweep (this role) turns it off before it
+      # terminates. Only that attribute, only to false: instanceType etc. stay unmodifiable. Stop protection does not
+      # block termination.
+      { Sid = "UnprotectOwnTermination", Effect = "Allow", Action = "ec2:ModifyInstanceAttribute", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab }, StringEqualsIgnoreCase = { "ec2:Attribute/disableApiTermination" = "false" } } },
+      # An allowlist, not s3:*: nothing here can lock a bucket against the sweep (and NoBucketLocks denies those anyway).
+      # PutBucketTagging has no tag condition keys, so the sweep finds lab buckets by name, not only by tag.
+      { Sid = "OwnBuckets", Effect = "Allow",
+        Action = ["s3:CreateBucket", "s3:DeleteBucket", "s3:Get*", "s3:List*", "s3:PutObject", "s3:DeleteObject",
+          "s3:DeleteObjectVersion", "s3:AbortMultipartUpload", "s3:PutObjectTagging", "s3:DeleteObjectTagging",
+          "s3:PutBucketTagging", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration", "s3:PutLifecycleConfiguration",
+        "s3:PutBucketPublicAccessBlock"],
       Resource = ["arn:aws:s3:::crucible-lab-${local.lab}*", "arn:aws:s3:::crucible-lab-${local.lab}*/*"] },
       { Sid = "OwnState", Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
       Resource = ["${local.state}/labs/${local.lab}.tfstate", "${local.state}/labs/${local.lab}.tfstate.tflock"] },
@@ -166,7 +219,7 @@ resource "aws_iam_role_policy" "ops" {
   role = aws_iam_role.ops.id
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["tag:GetResources", "ce:GetCostAndUsage", "cloudtrail:LookupEvents"], Resource = "*" }]
+    Statement = [{ Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "ce:GetCostAndUsage", "cloudtrail:LookupEvents"], Resource = "*" }]
   })
 }
 

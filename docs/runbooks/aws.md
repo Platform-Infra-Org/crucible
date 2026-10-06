@@ -109,16 +109,52 @@ request "Cloud Heat", approve it, then:
 1. In the workspace terminal: `aws sts get-caller-identity` shows `assumed-role/crucible-lab/crucible-lab-<id>`.
    On the node: `k3s kubectl -n lab-<id> get pods` shows `lab` Running and `tf-apply` Completed.
 2. Task 1 and task 2 both pass with **Check** (task 2: `echo hi > f && aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.txt`).
-3. **The boundary holds.** Each of these must fail with AccessDenied / UnauthorizedOperation:
+3. **The boundary holds.** In the workspace, `L=$CRUCIBLE_LAB_ID`, `AMI=<an AL2023 x86_64 AMI id in your region>`,
+   `T="ResourceType=instance,Tags=[{Key=crucible:lab-id,Value=$L}]" "ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=$L}]"`
+   (use `$T` unquoted below), and `V=<a volume you own>` from step 4's create. **Positive controls first:**
+   - `aws ec2 run-instances --dry-run --image-id $AMI --instance-type t3.micro --tag-specifications $T` returns
+     **DryRunOperation** (allowed). If this fails, a deny below is too broad (most likely `ec2:Tenancy` or
+     `ec2:VolumeType` missing from the request context): fix the labs stack before anything else.
+   - `aws ec2 create-volume --dry-run --size 8 --volume-type gp3 --availability-zone eu-west-1a --tag-specifications "ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=$L}]"` returns DryRunOperation.
+
+   Each of these must fail with AccessDenied / UnauthorizedOperation (the `--dry-run` ones with UnauthorizedOperation,
+   never DryRunOperation):
    - `aws ec2 create-volume --size 1 --availability-zone eu-west-1a` (no lab tag)
    - the same with `--tag-specifications 'ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=000000000000}]'` (someone else's lab id)
-   - `aws ec2 run-instances --image-id <any AL2023 AMI> --instance-type t3.large --tag-specifications 'ResourceType=instance,Tags=[{Key=crucible:lab-id,Value=<id>}]'` (instance type)
+   - the same with `Key=CRUCIBLE:LAB-ID,Value=$L` (key case variant, I5: the sweep would never see it)
+   - `aws ec2 run-instances --dry-run --image-id $AMI --instance-type t3.large --tag-specifications $T` (instance type;
+     both instance and volume are tagged, so only SmallInstancesOnly can refuse it)
+   - `aws ec2 run-instances --dry-run --image-id $AMI --instance-type t3.micro --placement Tenancy=dedicated --tag-specifications $T` (tenancy)
+   - `aws ec2 create-volume --dry-run --volume-type io2 --iops 1000 --size 100 --availability-zone eu-west-1a --tag-specifications "ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=$L}]"`,
+     and the same with `--volume-type gp3 --size 51`, and with `--volume-type gp3 --size 8 --iops 16000` (volume type, size, IOPS)
+   - `aws ec2 run-instances --dry-run --image-id $AMI --instance-type t3.micro --block-device-mappings 'DeviceName=/dev/xvda,Ebs={VolumeSize=500}' --tag-specifications $T` (root volume size)
+   - `aws ec2 run-instances --dry-run --image-id $AMI --instance-type t3.micro --security-group-ids <a security group tagged with another lab's id> --tag-specifications $T` (I4)
+   - `aws ec2 create-network-interface --subnet-id <default subnet> --tag-specifications "ResourceType=network-interface,Tags=[{Key=crucible:lab-id,Value=$L}]"` (no standalone ENIs)
+   - `aws ec2 delete-tags --resources $V` (**no** `--tags`: would strip every tag, C1) and
+     `aws ec2 delete-tags --resources $V --tags Key=crucible:lab-id` (lab tags are immutable)
+   - `aws ec2 modify-instance-attribute --instance-id <your instance> --instance-type t3.large` (only termination protection can be turned off)
    - `aws s3 mb s3://not-a-lab-bucket-$RANDOM` (bucket name)
-   - `aws s3 ls --region us-east-1` against a bucket in another region, or `aws ec2 describe-vpcs --region us-west-2` if us-west-2 is not allowed
+   - `aws s3 mb s3://crucible-lab-$L-x --region <a region not in allowed_regions, e.g. us-west-2>` and
+     `aws ec2 describe-vpcs --region us-west-2` (regions)
+   - with your lab bucket `B=crucible-lab-$L`: `aws s3api put-object-lock-configuration --bucket $B --object-lock-configuration ObjectLockEnabled=Enabled`,
+     `aws s3api put-bucket-policy --bucket $B --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Principal":"*","Action":"s3:DeleteBucket","Resource":"arn:aws:s3:::'$B'"}]}'`,
+     `aws s3api delete-bucket-tagging --bucket $B`, `aws s3api put-bucket-acl --bucket $B --acl private` (I2, I3)
    - `aws s3 cp s3://<labstate bucket>/labs/<another lab id>.tfstate -` (someone else's state)
-   - `aws ec2 delete-tags --resources <your volume> --tags Key=crucible:lab-id` (lab tags are immutable)
    - `aws iam list-roles` (no IAM)
-   - `curl -m 3 http://169.254.169.254/` (IMDS, from M4's NetworkPolicy)
+   - `curl -m 3 http://169.254.169.254/` (IMDS, from M4's NetworkPolicy; also from the `tf-apply` pod:
+     `k3s kubectl -n lab-<id> run imds --rm -it --restart=Never --image=busybox -- wget -T 3 -qO- http://169.254.169.254/` must time out)
+
+   **Protection does not stop the sweep (I2).** `aws ec2 run-instances --image-id $AMI --instance-type t3.micro --disable-api-termination --tag-specifications $T`
+   succeeds (EC2 has no condition key for it). End the lab: the end-of-lab sweep turns termination protection off and
+   terminates it. If the Ledger shows it as "failed" with OperationNotPermitted, the `ec2:Attribute/disableApiTermination`
+   condition did not match: record the real key here.
+   **An untagged bucket is swept (I3).** `aws s3api create-bucket --bucket crucible-lab-$L-untagged --create-bucket-configuration LocationConstraint=eu-west-1`
+   (no tags), then end the lab: it is deleted (found by name). `put-bucket-tagging` with another lab's id is allowed
+   (S3 has no tag condition key for it); the sweep goes by the name, but Cost Explorer bills that bucket to the other
+   lab. Accepted: S3 storage for one hour is cents.
+   **Accepted reads.** `ec2:Describe*` and `tag:GetResources` are account-wide: a trainee can list other labs' ids and
+   resource ARNs and the node's user data (which holds no secrets; keep it that way). Use a dedicated lab account if
+   that matters.
 4. **A tagged leak is swept.** Create a volume the lab owns:
    `aws ec2 create-volume --size 1 --availability-zone eu-west-1a --tag-specifications "ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=$CRUCIBLE_LAB_ID}]"`.
    Click **End lab**. Within ~5 min the lab is "cooled". The Ledger (admin) shows the volume under Reaper findings as
@@ -153,6 +189,9 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
   the lab up as stuck after **70 minutes** and destroys it again (the hourly cost cap limits what that can cost).
 - `CRUCIBLE_INFRACOST=off` is honoured only with `CRUCIBLE_AWS_LABS=dryrun` (the chart sets both for
   `awsLabs.dryRun`). Real aws labs always need infracost and its key.
+- `crucible aws up` needs the labs stack's outputs once aws labs are on: run it where `deploy/aws/labs/terraform.tfstate`
+  lives. If it cannot read them it stops rather than turning aws labs off (running aws labs would lose credential
+  refresh, destroy and the sweep). `--no-labs` turns aws labs off on purpose; end every aws lab first.
 - `crucible aws teardown` never touches the labs stack; it has local state in `deploy/aws/labs` and
   `prevent_destroy` on the state bucket.
 

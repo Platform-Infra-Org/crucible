@@ -214,7 +214,7 @@ func TestInitAndUp(t *testing.T) {
 		t.Fatalf("init apply missing:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
-	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
 		t.Fatal(err)
 	}
 	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); snap < 0 || apply < snap {
@@ -247,7 +247,7 @@ func TestUpFirstTimeSkipsSnapshot(t *testing.T) {
 		}
 		return exec(ctx, dir, name, args...)
 	}
-	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
 		t.Fatal(err)
 	}
 	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); apply < 0 || (snap >= 0 && snap < apply) {
@@ -266,7 +266,7 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
 		t.Fatalf("main: %v", err)
 	}
-	if err := o.Up(context.Background(), "x.tfvars", false); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
+	if err := o.Up(context.Background(), "x.tfvars", false, false); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
 		t.Fatalf("persistent: %v", err)
 	}
 }
@@ -357,7 +357,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 		t.Fatalf("labs-init apply:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
-	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
@@ -365,5 +365,39 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
 		}
+	}
+}
+
+// task-13-review I7: a missing labs state must not silently turn aws labs off.
+func TestUpRefusesToDropLabsItCannotRead(t *testing.T) {
+	wiredMain := func(cmd string) string {
+		if strings.Contains(cmd, "main output -json") {
+			return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"instance_id"`, 1)
+		}
+		return fakeAWS(cmd)
+	}
+	labsGone := func(cmd string) error {
+		if strings.Contains(cmd, "labs output -json") {
+			return errors.New("no state")
+		}
+		return nil
+	}
+	r := &recorder{output: wiredMain, outErr: labsGone}
+	err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false)
+	if err == nil || !strings.Contains(err.Error(), "--no-labs") || !strings.Contains(err.Error(), "crucible-lab") || indexOf(r.calls, "main apply") >= 0 {
+		t.Fatalf("up must refuse before applying: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+
+	r = &recorder{output: wiredMain, outErr: labsGone}
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "main apply") < 0 || indexOf(r.calls, "-var lab_role_arn") >= 0 || !strings.Contains(r.log.String(), "--no-labs") {
+		t.Fatalf("--no-labs applies without the lab vars, loudly:\n%s\n%s", strings.Join(r.calls, "\n"), r.log.String())
+	}
+
+	r = &recorder{output: fakeAWS, outErr: labsGone} // never wired: labs stay off without a flag
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false); err != nil || indexOf(r.calls, "main apply") < 0 {
+		t.Fatalf("no labs before, none now: %v", err)
 	}
 }

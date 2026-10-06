@@ -91,7 +91,8 @@ func mainVars(p map[string]string) []string {
 }
 
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
-func (o Ops) Up(ctx context.Context, varFile string, noSnapshot bool) error {
+// noLabs turns aws labs off; without it, Up refuses to drop the lab wiring main already has.
+func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) error {
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {
 		return err
@@ -102,14 +103,26 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot bool) error {
 		"-backend-config=region="+p["region"], "-backend-config=use_lockfile=true"); err != nil {
 		return err
 	}
+	wired := ""                                       // the lab role main is wired to now
 	if m, err := o.outputs(ctx, "main"); err == nil { // a node already exists
+		wired = m["lab_role_arn"]
 		if err := o.snapshotFirst(ctx, m, noSnapshot, "applying"); err != nil {
 			return err
 		}
 	}
 	vars := mainVars(p)
-	if l, err := o.outputs(ctx, "labs"); err == nil { // no labs stack = aws labs stay off
-		vars = append(vars, labVars(l)...)
+	if !noLabs {
+		l, err := o.outputs(ctx, "labs")
+		switch {
+		case err == nil:
+			vars = append(vars, labVars(l)...)
+		case wired != "":
+			// Dropping the wiring strands running aws labs: no credential refresh, no destroy, no sweep.
+			return fmt.Errorf("aws labs are on (%s) but the labs stack outputs cannot be read: %w\n"+
+				"run `up` where deploy/aws/labs/terraform.tfstate lives, or pass --no-labs to turn aws labs off", wired, err)
+		}
+	} else if wired != "" {
+		fmt.Fprintf(o.Log, "WARNING: --no-labs: turning aws labs off; running aws labs lose their credentials and cleanup\n")
 	}
 	abs, _ := filepath.Abs(varFile)
 	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, vars...)...); err != nil {

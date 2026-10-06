@@ -97,22 +97,33 @@ func (s *Service) labReview(ctx context.Context, inst *Instance) (*scoring.Submi
 // reviewed (spec §8.2). wait reports that the lab item must stay pending_review; points is the scorer's decision once
 // one exists.
 func (s *Service) selfReportReview(ctx context.Context, inst *Instance, lab *content.Lab, maxScore float64, done map[string]taskRow) (wait bool, points *float64, err error) {
+	if maxScore == 0 || s.Scoring == nil || inst.Runtime != "local" {
+		return false, nil, nil
+	}
+	// An existing decision or waiting submission counts whatever the flag says now; the flag only gates filing a new one.
+	sub, err := s.labReview(ctx, inst)
+	switch {
+	case err != nil:
+		return false, nil, err
+	case sub != nil && sub.Status == scoring.Scored:
+		return false, &sub.Points, nil
+	case sub != nil && sub.Status == scoring.Pending:
+		return true, nil, nil
+	}
 	st := s.Learn.State()
-	if maxScore == 0 || st == nil || st.Platform == nil {
+	if st == nil || st.Platform == nil {
 		return false, nil, nil
 	}
 	t := st.Platform.Teams[inst.Team]
 	if t == nil || t.Programs[inst.Training] == nil || !t.Programs[inst.Training].ReviewSelfReported {
 		return false, nil, nil
 	}
-	sub, err := s.labReview(ctx, inst)
-	switch {
-	case err != nil || s.Scoring == nil || inst.Runtime != "local":
+	var item string // a finished lab is not filed afterwards (SetItem would keep it complete anyway)
+	if err := s.DB.QueryRow(ctx, `SELECT status FROM item_progress WHERE user_id = $1 AND team = $2 AND training = $3
+		AND module = $4 AND item = 'lab'`, inst.UserID, inst.Team, inst.Training, inst.Module).Scan(&item); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return false, nil, err
-	case sub != nil && sub.Status == scoring.Scored:
-		return false, &sub.Points, nil
-	case sub != nil && sub.Status == scoring.Pending:
-		return true, nil, nil
+	} else if item == "complete" {
+		return false, nil, nil
 	}
 	email, name, err := s.requester(ctx, inst.UserID)
 	if err != nil {

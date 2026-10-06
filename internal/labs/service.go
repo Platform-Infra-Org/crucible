@@ -423,6 +423,12 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		}
 		v.Tasks = append(v.Tasks, tv)
 	}
+	if rv != nil && rv.Status == scoring.Scored { // the scorer's points are the lab's score, not the self-reported sum
+		v.Score = rv.Points
+	}
+	if rv != nil && rv.Status == scoring.Pending { // the lab is with a scorer, not forged yet
+		v.Complete = false
+	}
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl

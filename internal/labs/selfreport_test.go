@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"crucible/internal/blob"
 	"crucible/internal/scoring"
@@ -166,5 +169,124 @@ func TestUnflaggedLocalLabCompletesAtOnce(t *testing.T) {
 	f.doFirstLab(t, v.ID)
 	if st, _ := f.labItem(t); st != "complete" || f.labSub(t) != nil {
 		t.Fatalf("unflagged: %q", st)
+	}
+}
+
+// The flag only decides whether a NEW submission is filed: a waiting or decided one still counts after it is turned off.
+func TestSelfReportDecisionHonouredAfterFlagTurnedOff(t *testing.T) {
+	ctx := context.Background()
+	f := setupSelfReport(t)
+	v := f.start(t)
+	f.doFirstLab(t, v.ID)
+	sub := f.labSub(t)
+	f.plat.Teams["forge"].Programs["forge-101"].ReviewSelfReported = false
+	if _, err := f.s.Get(ctx, f.u, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.labItem(t); st != "pending_review" {
+		t.Fatalf("a waiting submission keeps the item waiting with the flag off: %q", st)
+	}
+	if _, err := f.sc.Score(ctx, f.other, sub.ID, sub.MaxPoints/2, "half"); err != nil {
+		t.Fatal(err)
+	}
+	if st, sc := f.labItem(t); st != "complete" || math.Abs(sc-0.5) > 1e-9 {
+		t.Fatalf("the scorer's points count: %q %v", st, sc)
+	}
+	v, _ = f.s.Get(ctx, f.u, v.ID)
+	if math.Abs(v.Score-sub.MaxPoints/2) > 1e-9 || !v.Complete {
+		t.Fatalf("the lab page shows the scorer's score: %v complete %v", v.Score, v.Complete)
+	}
+}
+
+func TestPendingSelfReportedLabIsNotShownComplete(t *testing.T) {
+	f := setupSelfReport(t)
+	v := f.start(t)
+	if v = f.doFirstLab(t, v.ID); v.Complete {
+		t.Fatal("a lab with a scorer is not complete yet")
+	}
+}
+
+func TestCompleteLabIsNotFiledLater(t *testing.T) {
+	f := setupSelfReport(t)
+	f.plat.Teams["forge"].Programs["forge-101"].ReviewSelfReported = false
+	v := f.start(t)
+	f.doFirstLab(t, v.ID)
+	f.plat.Teams["forge"].Programs["forge-101"].ReviewSelfReported = true
+	if err := f.s.Override(context.Background(), v.ID, "t1-forge-file", 0, func(context.Context, pgx.Tx, float64) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.labItem(t); st != "complete" || f.labSub(t) != nil {
+		t.Fatalf("a finished lab stays unfiled: %q %+v", st, f.labSub(t))
+	}
+}
+
+func TestSelfReportFilingRaceFilesOnce(t *testing.T) {
+	ctx := context.Background()
+	f := setupSelfReport(t)
+	v := f.start(t)
+	f.doFirstLab(t, v.ID)
+	// back to the moment before filing
+	if _, err := f.s.DB.Exec(ctx, `DELETE FROM submissions WHERE kind = 'lab'`); err != nil {
+		t.Fatal(err)
+	}
+	inst, err := f.s.instByID(ctx, v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lab, _, _ := f.s.labContent(ctx, inst)
+	done, _ := f.s.taskRows(ctx, inst)
+	var wg sync.WaitGroup
+	waits := make([]bool, 6)
+	errs := make([]error, 6)
+	for i := range waits {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			waits[i], _, errs[i] = f.s.selfReportReview(ctx, inst, lab, v.MaxScore, done)
+		}()
+	}
+	wg.Wait()
+	for i := range waits {
+		if errs[i] != nil || !waits[i] {
+			t.Fatalf("caller %d: wait %v err %v", i, waits[i], errs[i])
+		}
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM submissions WHERE kind = 'lab'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d lab submissions", n)
+	}
+}
+
+func TestWholeLabScoreWinsOverLaterOverride(t *testing.T) {
+	ctx := context.Background()
+	f := setupSelfReport(t)
+	v := f.start(t)
+	f.doFirstLab(t, v.ID)
+	sub := f.labSub(t)
+	if _, err := f.sc.Score(ctx, f.other, sub.ID, sub.MaxPoints/2, "half"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.sc.Override(ctx, f.other, sub.ID, "t1-forge-file", 0, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if st, sc := f.labItem(t); st != "complete" || math.Abs(sc-0.5) > 1e-9 {
+		t.Fatalf("override after a whole-lab score: %q %v", st, sc)
+	}
+}
+
+func TestClusterLabInFlaggedProgramCompletesAtOnce(t *testing.T) {
+	ctx := context.Background()
+	f := setupSelfReport(t)
+	f.s.Runners["cluster"] = f.run
+	v := f.start(t)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET runtime = 'cluster' WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if v = f.doFirstLab(t, v.ID); !v.Complete || v.SelfReported {
+		t.Fatalf("cluster results are not self-reported: %+v", v)
+	}
+	if st, _ := f.labItem(t); st != "complete" || f.labSub(t) != nil {
+		t.Fatalf("cluster lab: %q", st)
 	}
 }

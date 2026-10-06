@@ -150,3 +150,13 @@ button.danger { background: var(--danger); color: var(--bg); border: none; font-
 .approval h2 small { font-weight: normal; }
 .request { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; background: var(--surface); }
 meter { width: 8rem; vertical-align: middle; }
+
+.badge.pending_review { color: var(--accent); }
+.pip.submitted { border-style: dashed; border-color: var(--accent-2); }
+.feedback { border-left: 3px solid var(--accent-2); padding: 0.5rem 0.75rem; margin: 0.5rem 0; background: var(--surface-2); }
+.feedback.scored { border-left-color: var(--ok); }
+.feedback.returned { border-left-color: var(--accent); }
+.pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.question.human textarea, .review-form textarea { width: 100%; }
+.review-form { display: grid; gap: 0.5rem; margin: 0.75rem 0; }
+.small { font-size: 0.8rem; }

@@ -5,7 +5,7 @@ import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { MoltenBar } from '../components/MoltenBar'
 
-const statusLabel = { new: 'Cold', in_progress: 'Heating', complete: 'Forged' } as const
+const statusLabel = { new: 'Cold', in_progress: 'Heating', pending_review: 'Awaiting the hammer', complete: 'Forged' } as const
 
 function itemPath(base: string, module: string, it: ItemView) {
   return it.kind === 'reading' ? `${base}/${module}/read/${it.id}` : `${base}/${module}/${it.kind}`

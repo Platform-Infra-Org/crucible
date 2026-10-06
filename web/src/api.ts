@@ -29,3 +29,8 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText)
   return body as T
 }
+
+// upload posts a multipart form. The header proves the request came from this app (the server refuses forms without it).
+export function upload<T>(path: string, form: FormData): Promise<T> {
+  return api<T>(path, { method: 'POST', body: form, headers: { 'X-Crucible-Upload': '1' } })
+}

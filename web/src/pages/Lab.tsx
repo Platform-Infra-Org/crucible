@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link, useParams } from 'react-router'
 import { motion } from 'motion/react'
-import { api } from '../api'
+import { api, upload } from '../api'
 import { useFetch } from '../useFetch'
 import type { CheckResult, HintResult, LabView, ModuleLab, TaskDetail } from '../types'
 import { usd } from '../lib/money'
@@ -9,6 +9,7 @@ import { tierLabel } from './Approvals'
 import { clockOffset } from '../lib/timer'
 import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
 import { Embers } from '../components/Embers'
+import { FeedbackBox } from '../components/Feedback'
 import { ErrorBox } from '../components/ErrorBox'
 import { IdleModal } from '../components/IdleModal'
 import { Loader } from '../components/Loader'
@@ -95,6 +96,9 @@ export function LabPage() {
             Score {lab.score} / {lab.max_score} · {lab.tasks.filter((t) => t.status === 'passed').length} of {lab.tasks.length} tasks passed · hints used{' '}
             {lab.tasks.reduce((n, t) => n + t.hints_revealed, 0)}
           </p>
+          {lab.tasks.filter((t) => t.review).map((t) => (
+            <div key={t.id}><h3>{t.title}</h3><FeedbackBox f={t.review!} /></div>
+          ))}
         </div>
       )}
       {lab?.state === 'failed' && <p className="error">The lab failed to start: {lab.error}</p>}
@@ -203,6 +207,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
         <h1>{title}</h1>
         <span className="badge">{lab.runtime === 'local' ? 'Your laptop' : lab.runtime}</span>
         {lab.self_reported && <span className="badge warn" title="Checks run on your own machine">self-reported</span>}
+        <span className="muted small" title="Scorers can read what your terminals printed">Terminal output is recorded and visible to scorers</span>
         <span className="spacer" />
         <button className="ghost" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show tasks' : 'Hide tasks'}</button>
         <Timer lab={lab} offset={offset} onExtend={extend} />
@@ -259,6 +264,37 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           toast((e as Error).message)
         }
       }} />
+    </div>
+  )
+}
+
+function ReviewForm({ base, onLab, onAdvance }: { base: string; onLab: (l: LabView) => void; onAdvance: (l: LabView) => void }) {
+  const [notes, setNotes] = useState('')
+  const [files, setFiles] = useState<FileList | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
+  const send = async () => {
+    const form = new FormData()
+    form.set('answer', notes)
+    for (const f of Array.from(files ?? [])) form.append('file', f)
+    setBusy(true)
+    setErr(undefined)
+    try {
+      const l = await upload<LabView>(`${base}/submit`, form)
+      onLab(l)
+      onAdvance(l)
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="review-form">
+      <label>Notes for the scorer <textarea rows={4} maxLength={20000} value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
+      <label>Files for the scorer <input type="file" multiple onChange={(e) => setFiles(e.target.files)} /></label>
+      <button className="primary" disabled={busy} onClick={send}>{busy ? 'Submitting…' : 'Submit for review'}</button>
+      {err && <p className="error" role="alert">{err}</p>}
     </div>
   )
 }
@@ -360,7 +396,6 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
         {task.kind !== 'review' && task.status === 'open' && (
           <button className="primary" disabled={busy} onClick={check}>{busy ? 'Checking…' : 'Check'}</button>
         )}
-        {task.kind === 'review' && <span className="muted">A scorer reviews this task.</span>}
         {task.status === 'open' && task.hints_revealed < task.hints_total && (
           <button className="ghost" onClick={hint}>Hint {task.next_hint_cost > 0 ? `(−${task.next_hint_cost} pts)` : '(free)'}</button>
         )}
@@ -368,6 +403,8 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
         {task.status === 'setup_failed' && <button className="ghost" onClick={skip}>Skip task</button>}
         <SparkBurst trigger={spark} />
       </div>
+      {task.kind === 'review' && task.status === 'open' && <ReviewForm base={base} onLab={onLab} onAdvance={onAdvance} />}
+      {task.review && <FeedbackBox f={task.review} />}
       {task.status === 'passed' && <p className="pass">✦ Passed: {task.awarded} / {task.points} points</p>}
       {output && <pre className={`check-output ${output.ok ? 'ok' : 'bad'}`} role="status">{output.text}</pre>}
     </motion.div>

@@ -1,5 +1,5 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
@@ -14,18 +14,18 @@ export type TeamView = {
   can_edit_team: boolean; is_admin: boolean
 }
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }
-export type ItemView = { kind: 'reading' | 'quiz' | 'lab'; id: string; title: string; status: 'new' | 'in_progress' | 'complete' }
+export type ItemView = { kind: 'reading' | 'quiz' | 'lab'; id: string; title: string; status: 'new' | 'in_progress' | 'pending_review' | 'complete' }
 export type ModuleView = { id: string; title: string; locked: boolean; complete: boolean; items: ItemView[] }
 export type Outline = { team: string; training: string; title: string; description: string; progression: string; percent: number; modules: ModuleView[] }
 export type Choice = { id: number; text: string }
-export type PublicQuestion = { id: string; type: string; prompt: string; points: number; options?: Choice[]; left?: string[]; right?: Choice[]; human?: boolean }
+export type PublicQuestion = { id: string; type: string; prompt: string; points: number; options?: Choice[]; left?: string[]; right?: Choice[]; human?: boolean; submission?: Feedback }
 export type QuizView = { pass_threshold: number; questions: PublicQuestion[]; status: string }
-export type QuizResult = { score: number; max: number; percent: number; passed: boolean; correct: Record<string, boolean>; pending_human: boolean }
+export type QuizResult = { score: number; max: number; percent: number; passed: boolean; correct: Record<string, boolean>; pending_human: boolean; status: 'in_progress' | 'pending_review' | 'complete' }
 export type Terminal = { name: string; service: string }
-export type TaskStatus = 'locked' | 'open' | 'setup_failed' | 'passed' | 'skipped'
+export type TaskStatus = 'locked' | 'open' | 'setup_failed' | 'submitted' | 'passed' | 'skipped'
 export type TaskView = {
   id: string; title: string; status: TaskStatus; kind: 'check' | 'quiz' | 'review'; points: number; awarded: number
-  quiz_prompt?: string; has_setup: boolean; hints_total: number; hints_revealed: number; next_hint_cost: number
+  quiz_prompt?: string; has_setup: boolean; hints_total: number; hints_revealed: number; next_hint_cost: number; review?: Feedback
 }
 export type LabState = 'pending_approval' | 'provisioning' | 'ready' | 'destroying' | 'destroyed' | 'failed' | 'rejected' | 'expired'
 export type Tier = 'auto' | 'approver' | 'leader' | 'admin'
@@ -60,3 +60,25 @@ export type PlatformView = {
   cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
 }
+
+export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review'
+export type SubmissionFile = { name: string; size: number }
+export type Feedback = {
+  id: number; status: 'pending' | 'scored' | 'returned'; answer: string; files: SubmissionFile[] | null
+  points: number; max_points: number; feedback: string; scored_by?: string
+}
+export type Submission = {
+  id: number; trainee: string; trainee_name: string; team: string; training: string; module: string
+  kind: 'question' | 'task'; item: string; lab_id?: string; type: SubmissionType; prompt: string; rubric: string
+  max_points: number; answer: string; files: SubmissionFile[]; status: Feedback['status']; points: number
+  feedback: string; scored_by?: string; scored_at?: string; created_at: string
+}
+export type CheckRun = { lab_id: string; at: string; exit_code: number; output: string; answer?: string; self_reported: boolean }
+export type TaskEvidence = {
+  id: string; title: string; kind: 'check' | 'quiz' | 'review'; status: string; points: number; awarded: number
+  hints_used: number; hint_cost: number; checks: CheckRun[]
+}
+export type TranscriptInfo = { id: number; lab_id: string; terminal: string; bytes: number; truncated: boolean; started_at: string; ended_at: string }
+export type LabEvidence = { runtime: string; self_reported: boolean; tasks: TaskEvidence[]; transcripts: TranscriptInfo[] }
+export type AnvilDetail = { submission: Submission; history: Submission[]; lab?: LabEvidence }
+export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string }

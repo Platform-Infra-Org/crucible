@@ -11,3 +11,6 @@ trainings:
   forge-401:
     repo: file:///git/forge-401.git   # aws lab e2e fixture (dry run on kind); the e2e enrols the team through the UI
     branch: main
+  forge-102:
+    repo: file:///git/forge-102.git   # fixture for the M7 e2e (ranks, badges, journey, content edits); enrolled through the UI
+    branch: main

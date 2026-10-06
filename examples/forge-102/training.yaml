@@ -1,0 +1,7 @@
+id: forge-102
+title: "Forge 102: Sparks"
+description: A short spark of a training. One reading, one question, one badge.
+maintainers: [senior@crucible.local]
+progression: free
+estimated_hours: 0.25
+modules: [01-sparks]

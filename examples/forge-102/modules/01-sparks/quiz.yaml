@@ -1,0 +1,7 @@
+pass_threshold: 1
+questions:
+  - id: q-hot
+    type: single
+    prompt: Which iron do you strike?
+    options: ["Cold iron", "Hot iron"]
+    answer: 1

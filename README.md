@@ -41,8 +41,10 @@ docker build -t crucible:dev .                   # once, from this repo
 go run ./cmd/crucible preview path/to/your-training --free
 ```
 
-It prints a one-time sign-in link for http://localhost:8090 (bound to 127.0.0.1 only). Readings, quizzes and laptop
+It prints a sign-in link (valid for the whole run, not one-time) for http://localhost:8090 (bound to 127.0.0.1 only). Readings, quizzes and laptop
 (`local`) labs run against your working tree, including setup scripts for break-fix tasks; the lab agent runs inside
 the CLI. Only files git tracks or has staged are previewed (untracked files such as `.env` never are): `git add` a new
 file to see it. Save a file and the preview picks it up within seconds; lint problems print in the terminal. `--free`
-opens every module. Ctrl-C removes the containers, network and volumes.
+opens every module. Ctrl-C (or closing the terminal) removes the containers, network and volumes; after a `kill -9`, run `docker compose ls` and `docker compose -p crucible-preview-... down -v`.
+
+Previewing someone else's repo runs its local-lab compose files and setup scripts on your Docker, gated only by the content lint: read it first.

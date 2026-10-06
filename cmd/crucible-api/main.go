@@ -50,6 +50,26 @@ func main() {
 	}
 }
 
+// previewGuard fails closed: preview mode (an admin login by token, OIDC off) starts only when CRUCIBLE_PUBLIC_URL is
+// explicitly a loopback http URL and no OIDC variable is set, so the default public URL or a stray token on a real
+// deployment can never enable it. A no-op when CRUCIBLE_PREVIEW_TOKEN is unset.
+func previewGuard(getenv func(string) string) error {
+	token := getenv("CRUCIBLE_PREVIEW_TOKEN")
+	if token == "" {
+		return nil
+	}
+	public := strings.TrimRight(getenv("CRUCIBLE_PUBLIC_URL"), "/")
+	if public == "" {
+		return errors.New("CRUCIBLE_PUBLIC_URL must be set explicitly")
+	}
+	for _, k := range []string{"OIDC_ISSUER", "OIDC_DISCOVERY_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"} {
+		if getenv(k) != "" {
+			return fmt.Errorf("%s is set: a deployment with OIDC never runs in preview mode", k)
+		}
+	}
+	return auth.PreviewAllowed(public, token)
+}
+
 func run(ctx context.Context) error {
 	pool, err := db.Open(ctx, must("DATABASE_URL"))
 	if err != nil {
@@ -74,7 +94,7 @@ func run(ctx context.Context) error {
 	var oidcH *auth.OIDC
 	previewToken := os.Getenv("CRUCIBLE_PREVIEW_TOKEN")
 	if previewToken != "" {
-		if err := auth.PreviewAllowed(public, previewToken); err != nil {
+		if err := previewGuard(os.Getenv); err != nil {
 			return fmt.Errorf("preview mode: %w", err)
 		}
 		slog.Warn("PREVIEW MODE: OIDC is off and /auth/preview signs in with the preview token. Only crucible preview sets this")

@@ -48,3 +48,35 @@ func TestReaperRunsHourlyCostExplorerEverySixHours(t *testing.T) {
 		t.Fatalf("periodic jobs: %v", every)
 	}
 }
+
+func TestPreviewGuard(t *testing.T) {
+	tok := strings.Repeat("a", 48)
+	base := map[string]string{"CRUCIBLE_PREVIEW_TOKEN": tok, "CRUCIBLE_PUBLIC_URL": "http://localhost:8090"}
+	with := func(k, v string) map[string]string {
+		m := map[string]string{}
+		for a, b := range base {
+			m[a] = b
+		}
+		m[k] = v
+		return m
+	}
+	for name, tc := range map[string]struct {
+		env     map[string]string
+		wantErr bool
+	}{
+		"ok":               {base, false},
+		"no token is off":  {map[string]string{"OIDC_ISSUER": "https://idp"}, false},
+		"public url unset": {with("CRUCIBLE_PUBLIC_URL", ""), true},
+		"non-loopback":     {with("CRUCIBLE_PUBLIC_URL", "http://crucible.example.com"), true},
+		"https":            {with("CRUCIBLE_PUBLIC_URL", "https://localhost"), true},
+		"oidc issuer set":  {with("OIDC_ISSUER", "https://idp"), true},
+		"oidc client set":  {with("OIDC_CLIENT_ID", "x"), true},
+		"oidc secret set":  {with("OIDC_CLIENT_SECRET", "x"), true},
+		"oidc discovery":   {with("OIDC_DISCOVERY_URL", "http://kc"), true},
+	} {
+		err := previewGuard(envOf(tc.env))
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: err=%v wantErr=%v", name, err, tc.wantErr)
+		}
+	}
+}

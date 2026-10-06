@@ -121,7 +121,7 @@ func TestFingerprintNoticesEditsAndStaging(t *testing.T) {
 }
 
 func TestComposeFileStaysOnLoopback(t *testing.T) {
-	c := composeFile("p1", "crucible:dev", 8090, "tok", "hook", "/tmp/git")
+	c := composeFile("p1", "crucible:dev", 8090, "tok", "hook", "pw1", "/tmp/git")
 	for _, want := range []string{`"127.0.0.1:8090:8080"`, `CRUCIBLE_PREVIEW_TOKEN: "tok"`, `CRUCIBLE_GIT_ALLOW_FILE: "1"`, `CRUCIBLE_PUBLIC_URL: http://localhost:8090`, `name: p1`} {
 		if !strings.Contains(c, want) {
 			t.Errorf("compose file lacks %s:\n%s", want, c)
@@ -166,5 +166,60 @@ func TestPreviewNeedsTheImage(t *testing.T) {
 	}
 	if len(*calls) != 1 || !strings.Contains((*calls)[0], "nope:1") {
 		t.Fatalf("nothing starts without the image: %v", *calls)
+	}
+}
+
+func TestWriteComposeIsPrivateWithRandomPassword(t *testing.T) {
+	work := t.TempDir()
+	path, tok, _, err := writeCompose(work, "crucible:dev", 8090)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Errorf("compose.yml mode %o, want 600", fi.Mode().Perm())
+	}
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), "crucible:crucible@") || strings.Contains(string(b), "POSTGRES_PASSWORD: crucible,") {
+		t.Error("the Postgres password must be random per run")
+	}
+	if !strings.Contains(string(b), tok) {
+		t.Error("token missing")
+	}
+	for _, want := range []string{"read_only: true", "cap_drop: [ALL]", "no-new-privileges:true"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("api hardening %q missing", want)
+		}
+	}
+	p2, _, _, _ := writeCompose(t.TempDir(), "crucible:dev", 8090)
+	b2, _ := os.ReadFile(p2)
+	if string(b) == string(b2) {
+		t.Error("two runs must not share secrets")
+	}
+}
+
+func TestSnapshotSkipsSymlinkedDirsAndKeepsForceTracked(t *testing.T) {
+	src, work, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	writeFile(t, src, "training.yaml", "id: t1\n", 0o644)
+	writeFile(t, src, ".gitignore", "ign.md\n", 0o644)
+	writeFile(t, src, "ign.md", "x", 0o644)
+	writeFile(t, src, "modules/m1/a.md", "a", 0o644)
+	writeFile(t, outside, "s.txt", "secret", 0o644)
+	gitIn(t, src, "init", "-q")
+	gitIn(t, src, "add", "-f", ".")
+	if err := os.RemoveAll(filepath.Join(src, "modules")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(src, "modules")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, outside, "m1/a.md", "leak", 0o644)
+	if _, err := snapshot(src, work, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "src", "modules", "m1", "a.md")); err == nil {
+		t.Error("file reached through a symlinked directory was copied")
+	}
+	if _, err := os.Stat(filepath.Join(work, "src", "ign.md")); err != nil {
+		t.Error("force-tracked ignored file was dropped")
 	}
 }

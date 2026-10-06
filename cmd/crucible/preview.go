@@ -64,15 +64,19 @@ func preview(args []string) int {
 		return 1
 	}
 	// Caught from here on, so Ctrl-C during startup still reaches the cleanup below instead of killing the process.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// SIGHUP too: closing the terminal must not strand the stack.
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	ctx, cancel := context.WithCancel(sigCtx)
+	defer cancel()
 	work, err := os.MkdirTemp("", "crucible-preview-*")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	defer os.RemoveAll(work)
-	_ = os.Chmod(work, 0o755) // the API container runs as uid 10001 and must read the repos
+	// work stays 0700 (MkdirTemp): only work/git is opened up (openUp) for the container's uid 10001, and Docker
+	// mounts it as root, so no other local user can reach compose.yml or the repos.
 	if _, err := snapshot(src, work, *free); err != nil {
 		fmt.Fprintln(os.Stderr, "snapshot:", err)
 		return 1
@@ -90,9 +94,8 @@ func preview(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	token, hook, project := randHex(24), randHex(24), "crucible-preview-"+randHex(3)
-	compose := filepath.Join(work, "compose.yml")
-	if err := os.WriteFile(compose, []byte(composeFile(project, *image, *port, token, hook, filepath.Join(work, "git"))), 0o644); err != nil {
+	compose, token, hook, err := writeCompose(work, *image, *port)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -116,6 +119,12 @@ func preview(args []string) int {
 	agentDone := make(chan struct{})
 	go func() { // the agent runs in this process: local labs start on the author's Docker like a trainee's would
 		defer close(agentDone)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("preview agent panicked; stopping the preview", "panic", r)
+				cancel() // the main loop sees ctx.Done and runs the cleanup
+			}
+		}()
 		c := &agent.Client{Server: base, Token: pairing, Exec: agent.Compose{Dir: filepath.Join(work, "labs")}, Log: slog.Default()}
 		if err := c.Run(ctx); err != nil && ctx.Err() == nil {
 			slog.Error("preview agent stopped; local labs will not start", "err", err)
@@ -128,6 +137,7 @@ func preview(args []string) int {
 	for {
 		select {
 		case <-ctx.Done():
+			stop() // a second Ctrl-C now kills the process instead of waiting on a stuck lab teardown
 			fmt.Fprintln(os.Stderr, "stopping the preview…")
 			<-agentDone // the agent tears its labs down before the stack and the work dir go
 			return 0
@@ -215,14 +225,14 @@ func snapshot(src, work string, free bool) (bool, error) {
 		}
 	}
 	for _, rel := range files {
-		fi, err := os.Lstat(filepath.Join(src, rel))
+		fi, err := lstatNoLinks(src, rel)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue // deleted but not yet staged: the preview shows the working tree
 		}
 		if err != nil {
 			return false, err
 		}
-		if !fi.Mode().IsRegular() { // symlinks are a lint error anyway; submodules are directories
+		if fi == nil || !fi.Mode().IsRegular() { // symlinks (files or directories) are a lint error anyway; submodules are directories
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(src, rel))
@@ -242,7 +252,7 @@ func snapshot(src, work string, free bool) (bool, error) {
 			return false, err
 		}
 	}
-	if err := gitRun(repo, "add", "-A"); err != nil {
+	if err := gitRun(repo, "add", "-A", "-f"); err != nil {
 		return false, err
 	}
 	if gitRun(repo, "diff", "--cached", "--quiet") == nil && gitRun(repo, "rev-parse", "--verify", "-q", "HEAD") == nil {
@@ -255,6 +265,34 @@ func snapshot(src, work string, free bool) (bool, error) {
 		return false, err
 	}
 	return true, openUp(bare) // new objects must stay readable by the container's user
+}
+
+// lstatNoLinks lstats src/rel but returns nil if any parent directory of rel is a symlink, so a tracked directory
+// later replaced by a link cannot pull files from outside src into the preview.
+func lstatNoLinks(src, rel string) (fs.FileInfo, error) {
+	dir := src
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, p := range parts[:len(parts)-1] {
+		dir = filepath.Join(dir, p)
+		fi, err := os.Lstat(dir)
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return nil, nil
+		}
+	}
+	return os.Lstat(filepath.Join(src, rel))
+}
+
+// writeCompose writes work/compose.yml (0600: it holds the preview token, hook secret and DB password) with fresh
+// random secrets and returns its path, the sign-in token and the hook secret.
+func writeCompose(work, image string, port int) (path, token, hook string, err error) {
+	token, hook = randHex(24), randHex(24)
+	project, pg := "crucible-preview-"+randHex(3), randHex(16)
+	path = filepath.Join(work, "compose.yml")
+	err = os.WriteFile(path, []byte(composeFile(project, image, port, token, hook, pg, filepath.Join(work, "git"))), 0o600)
+	return
 }
 
 func gitRun(dir string, args ...string) error {
@@ -331,18 +369,18 @@ func fingerprint(dir string) (string, error) {
 
 // composeFile is the preview stack. Only the API publishes a port, and only on 127.0.0.1; Postgres keeps its data in
 // tmpfs. CRUCIBLE_GIT_ALLOW_FILE lets gitsync read the file:// snapshot repos mounted read-only at /git.
-func composeFile(project, image string, port int, token, hook, gitDir string) string {
+func composeFile(project, image string, port int, token, hook, pgPass, gitDir string) string {
 	return fmt.Sprintf(`name: %s
 services:
   postgres:
     image: postgres:18-alpine
-    environment: { POSTGRES_USER: crucible, POSTGRES_PASSWORD: crucible, POSTGRES_DB: crucible }
+    environment: { POSTGRES_USER: crucible, POSTGRES_PASSWORD: %s, POSTGRES_DB: crucible }
     tmpfs: [/var/lib/postgresql]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U crucible"], interval: 2s, retries: 30 }
   api:
     image: %q
     environment:
-      DATABASE_URL: postgres://crucible:crucible@postgres:5432/crucible?sslmode=disable
+      DATABASE_URL: postgres://crucible:%s@postgres:5432/crucible?sslmode=disable
       CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
       CRUCIBLE_PUBLIC_URL: http://localhost:%d
       CRUCIBLE_SYNC_INTERVAL: 30s
@@ -350,11 +388,16 @@ services:
       CRUCIBLE_GIT_HOOK_SECRET: %q
       CRUCIBLE_GIT_ALLOW_FILE: "1"
       CRUCIBLE_QUIZ_SECRET: crucible-preview
+    # The api only reads /git and writes its mirrors under /data (CRUCIBLE_DATA_DIR) and temp files.
+    read_only: true
+    tmpfs: ["/data:uid=10001,mode=0700", "/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     ports: ["127.0.0.1:%d:8080"]
     volumes: [%q]
     depends_on: { postgres: { condition: service_healthy } }
     healthcheck: { test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz"], interval: 2s, retries: 60 }
-`, project, image, port, token, hook, port, gitDir+":/git:ro")
+`, project, pgPass, image, pgPass, port, token, hook, port, gitDir+":/git:ro")
 }
 
 // pairingToken signs in through /auth/preview and asks for an agent pairing token the normal way.

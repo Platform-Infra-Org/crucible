@@ -200,20 +200,29 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 	}
 }
 
-// trainingOf returns the content version a lab runs, or nil while syncing / if it vanished.
+// trainingOf returns the content version a lab runs, or nil while syncing / if it vanished. Old versions live only as
+// long as the process, so after a restart it falls back to the program's current version if that still has the lab.
 func (s *Service) trainingOf(inst *Instance) *content.Training {
-	if st := s.Learn.State(); st != nil {
-		return st.Training(inst.Training, inst.SHA)
+	st := s.Learn.State()
+	if st == nil {
+		return nil
+	}
+	if t := st.Training(inst.Training, inst.SHA); t != nil {
+		return t
+	}
+	if t, _ := st.ProgramTraining(inst.Team, inst.Training); t != nil {
+		if m := t.Module(inst.Module); m != nil && m.Lab != nil {
+			return t
+		}
 	}
 	return nil
 }
 
 func (s *Service) labContent(inst *Instance) (*content.Lab, *content.Quiz, error) {
-	st := s.Learn.State()
-	if st == nil {
+	if s.Learn.State() == nil {
 		return nil, nil, apperr.Wrap(apperr.Unavailable, "content is still syncing")
 	}
-	t := st.Training(inst.Training, inst.SHA)
+	t := s.trainingOf(inst)
 	if t == nil {
 		return nil, nil, apperr.Wrap(apperr.Unavailable, "this lab's content is no longer available")
 	}
@@ -307,15 +316,17 @@ func taskStatuses(lab *content.Lab, done map[string]taskRow, setups map[string]s
 			out[t.ID] = r.Status
 			continue
 		}
-		if sub := reviews[t.ID]; sub != nil && sub.Status == scoring.Pending {
+		sub := reviews[t.ID]
+		if sub != nil && sub.Status == scoring.Pending {
 			out[t.ID] = "submitted" // with a scorer; later tasks go on (M5 ruling 4)
 			continue
 		}
-		if lab.TaskOrder == "linear" && opened {
+		returned := sub != nil && sub.Status == scoring.Returned // needs rework, but never re-locks what it unlocked
+		if !returned && lab.TaskOrder == "linear" && opened {
 			out[t.ID] = "locked"
 			continue
 		}
-		opened = true
+		opened = opened || !returned
 		if setups[t.ID] == "failed" {
 			out[t.ID] = "setup_failed"
 		} else {

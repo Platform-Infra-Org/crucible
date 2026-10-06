@@ -45,8 +45,9 @@ func (s *Service) SubmitReview(ctx context.Context, u *auth.User, labID, taskID,
 		return nil, err
 	}
 	s.Touch(ctx, inst.ID)
+	// The submission is stored: a failed recompute is logged (view settles it), never a 500 that invites a retry.
 	if err := s.recompute(ctx, inst, lab); err != nil {
-		return nil, err
+		s.Log.Error("recomputing a lab after a review submission failed", "lab", inst.ID, "err", err)
 	}
 	return s.view(ctx, inst)
 }
@@ -142,7 +143,10 @@ func (s *Service) Override(ctx context.Context, labID, taskID string, points flo
 		return err
 	}
 	s.event(ctx, inst.ID, "override", fmt.Sprintf("%s %.2f→%.2f", taskID, prev, points))
-	return s.recompute(ctx, inst, lab)
+	if err := s.recompute(ctx, inst, lab); err != nil { // committed and audited; the next page load recomputes
+		s.Log.Error("recomputing a lab after an override failed", "lab", inst.ID, "err", err)
+	}
+	return nil
 }
 
 // Evidence is what a scorer sees next to a lab submission (spec §7): every task's result, check runs and hints across

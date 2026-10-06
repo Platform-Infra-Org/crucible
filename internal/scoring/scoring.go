@@ -394,11 +394,8 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, status str
 	if utf8.RuneCountInString(feedback) > maxFeedback {
 		return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("feedback is limited to %d characters", maxFeedback))
 	}
-	sub, err := s.get(ctx, id)
+	sub, err := s.scorerGet(ctx, u, id)
 	if err != nil {
-		return nil, err
-	}
-	if err := s.mayScore(u, sub); err != nil {
 		return nil, err
 	}
 	if status == Scored && (math.IsNaN(points) || points < 0 || points > sub.MaxPoints) {

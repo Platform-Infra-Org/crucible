@@ -93,8 +93,9 @@ func (s *Service) Detail(ctx context.Context, u *auth.User, id int64) (*Detail, 
 	}
 	d := &Detail{Submission: sub, History: hist}
 	if sub.LabID != "" && s.Labs != nil {
-		if d.Lab, err = s.Labs.Evidence(ctx, sub.LabID); err != nil {
-			return nil, err
+		if d.Lab, err = s.Labs.Evidence(ctx, sub.LabID); err != nil { // e.g. its content version is gone: score without it
+			s.log().Error("loading lab evidence failed", "submission", sub.ID, "lab", sub.LabID, "err", err)
+			d.Lab = nil
 		}
 	}
 	return d, nil
@@ -220,7 +221,12 @@ func (s *Service) Override(ctx context.Context, u *auth.User, id int64, task str
 	if err != nil {
 		return nil, err
 	}
-	return s.Labs.Evidence(ctx, sub.LabID)
+	ev, err := s.Labs.Evidence(ctx, sub.LabID)
+	if err != nil { // the override is stored and audited: a retry would only apply it twice
+		s.log().Error("loading lab evidence after an override failed", "submission", sub.ID, "err", err)
+		return nil, nil // the caller reloads the detail
+	}
+	return ev, nil
 }
 
 // File opens one uploaded file for someone who may view the trainee's progress; everyone else gets NotFound.

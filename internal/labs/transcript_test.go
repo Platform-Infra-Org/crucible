@@ -91,7 +91,7 @@ func TestTerminalSessionIsRecorded(t *testing.T) {
 	h := resp.Header
 	if resp.StatusCode != 200 || !strings.Contains(string(b), "echo tempered") || h.Get("X-Content-Type-Options") != "nosniff" ||
 		!strings.HasPrefix(h.Get("Content-Disposition"), "attachment") || h.Get("Content-Security-Policy") != "sandbox" ||
-		!strings.HasPrefix(h.Get("Content-Type"), "text/plain") {
+		!strings.HasPrefix(h.Get("Content-Type"), "text/plain") || h.Get("Cache-Control") != "private, no-store" {
 		t.Fatalf("download %d %q %v", resp.StatusCode, b, h)
 	}
 }

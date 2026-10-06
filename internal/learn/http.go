@@ -70,6 +70,11 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, res, err)
 	})
 	r.Post(p+"/modules/{module}/quiz/questions/{question}/answer", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, _, err := s.quizModule(r.Context(), auth.UserFrom(r.Context()), param(r, "team"), param(r, "training"),
+			param(r, "module")); err != nil { // before spooling any upload
+			httpx.Error(w, err)
+			return
+		}
 		answer, files, done, err := scoring.ReadForm(w, r)
 		defer done()
 		if err != nil {

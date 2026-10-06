@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -42,11 +43,22 @@ func TestResolveTimingPrecedence(t *testing.T) {
 
 func TestBundleExcludesSecrets(t *testing.T) {
 	dir := t.TempDir()
-	for _, f := range []string{"compose.yaml", "conf/nginx.conf", "lab.yaml", "checks/1.sh", "setup/1.sh", "tasks/1.md", "hints/1.md", "quiz.yaml", "module.yaml"} {
+	for _, f := range []string{"compose.yaml", "conf/nginx.conf", "terraform/main.tf", "lab.yaml", "checks/1.sh", "setup/1.sh", "tasks/1.md", "hints/1.md", "quiz.yaml", "module.yaml"} {
 		_ = os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
 		_ = os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644)
 	}
-	b, err := Bundle(dir)
+	if got := bundled(t, dir, "local"); !slices.Equal(got, []string{"compose.yaml", "conf/nginx.conf", "terraform/main.tf"}) {
+		t.Fatalf("local bundle contains %v", got)
+	}
+	// an aws lab's terraform/ is its module, run by the runner, not the trainee
+	if got := bundled(t, dir, "aws"); !slices.Equal(got, []string{"compose.yaml", "conf/nginx.conf"}) {
+		t.Fatalf("aws bundle contains %v", got)
+	}
+}
+
+func bundled(t *testing.T, dir, runtime string) []string {
+	t.Helper()
+	b, err := Bundle(dir, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,9 +75,7 @@ func TestBundleExcludesSecrets(t *testing.T) {
 		}
 	}
 	sort.Strings(files)
-	if len(files) != 2 || files[0] != "compose.yaml" || files[1] != "conf/nginx.conf" {
-		t.Fatalf("bundle contains %v", files)
-	}
+	return files
 }
 
 func TestBundleSizeLimit(t *testing.T) {
@@ -75,11 +85,11 @@ func TestBundleSizeLimit(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "big.bin"), noise, 0o644)
 	defer func(old int) { maxBundleBytes = old }(maxBundleBytes)
 	maxBundleBytes = 16 << 10
-	if _, err := Bundle(dir); err == nil || !strings.Contains(err.Error(), "lab bundle exceeds") {
+	if _, err := Bundle(dir, "local"); err == nil || !strings.Contains(err.Error(), "lab bundle exceeds") {
 		t.Fatalf("want size error, got %v", err)
 	}
 	maxBundleBytes = 1 << 20
-	if _, err := Bundle(dir); err != nil {
+	if _, err := Bundle(dir, "local"); err != nil {
 		t.Fatal(err)
 	}
 }

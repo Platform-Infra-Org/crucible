@@ -17,11 +17,13 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/creack/pty v1.1.24
 	github.com/go-chi/chi/v5 v5.3.2
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/riverqueue/river v0.49.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.49.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
+	github.com/zclconf/go-cty v1.19.0
 	golang.org/x/oauth2 v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.34.12
@@ -75,7 +77,6 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/hashicorp/hcl/v2 v2.25.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -122,7 +123,6 @@ require (
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	github.com/zclconf/go-cty v1.19.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.71.0 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect

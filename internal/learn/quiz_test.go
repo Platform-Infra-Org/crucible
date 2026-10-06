@@ -177,6 +177,7 @@ func TestQuizOutcome(t *testing.T) {
 		{"one unanswered", 1, true, map[string]*scoring.Submission{"q-why": sub("scored", 5)}, "in_progress", 6.0 / 11},
 		{"all scored", 1, true, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("scored", 2), "q-demo": sub("scored", 3)}, "complete", 1},
 		{"all scored, too low", 0, true, map[string]*scoring.Submission{"q-why": sub("scored", 1), "q-log": sub("scored", 0), "q-demo": sub("scored", 3)}, "in_progress", 4.0 / 11},
+		{"older version's instant points", 3, true, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("scored", 2), "q-demo": sub("scored", 3)}, "complete", 1},
 		{"instant part never tried", 0, false, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("scored", 2), "q-demo": sub("scored", 3)}, "in_progress", 10.0 / 11},
 	}
 	for _, c := range cases {

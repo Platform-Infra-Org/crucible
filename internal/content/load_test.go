@@ -319,22 +319,49 @@ AWS`, "AWS", aws, 1)
 		override map[string]string
 		want     string
 	}{
-		"no region":      {withAWS("aws: {max_hourly_usd: 0.1}\n"), "aws.region is required"},
-		"odd region":     {withAWS("aws: {region: \"eu-west-1; rm -rf\", max_hourly_usd: 0.1}\n"), "aws.region is required"},
-		"no ceiling":     {withAWS("aws: {region: eu-west-1}\n"), "aws.max_hourly_usd must be set"},
-		"no module":      {tf("main.tf", "<delete>"), "needs a terraform/ directory"},
-		"own provider":   {tf("p.tf", "provider \"aws\" {\n  region = \"us-east-1\"\n}\n"), `do not declare provider "aws"`},
-		"own backend":    {tf("b.tf", "terraform {\n  backend \"local\" {}\n}\n"), "do not declare a backend"},
-		"registry mod":   {tf("m.tf", "module \"vpc\" {\n  source = \"terraform-aws-modules/vpc/aws\"\n}\n"), "must be a local path"},
-		"git module":     {tf("m.tf", "module \"x\" {\n  source = \"git::https://example.com/x.git\"\n}\n"), "must be a local path"},
-		"too big":        {tf("big.tf", "# "+strings.Repeat("x", 600<<10)+"\n"), "keep it under 512 KiB"},
-		"wrong terminal": {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
+		"no region":    {withAWS("aws: {max_hourly_usd: 0.1}\n"), "aws.region is required"},
+		"odd region":   {withAWS("aws: {region: \"eu-west-1; rm -rf\", max_hourly_usd: 0.1}\n"), "aws.region is required"},
+		"no ceiling":   {withAWS("aws: {region: eu-west-1}\n"), "aws.max_hourly_usd must be set"},
+		"no module":    {tf("main.tf", "<delete>"), "needs a terraform/ directory"},
+		"own provider": {tf("p.tf", "provider \"aws\" {\n  region = \"us-east-1\"\n}\n"), "do not declare provider blocks"},
+		"own backend":  {tf("b.tf", "terraform {\n  backend \"local\" {}\n}\n"), "do not declare a backend"},
+		"registry mod": {tf("m.tf", "module \"vpc\" {\n  source = \"terraform-aws-modules/vpc/aws\"\n}\n"), "must be a local path"},
+		"git module":   {tf("m.tf", "module \"x\" {\n  source = \"git::https://example.com/x.git\"\n}\n"), "must be a local path"},
+		// review bypasses (task-1-review.md): each passed the regex lint
+		"one-line git module":    {tf("m.tf", `module "x" { source = "git::https://evil/x.git" }`), "must be a local path"},
+		"one-line backend":       {tf("x_override.tf", `terraform { backend "local" {} }`), "terraform/x_override.tf"}, // invalid HCL: a parse error
+		"override backend":       {tf("x_override.tf", "terraform {\nbackend \"local\" {}\n}\n"), "do not declare a backend"},
+		"cloud block":            {tf("c.tf", "terraform {\n  cloud {}\n}\n"), "do not declare a backend"},
+		"json provider":          {tf("p.tf.json", `{"provider": {"aws": {"region": "us-east-1"}}}`), "do not declare provider blocks"},
+		"json backend":           {tf("b_override.tf.json", `{"terraform": {"backend": {"local": {}}}}`), "do not declare a backend"},
+		"json module":            {tf("m.tf.json", `{"module": {"x": {"source": "git::https://evil/x.git"}}}`), "must be a local path"},
+		"github shorthand":       {tf("m.tf", `module "x" { source = "github.com/evil/repo" }`), "must be a local path"},
+		"bitbucket shorthand":    {tf("m.tf", `module "x" { source = "bitbucket.org/x/y" }`), "must be a local path"},
+		"https module":           {tf("m.tf", `module "x" { source = "https://evil/x.zip" }`), "must be a local path"},
+		"s3 module":              {tf("m.tf", `module "x" { source = "s3::https://s3.amazonaws.com/b/x.zip" }`), "must be a local path"},
+		"escaping module":        {tf("m.tf", `module "x" { source = "./../../.." }`), "must be a local path"},
+		"evil provider source":   {tf("v.tf", "terraform {\n  required_providers {\n    aws = { source = \"evil.example/x/aws\" }\n  }\n}\n"), "provider source"},
+		"json provider source":   {tf("v.tf.json", `{"terraform": {"required_providers": {"aws": {"source": "evil/aws"}}}}`), "provider source"},
+		"auto tfvars":            {tf("zz.auto.tfvars", "crucible_team = \"other\"\n"), "do not ship"},
+		"tfvars json":            {tf("x.tfvars.json", `{}`), "do not ship"},
+		"plain tfvars":           {tf("terraform.tfvars", ""), "do not ship"},
+		"unquoted provider":      {tf("p.tf", "provider aws {\n}\n"), "do not declare provider blocks"},
+		"provider after comment": {tf("p.tf", "/* x */ provider \"aws\" {}\n"), "do not declare provider blocks"},
+		"split provider":         {tf("p.tf", "provider\n\"aws\"\n{\n}\n"), "terraform/p.tf"}, // invalid HCL: a parse error
+		"aliased other provider": {tf("p.tf", "provider \"random\" {\n  alias = \"x\"\n}\n"), "do not declare provider blocks"},
+		"upper-case extension":   {tf("P.TF", `provider "aws" {}`), "do not declare provider blocks"},
+		"nested module provider": {tf("x/main.tf", `provider "aws" {}`), "do not declare provider blocks"},
+		"parse error":            {tf("bad.tf", "resource \"x\" {\n"), "terraform/bad.tf"},
+		"json parse error":       {tf("bad.tf.json", "{"), "terraform/bad.tf.json"},
+		"shipped .terraform dir": {tf(".terraform/providers/x", "bin"), "do not ship"},
+		"too big":                {tf("big.tf", "# "+strings.Repeat("x", 600<<10)+"\n"), "keep it under 512 KiB"},
+		"wrong terminal":         {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, probs := Load(awsTree(t, c.override))
 			for _, p := range probs {
-				if strings.Contains(p.Msg, c.want) {
+				if strings.Contains(p.String(), c.want) {
 					return
 				}
 			}
@@ -346,6 +373,8 @@ AWS`, "AWS", aws, 1)
 		"modules/m1/lab/terraform/versions.tf": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n    }\n  }\n}\n",
 		"modules/m1/lab/terraform/mod.tf":      "module \"x\" {\n  source = \"./x\"\n}\n",
 		"modules/m1/lab/terraform/x/main.tf":   "# a local module\n",
+		"modules/m1/lab/terraform/more.tf.json": `{"terraform": {"required_providers": {"random": {"source": "registry.terraform.io/hashicorp/random"}, "null": "~> 3.0"}},
+			"module": {"y": {"source": "./x"}}}`,
 	})
 	if _, probs := Load(ok); len(probs) > 0 {
 		t.Fatalf("provider sources and local modules are allowed: %v", probs)

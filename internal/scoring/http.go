@@ -130,6 +130,7 @@ func (s *Service) Routes(r chi.Router) {
 		w.Header().Set("Content-Disposition", cd)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "sandbox")
+		w.Header().Set("Cache-Control", "private, no-store")
 		_, _ = io.Copy(w, rc)
 	})
 }

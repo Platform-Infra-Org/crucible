@@ -4,10 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
@@ -182,5 +187,55 @@ func TestForceScoreSetsExactlyAndNeverCreatesARow(t *testing.T) {
 	if err := s.DB.QueryRow(ctx, `SELECT status, score FROM item_progress WHERE user_id = $1`, u.ID).Scan(&st, &score); err != nil ||
 		st != "complete" || score != 0.4 {
 		t.Fatalf("forced score may go down, status kept: %s %v %v", st, score, err)
+	}
+}
+
+// A decision whose progress refresh failed (it runs after the scoring transaction) is applied when the quiz is next viewed.
+func TestQuizSettlesDecisionsOnPageLoad(t *testing.T) {
+	ctx := context.Background()
+	s, sc, u, senior := fixture301(t)
+	quiz := s.State().Trainings["forge-301@abc"].Module(temper).Quiz
+	if _, err := s.SubmitQuiz(ctx, u, team, f301, temper, asPublic(quiz, s.seedFor(u.ID, team, f301, temper), map[string]json.RawMessage{"q-quench": raw("0")})); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.AnswerHuman(ctx, u, team, f301, temper, "q-why", "Brittle, then tough.", nil)
+	v, _ := s.AnswerHuman(ctx, u, team, f301, temper, "q-log", "https://logs.example.com/run/42", nil)
+	sc.Quiz = nil // the refresh after a decision never happens
+	ids := submissionIDs(v)
+	_, _ = sc.Score(ctx, senior, ids["q-why"], 5, "")
+	_, _ = sc.Score(ctx, senior, ids["q-log"], 2, "")
+	if _, err := sc.SignOff(ctx, senior, scoring.SignOffInput{Team: team, Training: f301, Module: temper, Question: "q-demo", Trainee: u.Email}); err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := s.Outline(ctx, u, team, f301); !o.Modules[1].Locked {
+		t.Fatal("refresh was skipped, so the item should be stale")
+	}
+	if v, _ = s.Quiz(ctx, u, team, f301, temper); v.Status != "complete" {
+		t.Fatalf("settled on load: %s", v.Status)
+	}
+	if o, _ := s.Outline(ctx, u, team, f301); o.Modules[1].Locked {
+		t.Fatal("the stored progress was settled too")
+	}
+}
+
+type tripwire struct{ t *testing.T }
+
+func (r tripwire) Read([]byte) (int, error) {
+	r.t.Error("the body was read before enrolment was checked")
+	return 0, io.EOF
+}
+
+func TestAnswerChecksEnrolmentBeforeReadingTheBody(t *testing.T) {
+	s, _, _, _ := fixture301(t)
+	r := chi.NewRouter()
+	s.Routes(r)
+	req := httptest.NewRequest(http.MethodPost, "/api/programs/forge/forge-301/modules/01-temper/quiz/questions/q-why/answer", tripwire{t})
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: 99, Email: "stranger@crucible.local"}))
+	req.Header.Set("X-Crucible-Upload", "1")
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
+		t.Fatalf("not enrolled: %d", w.Code)
 	}
 }

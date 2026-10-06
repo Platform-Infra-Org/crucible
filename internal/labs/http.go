@@ -110,6 +110,10 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 	r.Post("/api/labs/{id}/tasks/{task}/submit", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := s.owned(r.Context(), user(r), p(r, "id")); err != nil { // before spooling any upload
+			httpx.Error(w, err)
+			return
+		}
 		notes, files, done, err := scoring.ReadForm(w, r)
 		defer done()
 		if err != nil {
@@ -137,6 +141,7 @@ func (s *Service) Routes(r chi.Router) {
 		h.Set("Content-Disposition", `attachment; filename="transcript.txt"`)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Security-Policy", "sandbox")
+		h.Set("Cache-Control", "private, no-store")
 		_, _ = io.Copy(w, rc)
 	})
 }

@@ -40,7 +40,7 @@ func TestClusterLabOnKind(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	dir := "../../examples/forge-101/modules/03-cluster-heat/lab"
-	bundle, err := Bundle(dir)
+	bundle, err := Bundle(dir, "cluster")
 	if err != nil {
 		t.Fatal(err)
 	}

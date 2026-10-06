@@ -237,7 +237,7 @@ func quizOutcome(q *content.Quiz, bestInstant float64, attempted bool, subs map[
 	}
 	pct := 0.0
 	if total := instantMax + humanMax; total > 0 {
-		pct = (bestInstant + humanScore) / total
+		pct = min(1, (bestInstant+humanScore)/total) // an older version may have had more instant points
 	}
 	switch {
 	case open:

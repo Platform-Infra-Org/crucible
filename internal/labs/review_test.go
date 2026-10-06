@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
 	"crucible/internal/apperr"
+	"crucible/internal/auth"
 	"crucible/internal/blob"
 	"crucible/internal/config"
 	"crucible/internal/content"
@@ -234,5 +239,83 @@ func TestDecisionsSettleOnPageLoad(t *testing.T) {
 	}
 	if st, score := f.item(t, "02-review-lab"); st != "complete" || math.Abs(score-0.8) > 1e-9 {
 		t.Fatalf("lab item: %s %.2f", st, score)
+	}
+}
+
+// A pin bump plus an API restart drops the lab's content version from memory; a pending review must still be scorable.
+func TestReviewOnAnUnloadedVersionCanStillBeScored(t *testing.T) {
+	ctx := context.Background()
+	f := setupReview(t)
+	v := f.startReviewLab(t)
+	_, _ = f.s.Check(ctx, f.u, v.ID, "t1-light", "")
+	v, _ = f.s.SubmitReview(ctx, f.u, v.ID, "t2-proof", "done", nil)
+	id := taskOf(v, "t2-proof").Review.ID
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET sha = 'gone' WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	d, err := f.sc.Detail(ctx, f.other, id)
+	if err != nil || d.Lab == nil || len(d.Lab.Tasks) != 2 {
+		t.Fatalf("the program's current version still has this lab: %+v %v", d, err)
+	}
+	if _, err := f.sc.Score(ctx, f.other, id, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.item(t, "02-review-lab"); st != "complete" {
+		t.Fatalf("lab item: %s", st)
+	}
+}
+
+func TestDetailWithoutLabContentStillLoads(t *testing.T) {
+	ctx := context.Background()
+	f := setupReview(t)
+	v := f.startReviewLab(t)
+	_, _ = f.s.Check(ctx, f.u, v.ID, "t1-light", "")
+	v, _ = f.s.SubmitReview(ctx, f.u, v.ID, "t2-proof", "done", nil)
+	// neither the lab's version nor any program version has this training any more
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET sha = 'gone', training = 'retired' WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	d, err := f.sc.Detail(ctx, f.other, taskOf(v, "t2-proof").Review.ID)
+	if err != nil || d.Lab != nil || d.Submission == nil {
+		t.Fatalf("detail without evidence: %+v %v", d, err)
+	}
+}
+
+func TestReturnedReviewDoesNotRelockLaterTasks(t *testing.T) {
+	lab := &content.Lab{TaskOrder: "linear", Tasks: []*content.Task{{ID: "a"}, {ID: "b"}, {ID: "c"}}}
+	got := taskStatuses(lab, map[string]taskRow{}, nil, map[string]*scoring.Submission{"a": {Status: scoring.Returned}})
+	if got["a"] != "open" || got["b"] != "open" || got["c"] != "locked" {
+		t.Fatalf("statuses: %v", got)
+	}
+	got = taskStatuses(lab, map[string]taskRow{}, map[string]string{"a": "failed"}, map[string]*scoring.Submission{"a": {Status: scoring.Returned}})
+	if got["a"] != "setup_failed" || got["b"] != "open" {
+		t.Fatalf("statuses with a failed setup: %v", got)
+	}
+}
+
+type tripwire struct{ t *testing.T }
+
+func (r tripwire) Read([]byte) (int, error) {
+	r.t.Error("the body was read before ownership was checked")
+	return 0, io.EOF
+}
+
+func TestSubmitChecksOwnerBeforeReadingTheBody(t *testing.T) {
+	f := setupReview(t)
+	v := f.startReviewLab(t)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.other)))
+		})
+	})
+	f.s.Routes(router)
+	req := httptest.NewRequest(http.MethodPost, "/api/labs/"+v.ID+"/tasks/t2-proof/submit", tripwire{t})
+	req.Header.Set("X-Crucible-Upload", "1")
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("someone else's lab: %d", w.Code)
 	}
 }

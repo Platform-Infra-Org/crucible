@@ -206,7 +206,7 @@ func TestDownloadIsAnAttachmentForViewersOnly(t *testing.T) {
 		body, _ := io.ReadAll(w.Body)
 		if w.Code != 200 || string(body) != "<script>alert(1)</script>" || w.Header().Get("Content-Type") != "application/octet-stream" ||
 			!strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") || w.Header().Get("X-Content-Type-Options") != "nosniff" ||
-			w.Header().Get("Content-Security-Policy") != "sandbox" {
+			w.Header().Get("Content-Security-Policy") != "sandbox" || w.Header().Get("Cache-Control") != "private, no-store" {
 			t.Fatalf("%s: %d %v", u.Email, w.Code, w.Header())
 		}
 	}

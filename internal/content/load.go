@@ -2,17 +2,23 @@ package content
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+	hcljson "github.com/hashicorp/hcl/v2/json"
+	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
 
 	"crucible/internal/yamlx"
@@ -702,18 +708,27 @@ func interpolates(n *yaml.Node) bool {
 
 var (
 	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
-	tfProvider  = regexp.MustCompile(`(?m)^\s*provider\s+"aws"`)
-	tfBackend   = regexp.MustCompile(`(?m)^\s*backend\s+"`)
-	tfSource    = regexp.MustCompile(`(?m)^\s*source\s*=\s*"([^"]*)"`)
-	// a provider source in required_providers ("hashicorp/aws", "registry.terraform.io/hashicorp/aws"), not a module
-	providerSource = regexp.MustCompile(`^([a-z0-9-]+\.[a-z0-9.-]+/)?[a-z0-9-]+/[a-z0-9-]+$`)
+	// required_providers may only name HashiCorp's own providers: anything else is a downloaded binary on the runner
+	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)
 )
 
 const maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
 
+// The parts of a terraform file awsModule looks at; PartialContent ignores the rest.
+var (
+	tfTopSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
+		{Type: "provider", LabelNames: []string{"name"}}, {Type: "terraform"}, {Type: "module", LabelNames: []string{"name"}}}}
+	tfTerraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
+		{Type: "backend", LabelNames: []string{"type"}}, {Type: "cloud"}, {Type: "required_providers"}}}
+	tfModuleSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
+)
+
 // awsModule checks an aws lab (spec §4.5, §8.2). Region and price ceiling are required. terraform/ holds a module
-// Crucible runs as-is after adding its own provider and backend, so the module must not declare them, and module
-// sources must be local so neither infracost (in the API pod) nor terraform fetches code from the network.
+// Crucible runs as-is after adding its own provider, backend and variables, so the module must not declare provider,
+// backend or cloud blocks nor ship tfvars; providers must be HashiCorp's; module sources must be local so neither
+// infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed with HCL:
+// a regex cannot be made sound for this. What the module does at plan/apply time (data "external", local-exec) is
+// the runner sandbox's job, not lint's.
 func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || !awsRegionRe.MatchString(lab.AWS.Region) {
 		l.add(lf, "aws.region is required for runtime: aws (e.g. eu-west-1)")
@@ -721,40 +736,127 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || lab.AWS.MaxHourlyUSD <= 0 {
 		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
 	}
+	root := filepath.Join(dir, "terraform")
 	files, size := 0, int64(0)
-	_ = filepath.WalkDir(filepath.Join(dir, "terraform"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
 			return err
+		}
+		name := strings.ToLower(d.Name())
+		if d.IsDir() {
+			if name == ".terraform" { // a pre-seeded provider/module cache
+				l.add(p, "do not ship .terraform/: Crucible runs terraform init itself")
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if info, err := d.Info(); err == nil {
 			size += info.Size()
 		}
-		if !strings.HasSuffix(p, ".tf") {
+		switch {
+		case strings.HasSuffix(name, ".tfvars") || strings.HasSuffix(name, ".tfvars.json"):
+			l.add(p, "do not ship %s: Crucible injects the lab's variables", d.Name())
 			return nil
-		}
-		files++
-		b, err := os.ReadFile(p)
-		if err != nil {
-			l.add(p, "%v", err)
-			return nil
-		}
-		if tfProvider.Match(b) {
-			l.add(p, `do not declare provider "aws": Crucible adds it with the lab's region and tags`)
-		}
-		if tfBackend.Match(b) {
-			l.add(p, "do not declare a backend: Crucible stores state per lab")
-		}
-		for _, m := range tfSource.FindAllSubmatch(b, -1) {
-			if s := string(m[1]); !strings.HasPrefix(s, "./") && !providerSource.MatchString(s) {
-				l.add(p, "module source %q must be a local path (./…)", s)
-			}
+		case strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json"):
+			files++
+			l.tfFile(p, strings.HasSuffix(name, ".json"))
 		}
 		return nil
 	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		l.add(root, "%v", err)
+	}
 	if files == 0 {
 		l.add(lf, "runtime: aws needs a terraform/ directory with at least one .tf file")
 	}
 	if size > maxModuleBytes {
 		l.add(lf, "terraform/ is %d KiB; keep it under %d KiB", size>>10, maxModuleBytes>>10)
+	}
+}
+
+// tfFile applies awsModule's rules to one terraform file (override files included: they are plain .tf to terraform).
+func (l *loader) tfFile(p string, isJSON bool) {
+	b, err := os.ReadFile(p)
+	if err != nil {
+		l.add(p, "%v", err)
+		return
+	}
+	var f *hcl.File
+	var diags hcl.Diagnostics
+	if isJSON {
+		f, diags = hcljson.Parse(b, filepath.Base(p))
+	} else {
+		f, diags = hclsyntax.ParseConfig(b, filepath.Base(p), hcl.InitialPos)
+	}
+	if diags.HasErrors() {
+		l.add(p, "%v", diags)
+		return
+	}
+	top, _, diags := f.Body.PartialContent(tfTopSchema)
+	l.tfDiags(p, diags)
+	for _, blk := range top.Blocks {
+		switch blk.Type {
+		case "provider":
+			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
+		case "terraform":
+			tb, _, diags := blk.Body.PartialContent(tfTerraformSchema)
+			l.tfDiags(p, diags)
+			for _, sub := range tb.Blocks {
+				switch sub.Type {
+				case "backend", "cloud":
+					l.add(p, "do not declare a backend or cloud block: Crucible stores state per lab")
+				case "required_providers":
+					attrs, diags := sub.Body.JustAttributes()
+					l.tfDiags(p, diags)
+					for name, a := range attrs {
+						l.providerSource(p, name, a)
+					}
+				}
+			}
+		case "module":
+			mb, _, diags := blk.Body.PartialContent(tfModuleSchema)
+			l.tfDiags(p, diags)
+			src := ""
+			if a := mb.Attributes["source"]; a != nil {
+				if v, diags := a.Expr.Value(nil); !diags.HasErrors() && v.Type() == cty.String && v.IsKnown() && !v.IsNull() {
+					src = v.AsString()
+				}
+			}
+			if !localModule(src) {
+				l.add(p, "module source %q must be a local path (./…) inside terraform/", src)
+			}
+		}
+	}
+}
+
+// providerSource checks one required_providers entry: a version string (implied hashicorp/<name>) or an object whose
+// source, if any, is hashicorp/<name> or registry.terraform.io/hashicorp/<name>.
+func (l *loader) providerSource(p, name string, a *hcl.Attribute) {
+	v, diags := a.Expr.Value(nil)
+	switch {
+	case diags.HasErrors() || !v.IsWhollyKnown() || v.IsNull():
+	case v.Type() == cty.String:
+		return
+	case v.Type().IsObjectType():
+		if !v.Type().HasAttribute("source") {
+			return
+		}
+		if s := v.GetAttr("source"); s.Type() == cty.String && !s.IsNull() &&
+			hashicorpProvider.MatchString(strings.ToLower(s.AsString())) {
+			return
+		}
+	}
+	l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
+}
+
+// localModule: ./ prefix, no .. element after cleaning (so it stays inside terraform/), no backslashes.
+func localModule(s string) bool {
+	return strings.HasPrefix(s, "./") && !strings.Contains(s, `\`) &&
+		!slices.Contains(strings.Split(path.Clean(s), "/"), "..")
+}
+
+func (l *loader) tfDiags(p string, diags hcl.Diagnostics) {
+	if diags.HasErrors() {
+		l.add(p, "%v", diags)
 	}
 }

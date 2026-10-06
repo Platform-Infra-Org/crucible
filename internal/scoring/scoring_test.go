@@ -149,8 +149,11 @@ func TestScoringRules(t *testing.T) {
 	if _, err := f.s.Score(ctx, f.trainee, sub.ID, 5, ""); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("nobody scores their own submission: %v", err)
 	}
-	if _, err := f.s.Score(ctx, f.leader, sub.ID, 5, ""); !errors.Is(err, apperr.Forbidden) {
+	if _, err := f.s.Score(ctx, f.leader, sub.ID, 5, ""); !errors.Is(err, apperr.NotFound) {
 		t.Fatalf("the leader is not a scorer of this program: %v", err)
+	}
+	if _, err := f.s.Return(ctx, f.stranger, sub.ID, "no"); !errors.Is(err, apperr.NotFound) {
+		t.Fatalf("strangers don't learn the submission exists: %v", err)
 	}
 	if _, err := f.s.Score(ctx, f.senior, sub.ID, 6, ""); !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("points over max: %v", err)

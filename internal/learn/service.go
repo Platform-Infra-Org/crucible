@@ -286,6 +286,11 @@ func (s *Service) Quiz(ctx context.Context, u *auth.User, team, training, module
 	if err != nil {
 		return nil, err
 	}
+	if status != "complete" && decided(subs) { // settle a decision whose refresh failed (it runs after the scoring tx)
+		if status, _, err = s.refreshQuiz(ctx, u.ID, team, t, module); err != nil {
+			return nil, err
+		}
+	}
 	qs := PublicQuiz(m.Quiz, s.seedFor(u.ID, team, training, module))
 	for i := range qs {
 		qs[i].Submission = subs[qs[i].ID].Feedback() // nil-safe; Feedback never carries the rubric
@@ -407,4 +412,13 @@ func (s *Service) ForceScore(ctx context.Context, userID int64, team, training, 
 	_, err := s.DB.Exec(ctx, `UPDATE item_progress SET score = $6, updated_at = now()
 		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 AND item = $5`, userID, team, training, module, item, score)
 	return err
+}
+
+func decided(subs map[string]*scoring.Submission) bool {
+	for _, x := range subs {
+		if x.Status != scoring.Pending {
+			return true
+		}
+	}
+	return false
 }

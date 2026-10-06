@@ -33,6 +33,10 @@ func (s *Service) Routes(r chi.Router) {
 		}
 		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID, in.Level))
 	})
+	r.Get("/api/catalog", func(w http.ResponseWriter, r *http.Request) {
+		c, err := s.Catalog(auth.UserFrom(r.Context()))
+		reply(w, c, err)
+	})
 	r.Get("/api/programs", func(w http.ResponseWriter, r *http.Request) {
 		cards, err := s.Programs(r.Context(), auth.UserFrom(r.Context()))
 		reply(w, cards, err)

@@ -24,6 +24,8 @@ import { ForgeStatusPage } from './pages/ForgeStatus'
 import { JourneyPage } from './pages/Journey'
 import { MentorPage } from './pages/Mentor'
 import { ProgramSettingsPage } from './pages/ProgramSettings'
+import { TrainingsPage } from './pages/Trainings'
+import { LabsPage } from './pages/Labs'
 import { EditsPage } from './pages/Edits'
 import { EditFilesPage } from './pages/EditFiles'
 import { EditReviewPage } from './pages/EditReview'
@@ -69,6 +71,8 @@ export default function App() {
           <Route path="/p/:team/:training/m/:module/read/:item" element={<ReadingPage />} />
           <Route path="/p/:team/:training/m/:module/quiz" element={<QuizPage />} />
           <Route path="/p/:team/:training/m/:module/lab" element={<LabPage />} />
+          <Route path="/trainings" element={<TrainingsPage />} />
+          <Route path="/labs" element={<LabsPage />} />
           <Route path="/connect" element={<ConnectPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/teams" element={<TeamsIndex />} />

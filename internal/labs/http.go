@@ -94,6 +94,10 @@ func (s *Service) Routes(r chi.Router) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	r.Get("/api/labs", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Mine(r.Context(), user(r))
+		reply(w, v, err)
+	})
 	r.Get("/api/labs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Get(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)

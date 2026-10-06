@@ -119,3 +119,6 @@ export type ContentEdit = {
   reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; files?: Record<string, string>; diff?: string
   can_review: boolean; can_withdraw: boolean
 }
+
+export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
+export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }

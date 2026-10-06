@@ -68,7 +68,7 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 			out[k] = fmt.Sprint(v.Value)
 		}
 	}
-	need, first := map[string]string{"persistent": "state_bucket", "main": "instance_id"}[stack], map[string]string{"persistent": "init", "main": "up"}[stack]
+	need, first := map[string]string{"persistent": "state_bucket", "main": "instance_id", "labs": "lab_role_arn"}[stack], map[string]string{"persistent": "init", "main": "up", "labs": "labs-init"}[stack]
 	if out[need] == "" {
 		return nil, fmt.Errorf("the %s stack has no %s output: run `crucible aws %s` first", stack, need, first)
 	}
@@ -107,8 +107,12 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot bool) error {
 			return err
 		}
 	}
+	vars := mainVars(p)
+	if l, err := o.outputs(ctx, "labs"); err == nil { // no labs stack = aws labs stay off
+		vars = append(vars, labVars(l)...)
+	}
 	abs, _ := filepath.Abs(varFile)
-	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, mainVars(p)...)...); err != nil {
+	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, vars...)...); err != nil {
 		return err
 	}
 	m, err := o.outputs(ctx, "main")
@@ -117,6 +121,26 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot bool) error {
 	}
 	fmt.Fprintf(o.Log, "Point an A record %s → %s now (skip if route53_zone_id is set).\n", m["domain"], m["public_ip"])
 	return o.Deploy(ctx)
+}
+
+// LabsInit creates the shared lab account stack (roles, permission boundary, state bucket). Run it with credentials
+// for the lab account; pass the Crucible account when that is a different one.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error {
+	d := o.dir("labs")
+	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
+		return err
+	}
+	args := []string{"-chdir=" + d, "apply", "-var", "region=" + region}
+	if crucibleAccount != "" {
+		args = append(args, "-var", "crucible_account_id="+crucibleAccount)
+	}
+	return o.Exec(ctx, o.Root, "terraform", args...)
+}
+
+// labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.
+func labVars(l map[string]string) []string {
+	return []string{"-var", "lab_role_arn=" + l["lab_role_arn"], "-var", "lab_ops_role_arn=" + l["ops_role_arn"],
+		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").

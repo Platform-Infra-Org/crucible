@@ -7,3 +7,4 @@ git_credentials    = "https://crucible-bot:TOKEN@git.example.com"
 # route53_zone_id  = "Z0123456789"   # optional: manage the A record
 # instance_type    = "t3a.large"     # cheaper if you only use local labs
 # schedule_enabled = false           # run 24/7
+# infracost_api_key = "ico-…"   # aws labs: free key from infracost auth login

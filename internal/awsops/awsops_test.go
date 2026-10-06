@@ -340,3 +340,30 @@ func TestDefaultOutputIncludesStderrInError(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"}}`
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "labs output -json") {
+			return labs
+		}
+		return fakeAWS(cmd)
+	}}
+	o := r.ops(t.TempDir())
+	if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333"); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var crucible_account_id=111122223333") < 0 {
+		t.Fatalf("labs-init apply:\n%s", strings.Join(r.calls, "\n"))
+	}
+	r.calls = nil
+	if err := o.Up(context.Background(), "x.tfvars", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
+		"-var lab_state_bucket=crucible-444455556666-labstate", "-var lab_state_region=eu-west-1", "-var lab_regions=eu-west-1"} {
+		if indexOf(r.calls, want) < 0 {
+			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	}
+}

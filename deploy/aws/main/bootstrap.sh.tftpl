@@ -116,9 +116,11 @@ sha=$(aws s3 cp "s3://$DATA_BUCKET/current-release" - 2>"$work/err") || {
 }
 aws s3 cp "s3://$DATA_BUCKET/releases/$sha/crucible-image.tar.gz" "$work/image.tar.gz"
 aws s3 cp "s3://$DATA_BUCKET/releases/$sha/chart.tgz" "$work/chart.tgz"
+aws ssm get-parameter --region "$REGION" --name "/$NAME/helm-values" --query Parameter.Value --output text > "$work/values.yaml"
 gunzip -c "$work/image.tar.gz" | k3s ctr images import -
 param() { aws ssm get-parameter --with-decryption --name "/$NAME/$1" --query Parameter.Value --output text; }
 kubectl create namespace crucible --dry-run=client -o yaml | kubectl apply -f -
+infracost_key=$(param infracost_api_key); [ "$infracost_key" = none ] && infracost_key=""
 kubectl -n crucible create secret generic crucible-secrets \
   --from-literal=OIDC_CLIENT_SECRET="$(param oidc_client_secret)" \
   --from-literal=CRUCIBLE_PLATFORM_REPO="$(param platform_repo)" \
@@ -126,6 +128,7 @@ kubectl -n crucible create secret generic crucible-secrets \
   --from-literal=CRUCIBLE_QUIZ_SECRET="$(param quiz_secret)" \
   --from-literal=POSTGRES_PASSWORD="$(param db_password)" \
   --from-literal=git-credentials="$(param git_credentials)" \
+  --from-literal=INFRACOST_API_KEY="$infracost_key" \
   --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade --install crucible "$work/chart.tgz" -n crucible \
   --set-string image.tag="$sha" --set host="$DOMAIN" --set publicURL="https://$DOMAIN" \
@@ -133,6 +136,7 @@ helm upgrade --install crucible "$work/chart.tgz" -n crucible \
   --set backup.bucket="$DATA_BUCKET" --set backup.region="$REGION" \
   --set-string backup.schedule="$BACKUP_CRON" --set-string backup.timeZone="$TIMEZONE" \
   --set-string gitBot.name="$GIT_BOT_NAME" --set-string gitBot.email="$GIT_BOT_EMAIL" \
+  -f "$work/values.yaml" \
   --wait --timeout 10m
 echo "deployed $sha"
 SH

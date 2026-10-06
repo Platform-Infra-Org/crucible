@@ -23,6 +23,7 @@ import (
 const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible aws init --region REGION --domain HOSTNAME
+  crucible aws labs-init --region REGION [--crucible-account ID]
   crucible aws up [--var-file FILE] [--no-snapshot]
   crucible aws deploy | snapshot | wake | status
   crucible aws sleep [--no-snapshot]
@@ -57,9 +58,10 @@ func awsCmd(args []string) int {
 		return 2
 	}
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
-	region := fs.String("region", "", "AWS region (init)")
+	region := fs.String("region", "", "AWS region (init, labs-init)")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
 	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
+	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
 	yes := fs.Bool("yes", false, "confirm teardown")
 	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
 	_ = fs.Parse(args[1:])
@@ -81,6 +83,12 @@ func awsCmd(args []string) int {
 			return 2
 		}
 		err = ops.Init(ctx, *region, *domain)
+	case "labs-init":
+		if *region == "" {
+			fmt.Fprintln(os.Stderr, "--region is required")
+			return 2
+		}
+		err = ops.LabsInit(ctx, *region, *crucibleAccount)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot)
 	case "deploy":

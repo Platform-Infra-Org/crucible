@@ -86,3 +86,32 @@ variable "git_bot_email" {
 variable "oidc_issuer" { type = string }
 variable "oidc_client_id" { type = string }
 variable "cognito_user_pool_id" { type = string }
+
+# Set by `crucible aws up` from the deploy/aws/labs outputs; empty = aws labs off.
+variable "lab_role_arn" {
+  type    = string
+  default = ""
+}
+variable "lab_ops_role_arn" {
+  type    = string
+  default = ""
+}
+variable "lab_state_bucket" {
+  type    = string
+  default = ""
+}
+variable "lab_state_region" {
+  type    = string
+  default = ""
+}
+variable "lab_regions" {
+  type        = string
+  default     = ""
+  description = "Comma-separated regions aws labs may use (the labs stack's allowed_regions)"
+}
+variable "infracost_api_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Free key from `infracost auth login`. Without it aws labs cannot be priced, so they cannot be requested."
+}

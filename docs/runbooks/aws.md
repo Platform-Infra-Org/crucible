@@ -83,3 +83,81 @@ Verify after `up` (over SSM, as root). Nothing here is covered by `terraform tes
 - **No certificate.** Check that DNS points at the Elastic IP and port 80 is reachable. Then run `sudo k3s kubectl -n kube-system logs deploy/traefik`. If the Traefik chart bundled with your k3s version rejects `ports.web.redirections`, use `ports.web.redirectTo: {port: websecure}` in `/var/lib/rancher/k3s/server/manifests/traefik-config.yaml`.
 - **Bootstrap failed.** `deploy` reports "node bootstrap failed" when `/opt/crucible/.failed` exists. Read `sudo tail -f /var/log/crucible-bootstrap.log` over SSM; `.ready` appears only after the first deploy attempt. After fixing the cause, clear the marker with `sudo rm /opt/crucible/.failed` and run `crucible aws deploy` again.
 - **App logs.** `sudo k3s kubectl -n crucible logs deploy/crucible -c api` (and `-c restore`).
+
+## AWS labs (runtime: aws)
+
+AWS labs run terraform in your **lab account** with one-hour credentials scoped to a single lab (spec §8.2). A
+dedicated sandbox account is strongly recommended: the permission boundary limits labs to EC2 and S3, small
+instance types and the allowed regions, but shared-account isolation is best-effort.
+
+**Setup (once).**
+1. With credentials for the lab account: `go run ./cmd/crucible aws labs-init --region eu-west-1` (add
+   `--crucible-account <id>` when the lab account is not the Crucible account). Back up
+   `deploy/aws/labs/terraform.tfstate` as you did for the persistent stack. labs-init also turns on account-wide
+   S3 Block Public Access in that account.
+2. In the **management (payer) account**, open Billing → Cost allocation tags and activate `crucible:lab-id`,
+   `crucible:team` and `crucible:training` (they appear after the first lab has run; activation takes up to 24 h
+   and is not retroactive unless you request a backfill). Open Cost Explorer once in the lab account so its API is
+   enabled. Cost Explorer charges $0.01 per API call; Crucible makes about 4–8 a day.
+3. `infracost auth login` (free), then put the key in `crucible.tfvars` as `infracost_api_key`.
+4. `crucible aws up` (with Crucible-account credentials). It reads the labs stack's outputs and turns aws labs on.
+   **A node built before M6 must be rebuilt** (`crucible aws teardown --yes`, then `crucible aws up`): deploy.sh
+   changed and user data never updates in place.
+
+**Verify on a real sandbox (by hand; nothing in `make` touches AWS).** Enrol yourself in Forge 401 (Team page),
+request "Cloud Heat", approve it, then:
+1. In the workspace terminal: `aws sts get-caller-identity` shows `assumed-role/crucible-lab/crucible-lab-<id>`.
+   On the node: `k3s kubectl -n lab-<id> get pods` shows `lab` Running and `tf-apply` Completed.
+2. Task 1 and task 2 both pass with **Check** (task 2: `echo hi > f && aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.txt`).
+3. **The boundary holds.** Each of these must fail with AccessDenied / UnauthorizedOperation:
+   - `aws ec2 create-volume --size 1 --availability-zone eu-west-1a` (no lab tag)
+   - the same with `--tag-specifications 'ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=000000000000}]'` (someone else's lab id)
+   - `aws ec2 run-instances --image-id <any AL2023 AMI> --instance-type t3.large --tag-specifications 'ResourceType=instance,Tags=[{Key=crucible:lab-id,Value=<id>}]'` (instance type)
+   - `aws s3 mb s3://not-a-lab-bucket-$RANDOM` (bucket name)
+   - `aws s3 ls --region us-east-1` against a bucket in another region, or `aws ec2 describe-vpcs --region us-west-2` if us-west-2 is not allowed
+   - `aws s3 cp s3://<labstate bucket>/labs/<another lab id>.tfstate -` (someone else's state)
+   - `aws ec2 delete-tags --resources <your volume> --tags Key=crucible:lab-id` (lab tags are immutable)
+   - `aws iam list-roles` (no IAM)
+   - `curl -m 3 http://169.254.169.254/` (IMDS, from M4's NetworkPolicy)
+4. **A tagged leak is swept.** Create a volume the lab owns:
+   `aws ec2 create-volume --size 1 --availability-zone eu-west-1a --tag-specifications "ResourceType=volume,Tags=[{Key=crucible:lab-id,Value=$CRUCIBLE_LAB_ID}]"`.
+   Click **End lab**. Within ~5 min the lab is "cooled". The Ledger (admin) shows the volume under Reaper findings as
+   "end-of-lab sweep / deleted", and `aws resourcegroupstaggingapi get-resources --tag-filters Key=crucible:lab-id,Values=<id>`
+   (admin credentials) returns nothing. Terminated instances can stay listed for about an hour; that is AWS.
+5. **The reaper.** With admin credentials, create a volume tagged `crucible:lab-id=<id of a lab that ended over an
+   hour ago>`, and another tagged with `cccccccccccc`. Ledger → **Refresh now**: the first is deleted, the second is
+   reported and still exists (delete it by hand), and admins get one "reaper found" email.
+6. **Credentials refresh.** Start a lab with a 2 h TTL (program `lab_defaults.ttl`), and after 65 minutes run
+   `aws sts get-caller-identity` in the workspace: it still works.
+7. **CloudTrail.** LookupEvents needs no trail (90-day event history). After step 3, Ledger → **Refresh now**: no
+   "CloudTrail" finding should appear, because every successful create carried the tag. A finding here means a policy gap.
+8. **Tags, session names and the policy variable.** (a) The instance the lab's terraform launched has its root
+   volume tagged `crucible:lab-id=<id>` (`aws ec2 describe-volumes --filters Name=attachment.instance-id,Values=<i-…>`);
+   if not, the content must use `volume_tags`/`root_block_device.tags`, and the end-of-lab sweep will miss the volume.
+   (b) CloudTrail → Event history for a create in step 3 shows **User name** = `crucible-lab-<id>` (the session
+   name); the Ledger's CloudTrail check matches on it. (c) The deny in step 3 for someone else's lab id proves
+   `${aws:PrincipalTag/crucible:lab-id}` resolves; if *your own* tagged create is also denied, the session tag did not
+   reach the role (check `sts:TagSession` on the trust policy and the node role).
+9. **Costs.** 24–48 h after a lab ends, Ledger → **Refresh now** shows its AWS bill. Once settled, the lab's row has no
+   "(so far)" and Estimate vs actual counts it.
+
+Record anything that differed (IAM condition keys, CloudTrail field names, tag propagation to root volumes) in this
+section, and fix the code or the labs stack before the release.
+
+**What trainees can see.** A lab session can read and write its own terraform state
+(`s3://<labstate bucket>/labs/<id>.tfstate`), and the workspace has those credentials. **Content authors must not
+put secrets in terraform state or outputs** (no generated passwords, keys or tokens the trainee should not see).
+
+**Operational notes.**
+- If crucible-api restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
+  the lab up as stuck after **70 minutes** and destroys it again (the hourly cost cap limits what that can cost).
+- `CRUCIBLE_INFRACOST=off` is honoured only with `CRUCIBLE_AWS_LABS=dryrun` (the chart sets both for
+  `awsLabs.dryRun`). Real aws labs always need infracost and its key.
+- `crucible aws teardown` never touches the labs stack; it has local state in `deploy/aws/labs` and
+  `prevent_destroy` on the state bucket.
+
+**Troubleshooting.**
+- A lab sits in "provisioning" and then fails with `terraform apply failed: …`. The trainee sees the log tail. On the node, `k3s kubectl -n lab-<id> get pod tf-apply -o jsonpath='{.status.containerStatuses[0].state.terminated.message}'` shows the same.
+- "no cost estimate is available for aws labs" means `INFRACOST_API_KEY` is unset, or infracost cannot reach its pricing API. Check `k3s kubectl -n crucible logs deploy/crucible -c api | grep infracost`.
+- If the Ledger says actuals are stale, look at Cost Explorer access (the ops role) and the tag activation (step 2). Budgets keep using estimates meanwhile.
+- **Run one Crucible deployment per lab account.** The reaper never deletes resources of labs it does not know. It reports them instead, so a second deployment's labs show up as findings rather than being deleted.

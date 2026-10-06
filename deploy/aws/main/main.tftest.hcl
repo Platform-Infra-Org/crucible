@@ -125,3 +125,45 @@ run "cluster_labs_use_sysbox" {
     error_message = "production never runs privileged lab pods"
   }
 }
+
+run "aws_labs_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.enabled == false
+    error_message = "aws labs stay off until the labs stack exists"
+  }
+  assert {
+    condition     = !anytrue([for s in data.aws_iam_policy_document.node.statement : contains(s.actions, "sts:AssumeRole")])
+    error_message = "the node assumes no lab role by default"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "/helm-values") && strcontains(aws_instance.node.user_data, "-f \"$work/values.yaml\"") && strcontains(aws_instance.node.user_data, "INFRACOST_API_KEY")
+    error_message = "deploy.sh passes the helm values from SSM and the infracost key"
+  }
+}
+
+run "aws_labs_wiring" {
+  command = plan
+  variables {
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "eu-west-1"
+    lab_regions       = "eu-west-1"
+    infracost_api_key = "ico-test"
+  }
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1" }
+    error_message = "helm values carry the labs stack outputs"
+  }
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops"])
+    error_message = "the node may assume exactly the two lab account roles"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "ico-test") && aws_ssm_parameter.secret["infracost_api_key"].type == "SecureString"
+    error_message = "the infracost key is a SecureString, never in user data"
+  }
+}

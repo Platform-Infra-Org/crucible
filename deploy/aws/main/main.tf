@@ -72,6 +72,7 @@ locals {
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
     quiz_secret        = random_password.quiz.result
+    infracost_api_key  = var.infracost_api_key == "" ? "none" : var.infracost_api_key
   }
 }
 
@@ -94,8 +95,24 @@ resource "aws_ssm_parameter" "env" {
   ENV
 }
 
+# Helm values deploy.sh passes with -f. Changing them needs only `crucible aws up`, no node rebuild.
+resource "aws_ssm_parameter" "helm_values" {
+  name = "/${var.name}/helm-values"
+  type = "String"
+  value = yamlencode({
+    awsLabs = {
+      enabled     = var.lab_role_arn != ""
+      labRoleArn  = var.lab_role_arn
+      opsRoleArn  = var.lab_ops_role_arn
+      stateBucket = var.lab_state_bucket
+      stateRegion = var.lab_state_region
+      regions     = var.lab_regions == "" ? var.region : var.lab_regions
+    }
+  })
+}
+
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+  for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "infracost_api_key"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]
@@ -128,6 +145,13 @@ data "aws_iam_policy_document" "node" {
   statement {
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = ["arn:aws:ssm:${var.region}:*:parameter/${var.name}/*"]
+  }
+  dynamic "statement" {
+    for_each = var.lab_role_arn == "" ? [] : [1]
+    content {
+      actions   = ["sts:AssumeRole", "sts:TagSession"] # lab sessions carry crucible:* tags
+      resources = [var.lab_role_arn, var.lab_ops_role_arn]
+    }
   }
 }
 
@@ -184,7 +208,7 @@ resource "aws_instance" "node" {
 
   tags = { Name = var.name }
 
-  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_iam_role_policy.node]
+  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
 
   lifecycle {
     ignore_changes = [ami, user_data] # never replace the node because Ubuntu published a new AMI

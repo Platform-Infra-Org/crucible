@@ -207,3 +207,18 @@ func TestDeleteOfAResourceStillInUseIsNotYet(t *testing.T) {
 		t.Fatalf("an attached volume is retried later, not a failure: %v %v", ok, err)
 	}
 }
+
+func TestLabWritesSaysWhenItStoppedEarly(t *testing.T) {
+	body := `{"NextToken":"more","Events":[{"EventId":"1","EventName":"CreateVolume","EventTime":1.7596e9,"Username":"crucible-lab-aaaaaaaaaaaa","CloudTrailEvent":"{\"requestParameters\":{}}"}]}`
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) { return 200, "application/x-amz-json-1.1", body })
+	got, err := cl.LabWrites(context.Background(), "eu-west-1", time.Now().Add(-24*time.Hour))
+	lookups := 0
+	for _, c := range calls() {
+		if c.target == "CloudTrail_20131101.LookupEvents" {
+			lookups++
+		}
+	}
+	if !errors.Is(err, ErrTruncated) || len(got) != 20 || lookups != 20 {
+		t.Fatalf("20 pages kept, then ErrTruncated: %d events, %d lookups, %v", len(got), lookups, err)
+	}
+}

@@ -46,6 +46,7 @@ const (
 	SetupFailed       Kind = "setup_failed"
 	SubmissionPending Kind = "submission_pending"
 	SubmissionScored  Kind = "submission_scored" // also returned for rework
+	ReaperReport      Kind = "reaper_report"
 	// Rank-up kinds arrive with ranks (M7).
 )
 
@@ -65,6 +66,7 @@ var Kinds = []KindInfo{
 	{SetupFailed, "A lab scenario I maintain failed to prepare"},
 	{SubmissionPending, "A submission is waiting for my score"},
 	{SubmissionScored, "My submission was scored or returned"},
+	{ReaperReport, "Leftover AWS lab resources need attention"},
 }
 
 type Event struct {

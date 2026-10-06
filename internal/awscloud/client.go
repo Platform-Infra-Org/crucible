@@ -258,11 +258,11 @@ func (c *Client) LabWrites(ctx context.Context, region string, since time.Time) 
 			}
 		}
 		if res.NextToken == nil {
-			break
+			return out, nil
 		}
 		in.NextToken = res.NextToken
 	}
-	return out, nil
+	return out, ErrTruncated
 }
 
 var createVerbs = []string{"Create", "Run", "Allocate", "Import", "Copy", "Register"}

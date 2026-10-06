@@ -28,15 +28,16 @@ func (s *Service) sweepLab(ctx context.Context, labID string) {
 			s.Log.Warn("tag sweep: listing failed; the reaper will retry", "lab", labID, "region", region, "err", err)
 			continue
 		}
-		s.deleteAll(ctx, region, creds, "destroy", res)
+		s.deleteAll(ctx, region, creds, "destroy", res, false)
 	}
 }
 
 // deleteAll deletes resources with one lab's credentials, instances first (their volumes and security groups are
 // only free once they are gone), and records each result. Already-gone resources (terraform got them; the tag
-// inventory lags) are not findings, nor are deletes AWS refuses for now. It returns the ARNs recorded for the first
-// time.
-func (s *Service) deleteAll(ctx context.Context, region string, creds awscloud.Credentials, source string, res []awscloud.Resource) []string {
+// inventory lags) are not findings, nor are deletes AWS refuses for now, unless stuck is set: then "not yet" has
+// lasted too long (an object-locked bucket, a security group held by something Crucible does not delete) and it is a
+// failed finding, so admins hear of it once. It returns the ARNs recorded for the first time.
+func (s *Service) deleteAll(ctx context.Context, region string, creds awscloud.Credentials, source string, res []awscloud.Resource, stuck bool) []string {
 	first := func(r awscloud.Resource) int {
 		if strings.Contains(r.ARN, ":instance/") {
 			return 0
@@ -50,6 +51,8 @@ func (s *Service) deleteAll(ctx context.Context, region string, creds awscloud.C
 		deleted, err := s.Cloud.Delete(ctx, region, creds, r.ARN)
 		action, detail := "deleted", ""
 		switch {
+		case errors.Is(err, awscloud.ErrNotYet) && stuck:
+			action, detail = "failed", "still not deletable a day after the lab ended: "+err.Error()
 		case errors.Is(err, awscloud.ErrNotYet):
 			s.Log.Info("tag sweep: not deletable yet; retried on the next run", "arn", r.ARN, "err", err)
 			continue

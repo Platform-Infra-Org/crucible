@@ -57,6 +57,9 @@ var ErrUnsupported = errors.New("Crucible cannot delete this resource type; dele
 // still terminating): not a failure, the next run tries again.
 var ErrNotYet = errors.New("not deletable yet")
 
+// ErrTruncated comes with the events LabWrites did read when it stopped at its page cap: more were left unread.
+var ErrTruncated = errors.New("CloudTrail lookup stopped at its page cap; older lab writes were not checked")
+
 type Cloud interface {
 	// AssumeLab returns one-hour credentials for the lab role, tagged with the session's lab, team and training.
 	AssumeLab(ctx context.Context, s Session) (Credentials, error)
@@ -68,6 +71,7 @@ type Cloud interface {
 	// Costs is daily cost per lab for [from, to); untagged spend is left out.
 	Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error)
 	// LabWrites lists successful create calls by lab sessions since `since` whose request had no lab tag.
+	// ErrTruncated (with the events read so far) when it stopped before the end.
 	LabWrites(ctx context.Context, region string, since time.Time) ([]TrailEvent, error)
 }
 

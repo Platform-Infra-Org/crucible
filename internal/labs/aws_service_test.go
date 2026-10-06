@@ -176,7 +176,7 @@ func TestTagSweepLeavesNotYetDeletableForTheNextRun(t *testing.T) {
 	cloud.NotYet(vol, 1) // attached to the instance until it has terminated
 	creds, _ := cloud.AssumeLab(ctx, awscloud.Session{LabID: id})
 	res, _ := cloud.Tagged(ctx, "eu-west-1", id)
-	fresh := f.s.deleteAll(ctx, "eu-west-1", creds, "destroy", res)
+	fresh := f.s.deleteAll(ctx, "eu-west-1", creds, "destroy", res, false)
 	if !cloud.Has(vol) || cloud.Has(inst) || len(fresh) != 2 { // the instance and the bucket
 		t.Fatalf("instances first; a volume still in use waits: %v", fresh)
 	}
@@ -186,7 +186,7 @@ func TestTagSweepLeavesNotYetDeletableForTheNextRun(t *testing.T) {
 		t.Fatal("'not yet' is no finding: not failed, just early")
 	}
 	res, _ = cloud.Tagged(ctx, "eu-west-1", id)
-	if fresh := f.s.deleteAll(ctx, "eu-west-1", creds, "destroy", res); !slices.Equal(fresh, []string{vol}) || cloud.Has(vol) {
+	if fresh := f.s.deleteAll(ctx, "eu-west-1", creds, "destroy", res, false); !slices.Equal(fresh, []string{vol}) || cloud.Has(vol) {
 		t.Fatalf("the next run deletes it: %v", fresh)
 	}
 }

@@ -13,8 +13,9 @@ import (
 // Fake is an in-memory lab account. Deletes follow the lab role's rule: a session may delete only its own lab's
 // resources. It backs unit tests and CRUCIBLE_AWS_LABS=dryrun (see SimulateApply).
 type Fake struct {
-	Now func() time.Time
-	Err error // when set, every call fails with it (throttling, Cost Explorer down…)
+	Now            func() time.Time
+	Err            error // when set, every call fails with it (throttling, Cost Explorer down…)
+	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
@@ -156,6 +157,9 @@ func (f *Fake) LabWrites(_ context.Context, _ string, since time.Time) ([]TrailE
 		if !e.At.Before(since) {
 			out = append(out, e)
 		}
+	}
+	if f.TrailTruncated {
+		return out, ErrTruncated
 	}
 	return out, nil
 }

@@ -188,10 +188,13 @@ func run(ctx context.Context) error {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})
 	river.AddWorker(workers, &labs.BudgetWorker{S: labSvc})
+	river.AddWorker(workers, &labs.ReapWorker{S: labSvc})
+	river.AddWorker(workers, &labs.CostWorker{S: labSvc})
 	river.AddWorker(workers, &notify.EmailWorker{S: notifySvc})
 	river.AddWorker(workers, &notify.WebhookWorker{S: notifySvc})
 	riverLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}}}, riverLog)
+	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}},
+		{Every: 6 * time.Hour, Args: labs.ReapArgs{}}, {Every: 6 * time.Hour, Args: labs.CostArgs{}}}, riverLog)
 	if err != nil {
 		return err
 	}

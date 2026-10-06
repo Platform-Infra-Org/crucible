@@ -75,6 +75,25 @@ func (s *Service) Routes(r chi.Router) {
 		st, err := s.Decide(r.Context(), user(r), p(r, "id"), *body.Approve, body.Note)
 		reply(w, map[string]State{"state": st}, err)
 	})
+	r.Post("/api/approvals/{id}/extension", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Approve *bool  `json:"approve"` // required, as for requests
+			Note    string `json:"note"`
+		}
+		if err := httpx.Read(r, &body); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		if body.Approve == nil {
+			httpx.Error(w, apperr.Wrap(apperr.Invalid, "approve (true or false) is required"))
+			return
+		}
+		if err := s.DecideExtension(r.Context(), user(r), p(r, "id"), *body.Approve, body.Note); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	r.Get("/api/labs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Get(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)

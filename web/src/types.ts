@@ -33,7 +33,7 @@ export type LabView = {
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
   terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number
-  can_extend: boolean; self_reported: boolean; complete: boolean; score: number; max_score: number
+  can_extend: boolean; extension_pending: boolean; self_reported: boolean; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
@@ -51,6 +51,7 @@ export type Approval = {
   id: string; requester: string; requester_name: string; team: string; training: string; module: string; lab_title: string
   runtime: string; hourly_usd: number; estimate_usd: number; ttl_s: number; tier: Tier; over_cap: boolean
   requested_at: string; escalate_at?: string; team_spend: Spend; program_spend: Spend; recent: RecentLab[]; schedule: ScheduleInfo
+  kind: 'request' | 'extension'; extend_until?: string
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
@@ -100,7 +101,7 @@ export type Ledger = {
 export type Forge = { percent: number; level: number; rank: string; ladder: { name: string; at: number }[]; badges: { training: string; title: string; earned_at: string }[]; rank_up: boolean }
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
-export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice'; module?: string; item?: string; detail: string; at?: string }
+export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
 export type JourneyRow = { email: string; name: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
 export type Mentee = {
   email: string; name: string; team: string; rank: string; programs: JourneyRow[]

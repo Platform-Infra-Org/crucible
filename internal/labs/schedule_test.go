@@ -68,20 +68,6 @@ func TestExtensionIsCappedByTheWindow(t *testing.T) {
 	}
 }
 
-func TestExtensionThatRaisesTheTierIsRefused(t *testing.T) {
-	ctx := context.Background()
-	f := setup(t, true)
-	f.rates["first-heat"] = 4.5 // $4.50 for 1h: tier 1. +30m = $6.75: tier 2.
-	v := f.request(t, f.u)
-	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil {
-		t.Fatal(err)
-	}
-	f.waitState(t, f.u, v.ID, Ready)
-	if _, err := f.s.Extend(ctx, f.u, v.ID); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "new approval") {
-		t.Fatalf("tier-raising extension: %v", err)
-	}
-}
-
 // A schedule that can't fit the escalation period (AddOpen gives up) falls back to plain wall-clock time, never a zero deadline.
 func TestEscalateAtFallsBackWhenScheduleIsDegenerate(t *testing.T) {
 	f := setup(t, true)

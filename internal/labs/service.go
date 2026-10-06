@@ -96,33 +96,34 @@ type TaskView struct {
 }
 
 type View struct {
-	ID           string             `json:"id"`
-	State        State              `json:"state"`
-	Error        string             `json:"error,omitempty"`
-	Runtime      string             `json:"runtime"`
-	Team         string             `json:"team"`
-	Training     string             `json:"training"`
-	Module       string             `json:"module"`
-	Terminals    []content.Terminal `json:"terminals"`
-	TaskOrder    string             `json:"task_order"`
-	Tasks        []TaskView         `json:"tasks"`
-	ServerNow    time.Time          `json:"server_now"`
-	EndsAt       *time.Time         `json:"ends_at,omitempty"`
-	LimitReason  string             `json:"limit_reason,omitempty"`
-	EndReason    string             `json:"end_reason,omitempty"`
-	IdleDeadline *time.Time         `json:"idle_deadline,omitempty"`
-	IdleWarningS int                `json:"idle_warning_s"`
-	CanExtend    bool               `json:"can_extend"`
-	SelfReported bool               `json:"self_reported"`
-	Complete     bool               `json:"complete"`
-	Score        float64            `json:"score"`
-	MaxScore     float64            `json:"max_score"`
-	EstimateUSD  float64            `json:"estimate_usd"`
-	Tier         string             `json:"tier"`
-	OverCap      bool               `json:"over_cap"`
-	EscalateAt   *time.Time         `json:"escalate_at,omitempty"`
-	DecidedBy    string             `json:"decided_by,omitempty"`
-	DecisionNote string             `json:"decision_note,omitempty"`
+	ID               string             `json:"id"`
+	State            State              `json:"state"`
+	Error            string             `json:"error,omitempty"`
+	Runtime          string             `json:"runtime"`
+	Team             string             `json:"team"`
+	Training         string             `json:"training"`
+	Module           string             `json:"module"`
+	Terminals        []content.Terminal `json:"terminals"`
+	TaskOrder        string             `json:"task_order"`
+	Tasks            []TaskView         `json:"tasks"`
+	ServerNow        time.Time          `json:"server_now"`
+	EndsAt           *time.Time         `json:"ends_at,omitempty"`
+	LimitReason      string             `json:"limit_reason,omitempty"`
+	EndReason        string             `json:"end_reason,omitempty"`
+	IdleDeadline     *time.Time         `json:"idle_deadline,omitempty"`
+	IdleWarningS     int                `json:"idle_warning_s"`
+	CanExtend        bool               `json:"can_extend"`
+	ExtensionPending bool               `json:"extension_pending"`
+	SelfReported     bool               `json:"self_reported"`
+	Complete         bool               `json:"complete"`
+	Score            float64            `json:"score"`
+	MaxScore         float64            `json:"max_score"`
+	EstimateUSD      float64            `json:"estimate_usd"`
+	Tier             string             `json:"tier"`
+	OverCap          bool               `json:"over_cap"`
+	EscalateAt       *time.Time         `json:"escalate_at,omitempty"`
+	DecidedBy        string             `json:"decided_by,omitempty"`
+	DecisionNote     string             `json:"decision_note,omitempty"`
 }
 
 type TaskDetail struct {
@@ -160,14 +161,16 @@ type ModuleLab struct {
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
 	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
-	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note`
+	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note,
+	ext_until, ext_estimate_usd, ext_tier, ext_requested_at`
 
 func scanInst(row pgx.Row) (*Instance, error) {
 	var in Instance
 	var ttl, idle, warn, ext int
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
 		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
-		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote)
+		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
+		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
 	}
@@ -416,6 +419,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
+		v.ExtensionPending = inst.ExtUntil != nil
 		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
 	}
 	return v, nil
@@ -1186,13 +1190,11 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	if !end.After(*inst.EndsAt) {
 		return nil, apperr.Wrap(apperr.Conflict, "the schedule window closes first; this lab can't be extended")
 	}
-	// ponytail: spec §8.6 "Extension pending" (send the extension back through approval) is deferred to the M7
-	// coverage pass; until then an extension that would lift the estimate into a higher tier is refused.
 	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil && st.Platform.Settings.CostTiers != nil {
 		tiers := *st.Platform.Settings.CostTiers
 		more := inst.EstimateUSD + inst.HourlyUSD*end.Sub(*inst.EndsAt).Hours()
 		if rbac.Tier(inst.Runtime, more, tiers) != rbac.Tier(inst.Runtime, inst.EstimateUSD, tiers) {
-			return nil, apperr.Wrap(apperr.Conflict, "this extension would need a new approval; end the lab and request it again, or ask your approver")
+			return s.requestExtension(ctx, u, st.Platform, inst, end, more)
 		}
 	}
 	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil {
@@ -1213,6 +1215,36 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	}
 	s.event(ctx, inst.ID, "extended", end.Sub(*inst.EndsAt).String())
 	return s.Get(ctx, u, labID)
+}
+
+// requestExtension sends an extension that lifts the estimate into a higher tier back through approval (spec §8.6).
+// It uses up the lab's one extension, even if rejected; the timer shows "Extension pending" until someone decides.
+// ponytail: extension requests do not escalate; the lab, and the request with it, ends within hours.
+func (s *Service) requestExtension(ctx context.Context, u *auth.User, p *config.Platform, inst *Instance, until time.Time, estimate float64) (*View, error) {
+	c := rbac.Checker{P: p}
+	tier := rbac.Tier(inst.Runtime, estimate, *p.Settings.CostTiers)
+	if over, err := s.overCap(ctx, p, inst.Team, inst.Training, estimate-inst.EstimateUSD); err != nil {
+		return nil, err
+	} else if over {
+		tier = rbac.TierAdmin
+	}
+	tier = c.Route(tier, inst.Team, inst.Training, u.Email)
+	now := s.Now()
+	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ext_until = $2, ext_estimate_usd = $3, ext_tier = $4, ext_requested_at = $5,
+		extended = true, last_activity_at = $5 WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, until, estimate, tier, now)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
+	}
+	s.event(ctx, inst.ID, "extension_requested", fmt.Sprintf("until %s, estimate %.2f USD, tier %s", until.UTC().Format(time.RFC3339), estimate, tier))
+	s.notify(ctx, notify.Event{Kind: notify.LabPending, To: c.TierApprovers(tier, inst.Team, inst.Training, u.Email), Team: inst.Team,
+		Subject: fmt.Sprintf("Lab extension from %s (%s, est. $%.2f)", strings.ToLower(u.Email), inst.Training, estimate),
+		Text: fmt.Sprintf("%s asks to extend the %s lab in %s/%s until %s, which lifts its estimate to $%.2f. It is waiting for approval.",
+			strings.ToLower(u.Email), inst.Module, inst.Team, inst.Training, until.UTC().Format("15:04 UTC"), estimate),
+		Link: "/approvals"})
+	return s.Get(ctx, u, inst.ID)
 }
 
 func (s *Service) End(ctx context.Context, u *auth.User, labID string) (*View, error) {

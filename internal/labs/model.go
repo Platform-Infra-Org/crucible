@@ -43,6 +43,9 @@ type Instance struct {
 	OverCap                                     bool
 	EscalateAt, DecidedAt                       *time.Time
 	DecidedBy, DecisionNote                     string
+	ExtUntil, ExtRequestedAt                    *time.Time // a pending extension (spec §8.6); nil = none
+	ExtEstimateUSD                              float64
+	ExtTier                                     string
 }
 
 // Limit is one candidate end time for a lab (TTL now; schedule window and budget cap arrive in M3/M6).

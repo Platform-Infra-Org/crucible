@@ -18,7 +18,7 @@ export function ApprovalsPage() {
       <h1>Approvals</h1>
       {data.length === 0 && <p className="muted">Nothing waiting. The forge is quiet.</p>}
       <ul className="approvals">
-        {data.map((a) => <ApprovalCard key={a.id} a={a} onDone={reload} />)}
+        {data.map((a) => <ApprovalCard key={a.kind + a.id} a={a} onDone={reload} />)}
       </ul>
     </section>
   )
@@ -37,11 +37,12 @@ function SpendLine({ s }: { s: Spend }) {
 function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  const ext = a.kind === 'extension'
   const decide = async (approve: boolean) => {
     setBusy(true)
     try {
-      await api(`/api/approvals/${a.id}`, { method: 'POST', json: { approve, note } })
-      toast(approve ? 'Approved: the lab is starting.' : 'Rejected.')
+      await api(`/api/approvals/${a.id}${ext ? '/extension' : ''}`, { method: 'POST', json: { approve, note } })
+      toast(approve ? (ext ? 'Approved: the lab runs longer.' : 'Approved: the lab is starting.') : 'Rejected.')
       onDone()
     } catch (e) {
       toast((e as Error).message)
@@ -51,11 +52,15 @@ function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
     }
   }
   return (
-    <li className="card approval" aria-label={`Request from ${a.requester}`}>
-      <h2>{a.lab_title} <small className="muted">{a.team} / {a.training}</small></h2>
+    <li className="card approval" aria-label={`${ext ? 'Extension' : 'Request'} from ${a.requester}`}>
+      <h2>{ext && 'Extension: '}{a.lab_title} <small className="muted">{a.team} / {a.training}</small></h2>
       <p>{a.requester_name || a.requester} <span className="muted">{a.requester}</span> · requested {new Date(a.requested_at).toLocaleString()}</p>
       <dl className="facts">
-        <dt>Estimate</dt><dd data-testid="estimate">{usd(a.estimate_usd)} ({usd(a.hourly_usd)}/h × {hours(a.ttl_s)}, {a.runtime})</dd>
+        {ext && a.extend_until && <><dt>Until</dt><dd>{new Date(a.extend_until).toLocaleString()}</dd></>}
+        <dt>Estimate</dt>
+        <dd data-testid="estimate">
+          {usd(a.estimate_usd)} {ext ? `(${usd(a.hourly_usd)}/h, the whole lab with the extension, ${a.runtime})` : `(${usd(a.hourly_usd)}/h × ${hours(a.ttl_s)}, ${a.runtime})`}
+        </dd>
         <dt>Waiting for</dt>
         <dd>
           {tierLabel[a.tier]}

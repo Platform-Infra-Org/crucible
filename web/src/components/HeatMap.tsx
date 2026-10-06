@@ -4,7 +4,7 @@ import { useCalm } from '../me'
 export const glyph: Record<Heat, string> = { cold: '·', glowing: '◐', forged: '●' }
 export const heatText: Record<Heat, string> = { cold: 'not started', glowing: 'in progress', forged: 'complete' }
 const why: Record<JourneyFlag['kind'], string> = {
-  failed_checks: 'May be stuck: ', final_hint: 'May need help: ', inactive: 'Gone quiet: ', returned_twice: 'Work keeps coming back: ',
+  failed_checks: 'May be stuck: ', final_hint: 'May need help: ', inactive: 'Gone quiet: ', returned_twice: 'Work keeps coming back: ', not_started: 'Not started yet: ',
 }
 
 export function Legend() {

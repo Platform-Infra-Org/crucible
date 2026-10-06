@@ -175,7 +175,9 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
   }
   const extend = async () => {
     try {
-      setLab(await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' }))
+      const v = await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' })
+      setLab(v)
+      if (v.extension_pending) toast('This extension needs an approval; your lab keeps running meanwhile.')
     } catch (e) {
       toast((e as Error).message)
     }

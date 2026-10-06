@@ -112,6 +112,8 @@ type Approval struct {
 	ProgramSpend  Spend        `json:"program_spend"`
 	Recent        []RecentLab  `json:"recent"`
 	Schedule      ScheduleInfo `json:"schedule"`
+	Kind          string       `json:"kind"` // request | extension (spec §8.6)
+	ExtendUntil   *time.Time   `json:"extend_until,omitempty"`
 }
 
 func scheduleInfo(p *config.Platform, team, training string, now time.Time) ScheduleInfo {
@@ -165,7 +167,7 @@ func (s *Service) platform() (*gitsync.State, error) {
 	return st, nil
 }
 
-// Approvals lists the pending requests the user may decide, oldest first.
+// Approvals lists the pending requests the user may decide, oldest first, then the pending extensions.
 func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, error) {
 	st, err := s.platform()
 	if err != nil {
@@ -195,14 +197,144 @@ func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, erro
 		}
 		out = append(out, *a)
 	}
+	rows, err = s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE state = 'ready' AND ext_until IS NOT NULL ORDER BY ext_requested_at`)
+	if err != nil {
+		return nil, err
+	}
+	exts, err := collectInst(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, inst := range exts {
+		email, name, err := s.requester(ctx, inst.UserID)
+		if err != nil {
+			return nil, err
+		}
+		over, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
+		if err != nil {
+			return nil, err
+		}
+		if !c.MayApprove(u.Email, email, inst.Team, inst.Training, inst.ExtEstimateUSD, over) {
+			continue
+		}
+		a, err := s.approval(ctx, st, inst, email, name)
+		if err != nil {
+			return nil, err
+		}
+		a.Kind, a.ExtendUntil, a.EstimateUSD, a.Tier, a.OverCap, a.EscalateAt = "extension", inst.ExtUntil, inst.ExtEstimateUSD, inst.ExtTier, over, nil
+		a.RequestedAt = *inst.ExtRequestedAt
+		out = append(out, *a)
+	}
 	return out, nil
+}
+
+// DecideExtension approves or rejects a pending extension (spec §8.6). Who may decide follows the new estimate, as
+// for a request; past the hard cap only an admin may, and that override is audited. Approval moves ends_at to the
+// requested end, clamped by the schedule window; the kill switch blocks it. Rejection keeps the end, and the lab's
+// one extension stays used.
+func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID string, approve bool, note string) error {
+	st, err := s.platform()
+	if err != nil {
+		return err
+	}
+	p := st.Platform
+	inst, err := scanInst(s.DB.QueryRow(ctx, `SELECT `+instCols+` FROM lab_instances WHERE id = $1`, labID))
+	if err != nil {
+		return err
+	}
+	if inst.State != Ready || inst.ExtUntil == nil || inst.EndsAt == nil {
+		return apperr.Wrap(apperr.Conflict, "there is no extension waiting on this lab")
+	}
+	email, _, err := s.requester(ctx, inst.UserID)
+	if err != nil {
+		return err
+	}
+	if len(note) > 500 {
+		note = note[:500]
+	}
+	note = strings.TrimSpace(cleanText(note))
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
+	// serialize the cap check + approval per team, as Decide does, so two approvals can't both fit under one cap
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, inst.Team); err != nil {
+		return err
+	}
+	over, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
+	if err != nil {
+		return err
+	}
+	if !(rbac.Checker{P: p}).MayApprove(u.Email, email, inst.Team, inst.Training, inst.ExtEstimateUSD, over) {
+		return apperr.Wrap(apperr.Forbidden, "you can't decide this extension")
+	}
+	end, reason := *inst.ExtUntil, "ttl"
+	q := `UPDATE lab_instances SET ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state = 'ready' AND ext_until IS NOT NULL`
+	args := []any{inst.ID}
+	closed := false
+	if approve {
+		if tp := p.Teams[inst.Team]; tp == nil || tp.Programs[inst.Training] == nil || !slices.Contains(tp.Programs[inst.Training].Enrolled, strings.ToLower(email)) {
+			return apperr.Wrap(apperr.Conflict, "This person is no longer enrolled in the program.")
+		}
+		var paused bool // FOR SHARE: a pause and this approval can't interleave (see Decide)
+		if err := tx.QueryRow(ctx, `SELECT enabled FROM kill_switch FOR SHARE`).Scan(&paused); err != nil {
+			return err
+		} else if paused {
+			return apperr.Wrap(apperr.Conflict, "Labs are paused by an admin.")
+		}
+		// <= : the request may already end exactly at the window's close; the lab still ends for the schedule
+		if lim := s.scheduleLimit(inst, s.Now()); !lim.At.IsZero() && !lim.At.After(end) {
+			end, reason = lim.At, lim.Reason
+		}
+		if closed = !end.After(*inst.EndsAt); !closed {
+			q = `UPDATE lab_instances SET ends_at = $2, limit_reason = $3, estimate_usd = $4,
+				ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state = 'ready' AND ext_until IS NOT NULL`
+			args = append(args, end, reason, inst.EstimateUSD+inst.HourlyUSD*end.Sub(*inst.EndsAt).Hours())
+		}
+	}
+	tag, err := tx.Exec(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return apperr.Wrap(apperr.Conflict, "this extension was already decided")
+	}
+	action := "lab.extension.reject"
+	if approve && !closed {
+		action = "lab.extension.approve"
+	}
+	if err := audit.Log(ctx, tx, u.Email, action, inst.ID, map[string]any{"requester": email, "team": inst.Team, "training": inst.Training,
+		"until": end, "estimate_usd": inst.ExtEstimateUSD, "over_cap": over, "note": note}, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if closed {
+		s.event(ctx, inst.ID, "extension_closed", "the schedule window closes first")
+		return apperr.Wrap(apperr.Conflict, "the schedule window closes before this extension would start; the request was closed")
+	}
+	kind, verb, text := notify.LabRejected, "not approved", "Your lab extension was not approved."
+	if approve {
+		kind, verb, text = notify.LabApproved, "approved", "Your lab extension was approved: the lab now ends at "+end.UTC().Format("15:04 UTC")+"."
+		s.event(ctx, inst.ID, "extended", end.Sub(*inst.EndsAt).String())
+	} else {
+		s.event(ctx, inst.ID, "extension_rejected", strings.ToLower(u.Email)+": "+note)
+	}
+	if note != "" {
+		text += " Note: " + note
+	}
+	s.notify(ctx, notify.Event{Kind: kind, To: []string{email}, Subject: fmt.Sprintf("Your %s lab extension was %s", inst.Training, verb),
+		Text: text, Link: labLink(inst)})
+	return nil
 }
 
 func (s *Service) approval(ctx context.Context, st *gitsync.State, inst *Instance, email, name string) (*Approval, error) {
 	a := &Approval{ID: inst.ID, Requester: email, RequesterName: name, Team: inst.Team, Training: inst.Training,
 		Module: inst.Module, LabTitle: inst.Module, Runtime: inst.Runtime, HourlyUSD: inst.HourlyUSD, EstimateUSD: inst.EstimateUSD,
 		TTLS: int(inst.TTL.Seconds()), Tier: inst.Tier, OverCap: inst.OverCap, RequestedAt: inst.CreatedAt, EscalateAt: inst.EscalateAt,
-		Schedule: scheduleInfo(st.Platform, inst.Team, inst.Training, s.Now())}
+		Schedule: scheduleInfo(st.Platform, inst.Team, inst.Training, s.Now()), Kind: "request"}
 	if t := st.Training(inst.Training, inst.SHA); t != nil {
 		if m := t.Module(inst.Module); m != nil {
 			a.LabTitle = m.Title

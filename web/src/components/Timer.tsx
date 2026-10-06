@@ -33,6 +33,7 @@ export function Timer({ lab, offset, onExtend }: { lab: LabView; offset: number;
     <div className={`timer ${known ? timerState(ms) : ''}`} title={limitLabel(lab)}>
       <span aria-hidden="true">⏳</span> <strong data-testid="lab-timer">{known ? formatRemaining(ms) : '—'}</strong>
       <small className="muted">{limitLabel(lab)}</small>
+      {lab.extension_pending && <span className="badge warn" role="status">Extension pending</span>}
       {lab.can_extend && <button className="ghost" onClick={onExtend}>Extend</button>}
     </div>
   )

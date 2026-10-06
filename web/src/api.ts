@@ -1,3 +1,4 @@
+import { uploadProblem } from './lib/uploads'
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -32,5 +33,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
 // upload posts a multipart form. The header proves the request came from this app (the server refuses forms without it).
 export function upload<T>(path: string, form: FormData): Promise<T> {
+  const problem = uploadProblem(form.getAll('file').filter((v): v is File => v instanceof File))
+  if (problem) return Promise.reject(new ApiError(413, problem))
   return api<T>(path, { method: 'POST', body: form, headers: { 'X-Crucible-Upload': '1' } })
 }

@@ -215,3 +215,16 @@ meter { width: 8rem; vertical-align: middle; }
 .editor { display: grid; grid-template-columns: 220px 1fr 1fr; gap: 1rem; }
 .editor textarea { width: 100%; font-family: 'JetBrains Mono', monospace; }
 @media (max-width: 900px) { .editor { grid-template-columns: 1fr; } }
+
+/* reading: progress bar, callouts, code highlighting, diagrams */
+.reading-progress { position: sticky; top: 0; z-index: 5; background: var(--bg); padding-top: 0.25rem; }
+.callout { border-left: 4px solid var(--accent); background: var(--surface); padding: 0.5rem 1rem; border-radius: 6px; color: var(--text); }
+.callout::before { content: attr(data-callout); display: block; font-weight: 700; letter-spacing: 0.05em; color: var(--accent); }
+.callout-warning, .callout-caution { border-color: var(--danger); }
+.callout-warning::before, .callout-caution::before { color: var(--danger); }
+.callout-tip::before { color: var(--ok); }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in { color: var(--accent); }
+.hljs-string, .hljs-attr { color: var(--ok); }
+.hljs-number, .hljs-literal, .hljs-title { color: var(--accent-2); }
+.hljs-comment { color: var(--muted); font-style: italic; }
+.mermaid svg { max-width: 100%; height: auto; }

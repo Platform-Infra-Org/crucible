@@ -7,3 +7,10 @@ Every engineer here was once new. The forge doesn't break metal — it reveals i
 - We leave every system cleaner than we found it.
 
 > Tip: images live in the training's `assets/` folder, e.g. `![anvil](assets/anvil.svg)`.
+
+> [!TIP]
+> Small changes are easier to review than big ones.
+
+```bash
+git switch -c my-first-change
+```

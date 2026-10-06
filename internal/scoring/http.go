@@ -116,6 +116,18 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Reset(r.Context(), user(r), n, in)
 		replyScorer(w, v, err)
 	})
+	r.Post("/api/admin/quiz-reset", func(w http.ResponseWriter, r *http.Request) {
+		var in QuizReset
+		if err := httpx.Read(r, &in); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		if err := s.ResetQuiz(r.Context(), user(r), in); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	r.Get("/api/submissions/{id}/files/{n}", func(w http.ResponseWriter, r *http.Request) {
 		sid, err := id(r)
 		if err != nil {

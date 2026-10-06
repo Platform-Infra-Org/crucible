@@ -110,12 +110,7 @@ func head(st *gitsync.State, training string) (*content.Training, string) {
 
 // enrolled: anyone enrolled in the training (any team) could read its answer keys through this API, so they get none.
 func enrolled(p *config.Platform, training, email string) bool {
-	for _, t := range p.Teams {
-		if pr := t.Programs[training]; pr != nil && slices.Contains(pr.Enrolled, email) {
-			return true
-		}
-	}
-	return false
+	return rbac.Checker{P: p}.Enrolled(email, training)
 }
 
 func maintainer(t *content.Training, email string) bool {

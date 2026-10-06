@@ -40,6 +40,11 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 	if (a == Score || a == ApproveLabs) && subject == actor {
 		return false
 	}
+	// Scoring shows the rubric (the answer key) and peers' answers, so nobody enrolled in the training scores it,
+	// admins included (the same rule as the edits module).
+	if a == Score && c.Enrolled(actor, training) {
+		return false
+	}
 
 	if c.IsAdmin(actor) {
 		return true
@@ -76,6 +81,17 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 		return role == "leader" || in(p.Roles.Manager) || in(p.Roles.Approvers)
 	case EditTeam:
 		return role == "leader"
+	}
+	return false
+}
+
+// Enrolled: email is enrolled in training in any team.
+func (c Checker) Enrolled(email, training string) bool {
+	email = strings.ToLower(email)
+	for _, t := range c.P.Teams {
+		if p := t.Programs[training]; p != nil && slices.Contains(p.Enrolled, email) {
+			return true
+		}
 	}
 	return false
 }

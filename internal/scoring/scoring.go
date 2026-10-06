@@ -547,14 +547,17 @@ func (s *Service) tellScorers(ctx context.Context, sub *Submission) {
 	if st == nil || st.Platform == nil {
 		return
 	}
+	c := rbac.Checker{P: st.Platform}
+	may := func(list []string) []string { // only people who may open it: not the trainee, nobody enrolled in the training
+		return slices.DeleteFunc(slices.Clone(list), func(e string) bool { return !c.Can(e, rbac.Score, sub.Team, sub.Training, sub.Email) })
+	}
 	var to []string
 	if t := st.Platform.Teams[sub.Team]; t != nil && t.Programs[sub.Training] != nil {
-		to = slices.Clone(t.Programs[sub.Training].Roles.Scorers)
+		to = may(t.Programs[sub.Training].Roles.Scorers)
 	}
 	if len(to) == 0 {
-		to = slices.Clone(st.Platform.Admins)
+		to = may(st.Platform.Admins)
 	}
-	to = slices.DeleteFunc(to, func(e string) bool { return strings.EqualFold(e, sub.Email) })
 	who := sub.Name
 	if who == "" {
 		who = sub.Email

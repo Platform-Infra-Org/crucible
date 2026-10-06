@@ -236,7 +236,13 @@ func (s *Service) File(ctx context.Context, u *auth.User, id int64, n int) (io.R
 	if err != nil {
 		return nil, "", err
 	}
-	if !s.CanView(u, sub.Team, sub.Training, sub.Email) || n < 0 || n >= len(sub.Keys) || n >= len(sub.Files) {
+	c, _, err := s.checker()
+	if err != nil {
+		return nil, "", err
+	}
+	own := strings.EqualFold(u.Email, sub.Email)
+	// A peer's uploaded answer is as good as an answer key to someone still taking the training.
+	if (!own && c.Enrolled(u.Email, sub.Training)) || !s.CanView(u, sub.Team, sub.Training, sub.Email) || n < 0 || n >= len(sub.Keys) || n >= len(sub.Files) {
 		return nil, "", apperr.Wrap(apperr.NotFound, "file not found")
 	}
 	rc, err := s.Blobs.Get(ctx, sub.Keys[n])
@@ -253,31 +259,49 @@ type ResetInput struct {
 	Score    bool   `json:"score"`
 }
 
+// QuizReset names a trainee's module quiz by person rather than by submission: an instant-only quiz locked out by
+// max_attempts has no submission to reset from.
+type QuizReset struct {
+	Email    string `json:"email"`
+	Team     string `json:"team"`
+	Training string `json:"training"`
+	Module   string `json:"module"`
+	ResetInput
+}
+
 // resetter is implemented by *learn.Service: it recomputes the item and may lower it (SetItem only ever raises).
 type resetter interface {
 	Reset(ctx context.Context, sub *Submission) error
 }
 
-// Reset is the admin escape hatch for "scores are final" (spec §7): it clears the trainee's instant quiz attempts for
-// the submission's module and/or reopens the scored submission for scoring, audited in the same transaction, and
-// tells the trainee. Admin only (spec §5.3: nobody else holds a power over another person's final score). Forge
-// ranks are never lowered: UpdateForge only raises them.
-func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInput) (*Submission, error) {
+// resetCheck: admin only (spec §5.3: nobody else holds a power over another person's final score), with a reason.
+func (s *Service) resetCheck(u *auth.User, in ResetInput) (string, error) {
 	c, _, err := s.checker()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if !c.IsAdmin(u.Email) {
-		return nil, apperr.Wrap(apperr.Forbidden, "only an admin can reset a trainee's item")
+		return "", apperr.Wrap(apperr.Forbidden, "only an admin can reset a trainee's item")
 	}
 	reason := Clean(strings.TrimSpace(in.Reason))
 	switch {
 	case reason == "":
-		return nil, apperr.Wrap(apperr.Invalid, "a reset needs a reason")
+		return "", apperr.Wrap(apperr.Invalid, "a reset needs a reason")
 	case utf8.RuneCountInString(reason) > 500:
-		return nil, apperr.Wrap(apperr.Invalid, "keep the reason under 500 characters")
+		return "", apperr.Wrap(apperr.Invalid, "keep the reason under 500 characters")
 	case !in.Attempts && !in.Score:
-		return nil, apperr.Wrap(apperr.Invalid, "choose what to reset")
+		return "", apperr.Wrap(apperr.Invalid, "choose what to reset")
+	}
+	return reason, nil
+}
+
+// Reset is the admin escape hatch for "scores are final" (spec §7): it clears the trainee's instant quiz attempts for
+// the submission's module and/or reopens the scored submission for scoring, audited in the same transaction, and
+// tells the trainee. Forge ranks are never lowered: UpdateForge only raises them.
+func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInput) (*Submission, error) {
+	reason, err := s.resetCheck(u, in)
+	if err != nil {
+		return nil, err
 	}
 	sub, err := s.get(ctx, id)
 	if err != nil {
@@ -289,47 +313,91 @@ func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInp
 	if in.Score && sub.Status != Scored {
 		return nil, apperr.Wrap(apperr.Conflict, "only a scored submission can be reopened")
 	}
-	tx, err := s.DB.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
-	var cleared int64
-	if in.Attempts {
-		tag, err := tx.Exec(ctx, `DELETE FROM quiz_attempts WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`,
-			sub.UserID, sub.Team, sub.Training, sub.Module)
-		if err != nil {
-			return nil, err
-		}
-		cleared = tag.RowsAffected()
-	}
-	if in.Score {
-		tag, err := tx.Exec(ctx, `UPDATE submissions SET status = 'pending', points = 0, scored_by = '', scored_at = NULL WHERE id = $1 AND status = 'scored'`, id)
-		if err != nil {
-			return nil, err
-		}
-		if tag.RowsAffected() == 0 {
-			return nil, apperr.Wrap(apperr.Conflict, "this submission changed, reload it")
-		}
-	}
-	if err := audit.Log(ctx, tx, u.Email, "submission.reset", fmt.Sprintf("submission/%d", id), map[string]any{"trainee": sub.Email,
-		"item": sub.Team + "/" + sub.Training + "/" + sub.Module + "/" + sub.Item, "attempts_cleared": cleared, "score_reopened": in.Score,
-		"previous_points": sub.Points, "reason": reason}, ""); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.reset(ctx, u, sub, in, reason); err != nil {
 		return nil, err
 	}
 	if in.Score {
 		sub.Status, sub.Points, sub.ScoredBy, sub.ScoredAt = Pending, 0, "", nil
 	}
+	return sub, nil
+}
+
+// ResetQuiz is Reset keyed by trainee and module: it clears the module's instant attempts and/or reopens every scored
+// human answer in it.
+func (s *Service) ResetQuiz(ctx context.Context, u *auth.User, in QuizReset) error {
+	reason, err := s.resetCheck(u, in.ResetInput)
+	if err != nil {
+		return err
+	}
+	_, st, err := s.checker()
+	if err != nil {
+		return err
+	}
+	t, sha := st.ProgramTraining(in.Team, in.Training)
+	if t == nil || t.Module(in.Module) == nil || t.Module(in.Module).Quiz == nil {
+		return apperr.Wrap(apperr.NotFound, "no such quiz in this program")
+	}
+	sub := &Submission{Email: strings.ToLower(strings.TrimSpace(in.Email)), Team: in.Team, Training: in.Training, Module: in.Module, SHA: sha}
+	err = s.DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, sub.Email).Scan(&sub.UserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apperr.Wrap(apperr.NotFound, "nobody with that email has signed in")
+	}
+	if err != nil {
+		return err
+	}
+	return s.reset(ctx, u, sub, in.ResetInput, reason)
+}
+
+// reset is the shared transaction: sub.ID != 0 reopens that one scored submission, sub.ID == 0 every scored answer in
+// the module. It recomputes the trainee's quiz item and tells them.
+func (s *Service) reset(ctx context.Context, u *auth.User, sub *Submission, in ResetInput, reason string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	var cleared, reopened int64
+	if in.Attempts {
+		tag, err := tx.Exec(ctx, `DELETE FROM quiz_attempts WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`,
+			sub.UserID, sub.Team, sub.Training, sub.Module)
+		if err != nil {
+			return err
+		}
+		cleared = tag.RowsAffected()
+	}
+	if in.Score {
+		tag, err := tx.Exec(ctx, `UPDATE submissions SET status = 'pending', points = 0, scored_by = '', scored_at = NULL
+			WHERE status = 'scored' AND kind = 'question' AND (id = $1 OR ($1 = 0 AND user_id = $2 AND team = $3 AND training = $4 AND module = $5))`,
+			sub.ID, sub.UserID, sub.Team, sub.Training, sub.Module)
+		if err != nil {
+			return err
+		}
+		reopened = tag.RowsAffected()
+		if sub.ID != 0 && reopened == 0 {
+			return apperr.Wrap(apperr.Conflict, "this submission changed, reload it")
+		}
+	}
+	item := sub.Team + "/" + sub.Training + "/" + sub.Module
+	action, target, what := "quiz.reset", "progress/"+sub.Email+"/"+item, "your quiz"
+	detail := map[string]any{"trainee": sub.Email, "item": item, "attempts_cleared": cleared, "scores_reopened": reopened, "reason": reason}
+	if sub.ID != 0 {
+		action, target, what = "submission.reset", fmt.Sprintf("submission/%d", sub.ID), fmt.Sprintf("your quiz item %q", short(sub.Prompt))
+		detail["item"], detail["score_reopened"], detail["previous_points"] = item+"/"+sub.Item, in.Score, sub.Points
+		delete(detail, "scores_reopened")
+	}
+	if err := audit.Log(ctx, tx, u.Email, action, target, detail, ""); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 	if r, ok := s.Quiz.(resetter); ok {
 		if err := r.Reset(ctx, sub); err != nil { // stored and audited: the next scoring decision recomputes anyway
-			s.log().Error("recomputing progress after a reset failed", "submission", sub.ID, "err", err)
+			s.log().Error("recomputing progress after a reset failed", "trainee", sub.Email, "item", item, "err", err)
 		}
 	}
 	s.send(ctx, notify.Event{Kind: notify.SubmissionScored, To: []string{sub.Email}, Subject: "Reset by an admin: " + sub.Training,
-		Text: fmt.Sprintf("An admin reset your quiz item %q (%s / %s). Reason: %s", short(sub.Prompt), sub.Training, sub.Module, reason),
+		Text: fmt.Sprintf("An admin reset %s (%s / %s). Reason: %s", what, sub.Training, sub.Module, reason),
 		Link: fmt.Sprintf("/p/%s/%s/m/%s/quiz", sub.Team, sub.Training, sub.Module)})
-	return sub, nil
+	return nil
 }

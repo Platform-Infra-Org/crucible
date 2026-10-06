@@ -309,3 +309,51 @@ func TestAdminResetRecomputesProgressAndKeepsRank(t *testing.T) {
 		t.Fatalf("percent drops, the rank stays: before %+v after %+v", f0, f)
 	}
 }
+
+// An instant-only quiz at max_attempts has no submission: the admin resets it by trainee and module (spec §7).
+func TestAdminQuizResetReopensAnInstantQuiz(t *testing.T) {
+	ctx := context.Background()
+	s, u, leader := fixture(t)
+	admin, _ := auth.Store{DB: s.DB}.UpsertUser(ctx, "s9", "admin@crucible.local", "Ada")
+	notes := &fakeNotify{}
+	sc := &scoring.Service{DB: s.DB, State: s.State, Quiz: s, Notify: notes, Log: slog.Default()}
+	_ = s.MarkRead(ctx, u, "forge", "forge-101", "01-welcome", "how-we-work")
+	s.State().Trainings["forge-101@abc"].Module("01-welcome").Quiz.MaxAttempts = 1
+	bad := correctAnswers()
+	bad["q-port"] = raw(`"1"`)
+	if _, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, correctAnswers())); !errors.Is(err, apperr.Conflict) {
+		t.Fatalf("locked out: %v", err)
+	}
+	post := func(who *auth.User, body string) int {
+		r := chi.NewRouter()
+		sc.Routes(r)
+		req := httptest.NewRequest(http.MethodPost, "/api/admin/quiz-reset", strings.NewReader(body))
+		req = req.WithContext(auth.WithUser(req.Context(), who))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	body := `{"email":"TRAINEE@crucible.local","team":"forge","training":"forge-101","module":"01-welcome","attempts":true,"reason":"typo in q-port"}`
+	if c := post(leader, body); c != http.StatusForbidden {
+		t.Fatalf("a leader may not reset: %d", c)
+	}
+	if c := post(admin, strings.Replace(body, "01-welcome", "99-nope", 1)); c != http.StatusNotFound {
+		t.Fatalf("unknown module: %d", c)
+	}
+	if c := post(admin, body); c != http.StatusNoContent {
+		t.Fatalf("admin reset: %d", c)
+	}
+	var audits int
+	_ = s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'quiz.reset' AND detail->>'reason' = 'typo in q-port'
+		AND (detail->>'attempts_cleared')::int = 1`).Scan(&audits)
+	if audits != 1 || len(notes.evs) != 1 || notes.evs[0].To[0] != "trainee@crucible.local" || notes.evs[0].Team != "" {
+		t.Fatalf("audited once (%d), trainee told by email only: %+v", audits, notes.evs)
+	}
+	if res, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, correctAnswers())); err != nil || !res.Passed {
+		t.Fatalf("attemptable again: %+v %v", res, err)
+	}
+}

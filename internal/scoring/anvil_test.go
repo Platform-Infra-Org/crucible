@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/audit"
 	"crucible/internal/auth"
+	"crucible/internal/notify"
 )
 
 type fakeLabs struct {
@@ -75,7 +77,7 @@ func TestQueueIsScopedToScorers(t *testing.T) {
 	ctx := context.Background()
 	f := fixture(t)
 	f.submitText(t)
-	// The senior is also enrolled as a trainee and answers the same question: never in their own queue.
+	// The senior is also enrolled as a trainee and answers the same question: they score nothing in it (rbac.Score).
 	p := f.plat.Teams["forge"].Programs["forge-301"]
 	p.Enrolled = append(p.Enrolled, "senior@crucible.local")
 	if _, err := f.s.Submit(ctx, f.senior, &Submission{Team: "forge", Training: "forge-301", Module: "01-temper", SHA: "abc",
@@ -94,8 +96,8 @@ func TestQueueIsScopedToScorers(t *testing.T) {
 		}
 		return len(list)
 	}
-	if n := count(f.senior, Filter{}); n != 1 {
-		t.Fatalf("senior queue = %d", n)
+	if n := count(f.senior, Filter{}); n != 0 {
+		t.Fatalf("an enrolled senior scores nothing in the training: %d", n)
 	}
 	if n := count(f.admin, Filter{}); n != 2 {
 		t.Fatalf("admin queue = %d", n)
@@ -177,6 +179,57 @@ func TestSignOffList(t *testing.T) {
 	if list, _ := f.s.SignOffs(ctx, f.senior); len(list) != 0 {
 		t.Fatalf("signed-off demos leave the list: %+v", list)
 	}
+}
+
+// A scorer who is also enrolled in the training (admins included) never sees its rubrics or peers' answers: queue,
+// detail, sign-offs, transcripts (CanScore) and uploaded evidence all refuse, and they are not told about submissions.
+// Their own submission is still scored by someone else.
+func TestEnrolledScorerNeverSeesRubric(t *testing.T) {
+	ctx := context.Background()
+	f := fixture(t)
+	p := f.plat.Teams["forge"].Programs["forge-301"]
+	p.Enrolled = append(p.Enrolled, "senior@crucible.local")
+	sub, err := f.s.Submit(ctx, f.trainee, &Submission{Team: "forge", Training: "forge-301", Module: "01-temper", SHA: "abc",
+		Kind: KindQuestion, Item: "q-log", QType: "upload", Prompt: "p", Rubric: "the key", MaxPoints: 2},
+		formFiles(t, map[string]string{"log.txt": "my answer"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := f.notes.last(notify.SubmissionPending); ev == nil || slices.Contains(ev.To, "senior@crucible.local") || !slices.Contains(ev.To, "admin@crucible.local") {
+		t.Fatalf("only people who may open it are told: %+v", ev)
+	}
+	refuses := func(u *auth.User) {
+		t.Helper()
+		if list, err := f.s.Queue(ctx, u, Filter{}); err != nil || len(list) != 0 {
+			t.Fatalf("%s queue: %d %v", u.Email, len(list), err)
+		}
+		if w := serve(f, u, http.MethodGet, fmt.Sprintf("/api/anvil/%d", sub.ID), ""); w.Code != 404 || strings.Contains(w.Body.String(), "the key") {
+			t.Fatalf("%s detail: %d %s", u.Email, w.Code, w.Body)
+		}
+		if list, err := f.s.SignOffs(ctx, u); err != nil || len(list) != 0 {
+			t.Fatalf("%s sign-offs: %+v %v", u.Email, list, err)
+		}
+		if f.s.CanScore(u, "forge", "forge-301", "trainee@crucible.local") {
+			t.Fatalf("%s may open transcripts", u.Email)
+		}
+		if w := serve(f, u, http.MethodGet, fmt.Sprintf("/api/submissions/%d/files/0", sub.ID), ""); w.Code != 404 {
+			t.Fatalf("%s evidence: %d", u.Email, w.Code)
+		}
+		if _, err := f.s.Score(ctx, u, sub.ID, 2, "ok"); err == nil {
+			t.Fatalf("%s scored", u.Email)
+		}
+	}
+	refuses(f.senior)
+	mine, err := f.s.Submit(ctx, f.senior, &Submission{Team: "forge", Training: "forge-301", Module: "01-temper", SHA: "abc",
+		Kind: KindQuestion, Item: "q-why", QType: "text", Prompt: "Why?", MaxPoints: 5, Answer: "mine"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Score(ctx, f.admin, mine.ID, 4, "good"); err != nil {
+		t.Fatalf("someone else scores the enrolled senior: %v", err)
+	}
+	p.Enrolled = append(p.Enrolled, "admin@crucible.local")
+	refuses(f.admin)
 }
 
 func TestDownloadIsAnAttachmentForViewersOnly(t *testing.T) {

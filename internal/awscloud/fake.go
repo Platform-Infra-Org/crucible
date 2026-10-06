@@ -48,9 +48,18 @@ func (f *Fake) Add(region string, r Resource) {
 
 func (f *Fake) AddCost(c DailyCost) { f.mu.Lock(); defer f.mu.Unlock(); f.costs = append(f.costs, c) }
 
-func (f *Fake) AddEvent(e TrailEvent) { f.mu.Lock(); defer f.mu.Unlock(); f.events = append(f.events, e) }
+func (f *Fake) AddEvent(e TrailEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
 
-func (f *Fake) Has(arn string) bool { f.mu.Lock(); defer f.mu.Unlock(); _, ok := f.resources[arn]; return ok }
+func (f *Fake) Has(arn string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.resources[arn]
+	return ok
+}
 
 func (f *Fake) Assumed() []Session { f.mu.Lock(); defer f.mu.Unlock(); return slices.Clone(f.assumed) }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"crucible/internal/content"
+	"crucible/internal/scoring"
 )
 
 type Choice struct {
@@ -18,14 +19,15 @@ type Choice struct {
 }
 
 type PublicQuestion struct {
-	ID      string   `json:"id"`
-	Type    string   `json:"type"`
-	Prompt  string   `json:"prompt"`
-	Points  float64  `json:"points"`
-	Options []Choice `json:"options,omitempty"`
-	Left    []string `json:"left,omitempty"`
-	Right   []Choice `json:"right,omitempty"`
-	Human   bool     `json:"human,omitempty"`
+	ID         string            `json:"id"`
+	Type       string            `json:"type"`
+	Prompt     string            `json:"prompt"`
+	Points     float64           `json:"points"`
+	Options    []Choice          `json:"options,omitempty"`
+	Left       []string          `json:"left,omitempty"`
+	Right      []Choice          `json:"right,omitempty"`
+	Human      bool              `json:"human,omitempty"`
+	Submission *scoring.Feedback `json:"submission,omitempty"` // the trainee's latest answer to a human question
 }
 
 type Result struct {
@@ -35,6 +37,7 @@ type Result struct {
 	Passed       bool            `json:"passed"`
 	Correct      map[string]bool `json:"correct"`
 	PendingHuman bool            `json:"pending_human"`
+	Status       string          `json:"status"` // the quiz item after this attempt: in_progress | pending_review | complete
 }
 
 // idPerm returns the opaque public ids for one question's n choices: perm[original index] = public id.
@@ -93,7 +96,7 @@ func Score(q *content.Quiz, seed uint64, answers map[string]json.RawMessage) Res
 			continue
 		}
 		if content.IsHuman(x.Type) {
-			res.PendingHuman = true // scored by people in M5
+			res.PendingHuman = true // answered and scored separately (AnswerHuman)
 			continue
 		}
 		res.Max += x.Points
@@ -106,7 +109,7 @@ func Score(q *content.Quiz, seed uint64, answers map[string]json.RawMessage) Res
 	if res.Max > 0 {
 		res.Percent = res.Score / res.Max
 	}
-	res.Passed = res.Max > 0 && !res.PendingHuman && res.Percent >= q.PassThreshold-1e-9
+	res.Passed = res.Max > 0 && res.Percent >= q.PassThreshold-1e-9 // instant part only; SubmitQuiz decides the item
 	return res
 }
 
@@ -203,4 +206,46 @@ func correct(x *content.Question, raw json.RawMessage) bool {
 		return true
 	}
 	return false
+}
+
+// quizOutcome decides the quiz item from the best instant attempt and the latest human submissions (spec §7):
+// complete only when every human question is scored and the total reaches the pass threshold; pending_review when the
+// only things missing are scorers' decisions; otherwise in_progress.
+func quizOutcome(q *content.Quiz, bestInstant float64, attempted bool, subs map[string]*scoring.Submission) (string, float64) {
+	var instantMax, humanMax, humanScore float64
+	waiting, open := false, false
+	for _, x := range q.Questions {
+		switch {
+		case x.Type == "terminal":
+		case content.IsHuman(x.Type):
+			humanMax += x.Points
+			sub := subs[x.ID]
+			switch {
+			case sub != nil && sub.Status == scoring.Scored:
+				humanScore += sub.Points
+			case sub != nil && sub.Status == scoring.Pending, sub == nil && x.Type == "signoff":
+				waiting = true
+			default: // unanswered, or returned for rework
+				open = true
+			}
+		default:
+			instantMax += x.Points
+		}
+	}
+	if instantMax > 0 && !attempted {
+		open = true
+	}
+	pct := 0.0
+	if total := instantMax + humanMax; total > 0 {
+		pct = (bestInstant + humanScore) / total
+	}
+	switch {
+	case open:
+		return "in_progress", pct
+	case waiting:
+		return "pending_review", pct
+	case pct >= q.PassThreshold-1e-9:
+		return "complete", pct
+	}
+	return "in_progress", pct
 }

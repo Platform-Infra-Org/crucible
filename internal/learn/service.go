@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"mime/multipart"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -14,6 +17,7 @@ import (
 	"crucible/internal/content"
 	"crucible/internal/gitsync"
 	"crucible/internal/rbac"
+	"crucible/internal/scoring"
 )
 
 type Service struct {
@@ -21,6 +25,8 @@ type Service struct {
 	State func() *gitsync.State
 	// QuizSecret is mixed into quiz choice-id seeds so learners cannot predict them; it must be stable across restarts.
 	QuizSecret string
+	// Scoring stores human-scored answers (M5). nil in tests that only exercise instant quizzes.
+	Scoring *scoring.Service
 }
 
 type ProgramCard struct {
@@ -276,7 +282,15 @@ func (s *Service) Quiz(ctx context.Context, u *auth.User, team, training, module
 	if status == "" {
 		status = "new"
 	}
-	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: PublicQuiz(m.Quiz, s.seedFor(u.ID, team, training, module)), Status: status}, nil
+	subs, err := s.latest(ctx, u.ID, team, t.ID, module)
+	if err != nil {
+		return nil, err
+	}
+	qs := PublicQuiz(m.Quiz, s.seedFor(u.ID, team, training, module))
+	for i := range qs {
+		qs[i].Submission = subs[qs[i].ID].Feedback() // nil-safe; Feedback never carries the rubric
+	}
+	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: qs, Status: status}, nil
 }
 
 func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, module string, answers map[string]json.RawMessage) (*Result, error) {
@@ -290,12 +304,107 @@ func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, u.ID, team, t.ID, module, sha, stored, res.Score, res.Max, res.Passed); err != nil {
 		return nil, err
 	}
-	status := "in_progress"
-	if res.Passed {
-		status = "complete"
-	}
-	if err := s.SetItem(ctx, u.ID, team, t.ID, module, "quiz", status, res.Percent); err != nil {
+	status, pct, err := s.refreshQuiz(ctx, u.ID, team, t, module)
+	if err != nil {
 		return nil, err
 	}
+	res.Status, res.Percent, res.Passed = status, pct, status == "complete"
 	return &res, nil
+}
+
+func (s *Service) latest(ctx context.Context, userID int64, team, training, module string) (map[string]*scoring.Submission, error) {
+	if s.Scoring == nil {
+		return nil, nil
+	}
+	return s.Scoring.Latest(ctx, userID, team, training, module, scoring.KindQuestion)
+}
+
+// refreshQuiz recomputes the quiz item from the best instant attempt ("best score counts", spec §7) and human scores.
+func (s *Service) refreshQuiz(ctx context.Context, userID int64, team string, t *content.Training, module string) (string, float64, error) {
+	m := t.Module(module)
+	if m == nil || m.Quiz == nil {
+		return "", 0, apperr.Wrap(apperr.NotFound, "this module has no quiz")
+	}
+	var best float64
+	var attempts int
+	if err := s.DB.QueryRow(ctx, `SELECT coalesce(max(score), 0), count(*) FROM quiz_attempts
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`, userID, team, t.ID, module).Scan(&best, &attempts); err != nil {
+		return "", 0, err
+	}
+	subs, err := s.latest(ctx, userID, team, t.ID, module)
+	if err != nil {
+		return "", 0, err
+	}
+	status, pct := quizOutcome(m.Quiz, best, attempts > 0, subs)
+	return status, pct, s.SetItem(ctx, userID, team, t.ID, module, "quiz", status, pct)
+}
+
+// AnswerHuman hands a text or upload answer to the program's scorers (spec §4.4, §7). Sign-offs come from scorers.
+func (s *Service) AnswerHuman(ctx context.Context, u *auth.User, team, training, module, question, answer string, files []*multipart.FileHeader) (*QuizView, error) {
+	t, sha, m, err := s.quizModule(ctx, u, team, training, module)
+	if err != nil {
+		return nil, err
+	}
+	x := m.Quiz.Question(question)
+	if x == nil || !content.IsHuman(x.Type) {
+		return nil, apperr.Wrap(apperr.NotFound, "question not found")
+	}
+	answer = strings.TrimSpace(answer)
+	switch x.Type {
+	case "signoff":
+		return nil, apperr.Wrap(apperr.Conflict, "a scorer signs this off after a live demo")
+	case "text":
+		if answer == "" || len(files) > 0 {
+			return nil, apperr.Wrap(apperr.Invalid, "write your answer (text questions take no files)")
+		}
+	case "upload":
+		if answer == "" && len(files) == 0 {
+			return nil, apperr.Wrap(apperr.Invalid, "attach a file or paste a link")
+		}
+		if answer != "" && !httpLink(answer) {
+			return nil, apperr.Wrap(apperr.Invalid, "a link must start with http:// or https://")
+		}
+	}
+	if s.Scoring == nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "scoring is not available")
+	}
+	if _, err := s.Scoring.Submit(ctx, u, &scoring.Submission{Team: team, Training: t.ID, Module: module, SHA: sha,
+		Kind: scoring.KindQuestion, Item: x.ID, QType: x.Type, Prompt: x.Prompt, Rubric: x.Rubric, MaxPoints: x.Points,
+		Answer: answer}, files); err != nil {
+		return nil, err
+	}
+	if _, _, err := s.refreshQuiz(ctx, u.ID, team, t, module); err != nil {
+		return nil, err
+	}
+	return s.Quiz(ctx, u, team, training, module)
+}
+
+// httpLink accepts only absolute http(s) URLs: scorers click these, so javascript: and friends never get stored.
+func httpLink(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && !strings.ContainsAny(s, " \t\r\n")
+}
+
+// Refresh implements scoring.Progress: a scorer decided on one of this trainee's answers.
+func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
+	st, err := s.state()
+	if err != nil {
+		return err
+	}
+	t, _ := st.ProgramTraining(sub.Team, sub.Training)
+	if t == nil || t.Module(sub.Module) == nil {
+		t = st.Training(sub.Training, sub.SHA)
+	}
+	if t == nil {
+		return apperr.Wrap(apperr.Unavailable, "this training's content is unavailable right now")
+	}
+	_, _, err = s.refreshQuiz(ctx, sub.UserID, sub.Team, t, sub.Module)
+	return err
+}
+
+// ForceScore sets an item's score exactly. SetItem only ever raises it; an override may lower it (labs).
+func (s *Service) ForceScore(ctx context.Context, userID int64, team, training, module, item string, score float64) error {
+	_, err := s.DB.Exec(ctx, `UPDATE item_progress SET score = $6, updated_at = now()
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 AND item = $5`, userID, team, training, module, item, score)
+	return err
 }

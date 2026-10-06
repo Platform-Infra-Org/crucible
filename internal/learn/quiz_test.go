@@ -1,7 +1,9 @@
 package learn
 
 import (
+	"crucible/internal/scoring"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -149,5 +151,42 @@ func TestPublicIDsDoNotRevealOrderOrMatch(t *testing.T) {
 		if res := Score(q, seed, map[string]json.RawMessage{x.ID: bad}); res.Correct[x.ID] {
 			t.Fatalf("%s: submitting sorted public ids must fail", x.ID)
 		}
+	}
+}
+
+func TestQuizOutcome(t *testing.T) {
+	tr, probs := content.Load("../../examples/forge-301")
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	q := tr.Module("01-temper").Quiz // instant 1 pt; human: q-why 5, q-log 2, q-demo (signoff) 3; threshold 0.6
+	sub := func(status string, pts float64) *scoring.Submission {
+		return &scoring.Submission{Status: status, Points: pts}
+	}
+	cases := []struct {
+		name      string
+		best      float64
+		attempted bool
+		subs      map[string]*scoring.Submission
+		want      string
+		pct       float64
+	}{
+		{"nothing yet", 0, false, nil, "in_progress", 0},
+		{"answers pending, sign-off not given", 1, true, map[string]*scoring.Submission{"q-why": sub("pending", 0), "q-log": sub("pending", 0)}, "pending_review", 1.0 / 11},
+		{"one returned", 1, true, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("returned", 0)}, "in_progress", 6.0 / 11},
+		{"one unanswered", 1, true, map[string]*scoring.Submission{"q-why": sub("scored", 5)}, "in_progress", 6.0 / 11},
+		{"all scored", 1, true, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("scored", 2), "q-demo": sub("scored", 3)}, "complete", 1},
+		{"all scored, too low", 0, true, map[string]*scoring.Submission{"q-why": sub("scored", 1), "q-log": sub("scored", 0), "q-demo": sub("scored", 3)}, "in_progress", 4.0 / 11},
+		{"instant part never tried", 0, false, map[string]*scoring.Submission{"q-why": sub("scored", 5), "q-log": sub("scored", 2), "q-demo": sub("scored", 3)}, "in_progress", 10.0 / 11},
+	}
+	for _, c := range cases {
+		got, pct := quizOutcome(q, c.best, c.attempted, c.subs)
+		if got != c.want || math.Abs(pct-c.pct) > 1e-9 {
+			t.Errorf("%s: got %s %.3f, want %s %.3f", c.name, got, pct, c.want, c.pct)
+		}
+	}
+	allHuman := &content.Quiz{PassThreshold: 0.5, Questions: []*content.Question{{ID: "a", Type: "text", Points: 2}}}
+	if got, _ := quizOutcome(allHuman, 0, false, map[string]*scoring.Submission{"a": sub("scored", 2)}); got != "complete" {
+		t.Errorf("an all-human quiz needs no instant attempt: %s", got)
 	}
 }

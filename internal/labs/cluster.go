@@ -53,10 +53,20 @@ func NewClusterRunner(cfg *rest.Config, privileged bool) (*ClusterRunner, error)
 func (c *ClusterRunner) Available(*Instance) error { return nil }
 
 func (c *ClusterRunner) Provision(ctx context.Context, inst *Instance, bundle []byte, compose string) error {
+	return c.provision(ctx, inst, bundle, compose, nil)
+}
+
+// provision creates the lab namespace, its policies and the dind pod, unpacks the bundle and starts compose.
+// awsSetup (aws labs only) runs once the namespace and its policies exist and before the pod: it creates the
+// credentials secret the pod mounts and the module config map the terraform pods mount. It must be idempotent.
+func (c *ClusterRunner) provision(ctx context.Context, inst *Instance, bundle []byte, compose string, awsSetup func(ns string) error) error {
 	if !validLabID(inst.ID) || !filepath.IsLocal(compose) {
 		return errors.New("invalid lab id or compose file name")
 	}
 	o := clusterObjects(inst.ID, compose, c.Privileged)
+	if awsSetup != nil {
+		o = awsWorkspace(o)
+	}
 	core, ns := c.Client.CoreV1(), o.Namespace.Name
 	create := []func() error{
 		func() error { _, err := core.Namespaces().Create(ctx, o.Namespace, metav1.CreateOptions{}); return err },
@@ -69,8 +79,11 @@ func (c *ClusterRunner) Provision(ctx context.Context, inst *Instance, bundle []
 			_, err := c.Client.NetworkingV1().NetworkPolicies(ns).Create(ctx, o.Network, metav1.CreateOptions{})
 			return err
 		},
-		func() error { _, err := core.Pods(ns).Create(ctx, o.Pod, metav1.CreateOptions{}); return err }, // last: isolated from its first packet
 	}
+	if awsSetup != nil {
+		create = append(create, func() error { return awsSetup(ns) })
+	}
+	create = append(create, func() error { _, err := core.Pods(ns).Create(ctx, o.Pod, metav1.CreateOptions{}); return err }) // last: isolated from its first packet
 	for _, step := range create {
 		if err := step(); err != nil && !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("creating the lab namespace: %w", err)
@@ -92,10 +105,6 @@ func (c *ClusterRunner) Provision(ctx context.Context, inst *Instance, bundle []
 
 // waitReady polls the lab pod until dockerd answers (readiness probe), failing fast on states that won't heal.
 func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
-	poll := c.Poll
-	if poll == 0 {
-		poll = 2 * time.Second
-	}
 	var unschedulableSince time.Time
 	for {
 		p, err := c.Client.CoreV1().Pods(ns).Get(ctx, labPod, metav1.GetOptions{})
@@ -105,13 +114,8 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 		if p.Status.Phase == corev1.PodFailed {
 			return fmt.Errorf("the lab pod stopped: %s %s", p.Status.Reason, p.Status.Message)
 		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if w := cs.State.Waiting; w != nil {
-				switch w.Reason {
-				case "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
-					return fmt.Errorf("the lab image could not be started (%s): %s", w.Reason, w.Message)
-				}
-			}
+		if reason, msg := stuck(p); reason != "" {
+			return fmt.Errorf("the lab image could not be started (%s): %s", reason, msg)
 		}
 		for _, cond := range p.Status.Conditions {
 			switch {
@@ -129,7 +133,79 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(poll):
+		case <-time.After(c.poll()):
+		}
+	}
+}
+
+// stuck names a container state that will not heal on its own (bad image or config), or "".
+func stuck(p *corev1.Pod) (reason, msg string) {
+	for _, cs := range p.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil {
+			switch w.Reason {
+			case "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
+				return w.Reason, w.Message
+			}
+		}
+	}
+	return "", ""
+}
+
+func (c *ClusterRunner) poll() time.Duration {
+	if c.Poll == 0 {
+		return 2 * time.Second
+	}
+	return c.Poll
+}
+
+// waitDone polls a one-shot pod until it has finished. ok reports success; msg is the container's termination
+// message (FallbackToLogsOnError: the log tail on failure). A bad image fails fast, as in waitReady.
+func (c *ClusterRunner) waitDone(ctx context.Context, ns, name string) (ok bool, msg string, err error) {
+	for {
+		p, err := c.Client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return false, "", err
+		}
+		if reason, m := stuck(p); reason != "" {
+			return false, reason + ": " + m, nil
+		}
+		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+			for _, cs := range p.Status.ContainerStatuses {
+				if t := cs.State.Terminated; t != nil {
+					msg = t.Message
+				}
+			}
+			if msg == "" { // killed before the container ran, e.g. activeDeadlineSeconds
+				msg = strings.TrimSpace(p.Status.Reason + " " + p.Status.Message)
+			}
+			return p.Status.Phase == corev1.PodSucceeded, msg, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, "", ctx.Err()
+		case <-time.After(c.poll()):
+		}
+	}
+}
+
+// deletePod deletes a pod and returns once it is gone (terraform gets its grace period to stop cleanly).
+func (c *ClusterRunner) deletePod(ctx context.Context, ns, name string) error {
+	pods := c.Client.CoreV1().Pods(ns)
+	if err := pods.Delete(ctx, name, metav1.DeleteOptions{}); apierrors.IsNotFound(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for {
+		if _, err := pods.Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(c.poll()):
 		}
 	}
 }

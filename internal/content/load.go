@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -1283,37 +1284,98 @@ func (l *loader) tfDiags(p string, diags hcl.Diagnostics) {
 }
 
 var (
-	mdLink  = regexp.MustCompile(`!?\[[^\]]*\]\(\s*<?([^)\s>]+)`)
-	mdFence = regexp.MustCompile("(?ms)^(```|~~~).*?^(```|~~~)")
-	mdCode  = regexp.MustCompile("`[^`\\n]*`")
+	mdLinkStart = regexp.MustCompile(`!?\[[^\]]*\]\(`)
+	mdCode      = regexp.MustCompile("`[^`\\n]*`")
 )
 
-// links checks Markdown links and images under modules/ (spec §6 "broken links/assets"). assets/... must exist under
-// the repo's assets/ with a type the app serves; other relative targets can't resolve inside Crucible. Absolute paths,
-// URLs, mailto: and #anchors are external and skipped (nothing is fetched). Fenced blocks and inline code spans are skipped.
-// ponytail: a regex scan, not a Markdown parser.
+// mdTargets returns the link and image targets in Markdown, leaving out fenced blocks (any indent, ``` closes ```,
+// ~~~ closes ~~~, an unclosed fence runs to the end), 4-space indented code blocks and inline code spans.
+// ponytail: a line scanner, not a Markdown parser; a list item's 4-space continuation after a blank line counts as code.
+func mdTargets(b []byte) []string {
+	var out []string
+	var fence string // the opening run, e.g. "```" or "~~~~"
+	prevBlank, prevCode := true, false
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		t := strings.TrimLeft(line, " \t")
+		if fence != "" {
+			if run := strings.TrimLeft(t, fence[:1]); strings.HasPrefix(t, fence) && strings.TrimSpace(run) == "" {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~") {
+			fence = t[:len(t)-len(strings.TrimLeft(t, t[:1]))]
+			prevBlank, prevCode = false, true
+			continue
+		}
+		code := (prevBlank || prevCode) && (strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t"))
+		prevBlank, prevCode = strings.TrimSpace(line) == "", code
+		if code || prevBlank {
+			continue
+		}
+		line = mdCode.ReplaceAllString(line, "")
+		for _, m := range mdLinkStart.FindAllStringIndex(line, -1) {
+			out = append(out, mdTarget(line[m[1]:]))
+		}
+	}
+	return out
+}
+
+// mdTarget reads one link destination: <angle bracketed>, or bare with balanced parentheses; backslash escapes unwrapped.
+func mdTarget(s string) string {
+	s = strings.TrimLeft(s, " \t")
+	var sb strings.Builder
+	angle := strings.HasPrefix(s, "<")
+	if angle {
+		s = s[1:]
+	}
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\\' && i+1 < len(s) && strings.IndexByte("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", s[i+1]) >= 0:
+			i++
+			sb.WriteByte(s[i])
+			continue
+		case angle && c == '>':
+			return sb.String()
+		case !angle && (c == ' ' || c == '\t'), !angle && c == ')' && depth == 0:
+			return sb.String()
+		case !angle && c == '(':
+			depth++
+		case !angle && c == ')':
+			depth--
+		}
+		sb.WriteByte(c)
+	}
+	return sb.String()
+}
+
 func (l *loader) links(dir string) {
 	_ = filepath.WalkDir(filepath.Join(dir, "modules"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(p), ".md") {
+		if err != nil || d.IsDir() || d.Type()&fs.ModeSymlink != 0 || !strings.EqualFold(filepath.Ext(p), ".md") { // noSymlinks reported links; never read through them
 			return nil
 		}
 		b, err := os.ReadFile(p)
 		if err != nil {
 			return nil
 		}
-		for _, m := range mdLink.FindAllSubmatch(mdCode.ReplaceAll(mdFence.ReplaceAll(b, nil), nil), -1) {
-			target := string(m[1])
+		for _, target := range mdTargets(b) {
 			switch {
 			case strings.HasPrefix(target, "#"), strings.HasPrefix(target, "/"), strings.Contains(target, "://"), strings.HasPrefix(target, "mailto:"):
 			case strings.HasPrefix(target, "assets/"):
 				rel, _, _ := strings.Cut(strings.TrimPrefix(target, "assets/"), "#")
 				rel, _, _ = strings.Cut(rel, "?")
+				if dec, err := url.PathUnescape(rel); err == nil { // my%20file.png is the file "my file.png"
+					rel = dec
+				}
 				if !filepath.IsLocal(filepath.FromSlash(rel)) {
 					l.add(p, "asset link %q leaves assets/", target)
 					continue
 				}
 				fp := filepath.Join(dir, "assets", filepath.FromSlash(rel))
-				if fi, err := os.Stat(fp); err != nil || !fi.Mode().IsRegular() {
+				if fi, err := os.Lstat(fp); err != nil || !fi.Mode().IsRegular() {
 					l.add(p, "broken asset link %q", target)
 				} else if !AssetTypes[strings.ToLower(filepath.Ext(fp))] {
 					l.add(p, "asset %q is not an image or font Crucible serves", target)

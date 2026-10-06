@@ -425,8 +425,13 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	if b.BudgetUSDMonth > 0 {
 		set["budget_usd_month"] = b.BudgetUSDMonth
 	}
-	if b.Schedule == "" && exists && t.Programs[training].Inline != nil {
+	schedule := b.Schedule
+	if exists && t.Programs[training].Inline != nil {
+		if b.Schedule != "" {
+			return "", apperr.Wrap(apperr.Conflict, "this program has an inline schedule; edit it in git")
+		}
 		delete(set, "schedule") // inline windows live in git; the UI only picks named schedules, so keep them
+		schedule = "inline"
 	}
 	rel := path.Join("teams", team, "programs", training+".yaml")
 	action, auditAction := "update program "+team+"/"+training, "program.update"
@@ -435,7 +440,7 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	}
 	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel}, Allow: allow, Edit: edit(rel, set)},
 		auditAction, team+"/"+training, map[string]any{
-			"enrolled": set["enrolled"], "roles": set["roles"], "schedule": b.Schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
+			"enrolled": set["enrolled"], "roles": set["roles"], "schedule": schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
 }
 
 func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b BudgetBody) (string, error) {

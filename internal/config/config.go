@@ -214,6 +214,14 @@ func Load(dir string) (*Platform, error) {
 	if p.Settings.EscalationHours < 0 {
 		errs = append(errs, errors.New("platform.yaml: escalation_hours must be positive"))
 	}
+	if raw, _ := os.ReadFile(filepath.Join(dir, "platform.yaml")); len(raw) > 0 {
+		var top map[string]yaml.Node // a present-but-empty ranks list is a mistake, not "use the defaults"
+		if yaml.Unmarshal(raw, &top) == nil {
+			if n, ok := top["ranks"]; ok && (n.Tag == "!!null" || (n.Kind == yaml.MappingNode && len(n.Content) == 0)) {
+				errs = append(errs, errors.New("platform.yaml: ranks is empty; list the thresholds or remove the key to use the defaults"))
+			}
+		}
+	}
 	if err := p.Settings.Ranks.fill(); err != nil {
 		errs = append(errs, fmt.Errorf("platform.yaml: ranks: %w", err))
 	}
@@ -335,7 +343,7 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 		name := strings.TrimSuffix(filepath.Base(f), ".yaml")
 		pr := &Program{}
 		if err := yamlx.ReadFile(f, pr, true); err != nil {
-			bad("%v", err)
+			bad("programs/%v", err) // ReadFile prefixes the base name
 			continue
 		}
 		pr.Schedule, pr.Inline = pr.ScheduleSpec.Name, pr.ScheduleSpec.Inline

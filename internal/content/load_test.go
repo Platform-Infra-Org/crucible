@@ -559,3 +559,45 @@ func TestCompletionAndAttempts(t *testing.T) {
 		t.Errorf("parsed: %+v %+v", tr, m)
 	}
 }
+
+func TestLinksCodeAndTargets(t *testing.T) {
+	md := "# R\n\n![a](assets/a(1).png) ![b](assets/my%20file.png) ![c](<assets/my file.png>) [d](assets/a\\(1\\).png)\n\n" +
+		"- step\n\n  ```sh\n  [x](nowhere.md)\n  ```\n\n" +
+		"   ~~~\n[y](nowhere2.md)\n```\n[z](nowhere3.md)\n~~~\n\n" +
+		"    [w](nowhere4.md)\n\n```\n[unclosed](nowhere5.md)\n"
+	dir := tree(t, map[string]string{
+		"modules/m1/reading/intro.md": md,
+		"assets/a(1).png":             "png",
+		"assets/my file.png":          "png",
+	})
+	if _, probs := Load(dir); len(probs) > 0 {
+		t.Fatalf("code and escaped targets flagged: %v", probs)
+	}
+	for _, bad := range []string{"![a](assets/%2e%2e/x.png)", "![a](assets/none%20here.png)", "[a](assets\\logo.png)", "[a](<nowhere.md>)", "~~~\n```\n~~~\n[a](nowhere.md)"} {
+		dir := tree(t, map[string]string{"modules/m1/reading/intro.md": "x\n\n" + bad + "\n"})
+		if _, probs := Load(dir); len(probs) == 0 {
+			t.Errorf("%q must be flagged", bad)
+		}
+	}
+}
+
+func TestLinksSymlinks(t *testing.T) {
+	dir := tree(t, map[string]string{"modules/m1/reading/intro.md": "![a](assets/l.png)\n", "assets/real.png": "png"})
+	outside := filepath.Join(t.TempDir(), "o.md")
+	_ = os.WriteFile(outside, []byte("[leak](secret-path.md)"), 0o644)
+	if err := os.Symlink(filepath.Join(dir, "assets/real.png"), filepath.Join(dir, "assets/l.png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "modules/m1/reading/ln.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, probs := Load(dir)
+	var all []string
+	for _, p := range probs {
+		all = append(all, fmt.Sprint(p))
+	}
+	j := strings.Join(all, "\n")
+	if !strings.Contains(j, "symlinks are not allowed") || !strings.Contains(j, "broken asset link") || strings.Contains(j, "secret-path") {
+		t.Fatalf("symlinked asset is rejected and a symlinked .md is never read:\n%s", j)
+	}
+}

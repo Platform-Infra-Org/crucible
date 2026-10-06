@@ -146,10 +146,13 @@ func TestRankLadderFromConfig(t *testing.T) {
 	if err != nil || !slices.Equal(p.Settings.Ranks.Steps(), []float64{0, 20, 45, 70, 90, 100}) {
 		t.Fatalf("one override: %v %v", p.Settings.Ranks.Steps(), err)
 	}
-	for _, bad := range []string{"ranks: {ingot: 50, tempered: 40}\n", "ranks: {masterwork: 120}\n", "ranks: {masterwork: 95}\n", "ranks: {ingot: -1}\n", "ranks: {blade: 95}\n"} {
+	for _, bad := range []string{"ranks: {ingot: 50, tempered: 40}\n", "ranks: {masterwork: 120}\n", "ranks: {masterwork: 95}\n", "ranks: {ingot: -1}\n", "ranks: {blade: 95}\n", "ranks: {}\n", "ranks:\n"} {
 		if _, err := Load(platformDir(t, map[string]string{"platform.yaml": tiers + bad})); err == nil || !strings.Contains(err.Error(), "ranks") {
 			t.Errorf("%q must be rejected, got %v", bad, err)
 		}
+	}
+	if _, err := Load(platformDir(t, map[string]string{"platform.yaml": tiers + "ranks: 0\n"})); err == nil {
+		t.Error("ranks: 0 must be rejected")
 	}
 }
 
@@ -173,8 +176,8 @@ func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
 		"timezone: UTC\n  tz: x\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]",
 	} {
 		bad := "enrolled: [u@x]\nschedule:\n  " + sched + "\n"
-		if _, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": bad})); err == nil || !strings.Contains(err.Error(), "t1.yaml") {
-			t.Fatalf("a bad inline schedule names the file: %v", err)
+		if _, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": bad})); err == nil || !strings.Contains(err.Error(), "programs/t1.yaml") {
+			t.Fatalf("a bad inline schedule names programs/t1.yaml: %v", err)
 		}
 	}
 	named, err := Load(platformDir(t, map[string]string{

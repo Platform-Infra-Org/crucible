@@ -328,4 +328,29 @@ func TestSetProgramKeepsInlineSchedule(t *testing.T) {
 	if !strings.Contains(got, "timezone: Europe/Bucharest") || !strings.Contains(got, "review_self_reported: true") {
 		t.Fatalf("saving must keep the inline schedule and the review flag:\n%s", got)
 	}
+	var detail string
+	_ = f.s.DB.QueryRow(ctx, `SELECT detail::text FROM audit_log ORDER BY id DESC LIMIT 1`).Scan(&detail)
+	if !strings.Contains(detail, `"schedule": "inline"`) {
+		t.Fatalf("audit must record the kept inline schedule: %s", detail)
+	}
+}
+
+func TestSetProgramRefusesToReplaceInlineSchedule(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	inline := "training: forge-101\nenrolled: [trainee@crucible.local]\nschedule:\n  timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]\n"
+	f.push(t, map[string]string{"teams/forge/programs/forge-101.yaml": inline})
+	if err := f.sync.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b := emptyProgram(f.sha())
+	b.Enrolled = []string{"trainee@crucible.local"}
+	b.Schedule = "business-hours"
+	if _, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", b); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "edit it in git") {
+		t.Fatalf("a named schedule over inline windows must be refused: %v", err)
+	}
+	got := sh(t, "", "--git-dir", f.remote, "show", "main:teams/forge/programs/forge-101.yaml")
+	if !strings.Contains(got, "timezone: Europe/Bucharest") {
+		t.Fatalf("inline windows must survive the refused save:\n%s", got)
+	}
 }

@@ -169,6 +169,7 @@ func run(ctx context.Context) error {
 	scoreSvc := &scoring.Service{DB: pool, Blobs: blobs, State: syncer.Current, Notify: notifySvc, Quiz: learnSvc, Labs: labSvc,
 		Log: slog.Default(), Now: time.Now}
 	learnSvc.Scoring = scoreSvc
+	learnSvc.Notify = notifySvc
 	labSvc.Scoring, labSvc.Blobs = scoreSvc, blobs
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()

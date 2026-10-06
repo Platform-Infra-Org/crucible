@@ -47,7 +47,7 @@ const (
 	SubmissionPending Kind = "submission_pending"
 	SubmissionScored  Kind = "submission_scored" // also returned for rework
 	ReaperReport      Kind = "reaper_report"
-	// Rank-up kinds arrive with ranks (M7).
+	RankUp            Kind = "rank_up"
 )
 
 type KindInfo struct {
@@ -67,6 +67,7 @@ var Kinds = []KindInfo{
 	{SubmissionPending, "A submission is waiting for my score"},
 	{SubmissionScored, "My submission was scored or returned"},
 	{ReaperReport, "Leftover AWS lab resources need attention"},
+	{RankUp, "I or one of my mentees reached a new forge rank"},
 }
 
 type Event struct {

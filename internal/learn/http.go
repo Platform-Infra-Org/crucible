@@ -18,6 +18,13 @@ import (
 
 func (s *Service) Routes(r chi.Router) {
 	const p = "/api/programs/{team}/{training}"
+	r.Get("/api/me/forge", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.UpdateForge(r.Context(), auth.UserFrom(r.Context()).ID)
+		reply(w, v, err)
+	})
+	r.Post("/api/me/forge/seen", func(w http.ResponseWriter, r *http.Request) {
+		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID))
+	})
 	r.Get("/api/programs", func(w http.ResponseWriter, r *http.Request) {
 		cards, err := s.Programs(r.Context(), auth.UserFrom(r.Context()))
 		reply(w, cards, err)

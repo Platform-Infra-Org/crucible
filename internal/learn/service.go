@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"mime/multipart"
 	"net/url"
 	"os"
@@ -32,6 +33,7 @@ type Service struct {
 	// Versions loads a training at an exact sha from the mirror when it isn't in memory (gitsync.Syncer.Version).
 	// nil: only in-memory versions (tests).
 	Versions func(ctx context.Context, id, sha string) *content.Training
+	Notify   Notifier // rank-up notifications; nil = off
 }
 
 // Version returns training id at exactly sha, or nil if that version isn't available. Never another version: labs
@@ -302,7 +304,18 @@ func (s *Service) SetItem(ctx context.Context, userID int64, team, training, mod
 		  status = CASE WHEN item_progress.status = 'complete' THEN 'complete' ELSE EXCLUDED.status END,
 		  score = GREATEST(item_progress.score, EXCLUDED.score),
 		  updated_at = now()`, userID, team, training, module, item, status, score)
-	return err
+	if err != nil {
+		return err
+	}
+	s.afterWrite(ctx, userID)
+	return nil
+}
+
+// afterWrite raises the forge rank; progress is already saved, so a failure only delays the rank.
+func (s *Service) afterWrite(ctx context.Context, userID int64) {
+	if _, err := s.UpdateForge(ctx, userID); err != nil {
+		slog.Warn("forge rank update failed", "user", userID, "err", err)
+	}
 }
 
 func findItem(m *content.Module, kind, id string) *content.Item {
@@ -560,7 +573,11 @@ func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
 func (s *Service) ForceScore(ctx context.Context, userID int64, team, training, module, item string, score float64) error {
 	_, err := s.DB.Exec(ctx, `UPDATE item_progress SET score = $6, updated_at = now()
 		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4 AND item = $5`, userID, team, training, module, item, score)
-	return err
+	if err != nil {
+		return err
+	}
+	s.afterWrite(ctx, userID)
+	return nil
 }
 
 func decided(subs map[string]*scoring.Submission) bool {

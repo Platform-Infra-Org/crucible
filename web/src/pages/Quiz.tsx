@@ -7,12 +7,10 @@ import { FeedbackBox } from '../components/Feedback'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { SparkBurst } from '../components/SparkBurst'
+import { attemptPassed, resultMessage } from '../lib/quizResult'
 
 type Answers = Record<string, unknown>
 
-// score/max are this attempt; percent/passed/status are quiz-wide (best instant + scored human answers).
-// An earlier passing attempt must not make a failing one look like a win.
-const attemptPassed = (r: QuizResult, threshold: number) => r.max <= 0 || r.score / r.max >= threshold - 1e-9
 
 function Question({ q, n, value, onChange, verdict }: { q: PublicQuestion; n: number; value: unknown; onChange: (v: unknown) => void; verdict?: boolean }) {
   const cls = `question ${verdict === undefined ? '' : verdict ? 'right' : 'wrong'}`
@@ -179,7 +177,6 @@ export function QuizPage() {
   }
   const instant = data.questions.filter((q) => !q.human)
   const ok = !!result && result.status === 'complete' && attemptPassed(result, data.pass_threshold)
-  const pct = result ? Math.round(result.percent * 100) : 0
   return (
     <section className="page">
       <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
@@ -201,15 +198,7 @@ export function QuizPage() {
       {err && <p className="error" role="alert">{err}</p>}
       <div role="status" className={result ? `result ${ok ? 'pass' : 'fail'}` : undefined}>
         {result && (<>
-          {result.status === 'pending_review'
-            ? 'Submitted: a scorer still has to read your answers.'
-            : result.status === 'complete'
-              ? ok
-                ? `Passed: ${pct}%. Tempered!`
-                : `Not yet: this attempt scored ${Math.round((result.score / result.max) * 100)}%. An earlier attempt already passed.`
-              : result.pending_human
-                ? 'Choices scored. Answer the questions a person scores below.'
-                : `Not yet: ${pct}%. Reheat and try again.`}{' '}
+          {resultMessage(result, data.pass_threshold)}{' '}
           {result.status === 'complete' && <Link to={`/p/${team}/${training}`}>Back to the training</Link>}
         </>)}
       </div>

@@ -148,6 +148,7 @@ export function AnvilDetailPage() {
             <label>Points <input type="number" min={0} max={s.max_points} step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} /></label>
             <span className="muted">of {s.max_points}</span>
           </div>
+          <p className="muted">Scores are final: the trainee cannot retry this item.</p>
           {hintCost > 0 && <p className="muted">Hints the trainee revealed cost {hintCost} points; they are taken off what you award.</p>}
           <label>Feedback <textarea rows={4} maxLength={5000} value={feedback} onChange={(e) => setFeedback(e.target.value)} /></label>
           <div className="row">

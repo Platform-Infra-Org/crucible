@@ -355,6 +355,16 @@ AWS`, "AWS", aws, 1)
 		"json parse error":       {tf("bad.tf.json", "{"), "terraform/bad.tf.json"},
 		"shipped .terraform dir": {tf(".terraform/providers/x", "bin"), "do not ship"},
 		"too big":                {tf("big.tf", "# "+strings.Repeat("x", 600<<10)+"\n"), "keep it under 512 KiB"},
+		// fix round 2 (task-1-review): shipped state, import blocks, non-literal sources, per-file cap
+		"shipped tfstate":        {tf("terraform.tfstate", "{}"), "do not ship"},
+		"shipped tfstate backup": {tf("X.TFSTATE.BACKUP", "{}"), "do not ship"},
+		"import block":           {tf("i.tf", "import {\n  to = aws_s3_bucket.b\n  id = \"other-lab\"\n}\n"), "do not declare import blocks"},
+		"json import block":      {tf("i.tf.json", `{"import": [{"to": "aws_s3_bucket.b", "id": "x"}]}`), "do not declare import blocks"},
+		"templated source":       {tf("m.tf", "module \"x\" {\n  source = \"./${var.x}\"\n}\n"), "must be a literal"},
+		"json non-string source": {tf("m.tf.json", `{"module": {"x": {"source": ["./x"]}}}`), "must be a literal"},
+		"computed provider":      {tf("v.tf", "terraform {\n  required_providers {\n    aws = { source = lower(\"HASHICORP/AWS\") }\n  }\n}\n"), "must be a literal"},
+		"for provider":           {tf("v.tf", "terraform {\n  required_providers {\n    aws = { for k in [1] : \"source\" => \"hashicorp/aws\" }\n  }\n}\n"), "must be a literal"},
+		"big file":               {tf("big.tf", "# "+strings.Repeat("x", 200<<10)+"\n"), "keep each file under 128 KiB"},
 		"wrong terminal":         {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
 	}
 	for name, c := range cases {
@@ -378,6 +388,40 @@ AWS`, "AWS", aws, 1)
 	})
 	if _, probs := Load(ok); len(probs) > 0 {
 		t.Fatalf("provider sources and local modules are allowed: %v", probs)
+	}
+}
+
+// The lint runs inside crucible-api on every git sync: an author's push must not crash it (stack overflow on deep
+// nesting) or burn minutes of CPU (evaluating expressions). Each input must fail fast with a problem.
+func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
+	nest := func(open, close string, n int) string { return strings.Repeat(open, n) + strings.Repeat(close, n) }
+	list := "[" + strings.TrimSuffix(strings.Repeat("1,", 400), ",") + "]"
+	cases := map[string]struct{ name, body, want string }{
+		"deep list":         {"d.tf", "locals {\n  x = " + nest("[", "]", 50000) + "\n}\n", "nested too deeply"},
+		"deep parens":       {"d.tf", "locals {\n  x = " + nest("(", ")", 50000) + "\n}\n", "nested too deeply"},
+		"deep json":         {"d.tf.json", `{"locals": {"x": ` + nest("[", "]", 50000) + `}}`, "nested too deeply"},
+		"strings hide nest": {"d.tf", "locals {\n  x = " + strings.Repeat(`["]]]",`, 10000) + strings.Repeat("]", 10000) + "\n}\n", "nested too deeply"},
+		"huge deep list":    {"d.tf", "locals {\n  x = " + nest("[", "]", 250000) + "\n}\n", "keep"},
+		"for bomb": {"m.tf", "locals {\n  l = " + list + "\n}\nmodule \"x\" {\n  source = [for a in local.l : [for b in local.l : [for c in local.l : [for d in local.l : 1]]]]\n}\n",
+			"must be a literal"},
+		"provider for bomb": {"v.tf", "terraform {\n  required_providers {\n    aws = [for a in " + list + " : [for b in " + list + " : [for c in " + list + " : 1]]]\n  }\n}\n",
+			"must be a literal"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := awsTree(t, map[string]string{"modules/m1/lab/terraform/" + c.name: c.body})
+			start := time.Now()
+			_, probs := Load(dir)
+			if d := time.Since(start); d > time.Second {
+				t.Errorf("lint took %v", d)
+			}
+			for _, p := range probs {
+				if strings.Contains(p.String(), c.want) {
+					return
+				}
+			}
+			t.Fatalf("want a problem containing %q, got %v", c.want, probs)
+		})
 	}
 }
 

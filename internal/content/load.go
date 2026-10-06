@@ -2,6 +2,7 @@ package content
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -712,12 +713,17 @@ var (
 	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)
 )
 
-const maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
+const (
+	maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
+	maxTFFileBytes = 128 << 10
+	maxTFDepth     = 64 // HCL's parsers recurse per nesting level; deep input overflows the stack (a fatal error)
+)
 
 // The parts of a terraform file awsModule looks at; PartialContent ignores the rest.
 var (
 	tfTopSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
-		{Type: "provider", LabelNames: []string{"name"}}, {Type: "terraform"}, {Type: "module", LabelNames: []string{"name"}}}}
+		{Type: "provider", LabelNames: []string{"name"}}, {Type: "terraform"}, {Type: "module", LabelNames: []string{"name"}},
+		{Type: "import"}}}
 	tfTerraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
 		{Type: "backend", LabelNames: []string{"type"}}, {Type: "cloud"}, {Type: "required_providers"}}}
 	tfModuleSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
@@ -725,10 +731,12 @@ var (
 
 // awsModule checks an aws lab (spec §4.5, §8.2). Region and price ceiling are required. terraform/ holds a module
 // Crucible runs as-is after adding its own provider, backend and variables, so the module must not declare provider,
-// backend or cloud blocks nor ship tfvars; providers must be HashiCorp's; module sources must be local so neither
-// infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed with HCL:
-// a regex cannot be made sound for this. What the module does at plan/apply time (data "external", local-exec) is
-// the runner sandbox's job, not lint's.
+// backend, cloud or import blocks nor ship tfvars or state; providers must be HashiCorp's; module sources must be local
+// so neither infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed
+// with HCL: a regex cannot be made sound for this. This runs inside crucible-api on an author's push, so sizes are
+// capped before anything is parsed, nesting depth is capped before the (recursive) parser runs, and no expression is
+// ever evaluated: the values lint cares about must be literal strings. What the module does at plan/apply time
+// (data "external", local-exec) is the runner sandbox's job, not lint's.
 func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || !awsRegionRe.MatchString(lab.AWS.Region) {
 		l.add(lf, "aws.region is required for runtime: aws (e.g. eu-west-1)")
@@ -737,7 +745,8 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
 	}
 	root := filepath.Join(dir, "terraform")
-	files, size := 0, int64(0)
+	var tfs []string
+	size, tooBig := int64(0), false
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -752,25 +761,36 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 		}
 		if info, err := d.Info(); err == nil {
 			size += info.Size()
+			if info.Size() > maxTFFileBytes {
+				tooBig = true
+				l.add(p, "%d KiB; keep each file under %d KiB", info.Size()>>10, maxTFFileBytes>>10)
+			}
 		}
 		switch {
 		case strings.HasSuffix(name, ".tfvars") || strings.HasSuffix(name, ".tfvars.json"):
 			l.add(p, "do not ship %s: Crucible injects the lab's variables", d.Name())
-			return nil
+		case strings.HasSuffix(name, ".tfstate") || strings.HasSuffix(name, ".tfstate.backup"):
+			l.add(p, "do not ship %s: Crucible stores state per lab", d.Name())
 		case strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json"):
-			files++
-			l.tfFile(p, strings.HasSuffix(name, ".json"))
+			tfs = append(tfs, p)
 		}
 		return nil
 	})
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		l.add(root, "%v", err)
 	}
-	if files == 0 {
+	if len(tfs) == 0 {
 		l.add(lf, "runtime: aws needs a terraform/ directory with at least one .tf file")
 	}
 	if size > maxModuleBytes {
 		l.add(lf, "terraform/ is %d KiB; keep it under %d KiB", size>>10, maxModuleBytes>>10)
+		return
+	}
+	if tooBig {
+		return
+	}
+	for _, p := range tfs {
+		l.tfFile(p, strings.HasSuffix(strings.ToLower(p), ".json"))
 	}
 }
 
@@ -779,6 +799,10 @@ func (l *loader) tfFile(p string, isJSON bool) {
 	b, err := os.ReadFile(p)
 	if err != nil {
 		l.add(p, "%v", err)
+		return
+	}
+	if d := tfDepth(b, isJSON); d > maxTFDepth {
+		l.add(p, "nested too deeply (%d levels; keep it under %d)", d, maxTFDepth)
 		return
 	}
 	var f *hcl.File
@@ -798,6 +822,8 @@ func (l *loader) tfFile(p string, isJSON bool) {
 		switch blk.Type {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
+		case "import": // it could adopt another lab's resources into this lab's state
+			l.add(p, "do not declare import blocks: a lab creates its own resources")
 		case "terraform":
 			tb, _, diags := blk.Body.PartialContent(tfTerraformSchema)
 			l.tfDiags(p, diags)
@@ -809,44 +835,117 @@ func (l *loader) tfFile(p string, isJSON bool) {
 					attrs, diags := sub.Body.JustAttributes()
 					l.tfDiags(p, diags)
 					for name, a := range attrs {
-						l.providerSource(p, name, a)
+						l.providerSource(p, b, name, a)
 					}
 				}
 			}
 		case "module":
 			mb, _, diags := blk.Body.PartialContent(tfModuleSchema)
 			l.tfDiags(p, diags)
-			src := ""
+			src, ok := "", true
 			if a := mb.Attributes["source"]; a != nil {
-				if v, diags := a.Expr.Value(nil); !diags.HasErrors() && v.Type() == cty.String && v.IsKnown() && !v.IsNull() {
-					src = v.AsString()
-				}
+				src, ok = tfLiteral(a.Expr, b)
 			}
-			if !localModule(src) {
+			switch {
+			case !ok:
+				l.add(p, "module source must be a literal string")
+			case !localModule(src):
 				l.add(p, "module source %q must be a local path (./…) inside terraform/", src)
 			}
 		}
 	}
 }
 
-// providerSource checks one required_providers entry: a version string (implied hashicorp/<name>) or an object whose
-// source, if any, is hashicorp/<name> or registry.terraform.io/hashicorp/<name>.
-func (l *loader) providerSource(p, name string, a *hcl.Attribute) {
-	v, diags := a.Expr.Value(nil)
-	switch {
-	case diags.HasErrors() || !v.IsWhollyKnown() || v.IsNull():
-	case v.Type() == cty.String:
+// providerSource checks one required_providers entry: a version string (implied hashicorp/<name>) or an object of
+// literal strings whose source, if any, is hashicorp/<name> or registry.terraform.io/hashicorp/<name>.
+func (l *loader) providerSource(p string, src []byte, name string, a *hcl.Attribute) {
+	if _, ok := tfLiteral(a.Expr, src); ok {
 		return
-	case v.Type().IsObjectType():
-		if !v.Type().HasAttribute("source") {
-			return
+	}
+	kvs, diags := hcl.ExprMap(a.Expr)
+	if diags.HasErrors() {
+		l.add(p, "required_providers entry %q must be a literal string or object", name)
+		return
+	}
+	for _, kv := range kvs {
+		k := hcl.ExprAsKeyword(kv.Key)
+		if k == "" {
+			k, _ = tfLiteral(kv.Key, src)
 		}
-		if s := v.GetAttr("source"); s.Type() == cty.String && !s.IsNull() &&
-			hashicorpProvider.MatchString(strings.ToLower(s.AsString())) {
-			return
+		v, ok := tfLiteral(kv.Value, src)
+		if !ok {
+			l.add(p, "required_providers entry %q: %q must be a literal string", name, k)
+			continue
+		}
+		if k == "source" && !hashicorpProvider.MatchString(strings.ToLower(v)) {
+			l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
 		}
 	}
-	l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
+}
+
+// tfLiteral returns e's value when it is a literal string, without evaluating anything: a native "…" with no
+// interpolation, or a JSON string (read from its source bytes; with a nil context HCL takes JSON strings literally).
+func tfLiteral(e hcl.Expression, src []byte) (string, bool) {
+	if k, ok := e.(*hclsyntax.ObjectConsKeyExpr); ok {
+		e = k.Wrapped
+	}
+	switch x := e.(type) {
+	case *hclsyntax.TemplateExpr:
+		if len(x.Parts) == 1 {
+			if lit, ok := x.Parts[0].(*hclsyntax.LiteralValueExpr); ok && lit.Val.Type() == cty.String && !lit.Val.IsNull() {
+				return lit.Val.AsString(), true
+			}
+		}
+		return "", false
+	case hclsyntax.Expression: // any other native expression
+		return "", false
+	}
+	r := e.Range()
+	var s string
+	if r.Start.Byte < 0 || r.End.Byte > len(src) || r.Start.Byte > r.End.Byte ||
+		json.Unmarshal(src[r.Start.Byte:r.End.Byte], &s) != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// tfDepth is the deepest bracket/brace/paren/template nesting in a terraform file, found without the recursive
+// parser: HCL's own lexer (a state machine) for .tf, encoding/json's tokenizer for .tf.json. Strings are tokens to
+// both, so brackets inside strings neither add nor hide depth. A lex error counts as too deep: the parse would fail.
+func tfDepth(b []byte, isJSON bool) int {
+	depth, deepest := 0, 0
+	if isJSON {
+		dec := json.NewDecoder(bytes.NewReader(b))
+		for {
+			tok, err := dec.Token()
+			if err == io.EOF {
+				return deepest
+			}
+			if err != nil {
+				return deepest // the parser reports the syntax error; it never got deeper than this
+			}
+			switch tok {
+			case json.Delim('['), json.Delim('{'):
+				depth++
+				deepest = max(deepest, depth)
+			case json.Delim(']'), json.Delim('}'):
+				depth--
+			}
+		}
+	}
+	toks, _ := hclsyntax.LexConfig(b, "", hcl.InitialPos)
+	for _, t := range toks {
+		switch t.Type {
+		case hclsyntax.TokenOBrace, hclsyntax.TokenOBrack, hclsyntax.TokenOParen, hclsyntax.TokenOQuote,
+			hclsyntax.TokenOHeredoc, hclsyntax.TokenTemplateInterp, hclsyntax.TokenTemplateControl:
+			depth++
+			deepest = max(deepest, depth)
+		case hclsyntax.TokenCBrace, hclsyntax.TokenCBrack, hclsyntax.TokenCParen, hclsyntax.TokenCQuote,
+			hclsyntax.TokenCHeredoc, hclsyntax.TokenTemplateSeqEnd:
+			depth--
+		}
+	}
+	return deepest
 }
 
 // localModule: ./ prefix, no .. element after cleaning (so it stays inside terraform/), no backslashes.

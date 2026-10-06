@@ -130,7 +130,7 @@ func lint(dir string, w io.Writer) int {
 }
 
 // priceRunner is the real infracost CLI when it is installed and INFRACOST_API_KEY is set, else nil.
-func priceRunner() infracost.Runner {
+var priceRunner = func() infracost.Runner {
 	if _, err := exec.LookPath("infracost"); err != nil || os.Getenv("INFRACOST_API_KEY") == "" {
 		return nil
 	}

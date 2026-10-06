@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"crucible/internal/content"
@@ -25,6 +26,9 @@ import (
 const (
 	timeout   = 2 * time.Minute
 	maxOutput = 8 << 20
+	// lint caps a module at 512 KiB and 200 files; this only stops an unlinted directory filling /tmp
+	maxCopyBytes = 1 << 20
+	maxCopyFiles = 400
 )
 
 // Runner runs the infracost CLI in dir and returns its stdout.
@@ -54,6 +58,10 @@ func Exec(ctx context.Context, dir string, env []string, args ...string) ([]byte
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "infracost", args...)
 	cmd.Dir, cmd.WaitDelay = dir, 5*time.Second
+	// its own process group, killed whole: infracost starts git/terraform children that would outlive it
+	// ponytail: unix-only (Setpgid); Crucible builds for linux and macOS
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Env = []string{}
 	for _, k := range passEnv {
 		if v, ok := os.LookupEnv(k); ok {
@@ -64,6 +72,9 @@ func Exec(ctx context.Context, dir string, env []string, args ...string) ([]byte
 	out, stderr := &limitWriter{max: maxOutput}, &limitWriter{max: 64 << 10}
 	cmd.Stdout, cmd.Stderr = out, stderr
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, errors.New("infracost timed out")
+		}
 		msg := strings.TrimSpace(stderr.buf.String())
 		if len(msg) > 500 {
 			msg = msg[len(msg)-500:]
@@ -84,6 +95,22 @@ func Hourly(ctx context.Context, run Runner, moduleDir, region string) (float64,
 	defer os.RemoveAll(tmp)
 	home, mod := filepath.Join(tmp, "home"), filepath.Join(tmp, "module") // HOME stays outside the scanned path
 	if err := os.Mkdir(home, 0o700); err != nil {
+		return 0, err
+	}
+	size, n := int64(0), 0
+	err = filepath.WalkDir(moduleDir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if info, err := d.Info(); err == nil {
+			size += info.Size()
+		}
+		if n++; n > maxCopyFiles || size > maxCopyBytes {
+			return fmt.Errorf("module is over %d files or %d KiB", maxCopyFiles, maxCopyBytes>>10)
+		}
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	if err := os.CopyFS(mod, os.DirFS(moduleDir)); err != nil { // refuses symlinks

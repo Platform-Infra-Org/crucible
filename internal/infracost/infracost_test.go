@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestHourlyPricesALocalCopy(t *testing.T) {
@@ -80,5 +83,52 @@ func TestExecScrubsEnvAndCapsOutput(t *testing.T) {
 	}
 	if _, err := Exec(context.Background(), t.TempDir(), nil, "flood"); err == nil {
 		t.Fatal("output over the cap is an error")
+	}
+}
+
+// A hung CLI is killed with everything it started (git, terraform), and the error says it timed out.
+func TestExecTimeoutKillsTheProcessGroup(t *testing.T) {
+	bin, tmp := t.TempDir(), t.TempDir()
+	pidFile := filepath.Join(tmp, "child.pid")
+	script := "#!/bin/sh\nsleep 30 &\necho $! > " + pidFile + "\nwait\n"
+	if err := os.WriteFile(filepath.Join(bin, "infracost"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := Exec(ctx, tmp, nil, "breakdown")
+	if err == nil || !strings.Contains(err.Error(), "infracost timed out") {
+		t.Fatalf("want a timeout error, got %v", err)
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Fatalf("Exec waited %v: the child kept the pipes open", time.Since(start))
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	for range 50 { // the kill is asynchronous; give the child a moment to go
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %d still running", pid)
+}
+
+func TestHourlyRefusesOversizedModules(t *testing.T) {
+	module := t.TempDir()
+	if err := os.WriteFile(filepath.Join(module, "big.tf"), make([]byte, maxCopyBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(context.Context, string, []string, ...string) ([]byte, error) {
+		t.Fatal("infracost must not run")
+		return nil, nil
+	}
+	if _, err := Hourly(context.Background(), run, module, "us-east-2"); err == nil {
+		t.Fatal("a module over the copy cap is an error")
 	}
 }

@@ -61,3 +61,27 @@ func TestPriceCheck(t *testing.T) {
 		t.Fatalf("a failing estimate fails lint: %v", p)
 	}
 }
+
+// infracost never runs on content lint has just rejected.
+func TestLintSkipsPriceCheckOnProblems(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../examples/forge-401")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules/01-cloud-heat/lab/terraform/p.tf"), []byte(`provider "aws" {}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	old := priceRunner
+	priceRunner = func() infracost.Runner {
+		return func(context.Context, string, []string, ...string) ([]byte, error) {
+			ran = true
+			return []byte(`{"projects":[{}],"totalHourlyCost":"0.01"}`), nil
+		}
+	}
+	defer func() { priceRunner = old }()
+	var out bytes.Buffer
+	if code := lint(dir, &out); code != 1 || ran {
+		t.Fatalf("exit %d, infracost ran: %v\n%s", code, ran, out.String())
+	}
+}

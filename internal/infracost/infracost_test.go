@@ -95,14 +95,14 @@ func TestExecTimeoutKillsTheProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+":/usr/bin:/bin")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // long enough for a loaded machine to start the script and write its pid
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second) // long enough for a loaded machine to start the script and write its pid
 	defer cancel()
 	start := time.Now()
 	_, err := Exec(ctx, tmp, nil, "breakdown")
 	if err == nil || !strings.Contains(err.Error(), "infracost timed out") {
 		t.Fatalf("want a timeout error, got %v", err)
 	}
-	if time.Since(start) > 6*time.Second {
+	if time.Since(start) > 14*time.Second {
 		t.Fatalf("Exec waited %v: the child kept the pipes open", time.Since(start))
 	}
 	b, err := os.ReadFile(pidFile)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -29,14 +29,23 @@ func NoSymlinks(dir, rel string) error {
 	return nil
 }
 
-// cleanRel checks a repo-relative path from user input: clean, slash-separated, inside the repo and outside .git.
-func cleanRel(rel string) error {
-	if rel == "" || strings.ContainsAny(rel, "\\\x00") || path.IsAbs(rel) || path.Clean(rel) != rel {
-		return fmt.Errorf("%q is not a clean relative path", rel)
+// partRE is the charset of one path component of an edit: no leading dot (hidden files, .git, .github CI config), no
+// spaces or Unicode (HFS/NTFS aliases), no trailing dot.
+var partRE = regexp.MustCompile(`^[A-Za-z0-9_-]([A-Za-z0-9._-]{0,98}[A-Za-z0-9_-])?$`)
+
+// editPath checks a repo-relative path from user input: training.yaml or a file inside modules/<module-id>/, every
+// component in partRE. Anything else (CI config, hooks, root scripts) can only change in git.
+func editPath(rel string) error {
+	parts := strings.Split(rel, "/")
+	if rel != "training.yaml" && (len(parts) < 3 || parts[0] != "modules") {
+		return fmt.Errorf("%q: only training.yaml and files inside modules/<module>/ can be edited here", rel)
 	}
-	for _, part := range strings.Split(rel, "/") {
-		if part == ".." || strings.EqualFold(part, ".git") {
-			return fmt.Errorf("%q is outside the editable content", rel)
+	if len(rel) > 255 {
+		return fmt.Errorf("%q: path too long", rel)
+	}
+	for _, part := range parts {
+		if !partRE.MatchString(part) {
+			return fmt.Errorf("%q: path parts use only letters, digits, '.', '_' and '-' and don't start or end with '.'", rel)
 		}
 	}
 	return nil

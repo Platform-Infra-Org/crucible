@@ -27,6 +27,7 @@ services:
     environment:
       DATABASE_URL: postgres://crucible:crucible@postgres:5432/crucible?sslmode=disable
       CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
+      CRUCIBLE_GIT_ALLOW_FILE: "1"   # the seeded repos are mounted at /git
       CRUCIBLE_PUBLIC_URL: http://localhost:8080
       CRUCIBLE_SYNC_INTERVAL: 10s
       CRUCIBLE_QUIZ_SECRET: crucible-dev-quiz-secret

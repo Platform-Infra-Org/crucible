@@ -26,14 +26,16 @@ RUN apk add --no-cache curl \
  && tar -xzf /tmp/i.tgz -C /tmp && install -m 0755 "/tmp/infracost-linux-${TARGETARCH}" /usr/local/bin/infracost
 
 FROM alpine:3.22
+# crucible-api runs git with only this config (no system or global config): see gitsync.git.
 RUN apk add --no-cache git tar ca-certificates \
- && git config --system --add safe.directory '*' \
- && git config --system credential.helper '!f() { test "$1" = get && git credential-store --file=/etc/crucible/git-credentials get; }; f' \
+ && mkdir -p /etc/crucible \
+ && git config --file /etc/crucible/gitconfig --add safe.directory '*' \
+ && git config --file /etc/crucible/gitconfig credential.helper '!f() { test "$1" = get && git credential-store --file=/etc/crucible/git-credentials get; }; f' \
  && adduser -D -u 10001 crucible && mkdir /data && chown crucible /data
 COPY --from=go /out/ /usr/local/bin/
 COPY --from=infracost /usr/local/bin/infracost /usr/local/bin/
 COPY --from=web /src/web/dist /app/web
 USER crucible
-ENV CRUCIBLE_WEB_DIR=/app/web CRUCIBLE_DATA_DIR=/data INFRACOST_SKIP_UPDATE_CHECK=true
+ENV CRUCIBLE_GIT_CONFIG=/etc/crucible/gitconfig CRUCIBLE_WEB_DIR=/app/web CRUCIBLE_DATA_DIR=/data INFRACOST_SKIP_UPDATE_CHECK=true
 EXPOSE 8080
 ENTRYPOINT ["crucible-api"]

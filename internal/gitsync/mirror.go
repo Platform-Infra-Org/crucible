@@ -5,20 +5,38 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"testing"
 )
 
 // Mirror is a bare `git clone --mirror` of a remote, driven through the git CLI so any host and auth method works.
 type Mirror struct{ URL, Dir string }
 
+// allowFile lets remotes use the file transport (local paths, file://): local stacks mount seeded repos at /git.
+// Elsewhere it is off, so a repo URL can't read the server's own disk (other clones, mirrors). Tests (every package's)
+// use local bare repos as remotes.
+var allowFile = os.Getenv("CRUCIBLE_GIT_ALLOW_FILE") == "1" || testing.Testing()
+
+// git runs git with no host config: only CRUCIBLE_GIT_CONFIG (the image's credential helper and safe.directory)
+// applies, so a host's filters, hooksPath or fsmonitor never run in the bot's clones.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	if !allowFile {
+		args = append([]string{"-c", "protocol.file.allow=never"}, args...)
+	}
+	global := os.Getenv("CRUCIBLE_GIT_CONFIG")
+	if global == "" {
+		global = os.DevNull
+	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", redact(strings.Join(args, " ")), err, redact(string(bytes.TrimSpace(out))))
@@ -26,10 +44,31 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-var userinfoRE = regexp.MustCompile(`://[^/@\s]+@`)
+var urlRE = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s'"]+`)
 
-// redact hides credentials in URLs (https://user:token@host) so git errors can be logged and returned.
-func redact(s string) string { return userinfoRE.ReplaceAllString(s, "://***@") }
+// redact hides credentials in URLs (https://user:token@host, ?private_token=…) so git errors can be logged and returned.
+// The userinfo and every query value are replaced; a URL that doesn't parse loses everything after the scheme.
+func redact(s string) string {
+	return urlRE.ReplaceAllStringFunc(s, func(raw string) string {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return raw[:strings.Index(raw, "://")] + "://***"
+		}
+		out := u.Scheme + "://"
+		if u.User != nil {
+			out += "***@"
+		}
+		out += u.Host + u.EscapedPath()
+		if u.RawQuery != "" {
+			keys := slices.Sorted(maps.Keys(u.Query()))
+			for i, k := range keys {
+				keys[i] = url.QueryEscape(k) + "=***"
+			}
+			out += "?" + strings.Join(keys, "&")
+		}
+		return out
+	})
+}
 
 func (m Mirror) Fetch(ctx context.Context) error {
 	if strings.HasPrefix(m.URL, "-") {

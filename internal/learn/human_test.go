@@ -160,3 +160,27 @@ func TestTraineeNeverSeesRubric(t *testing.T) {
 		t.Fatalf("rubric leaked: %s", b)
 	}
 }
+
+func TestForceScoreSetsExactlyAndNeverCreatesARow(t *testing.T) {
+	ctx := context.Background()
+	s, _, u, _ := fixture301(t)
+	if err := s.ForceScore(ctx, u.ID, team, f301, temper, "quiz", 0.5); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM item_progress WHERE user_id = $1`, u.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("no progress row: a no-op (%d rows, %v)", n, err)
+	}
+	if err := s.SetItem(ctx, u.ID, team, f301, temper, "quiz", "complete", 0.9); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ForceScore(ctx, u.ID, team, f301, temper, "quiz", 0.4); err != nil {
+		t.Fatal(err)
+	}
+	var st string
+	var score float64
+	if err := s.DB.QueryRow(ctx, `SELECT status, score FROM item_progress WHERE user_id = $1`, u.ID).Scan(&st, &score); err != nil ||
+		st != "complete" || score != 0.4 {
+		t.Fatalf("forced score may go down, status kept: %s %v %v", st, score, err)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/scoring"
 )
 
 type clock struct {
@@ -110,6 +111,7 @@ type fx struct {
 	notes         *fakeNotifier
 	rates         FixedRates
 	plat          *config.Platform
+	sc            *scoring.Service
 }
 
 func setup(t *testing.T, unlock bool) *fx {

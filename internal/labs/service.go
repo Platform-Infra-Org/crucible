@@ -22,11 +22,13 @@ import (
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/blob"
 	"crucible/internal/config"
 	"crucible/internal/content"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/scoring"
 )
 
 // Notifier queues notifications (implemented by *notify.Service).
@@ -42,6 +44,8 @@ type Service struct {
 	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
 	Now        func() time.Time
 	Log        *slog.Logger
+	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
+	Blobs      blob.Store       // transcripts (Task 6)
 
 	sweepMu sync.Mutex // one sweep at a time in this process
 
@@ -67,17 +71,18 @@ func (s *Service) setupLock(labID string) *sync.Mutex {
 }
 
 type TaskView struct {
-	ID            string  `json:"id"`
-	Title         string  `json:"title"`
-	Status        string  `json:"status"` // locked | open | setup_failed | passed | skipped
-	Kind          string  `json:"kind"`   // check | quiz | review
-	Points        float64 `json:"points"`
-	Awarded       float64 `json:"awarded"`
-	QuizPrompt    string  `json:"quiz_prompt,omitempty"`
-	HasSetup      bool    `json:"has_setup"`
-	HintsTotal    int     `json:"hints_total"`
-	HintsRevealed int     `json:"hints_revealed"`
-	NextHintCost  float64 `json:"next_hint_cost"`
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	Status        string            `json:"status"` // locked | open | setup_failed | submitted | passed | skipped
+	Kind          string            `json:"kind"`   // check | quiz | review
+	Points        float64           `json:"points"`
+	Awarded       float64           `json:"awarded"`
+	QuizPrompt    string            `json:"quiz_prompt,omitempty"`
+	HasSetup      bool              `json:"has_setup"`
+	HintsTotal    int               `json:"hints_total"`
+	HintsRevealed int               `json:"hints_revealed"`
+	NextHintCost  float64           `json:"next_hint_cost"`
+	Review        *scoring.Feedback `json:"review,omitempty"` // review tasks: the latest submission, never the rubric
 }
 
 type View struct {
@@ -294,12 +299,16 @@ func (s *Service) setupStatus(ctx context.Context, labID string) (map[string]str
 	return out, rows.Err()
 }
 
-func taskStatuses(lab *content.Lab, done map[string]taskRow, setups map[string]string) map[string]string {
+func taskStatuses(lab *content.Lab, done map[string]taskRow, setups map[string]string, reviews map[string]*scoring.Submission) map[string]string {
 	out := map[string]string{}
 	opened := false
 	for _, t := range lab.Tasks {
 		if r, ok := done[t.ID]; ok {
 			out[t.ID] = r.Status
+			continue
+		}
+		if sub := reviews[t.ID]; sub != nil && sub.Status == scoring.Pending {
+			out[t.ID] = "submitted" // with a scorer; later tasks go on (M5 ruling 4)
 			continue
 		}
 		if lab.TaskOrder == "linear" && opened {
@@ -335,6 +344,15 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
+	reviews, err := s.reviews(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	if s.settle(ctx, inst, lab, done, reviews) {
+		if done, err = s.taskRows(ctx, inst); err != nil {
+			return nil, err
+		}
+	}
 	counts, _, err := s.hintCounts(ctx, inst)
 	if err != nil {
 		return nil, err
@@ -343,7 +361,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	statuses := taskStatuses(lab, done, setups)
+	statuses := taskStatuses(lab, done, setups, reviews)
 	v := &View{ID: inst.ID, State: inst.State, Error: inst.Error, Runtime: inst.Runtime, Team: inst.Team,
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
@@ -358,7 +376,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		case t.Check != nil:
 			tv.Kind = "check"
 		default:
-			tv.Kind = "review" // human scoring arrives in M5
+			tv.Kind, tv.Review = "review", reviews[t.ID].Feedback()
 		}
 		if n := counts[t.ID]; n < len(t.Hints) {
 			tv.NextHintCost = t.Hints[n].EffectiveCost(lab)
@@ -737,9 +755,25 @@ func (s *Service) readyTask(ctx context.Context, u *auth.User, labID, taskID str
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	statuses := taskStatuses(lab, done, setups)
+	reviews, err := s.reviews(ctx, inst)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	statuses := taskStatuses(lab, done, setups, reviews)
 	statuses["_setup:"+taskID] = setups[taskID]
 	return inst, lab, quiz, task, statuses, nil
+}
+
+func (s *Service) instByID(ctx context.Context, labID string) (*Instance, error) {
+	return scanInst(s.DB.QueryRow(ctx, `SELECT `+instCols+` FROM lab_instances WHERE id = $1`, labID))
+}
+
+// reviews returns the latest review submission per task of this trainee's module.
+func (s *Service) reviews(ctx context.Context, inst *Instance) (map[string]*scoring.Submission, error) {
+	if s.Scoring == nil {
+		return nil, nil
+	}
+	return s.Scoring.Latest(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, scoring.KindTask)
 }
 
 func (s *Service) Get(ctx context.Context, u *auth.User, labID string) (*View, error) {
@@ -879,26 +913,52 @@ func (s *Service) finishTask(ctx context.Context, inst *Instance, lab *content.L
 		inst.UserID, inst.Team, inst.Training, inst.Module, taskID, status, points); err != nil {
 		return err
 	}
+	return s.recompute(ctx, inst, lab)
+}
+
+// recompute sets the module's lab item from the task results: complete (with its exact score) when every task is
+// done, pending_review when only scorers' decisions are missing (spec §7: progression waits on pending human scores),
+// in_progress otherwise. It is idempotent: Refresh, overrides and page loads (settle) all end here.
+func (s *Service) recompute(ctx context.Context, inst *Instance, lab *content.Lab) error {
 	done, err := s.taskRows(ctx, inst)
 	if err != nil {
 		return err
 	}
+	reviews, err := s.reviews(ctx, inst)
+	if err != nil {
+		return err
+	}
 	var score, maxScore float64
+	waiting, missing := false, false
 	for _, t := range lab.Tasks {
 		r, ok := done[t.ID]
 		if !ok {
-			return nil // not finished yet
+			if sub := reviews[t.ID]; sub != nil && sub.Status == scoring.Pending {
+				waiting = true
+			} else {
+				missing = true
+			}
+			continue
 		}
 		score += r.Points
 		if r.Status != "skipped" {
 			maxScore += t.Points
 		}
 	}
+	switch {
+	case missing: // SetItem never downgrades a complete item
+		return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "in_progress", 0)
+	case waiting:
+		return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "pending_review", 0)
+	}
 	if maxScore == 0 {
 		maxScore = 1 // everything skipped
 	}
 	s.event(ctx, inst.ID, "completed", fmt.Sprintf("%.2f/%.2f", score, maxScore))
-	return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "complete", score/maxScore)
+	if err := s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "complete", score/maxScore); err != nil {
+		return err
+	}
+	return s.Learn.ForceScore(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", score/maxScore) // overrides may lower it
 }
 
 func (s *Service) RevealHint(ctx context.Context, u *auth.User, labID, taskID string) (*HintResult, error) {
@@ -937,7 +997,7 @@ func (s *Service) ResetTask(ctx context.Context, u *auth.User, labID, taskID str
 	if task.Setup == nil {
 		return nil, apperr.Wrap(apperr.Conflict, "this task has no scenario to reset")
 	}
-	if st := statuses[taskID]; st == "passed" || st == "skipped" || st == "locked" {
+	if st := statuses[taskID]; st == "passed" || st == "skipped" || st == "locked" || st == "submitted" {
 		return nil, apperr.Wrap(apperr.Conflict, "only the current task can be reset")
 	}
 	mu := s.setupLock(inst.ID)

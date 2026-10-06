@@ -14,3 +14,6 @@ tasks:
     human_review: true
     rubric: "The transcript shows /tmp/proof being written with the word tempered, and the notes say what was done."
     points: 3
+    hints:
+      - text: "`echo tempered > /tmp/proof && cat /tmp/proof`"
+        cost: 1

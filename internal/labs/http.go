@@ -11,6 +11,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
 	"crucible/internal/httpx"
+	"crucible/internal/scoring"
 )
 
 func (s *Service) Routes(r chi.Router) {
@@ -103,6 +104,16 @@ func (s *Service) Routes(r chi.Router) {
 	})
 	r.Post("/api/labs/{id}/tasks/{task}/skip", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Skip(r.Context(), user(r), p(r, "id"), p(r, "task"))
+		reply(w, v, err)
+	})
+	r.Post("/api/labs/{id}/tasks/{task}/submit", func(w http.ResponseWriter, r *http.Request) {
+		notes, files, done, err := scoring.ReadForm(w, r)
+		defer done()
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SubmitReview(r.Context(), user(r), p(r, "id"), p(r, "task"), notes, files)
 		reply(w, v, err)
 	})
 	r.Get("/api/labs/{id}/terminals/{name}/ws", s.terminal)

@@ -81,6 +81,24 @@ spec:
             - { name: CRUCIBLE_CLUSTER_PRIVILEGED, value: "1" }
             {{- end }}
             {{- end }}
+            {{- if .Values.awsLabs.enabled }}
+            {{- if not .Values.clusterLabs.enabled }}{{ fail "awsLabs.enabled needs clusterLabs.enabled: the workspace and terraform pods run in the cluster" }}{{ end }}
+            {{- if and (not .Values.awsLabs.dryRun) (or (not .Values.awsLabs.labRoleArn) (not .Values.awsLabs.opsRoleArn) (not .Values.awsLabs.stateBucket)) }}{{ fail "awsLabs needs labRoleArn, opsRoleArn and stateBucket (the deploy/aws/labs outputs)" }}{{ end }}
+            - { name: CRUCIBLE_AWS_LABS, value: {{ ternary "dryrun" "1" .Values.awsLabs.dryRun | quote }} }
+            {{- if .Values.awsLabs.dryRun }}
+            - { name: CRUCIBLE_INFRACOST, value: "off" }
+            {{- end }}
+            - { name: CRUCIBLE_AWS_LAB_ROLE_ARN, value: {{ .Values.awsLabs.labRoleArn | quote }} }
+            - { name: CRUCIBLE_AWS_OPS_ROLE_ARN, value: {{ .Values.awsLabs.opsRoleArn | quote }} }
+            - { name: CRUCIBLE_AWS_STATE_BUCKET, value: {{ .Values.awsLabs.stateBucket | quote }} }
+            - { name: CRUCIBLE_AWS_STATE_REGION, value: {{ .Values.awsLabs.stateRegion | default .Values.backup.region | quote }} }
+            - { name: CRUCIBLE_AWS_LAB_REGIONS, value: {{ .Values.awsLabs.regions | quote }} }
+            - { name: CRUCIBLE_AWS_WORKSPACE_IMAGE, value: {{ .Values.awsLabs.workspaceImage | quote }} }
+            - { name: CRUCIBLE_TERRAFORM_IMAGE, value: {{ .Values.awsLabs.terraformImage | quote }} }
+            - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }   # STS regional endpoint
+            - name: INFRACOST_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: INFRACOST_API_KEY, optional: true } }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             periodSeconds: 5

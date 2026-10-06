@@ -27,3 +27,13 @@ clusterLabs:
   enabled: true            # runtime: cluster labs; nodes need the sysbox-runc RuntimeClass (docs/runbooks/aws.md)
   unsafePrivileged: false  # dev clusters without sysbox only (kind): privileged lab pods. Never in production
   iUnderstandPrivilegedLabsAreUnsafe: false  # must also be true to render unsafePrivileged
+awsLabs:
+  enabled: false            # runtime: aws labs; needs clusterLabs.enabled and the deploy/aws/labs stack (docs/runbooks/aws.md)
+  dryRun: false             # CRUCIBLE_AWS_LABS=dryrun: no AWS, a fake lab account, role ARNs not needed. Development only
+  labRoleArn: ""            # deploy/aws/labs outputs; `crucible aws up` fills these in
+  opsRoleArn: ""
+  stateBucket: ""
+  stateRegion: ""           # default: backup.region
+  regions: eu-west-1        # comma-separated; must match the labs stack's allowed_regions
+  workspaceImage: amazon/aws-cli:2.27.0
+  terraformImage: hashicorp/terraform:1.16.5

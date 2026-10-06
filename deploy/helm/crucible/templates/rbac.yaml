@@ -18,7 +18,8 @@ rules:
     verbs: [list, create, delete]
   - apiGroups: [""]
     resources: [pods]
-    verbs: [get, create]          # no list: a cluster-wide list would expose every pod's env, and admission can't gate reads
+    verbs: [get, create{{ if .Values.awsLabs.enabled }}, delete{{ end }}]   # no list: a cluster-wide list would expose every pod's env, and admission can't gate reads
+    # aws labs: delete stops a running terraform apply before destroy
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [get, create]          # WebSocket exec authorizes get (and create on newer API servers); SPDY uses create
@@ -28,6 +29,14 @@ rules:
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
     verbs: [create]
+  {{- if .Values.awsLabs.enabled }}
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, update]       # aws labs: write the lab's credentials file; Crucible can never read a secret back
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]               # aws labs: the terraform module
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -47,6 +56,11 @@ spec:
       - { apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [pods, resourcequotas, limitranges] }
       - { apiGroups: [""], apiVersions: [v1], operations: [CONNECT], resources: [pods/exec] }
       - { apiGroups: [networking.k8s.io], apiVersions: [v1], operations: [CREATE], resources: [networkpolicies] }
+      {{- if .Values.awsLabs.enabled }}
+      - { apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [secrets] }
+      - { apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [configmaps] }
+      - { apiGroups: [""], apiVersions: [v1], operations: [DELETE], resources: [pods] }
+      {{- end }}
   matchConditions:
     - name: crucible-api-only
       expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:crucible'"

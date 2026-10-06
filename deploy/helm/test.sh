@@ -46,4 +46,23 @@ grep -q 'automountServiceAccountToken: false' <<<"$off" || { echo "no API token 
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
 need 'CRUCIBLE_BLOB_BUCKET, value: "b"'                    # uploads go to the data bucket, not the emptyDir
 need 'CRUCIBLE_BLOB_REGION, value: "eu-west-1"'
+# AWS labs (M6): off by default; when on, Crucible may write the credentials secret but never read any secret.
+if grep -q 'CRUCIBLE_AWS_LABS' <<<"$out"; then echo "aws labs must be opt-in"; exit 1; fi
+aws="$base --set awsLabs.enabled=true --set awsLabs.labRoleArn=arn:aws:iam::1:role/l --set awsLabs.opsRoleArn=arn:aws:iam::1:role/o --set awsLabs.stateBucket=sb"
+awsout=$(helm template t "$chart" $aws)
+for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_ARN' 'name: CRUCIBLE_AWS_STATE_BUCKET' 'key: INFRACOST_API_KEY, optional: true' 'name: AWS_REGION'; do
+  grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
+done
+if grep -q 'CRUCIBLE_INFRACOST' <<<"$awsout"; then echo "real aws labs must not turn infracost off"; exit 1; fi
+dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
+for want in 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' 'name: CRUCIBLE_INFRACOST, value: "off"'; do
+  grep -q -- "$want" <<<"$dry" || { echo "missing in dry run: $want"; exit 1; }
+done
+awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)
+grep -A1 '^    resources: \[secrets\]' <<<"$awsrbac" | grep -q 'verbs: \[create, update\]' || { echo "secrets: create and update only"; exit 1; }
+if grep -A1 'resources: \[secrets\]' <<<"$awsrbac" | grep -qE '\b(get|list|watch)\b'; then echo "crucible must never read secrets"; exit 1; fi
+grep -q 'operations: \[CREATE, UPDATE\], resources: \[secrets\]' <<<"$awsrbac" || { echo "the admission policy must confine secret writes to lab namespaces"; exit 1; }
+grep -q 'operations: \[DELETE\], resources: \[pods\]' <<<"$awsrbac" || { echo "the admission policy must confine pod deletes to lab namespaces"; exit 1; }
+if helm template t "$chart" $aws --set clusterLabs.enabled=false >/dev/null 2>&1; then echo "aws labs need cluster labs"; exit 1; fi
+if helm template t "$chart" $base --set awsLabs.enabled=true >/dev/null 2>&1; then echo "aws labs need the lab account's role ARNs"; exit 1; fi
 echo "helm chart OK"

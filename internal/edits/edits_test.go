@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
@@ -352,6 +353,154 @@ func TestRejectAndWithdraw(t *testing.T) {
 	}
 	if list, _ := f.s.List(ctx, f.senior); len(list) != 2 || list[0].Diff != "" {
 		t.Fatalf("reviewers see both, without the diff: %+v", list)
+	}
+}
+
+// Leaders and seniors propose only for trainings a team of theirs has a program for.
+func TestProposeIsTeamScoped(t *testing.T) {
+	f := setup(t)
+	plat := f.s.State().Platform
+	plat.Teams["other"] = &config.Team{ID: "other", Name: "Other", Leader: "other@crucible.local", Programs: map[string]*config.Program{}}
+	other := &auth.User{Email: "other@crucible.local"}
+	if _, _, err := f.s.Files(other, "t1"); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("files: %v", err)
+	}
+	if _, err := f.s.File(other, "t1", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("file: %v", err)
+	}
+	if _, err := f.propose(t, other, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("propose: %v", err)
+	}
+	if f.s.CanUse(other.Email) || len(f.s.Trainings(other)) != 0 {
+		t.Fatal("can_edit_content for an unrelated leader")
+	}
+	if _, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); err != nil {
+		t.Fatalf("forge's leader still proposes: %v", err)
+	}
+}
+
+// hold makes every push to the bare remote wait in a pre-receive hook until release is called (or the test ends).
+// waiting blocks until a push is held.
+func hold(t *testing.T, remote string) (waiting, release func()) {
+	t.Helper()
+	dir := t.TempDir()
+	gate, entered := filepath.Join(dir, "gate"), filepath.Join(dir, "entered")
+	if err := writeFile(gate, ""); err != nil {
+		t.Fatal(err)
+	}
+	hook := "#!/bin/sh\ntouch '" + entered + "'\nwhile [ -e '" + gate + "' ]; do sleep 0.05; done\n"
+	if err := os.WriteFile(filepath.Join(remote, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	release = func() { _ = os.Remove(gate) }
+	t.Cleanup(release)
+	return func() {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(entered); err == nil {
+				_ = os.Remove(entered)
+				return
+			}
+		}
+		t.Fatal("no push reached the remote")
+	}, release
+}
+
+func openTxs(t *testing.T, f *fx) int {
+	t.Helper()
+	var n int
+	if err := f.s.DB.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND state LIKE 'idle in transaction%'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// No DB transaction stays open while git talks to the remote, and a reviewer who goes away once the merge is pushed
+// still gets it recorded: merged, audited, the author told.
+func TestGitRunsOutsideTransactions(t *testing.T) {
+	f := setup(t)
+	waiting, release := hold(t, f.remote)
+	done := make(chan error, 1)
+	var e *Edit
+	go func() {
+		var err error
+		e, err = f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHeld.\n"})
+		done <- err
+	}()
+	waiting()
+	if n := openTxs(t, f); n != 0 {
+		t.Fatalf("%d transactions open while the edit is pushed", n)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	waiting, release = hold(t, f.remote)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _, err := f.s.Approve(ctx, f.senior, e.ID, "ok"); done <- err }()
+	waiting()
+	if n := openTxs(t, f); n != 0 {
+		t.Fatalf("%d transactions open while the merge is pushed", n)
+	}
+	cancel() // the reviewer closes the tab with the merge on its way
+	release()
+	<-done
+	got, err := f.s.Get(context.Background(), f.leader, e.ID)
+	if err != nil || got.Status != "merged" || got.MergeSHA != git(t, f.remote, "rev-parse", "main") {
+		t.Fatalf("the landed merge is recorded: %+v %v", got, err)
+	}
+	var as string
+	if err := f.s.DB.QueryRow(context.Background(), `SELECT detail->>'as' FROM audit_log WHERE action = 'content_edit.merged'`).Scan(&as); err != nil || as != "maintainer" {
+		t.Fatalf("audited: %q %v", as, err)
+	}
+	if last := f.notes.evs[len(f.notes.evs)-1]; strings.Join(last.To, ",") != "leader@crucible.local" {
+		t.Fatalf("author told: %+v", last)
+	}
+}
+
+func TestGitTimeout(t *testing.T) {
+	f := setup(t)
+	defer func(d time.Duration) { gitTimeout = d }(gitTimeout)
+	gitTimeout = 300 * time.Millisecond
+	hold(t, f.remote)
+	start := time.Now()
+	if _, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nSlow.\n"}); err == nil {
+		t.Fatal("a hanging push must fail")
+	}
+	if d := time.Since(start); d > 15*time.Second {
+		t.Fatalf("the timeout didn't bound the push: %v", d)
+	}
+	var n int
+	if err := f.s.DB.QueryRow(context.Background(), `SELECT count(*) FROM content_edits`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("nothing recorded: %d %v", n, err)
+	}
+}
+
+// An admin who isn't a maintainer is an override, and the audit says so; a stale merge keeps the reviewer's note.
+func TestAdminOverrideAndStaleNote(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	e, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nMine.\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "o")
+	git(t, "", "clone", "-q", f.remote, other)
+	_ = writeFile(filepath.Join(other, "modules/m1/reading/intro.md"), "# Intro\n\nTheirs.\n")
+	git(t, other, "commit", "-qam", "theirs")
+	git(t, other, "push", "-q", "origin", "HEAD:main")
+	if _, err := f.s.Approve(ctx, f.admin, e.ID, "looks good"); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "applies cleanly") {
+		t.Fatalf("stale, with the git reason: %v", err)
+	}
+	got, _ := f.s.Get(ctx, f.leader, e.ID)
+	if got.Status != "stale" || got.Note != "looks good" {
+		t.Fatalf("the reviewer's note is kept: %+v", got)
+	}
+	var as, gitErr string
+	if err := f.s.DB.QueryRow(ctx, `SELECT detail->>'as', detail->>'error' FROM audit_log WHERE action = 'content_edit.stale'`).Scan(&as, &gitErr); err != nil ||
+		as != "admin" || !strings.Contains(gitErr, "applies cleanly") {
+		t.Fatalf("audit: %q %q %v", as, gitErr, err)
 	}
 }
 

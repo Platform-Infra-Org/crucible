@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,6 +40,8 @@ type Service struct {
 	Notify Notifier
 	Resync func(ctx context.Context) error // re-read git after a merge so trainees see it at once
 	Log    *slog.Logger
+
+	locks sync.Map // training id → chan struct{}: one decision at a time per training
 }
 
 type Edit struct {
@@ -86,6 +89,9 @@ const (
 	cols       = `id, training, title, author, base_sha, head_sha, branch, status, reviewer, note, merge_sha, created_at, decided_at, files, diff`
 )
 
+// gitTimeout bounds every git section (fetch, merge, push) so a hanging git host fails the request instead of piling up.
+var gitTimeout = 2 * time.Minute
+
 func clean(s string) string { return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "") }
 
 func (s *Service) state() (*gitsync.State, error) {
@@ -116,7 +122,8 @@ func maintainer(t *content.Training, email string) bool {
 	return t != nil && slices.ContainsFunc(t.Maintainers, func(m string) bool { return strings.EqualFold(m, email) })
 }
 
-// canPropose: admins, the training's maintainers, team leaders and seniors; never anyone enrolled in the training.
+// canPropose: admins, the training's maintainers, and leaders and seniors of teams with a program for the training;
+// never anyone enrolled in it. Proposing means reading the raw files (answer keys, check scripts).
 func canPropose(p *config.Platform, t *content.Training, email string) bool {
 	email = strings.ToLower(email)
 	if enrolled(p, t.ID, email) {
@@ -126,7 +133,7 @@ func canPropose(p *config.Platform, t *content.Training, email string) bool {
 		return true
 	}
 	for _, team := range p.Teams {
-		if r := team.RoleOf(email); r == "leader" || r == "senior" {
+		if r := team.RoleOf(email); team.Programs[t.ID] != nil && (r == "leader" || r == "senior") {
 			return true
 		}
 	}
@@ -286,6 +293,27 @@ func validate(t *content.Training, files map[string]string) (map[string]string, 
 	return changed, nil
 }
 
+// limits are the per-author volume limits. Create checks them cheaply first, then again, authoritatively, in the
+// transaction that records the edit.
+func limits(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, me string) error {
+	var open, lastHour int
+	if err := db.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status = 'pending'), count(*) FILTER (WHERE created_at > now() - interval '1 hour')
+		FROM content_edits WHERE author = $1`, me).Scan(&open, &lastHour); err != nil {
+		return err
+	}
+	switch {
+	case open >= maxOpen:
+		return apperr.Wrap(apperr.Conflict, fmt.Sprintf("you have %d open edits; wait for a review or withdraw one first", open))
+	case lastHour >= maxPerHour:
+		return apperr.Wrap(apperr.Conflict, fmt.Sprintf("you proposed %d edits in the last hour; try again later", lastHour))
+	}
+	return nil
+}
+
+// Create pushes the edit to its branch first and records it after, in a short transaction: no DB connection is held
+// while git talks to the remote. The branch is deleted again if anything fails once the push has started.
 func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, error) {
 	st, t, sha, err := s.training(u, in.Training)
 	if err != nil {
@@ -299,53 +327,52 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if title == "" || len(title) > maxTitle {
 		return nil, apperr.Wrap(apperr.Invalid, "give the edit a title of at most 200 characters")
 	}
+	repo := s.Repo(in.Training)
+	if repo == nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "this training's repo is not available for edits")
+	}
+	if err := limits(ctx, s.DB, me); err != nil { // before the copy validate makes
+		return nil, err
+	}
 	changed, err := validate(t, in.Files)
 	if err != nil {
 		return nil, err
 	}
-	repo := s.Repo(in.Training)
-	if repo == nil {
-		return nil, apperr.Wrap(apperr.Unavailable, "this training's repo is not available for edits")
+	var id int64
+	if err := s.DB.QueryRow(ctx, `SELECT nextval(pg_get_serial_sequence('content_edits', 'id'))`).Scan(&id); err != nil {
+		return nil, err
+	}
+	branch := fmt.Sprintf("crucible/edit/%d", id)
+	committed := false
+	defer func() {
+		if !committed { // nothing recorded, so no branch either (a no-op when the push never landed)
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitTimeout)
+			defer cancel()
+			if err := repo.DeleteBranch(dctx, branch); err != nil && s.Log != nil {
+				s.Log.Warn("deleting an unrecorded edit branch failed", "branch", branch, "err", err)
+			}
+		}
+	}()
+	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	headSHA, diff, err := repo.PushEdit(gctx, branch, sha, changed, me, "crucible: "+title)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
-	// Volume limits per author, serialized per author so parallel requests can't slip past them.
-	var open, lastHour int
+	// Serialized per author so parallel requests can't slip past the limits.
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('content_edits:' || $1))`, me); err != nil {
 		return nil, err
 	}
-	if err := tx.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status = 'pending'), count(*) FILTER (WHERE created_at > now() - interval '1 hour')
-		FROM content_edits WHERE author = $1`, me).Scan(&open, &lastHour); err != nil {
+	if err := limits(ctx, tx, me); err != nil {
 		return nil, err
 	}
-	switch {
-	case open >= maxOpen:
-		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("you have %d open edits; wait for a review or withdraw one first", open))
-	case lastHour >= maxPerHour:
-		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("you proposed %d edits in the last hour; try again later", lastHour))
-	}
-	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO content_edits (training, title, author, base_sha, files, status)
-		VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`, in.Training, title, me, sha, changed).Scan(&id); err != nil {
-		return nil, err
-	}
-	branch := fmt.Sprintf("crucible/edit/%d", id)
-	headSHA, diff, err := repo.PushEdit(ctx, branch, sha, changed, me, "crucible: "+title)
-	if err != nil {
-		return nil, err
-	}
-	committed := false
-	defer func() {
-		if !committed { // the row is gone with the rollback, so is its branch
-			if err := repo.DeleteBranch(context.WithoutCancel(ctx), branch); err != nil && s.Log != nil {
-				s.Log.Warn("deleting an unrecorded edit branch failed", "branch", branch, "err", err)
-			}
-		}
-	}()
-	if _, err := tx.Exec(ctx, `UPDATE content_edits SET branch = $2, head_sha = $3, diff = $4 WHERE id = $1`, id, branch, headSHA, diff); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO content_edits (id, training, title, author, base_sha, files, status, branch, head_sha, diff)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)`, id, in.Training, title, me, sha, changed, branch, headSHA, diff); err != nil {
 		return nil, err
 	}
 	if err := audit.Log(ctx, tx, me, "content_edit.propose", in.Training, map[string]any{"edit": id, "title": title, "files": slices.Sorted(maps.Keys(changed))}, headSHA); err != nil {
@@ -451,8 +478,39 @@ func (s *Service) Withdraw(ctx context.Context, u *auth.User, id int64) (*Edit, 
 	return s.decide(ctx, u, id, "withdrawn", "")
 }
 
-// decide moves a pending edit to merged, rejected or withdrawn. The row stays locked for the whole merge, so two
-// approvers can never both merge: the second waits, then finds the edit decided. Only the commit that was reviewed
+// lock serializes decisions per training. It is taken before any transaction, so waiting on it (or on git under it)
+// never holds a DB connection.
+func (s *Service) lock(ctx context.Context, training string) (func(), error) {
+	v, _ := s.locks.LoadOrStore(training, make(chan struct{}, 1))
+	ch := v.(chan struct{})
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// mayDecide checks the edit is visible to u and that u may move it to `to`.
+func mayDecide(st *gitsync.State, u *auth.User, e *Edit, to string) error {
+	if !visible(st, u, e) {
+		return apperr.Wrap(apperr.NotFound, "edit not found")
+	}
+	switch {
+	case to == "withdrawn" && e.Author != strings.ToLower(u.Email):
+		return apperr.Wrap(apperr.Forbidden, "only the author can withdraw an edit")
+	case to != "withdrawn" && !e.CanReview && e.Status == "pending":
+		return apperr.Wrap(apperr.Forbidden, "only the training's maintainers or an admin, other than the author, can review this edit")
+	case e.Status != "pending":
+		return apperr.Wrap(apperr.Conflict, "this edit was already decided")
+	}
+	return nil
+}
+
+// decide moves a pending edit to merged, rejected or withdrawn. Decisions on a training's edits run one at a time
+// (s.lock), so two approvers can never both merge: the second waits, then finds the edit decided. The git work runs
+// before the short transaction that records it, bounded by gitTimeout and detached from the request: once a merge is
+// pushed it is recorded, audited and announced even if the reviewer went away. Only the commit that was reviewed
 // (head_sha) is merged. A merge that conflicts, or would be invalid on the current content, marks the edit stale; an
 // edit branch someone pushed to since is restored to the reviewed change and needs a new approval; any other failure
 // leaves the edit pending, branch and all, so it can be approved again.
@@ -462,82 +520,105 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 		return nil, err
 	}
 	me := strings.ToLower(u.Email)
-	tx, err := s.DB.Begin(ctx)
+	get := func(ctx context.Context) (*Edit, error) {
+		return scan(s.DB.QueryRow(ctx, `SELECT `+cols+` FROM content_edits WHERE id = $1`, id))
+	}
+	e, err := get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
-	e, err := scan(tx.QueryRow(ctx, `SELECT `+cols+` FROM content_edits WHERE id = $1 FOR UPDATE`, id))
+	if err := mayDecide(st, u, e, to); err != nil {
+		return nil, err
+	}
+	unlock, err := s.lock(ctx, e.Training)
 	if err != nil {
 		return nil, err
 	}
-	if !visible(st, u, e) {
-		return nil, apperr.Wrap(apperr.NotFound, "edit not found")
+	defer unlock()
+	if e, err = get(ctx); err != nil { // again: another decision may have landed while we waited
+		return nil, err
 	}
-	switch {
-	case to == "withdrawn" && e.Author != me:
-		return nil, apperr.Wrap(apperr.Forbidden, "only the author can withdraw an edit")
-	case to != "withdrawn" && !e.CanReview && e.Status == "pending":
-		return nil, apperr.Wrap(apperr.Forbidden, "only the training's maintainers or an admin, other than the author, can review this edit")
-	case e.Status != "pending":
-		return nil, apperr.Wrap(apperr.Conflict, "this edit was already decided")
+	if err := mayDecide(st, u, e, to); err != nil {
+		return nil, err
 	}
 	note = strings.TrimSpace(clean(note))
 	if len(note) > maxNote {
 		note = strings.ToValidUTF8(note[:maxNote], "")
 	}
-	status, mergeSHA, repo := to, "", s.Repo(e.Training)
+	gctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gitTimeout)
+	defer cancel()
+	status, mergeSHA, gitErr, repo := to, "", "", s.Repo(e.Training)
 	if to == "merged" {
 		if repo == nil {
 			return nil, apperr.Wrap(apperr.Unavailable, "this training's repo is not available for edits")
 		}
-		mergeSHA, err = repo.Merge(ctx, e.Branch, e.HeadSHA, fmt.Sprintf("crucible: merge edit %d %q by %s", e.ID, e.Title, e.Author), me)
+		mergeSHA, err = repo.Merge(gctx, e.Branch, e.HeadSHA, fmt.Sprintf("crucible: merge edit %d %q by %s", e.ID, e.Title, e.Author), me)
 		switch {
 		case errors.Is(err, gitsync.ErrEditMoved):
-			return nil, s.restore(ctx, tx, repo, e, me)
+			return nil, s.restore(gctx, repo, e, me)
 		case errors.Is(err, gitsync.ErrMergeConflict), errors.Is(err, gitsync.ErrMergeInvalid):
-			status, note, mergeSHA = "stale", err.Error(), ""
+			status, gitErr, mergeSHA = "stale", err.Error(), ""
 		case err != nil:
 			return nil, err // transient: still pending, branch kept
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE content_edits SET status = $2, reviewer = $3, note = $4, merge_sha = $5, decided_at = now() WHERE id = $1`,
+	detail := map[string]any{"edit": e.ID, "title": e.Title, "author": e.Author, "note": note, "as": "author"}
+	if to != "withdrawn" {
+		detail["as"] = "maintainer"
+		if t, _ := head(st, e.Training); !maintainer(t, me) {
+			detail["as"] = "admin" // an override: admins review any training
+		}
+	}
+	if gitErr != "" {
+		detail["error"] = gitErr
+	}
+	tx, err := s.DB.Begin(gctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(gctx) //nolint:errcheck // no-op after Commit
+	if _, err := tx.Exec(gctx, `UPDATE content_edits SET status = $2, reviewer = $3, note = $4, merge_sha = $5, decided_at = now() WHERE id = $1`,
 		e.ID, status, me, note, mergeSHA); err != nil {
 		return nil, err
 	}
-	if err := audit.Log(ctx, tx, me, "content_edit."+status, e.Training, map[string]any{"edit": e.ID, "title": e.Title, "author": e.Author, "note": note}, mergeSHA); err != nil {
+	if err := audit.Log(gctx, tx, me, "content_edit."+status, e.Training, detail, mergeSHA); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(gctx); err != nil {
 		return nil, err
 	}
 	if repo != nil {
-		if err := repo.DeleteBranch(ctx, e.Branch); err != nil && s.Log != nil {
+		if err := repo.DeleteBranch(gctx, e.Branch); err != nil && s.Log != nil {
 			s.Log.Warn("deleting a decided edit branch failed", "branch", e.Branch, "err", err)
 		}
 	}
 	if status == "merged" && s.Resync != nil {
-		if err := s.Resync(ctx); err != nil && s.Log != nil {
+		if err := s.Resync(gctx); err != nil && s.Log != nil {
 			s.Log.Warn("re-sync after a content merge failed; the poller will pick it up", "err", err)
 		}
 	}
 	if me != e.Author {
-		s.notify(ctx, notify.Event{Kind: notify.ContentEdit, To: []string{e.Author}, Subject: "Your content edit was " + status + ": " + e.Title,
-			Text: strings.TrimSpace(fmt.Sprintf("%s marked your edit %s. %s", me, status, note)), Link: fmt.Sprintf("/edits/%d", e.ID)})
+		s.notify(gctx, notify.Event{Kind: notify.ContentEdit, To: []string{e.Author}, Subject: "Your content edit was " + status + ": " + e.Title,
+			Text: strings.TrimSpace(fmt.Sprintf("%s marked your edit %s. %s %s", me, status, gitErr, note)), Link: fmt.Sprintf("/edits/%d", e.ID)})
 	}
 	if status == "stale" {
-		return nil, apperr.Wrap(apperr.Conflict, "this edit no longer applies to the current content; the author can redo it on the fresh version")
+		return nil, apperr.Wrap(apperr.Conflict, "this edit no longer applies to the current content; the author can redo it on the fresh version ("+gitErr+")")
 	}
-	return s.Get(ctx, u, e.ID)
+	return s.Get(gctx, u, e.ID)
 }
 
 // restore re-pushes the stored (reviewed) files to an edit branch someone changed outside Crucible. The new commit and
 // diff replace the old ones, so nothing merges until a reviewer approves again. Returns ErrEditMoved when it worked.
-func (s *Service) restore(ctx context.Context, tx pgx.Tx, repo *gitsync.ContentRepo, e *Edit, me string) error {
+func (s *Service) restore(ctx context.Context, repo *gitsync.ContentRepo, e *Edit, me string) error {
 	headSHA, diff, err := repo.PushEdit(ctx, e.Branch, e.BaseSHA, e.Files, e.Author, "crucible: "+e.Title)
 	if err != nil {
 		return err
 	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
 	if _, err := tx.Exec(ctx, `UPDATE content_edits SET head_sha = $2, diff = $3 WHERE id = $1`, e.ID, headSHA, diff); err != nil {
 		return err
 	}

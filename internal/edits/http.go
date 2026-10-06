@@ -56,7 +56,7 @@ func (s *Service) Routes(r chi.Router) {
 		e, err := s.Get(r.Context(), user(r), n)
 		reply(w, e, err)
 	})
-	r.Post("/api/edits/{id}/{action:approve|reject|withdraw}", func(w http.ResponseWriter, r *http.Request) {
+	r.Post("/api/edits/{id}/{action:(approve|reject|withdraw)}", func(w http.ResponseWriter, r *http.Request) {
 		n, err := id(r)
 		if err != nil {
 			httpx.Error(w, err)

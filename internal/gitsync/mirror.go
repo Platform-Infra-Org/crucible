@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Mirror is a bare `git clone --mirror` of a remote, driven through the git CLI so any host and auth method works.
@@ -36,6 +37,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = 5 * time.Second // a cancelled git's helpers (remote-https, a local receive-pack) may keep its output open
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

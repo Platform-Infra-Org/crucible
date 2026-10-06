@@ -159,8 +159,10 @@ func (c *ClusterRunner) poll() time.Duration {
 }
 
 // waitDone polls a one-shot pod until it has finished. ok reports success; msg is the container's termination
-// message (FallbackToLogsOnError: the log tail on failure). A bad image fails fast, as in waitReady.
+// message (FallbackToLogsOnError: the log tail on failure). A bad image fails fast, and a pod that cannot be
+// scheduled fails after unschedulableGrace, as in waitReady.
 func (c *ClusterRunner) waitDone(ctx context.Context, ns, name string) (ok bool, msg string, err error) {
+	var unschedulableSince time.Time
 	for {
 		p, err := c.Client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
@@ -168,6 +170,16 @@ func (c *ClusterRunner) waitDone(ctx context.Context, ns, name string) (ok bool,
 		}
 		if reason, m := stuck(p); reason != "" {
 			return false, reason + ": " + m, nil
+		}
+		for _, cond := range p.Status.Conditions {
+			if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse && cond.Reason == corev1.PodReasonUnschedulable {
+				if unschedulableSince.IsZero() {
+					unschedulableSince = time.Now()
+				}
+				if time.Since(unschedulableSince) >= unschedulableGrace {
+					return false, errClusterFull.Error(), nil
+				}
+			}
 		}
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			for _, cs := range p.Status.ContainerStatuses {

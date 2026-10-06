@@ -35,5 +35,7 @@ export function Mermaid({ source }: { source: string }) {
     }
   }, [id, source])
   if (!svg) return <pre className={failed ? 'mermaid-failed' : 'mermaid-pending'}>{source}</pre>
+  // The one dangerouslySetInnerHTML in the app: the input is mermaid's own SVG, sanitized (DOMPurify) at securityLevel 'strict'
+  // with HTML labels off and %%{init}%% unable to change that (see mermaidConfig; Mermaid.test.ts pins that config). A real render needs a DOM (no jsdom here), so e2e-level only.
   return <div className="mermaid" role="img" aria-label="Diagram" dangerouslySetInnerHTML={{ __html: svg }} />
 }

@@ -1,3 +1,4 @@
+import { isLeaveChord } from '../lib/advanceFocus'
 import { useEffect, useRef } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -24,7 +25,7 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', Menlo, monospace",
       fontSize,
-      theme: { background: cssVar('--term-bg'), foreground: cssVar('--term-fg'), cursor: cssVar('--accent') },
+      theme: { background: cssVar('--term-bg'), foreground: cssVar('--term-fg'), cursor: cssVar('--term-fg') },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -34,7 +35,7 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
     // xterm swallows Tab, so give keyboard users a way out (no focus trap).
     // Ctrl+C is SIGINT in a shell, so copy/paste is Ctrl+Shift+C/V as in Linux terminals; Cmd+C/V on a Mac stays native.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.ctrlKey && e.altKey && e.key === 'ArrowUp') { leaveRef.current(); return false }
+      if (e.type === 'keydown' && isLeaveChord(e)) { leaveRef.current(); return false }
       if (e.ctrlKey && e.shiftKey && !e.altKey && (e.code === 'KeyC' || e.code === 'KeyV')) {
         if (e.type === 'keydown') {
           e.preventDefault() // no browser paste on top of ours

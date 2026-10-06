@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Markdown } from './Markdown'
+import { MarkdownImpl as Markdown } from './MarkdownImpl'
 
 test('callouts, highlighted code and mermaid placeholders', () => {
   const md = '> [!WARNING]\n> Hot metal.\n\n```go\nfunc main() {}\n```\n\n```mermaid\ngraph TD; A-->B\n```\n'

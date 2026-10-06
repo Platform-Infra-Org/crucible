@@ -24,7 +24,7 @@ function Burn({ label, s }: { label: string; s: Spend }) {
 
 function LabRows({ labs, testid }: { labs: LedgerLab[]; testid: string }) {
   return (
-    <table className="grid" data-testid={testid}>
+    <div className="table-wrap"><table className="grid" data-testid={testid}>
       <thead><tr><th>Lab</th><th>Team</th><th>Requested by</th><th>Runtime</th><th>State</th><th>Estimate</th><th>Cost so far</th><th>AWS bill</th></tr></thead>
       <tbody>
         {labs.map((l) => (
@@ -36,7 +36,7 @@ function LabRows({ labs, testid }: { labs: LedgerLab[]; testid: string }) {
           </tr>
         ))}
       </tbody>
-    </table>
+    </table></div>
   )
 }
 
@@ -100,10 +100,10 @@ export function LedgerPage() {
       </div>
       <details>
         <summary>Numbers</summary>
-        <table className="grid">
+        <div className="table-wrap"><table className="grid">
           <thead><tr><th>Day</th><th>Estimate</th><th>AWS bill</th></tr></thead>
           <tbody>{l.daily.map((d) => <tr key={d.day}><td>{d.day}</td><td>{usd(d.estimate_usd)}</td><td>{usd(d.actual_usd)}</td></tr>)}</tbody>
-        </table>
+        </table></div>
       </details>
 
       <h2>Running now</h2>
@@ -114,10 +114,10 @@ export function LedgerPage() {
 
       <h2>Top spenders</h2>
       {l.top_spenders.length === 0 ? <p className="muted">Nothing spent yet.</p> : (
-        <table className="grid">
+        <div className="table-wrap"><table className="grid">
           <thead><tr><th>Requested by</th><th>Team</th><th>This month</th></tr></thead>
           <tbody>{l.top_spenders.map((s) => <tr key={s.requester + s.team}><td>{s.requester}</td><td>{s.team}</td><td>{usd(s.usd)}</td></tr>)}</tbody>
-        </table>
+        </table></div>
       )}
 
       <h2>Estimate vs actual</h2>
@@ -128,7 +128,7 @@ export function LedgerPage() {
         <>
           <h2>Reaper findings</h2>
           <p className="muted">{l.reaped_at ? `Last reaper run: ${new Date(l.reaped_at).toLocaleString()}.` : 'The reaper has not run yet.'}</p>
-          <table className="grid" data-testid="reaper-findings">
+          <div className="table-wrap"><table className="grid" data-testid="reaper-findings">
             <thead><tr><th>Last seen</th><th>Found by</th><th>Lab</th><th>Resource</th><th>Action</th><th>Detail</th></tr></thead>
             <tbody>
               {(l.findings ?? []).map((f) => (
@@ -138,7 +138,7 @@ export function LedgerPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         </>
       )}
     </section>

@@ -1,29 +1,8 @@
-import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
-import { remarkCallouts } from '../lib/callouts'
-import { Mermaid } from './Mermaid'
+import { lazy, Suspense } from 'react'
 
-const components: Components = {
-  code({ className, children, ...rest }) {
-    if (className?.includes('language-mermaid')) return <Mermaid source={String(children).trim()} />
-    return <code className={className} {...rest}>{children}</code>
-  },
-}
+// react-markdown + highlight.js are a big share of the bundle: load them only on pages that render markdown.
+const Impl = lazy(() => import('./MarkdownImpl').then((m) => ({ default: m.MarkdownImpl })))
 
-// assetBase rewrites `assets/x.png` links to the training's asset endpoint.
-// No raw HTML: react-markdown ignores it; rehype-highlight emits hast spans, never HTML strings.
-export function Markdown({ text, assetBase }: { text: string; assetBase?: string }) {
-  return (
-    <div className="prose">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkCallouts]}
-        rehypePlugins={[[rehypeHighlight, { plainText: ['mermaid'] }]]}
-        components={components}
-        urlTransform={(url) => (assetBase && url.startsWith('assets/') ? `${assetBase}/${url.slice('assets/'.length)}` : defaultUrlTransform(url))}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  )
+export function Markdown(props: { text: string; assetBase?: string }) {
+  return <Suspense fallback={<div className="prose" aria-busy="true" />}><Impl {...props} /></Suspense>
 }

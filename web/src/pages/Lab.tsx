@@ -8,6 +8,7 @@ import { usd } from '../lib/money'
 import { tierLabel } from './Approvals'
 import { clockOffset } from '../lib/timer'
 import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
+import { advanceFocus } from '../lib/advanceFocus'
 import { Embers } from '../components/Embers'
 import { FeedbackBox } from '../components/Feedback'
 import { ErrorBox } from '../components/ErrorBox'
@@ -175,7 +176,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
     tabRefs.current[next]?.focus()
   }
   // Full screen (spec §8.3): the Fullscreen API where the browser allows it, else a fixed overlay. Esc exits; inside a
-  // terminal Esc belongs to the shell (vim), so Ctrl+Alt+↑ leaves the terminal first.
+  // terminal Esc belongs to the shell (vim), so Ctrl+Alt+↑ or Ctrl+Shift+F6 leaves the terminal first.
   const termsRef = useRef<HTMLElement>(null)
   const [full, setFull] = useState(false)
   useEffect(() => {
@@ -189,6 +190,17 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
     const el = termsRef.current
     if (el?.requestFullscreen && document.fullscreenEnabled) el.requestFullscreen().catch(() => setFull(true))
     else setFull(true)
+  }
+  const pipRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const [moved, setMoved] = useState('')
+  // The panel remounts per task, so the focused Check button disappears: land on the next pip and say so.
+  const advance = (l: LabView) => {
+    const next = firstOpen(l)
+    const f = advanceFocus(l.tasks, taskId, next)
+    setTaskId(next)
+    if (!f) return
+    setMoved(f.message)
+    requestAnimationFrame(() => pipRefs.current[f.index]?.focus())
   }
   const leaveTerminal = () => tabRefs.current[tabs.findIndex((t) => t.key === active)]?.focus()
 
@@ -265,16 +277,17 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           <ol className="task-pips">
             {lab.tasks.map((t, i) => (
               <li key={t.id}>
-                <button className={`pip ${t.status} ${t.id === taskId ? 'current' : ''}`} disabled={t.status === 'locked'} onClick={() => setTaskId(t.id)} aria-label={`Task ${i + 1}: ${t.title} (${t.status})`}>
+                <button ref={(el) => { pipRefs.current[i] = el }} className={`pip ${t.status} ${t.id === taskId ? 'current' : ''}`} disabled={t.status === 'locked'} onClick={() => setTaskId(t.id)} aria-label={`Task ${i + 1}: ${t.title} (${t.status})`}>
                   {i + 1}
                 </button>
               </li>
             ))}
           </ol>
-          <TaskPanel key={taskId} lab={lab} taskId={taskId} onLab={setLab} onAdvance={(l) => setTaskId(firstOpen(l))} />
+          <TaskPanel key={taskId} lab={lab} taskId={taskId} onLab={setLab} onAdvance={advance} />
+          <div className="sr-only" role="status" aria-live="polite">{moved}</div>
         </aside>
         <div
-          className="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" aria-valuenow={Math.round(split)} tabIndex={0}
+          className="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" aria-valuemin={25} aria-valuemax={70} aria-valuenow={Math.round(split)} tabIndex={0}
           onPointerDown={startDrag}
           onKeyDown={(e) => {
             if (e.key === 'ArrowLeft') setSplit((s) => Math.max(25, s - 2))
@@ -293,7 +306,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
               >{t.key}</button>
             ))}
             <span className="spacer" />
-            <span className="muted small" title="The terminal captures Tab">Ctrl+Alt+↑ leaves the terminal</span>
+            <span className="muted small" title="The terminal captures Tab. Ctrl+Alt+↑ is taken by some operating systems; Ctrl+Shift+F6 always works">Ctrl+Alt+↑ or Ctrl+Shift+F6 leaves the terminal</span>
             <button className="ghost" aria-label="Smaller text" onClick={() => bump(-1)}>A−</button>
             <button className="ghost" aria-label="Larger text" onClick={() => bump(1)}>A+</button>
             <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>

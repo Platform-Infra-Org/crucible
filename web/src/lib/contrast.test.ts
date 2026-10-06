@@ -9,11 +9,16 @@ function tokens(theme: string): Record<string, string> {
   return Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-fA-F]{3,6})\b/g)].map((m) => [m[1], m[2]]))
 }
 
-// Text pairs need 4.5:1 (7:1 for High Contrast = AAA); focus rings and other UI need 3:1.
-const textPairs = [['text', 'bg'], ['text', 'surface'], ['text', 'surface-2'], ['muted', 'bg'], ['muted', 'surface'], ['muted', 'surface-2'],
-  ['accent', 'bg'], ['accent', 'surface'], ['accent-2', 'bg'], ['accent-2', 'surface'], ['danger', 'bg'], ['danger', 'surface'],
-  ['ok', 'bg'], ['ok', 'surface'], ['term-fg', 'term-bg']]
-const uiPairs = [['accent-2', 'bg'], ['accent-2', 'surface'], ['accent-2', 'surface-2'], ['accent', 'surface-2']]
+// Every colour/background pair app.css draws. Text pairs need 4.5:1 (7:1 for High Contrast = AAA); focus rings and
+// other UI need 3:1. Surfaces: bg (page), surface (cards, nav, modals), surface-2 (code, badges, tabs), term-bg (terminal, diff).
+const onSurfaces = ['bg', 'surface', 'surface-2']
+const textPairs = [
+  ...['text', 'muted', 'accent', 'accent-2', 'danger', 'ok'].flatMap((fg) => onSurfaces.map((bg) => [fg, bg])), // links, badges, hljs tokens, callouts, timers, .pass/.error/.warn
+  ['term-fg', 'term-bg'], ['diff-add', 'term-bg'], ['diff-del', 'term-bg'], ['diff-hunk', 'term-bg'], // terminal and diff view
+  ['on-accent', 'accent'], ['on-accent', 'accent-2'], // button.primary gradient
+  ['bg', 'ok'], ['bg', 'danger'], ['bg', 'text'], // passed pip, button.danger, forged heat cell
+]
+const uiPairs = [...['accent', 'accent-2', 'ok', 'danger'].flatMap((fg) => onSurfaces.map((bg) => [fg, bg]))] // focus ring, state borders
 
 describe('theme contrast (spec §12: contrast checked per theme; High Contrast = WCAG AAA)', () => {
   for (const theme of ['forge', 'anvil', 'quench', 'contrast']) {
@@ -30,6 +35,11 @@ describe('theme contrast (spec §12: contrast checked per theme; High Contrast =
       })
     }
   }
+  test('app.css hard-codes no colour outside the tokens (a literal would dodge the pairs above)', () => {
+    const app = readFileSync(new URL('../theme/app.css', import.meta.url), 'utf8')
+    const bad = app.split('\n').filter((l) => /(^|[\s;{])(color|background(-color)?)\s*:[^;}]*(#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\()/.test(l) && !/rgba\(0, 0, 0, 0\.55\)/.test(l))
+    expect(bad).toEqual([])
+  })
   test('the formula', () => {
     expect(contrast('#000', '#fff')).toBeCloseTo(21, 0)
     expect(contrast('#777', '#fff')).toBeCloseTo(4.48, 1)

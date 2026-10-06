@@ -62,6 +62,7 @@ for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
   grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }
 done
 if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
+if grep -q CRUCIBLE_GIT_ALLOW_FILE <<<"$out$boot$awsout"; then echo "file git transport must never be rendered"; exit 1; fi
 if grep -q 'CRUCIBLE_INFRACOST' <<<"$awsout"; then echo "real aws labs must not turn infracost off"; exit 1; fi
 dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
 for want in 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' 'name: CRUCIBLE_INFRACOST, value: "off"'; do

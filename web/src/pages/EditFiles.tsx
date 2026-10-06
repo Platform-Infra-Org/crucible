@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '../api'
 import type { ContentEdit } from '../types'
+import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
 import { DiffView } from '../components/DiffView'
 import { editProblem } from '../lib/editLimits'
@@ -64,6 +65,7 @@ export function EditFilesPage() {
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
+  if (!list && !err) return <section className="page"><Loader label="Loading files…" /></section>
   return (
     <section className="page">
       <h1>Edit {training}</h1>

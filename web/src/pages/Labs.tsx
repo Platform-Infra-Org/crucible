@@ -15,7 +15,7 @@ export function LabsPage() {
     <section className="page">
       <h1>Labs</h1>
       {data.length === 0 ? <p className="muted">No labs yet.</p> : (
-        <table className="grid">
+        <div className="table-wrap"><table className="grid">
           <thead><tr><th>Lab</th><th>Training</th><th>State</th><th>Started</th><th>Ends</th><th /></tr></thead>
           <tbody>
             {data.map((l) => (
@@ -29,7 +29,7 @@ export function LabsPage() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </section>
   )

@@ -19,6 +19,12 @@ import (
 	"crucible/internal/learn"
 )
 
+// TestMain allows the file transport: these tests use local bare repos as git remotes.
+func TestMain(m *testing.M) {
+	gitsync.AllowFileTransport = true
+	os.Exit(m.Run())
+}
+
 func TestStateChangingRequestsNeedSameOrigin(t *testing.T) {
 	reached := false
 	h := sameOrigin("https://crucible.example.com")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -77,6 +77,7 @@ func run(ctx context.Context) error {
 	}
 	defer pool.Close()
 
+	gitsync.AllowFileTransport = gitsync.AllowFileFromEnv(os.Getenv)
 	syncer := gitsync.New(env("CRUCIBLE_DATA_DIR", "/data"), must("CRUCIBLE_PLATFORM_REPO"), env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial git sync failed; retrying in the background", "err", err)

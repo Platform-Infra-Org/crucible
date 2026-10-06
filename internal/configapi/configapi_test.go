@@ -17,6 +17,12 @@ import (
 	"crucible/internal/gitsync"
 )
 
+// TestMain allows the file transport: these tests use local bare repos as git remotes.
+func TestMain(m *testing.M) {
+	gitsync.AllowFileTransport = true
+	os.Exit(m.Run())
+}
+
 func sh(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)

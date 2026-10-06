@@ -13,22 +13,26 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"testing"
 	"time"
 )
 
 // Mirror is a bare `git clone --mirror` of a remote, driven through the git CLI so any host and auth method works.
 type Mirror struct{ URL, Dir string }
 
-// allowFile lets remotes use the file transport (local paths, file://): local stacks mount seeded repos at /git.
-// Elsewhere it is off, so a repo URL can't read the server's own disk (other clones, mirrors). Tests (every package's)
-// use local bare repos as remotes.
-var allowFile = os.Getenv("CRUCIBLE_GIT_ALLOW_FILE") == "1" || testing.Testing()
+// AllowFileTransport lets remotes use the file transport (local paths, file://): local stacks mount seeded repos at
+// /git. It is off by default, so a repo URL can't read the server's own disk (other clones, mirrors). crucible-api sets
+// it from CRUCIBLE_GIT_ALLOW_FILE (AllowFileFromEnv); tests that use local bare repos as remotes set it in TestMain.
+var AllowFileTransport bool
+
+// AllowFileFromEnv reports whether CRUCIBLE_GIT_ALLOW_FILE=1 asks for the file transport.
+func AllowFileFromEnv(getenv func(string) string) bool {
+	return getenv("CRUCIBLE_GIT_ALLOW_FILE") == "1"
+}
 
 // git runs git with no host config: only CRUCIBLE_GIT_CONFIG (the image's credential helper and safe.directory)
 // applies, so a host's filters, hooksPath or fsmonitor never run in the bot's clones.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	if !allowFile {
+	if !AllowFileTransport {
 		args = append([]string{"-c", "protocol.file.allow=never"}, args...)
 	}
 	global := os.Getenv("CRUCIBLE_GIT_CONFIG")

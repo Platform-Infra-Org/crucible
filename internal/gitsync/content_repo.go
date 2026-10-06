@@ -123,8 +123,11 @@ func labDir(dir, rel string) string {
 		return ""
 	}
 	for _, it := range m.Items {
-		if lab, ok := it["lab"]; ok && filepath.IsLocal(lab) {
-			return path.Join("modules", parts[1], path.Clean(lab)) + "/"
+		// a lab is a real subdirectory: "." or "lab/.." would make every script in the module executable
+		if lab, ok := it["lab"]; ok {
+			if c := path.Clean(lab); c != "." && filepath.IsLocal(c) {
+				return path.Join("modules", parts[1], c) + "/"
+			}
 		}
 	}
 	return ""
@@ -241,7 +244,7 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files m
 	if err != nil {
 		return "", "", err
 	}
-	diff, err := git(ctx, c.Dir, "diff", "--no-color", "--end-of-options", base, sha)
+	diff, err := git(ctx, c.Dir, "diff", "--no-color", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base, sha)
 	if err != nil {
 		return "", "", err
 	}

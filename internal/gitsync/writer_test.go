@@ -15,6 +15,12 @@ import (
 
 const validPlatform = "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n"
 
+// TestMain allows the file transport: these tests use local bare repos as remotes.
+func TestMain(m *testing.M) {
+	AllowFileTransport = true
+	os.Exit(m.Run())
+}
+
 // bare returns a bare repo seeded with files (pushes need a bare remote).
 func bare(t *testing.T, files map[string]string) string {
 	t.Helper()

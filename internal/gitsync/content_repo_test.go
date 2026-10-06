@@ -205,8 +205,8 @@ func TestPushEditRefusesBadFiles(t *testing.T) {
 		"backslash":    {`modules\m1\x.md`: "x"},
 		"nul":          {"a\x00.md": "x"},
 		"extension":    {"modules/m1/main.tf": "x"},
-		"binary":       {"a.md": "x\x00y"},
-		"too big":      {"a.md": strings.Repeat("x", 256<<10+1)},
+		"binary":       {"modules/m1/reading/a.md": "x\x00y"},
+		"too big":      {"modules/m1/reading/a.md": strings.Repeat("x", 256<<10+1)},
 		"too many":     many,
 		"empty":        {},
 		"maintainers":  {"training.yaml": "id: t1\ntitle: T1\nmaintainers: [a@x]\nmodules: [m1]\n"},
@@ -399,9 +399,63 @@ func TestGitIgnoresHostConfig(t *testing.T) {
 		t.Fatalf("host config applied: %q", out)
 	}
 	remote := bare(t, trainingFiles())
-	allowFile = false
-	defer func() { allowFile = true }()
+	AllowFileTransport = false
+	defer func() { AllowFileTransport = true }()
 	if _, err := git(context.Background(), "", "clone", "-q", "--", "file://"+remote, filepath.Join(t.TempDir(), "c")); err == nil {
 		t.Fatal("file:// remotes are refused unless allowed")
+	}
+}
+
+func TestAllowFileTransportComesFromTheEnvironment(t *testing.T) {
+	for v, want := range map[string]bool{"1": true, "": false, "0": false, "true": false} {
+		if got := AllowFileFromEnv(func(k string) string {
+			if k == "CRUCIBLE_GIT_ALLOW_FILE" {
+				return v
+			}
+			return ""
+		}); got != want {
+			t.Errorf("CRUCIBLE_GIT_ALLOW_FILE=%q: %v", v, got)
+		}
+	}
+}
+
+func TestEditDiffIgnoresRepoAttributes(t *testing.T) {
+	ctx := context.Background()
+	files := trainingFiles()
+	files[".gitattributes"] = "*.md binary\n"
+	remote := bare(t, files)
+	base := gitOut(t, remote, "rev-parse", "main")
+	c := contentRepo(t, remote)
+	_, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nsneaky line\n"}, "a@x", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "+sneaky line") {
+		t.Fatalf("the reviewer sees the text change whatever .gitattributes says: %q", diff)
+	}
+}
+
+func TestLabDirDotIsNotALabDir(t *testing.T) {
+	ctx := context.Background()
+	files := trainingFiles()
+	files["modules/m1/module.yaml"] = "title: M1\nitems:\n  - reading: reading/intro.md\n  - lab: .\n"
+	remote := bare(t, files)
+	base := gitOut(t, remote, "rev-parse", "main")
+	c := contentRepo(t, remote)
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/notes.sh": "#!/bin/sh\nexit 0\n"}, "a@x", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := gitOut(t, remote, "ls-tree", sha, "modules/m1/reading/notes.sh"); !strings.HasPrefix(mode, "100644") {
+		t.Fatalf("lab: . never makes the whole module executable: %q", mode)
+	}
+	dir := t.TempDir()
+	for lab, want := range map[string]string{".": "", "./": "", "lab/..": "", "": "", "../x": "", "/abs": "", "lab/": "modules/m1/lab/", "./lab": "modules/m1/lab/"} {
+		if err := writeFile(dir, "modules/m1/module.yaml", "items:\n  - lab: \""+lab+"\"\n"); err != nil {
+			t.Fatal(err)
+		}
+		if got := labDir(dir, "modules/m1/x.sh"); got != want {
+			t.Errorf("lab %q: %q, want %q", lab, got, want)
+		}
 	}
 }

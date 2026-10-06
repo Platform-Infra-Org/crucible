@@ -19,10 +19,12 @@ import (
 	"crucible/internal/rbac"
 )
 
-// Spend is month-to-date lab spend for a team or one program, from per-lab estimates (actual AWS costs arrive in M6).
+// Spend is month-to-date lab spend for a team or one program: estimates, with Cost Explorer actuals swapped in for
+// labs whose actual cost has settled (spec §9.3).
 type Spend struct {
-	SpentUSD     float64 `json:"spent_usd"`     // hourly estimate × time each lab has run this month
+	SpentUSD     float64 `json:"spent_usd"`     // per lab: settled actual, else hourly estimate × time run this month
 	CommittedUSD float64 `json:"committed_usd"` // spent + the rest of every lab still starting or running, to its end
+	ActualUSD    float64 `json:"actual_usd"`    // the part of spent that comes from settled actuals
 	BudgetUSD    float64 `json:"budget_usd"`    // 0 = no budget
 	CapUSD       float64 `json:"cap_usd"`       // 0 = no hard cap
 }
@@ -32,21 +34,32 @@ func monthStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
+// labCostSQL selects lab_instances (alias l) with three more columns: actual (Cost Explorer total, NULL when never
+// reported), settled (use the actual instead of the estimate: reported, and the lab ended 48 h before the last
+// successful ingestion, so Cost Explorer has caught up) and est_spent (hourly estimate × time run). $1 is now.
+// Conservative on purpose: a lab Cost Explorer never reported keeps its estimate (tags not activated != free).
+const labCostSQL = `SELECT l.*, a.usd AS actual,
+	coalesce(a.usd IS NOT NULL AND l.destroyed_at < (SELECT ingest_ok_at FROM aws_ops) - interval '48 hours', false) AS settled,
+	CASE WHEN l.ready_at IS NULL THEN 0
+		ELSE l.hourly_usd * extract(epoch FROM least(coalesce(l.destroyed_at, $1), $1) - l.ready_at)::float8 / 3600 END AS est_spent
+	FROM lab_instances l LEFT JOIN (SELECT lab_id, sum(usd) AS usd FROM cost_actuals GROUP BY lab_id) a ON a.lab_id = l.id`
+
 // spend sums this calendar month (UTC) for a team, or one program when training != "".
 // ponytail: a lab counts in the month it was requested; one running across midnight on the 1st stays in the old month.
 func (s *Service) spend(ctx context.Context, p *config.Platform, team, training string) (Spend, error) {
 	now := s.Now()
 	var sp Spend
-	err := s.DB.QueryRow(ctx, `SELECT
-		coalesce(sum(CASE WHEN ready_at IS NULL THEN 0
-			ELSE hourly_usd * extract(epoch FROM least(coalesce(destroyed_at, $3), $3) - ready_at)::float8 / 3600 END), 0),
-		coalesce(sum(CASE
-			WHEN state = 'provisioning' THEN estimate_usd
-			WHEN state = 'ready' THEN hourly_usd * extract(epoch FROM greatest(ends_at, $3) - ready_at)::float8 / 3600
-			WHEN ready_at IS NULL THEN 0
-			ELSE hourly_usd * extract(epoch FROM coalesce(destroyed_at, $3) - ready_at)::float8 / 3600 END), 0)
-		FROM lab_instances WHERE team = $1 AND ($2 = '' OR training = $2) AND created_at >= $4`,
-		team, training, now, monthStart(now)).Scan(&sp.SpentUSD, &sp.CommittedUSD)
+	err := s.DB.QueryRow(ctx, `WITH labs AS (`+labCostSQL+`
+		WHERE l.team = $2 AND ($3 = '' OR l.training = $3) AND l.created_at >= $4)
+		SELECT
+			coalesce(sum(CASE WHEN settled THEN actual ELSE est_spent END), 0),
+			coalesce(sum(CASE
+				WHEN settled THEN actual
+				WHEN state = 'provisioning' THEN estimate_usd
+				WHEN state = 'ready' THEN hourly_usd * extract(epoch FROM greatest(ends_at, $1) - ready_at)::float8 / 3600
+				ELSE est_spent END), 0),
+			coalesce(sum(CASE WHEN settled THEN actual ELSE 0 END), 0)
+		FROM labs`, now, team, training, monthStart(now)).Scan(&sp.SpentUSD, &sp.CommittedUSD, &sp.ActualUSD)
 	if err != nil {
 		return sp, err
 	}

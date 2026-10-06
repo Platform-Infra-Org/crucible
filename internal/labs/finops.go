@@ -153,3 +153,29 @@ func (s *Service) killAll(ctx context.Context) {
 		s.destroy(ctx, inst, "kill_switch")
 	}
 }
+
+// budgetLimit is when this lab's running cost would reach the team's or the program's hard cap (spec §8.6): the
+// headroom other labs leave, divided by this lab's hourly rate, from when it is ready. Called while the lab is
+// still provisioning, so spend() counts its whole estimate: take that back out. Labs an admin approved over the cap
+// and free labs have no budget limit.
+func (s *Service) budgetLimit(ctx context.Context, inst *Instance, now time.Time) Limit {
+	st := s.Learn.State()
+	if inst.HourlyUSD <= 0 || inst.OverCap || st == nil || st.Platform == nil {
+		return Limit{}
+	}
+	var best Limit
+	for _, scope := range []string{"", inst.Training} {
+		sp, err := s.spend(ctx, st.Platform, inst.Team, scope)
+		if err != nil {
+			s.Log.Warn("budget limit: reading spend failed", "lab", inst.ID, "err", err)
+			continue
+		}
+		if sp.CapUSD <= 0 {
+			continue
+		}
+		headroom := max(0, sp.CapUSD-(sp.CommittedUSD-inst.EstimateUSD))
+		at := now.Add(time.Duration(headroom / inst.HourlyUSD * float64(time.Hour)))
+		best = EffectiveEnd(best, Limit{At: at, Reason: "budget"})
+	}
+	return best
+}

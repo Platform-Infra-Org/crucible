@@ -404,7 +404,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
-		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule"
+		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
 	}
 	return v, nil
 }
@@ -675,7 +675,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		return
 	}
 	now := s.Now()
-	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now))
+	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now), s.budgetLimit(ctx, inst, now))
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
@@ -1087,8 +1087,8 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	if !end.After(*inst.EndsAt) {
 		return nil, apperr.Wrap(apperr.Conflict, "the schedule window closes first; this lab can't be extended")
 	}
-	// ponytail: spec §8.6 "Extension pending" (send the extension back through approval) ships with real cloud costs
-	// in M6; until then an extension that would lift the estimate into a higher tier is refused.
+	// ponytail: spec §8.6 "Extension pending" (send the extension back through approval) is deferred to the M7
+	// coverage pass; until then an extension that would lift the estimate into a higher tier is refused.
 	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil && st.Platform.Settings.CostTiers != nil {
 		tiers := *st.Platform.Settings.CostTiers
 		more := inst.EstimateUSD + inst.HourlyUSD*end.Sub(*inst.EndsAt).Hours()

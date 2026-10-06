@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -244,5 +245,70 @@ func TestRecentApprovalDoesNotBypassTheCap(t *testing.T) {
 	}
 	if v := f.request(t, f.u); v.Tier != rbac.TierAdmin || !v.OverCap {
 		t.Fatalf("%+v", v)
+	}
+}
+
+func closeTo(a, b float64) bool { return math.Abs(a-b) < 0.001 }
+
+// endedAgo moves a lab (inserted by f.spent: one hour of running) so that it ended d ago.
+func (f *fx) endedAgo(t *testing.T, id string, d time.Duration) {
+	t.Helper()
+	end := f.clk.Now().Add(-d)
+	if _, err := f.s.DB.Exec(context.Background(), `UPDATE lab_instances SET ready_at = $2::timestamptz - interval '1 hour',
+		destroyed_at = $2 WHERE id = $1`, id, end); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSpendUsesSettledActualsOnly(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // ended 3 days ago, Cost Explorer says $0.40
+	f.spent(t, "aaaaaaaaaaa2", "forge-101", 2) // ended an hour ago, Cost Explorer says $5 so far (not settled)
+	f.spent(t, "aaaaaaaaaaa3", "forge-101", 2) // ended 3 days ago, never reported (tags not activated?)
+	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
+	f.endedAgo(t, "aaaaaaaaaaa3", 72*time.Hour)
+	for id, usd := range map[string]float64{"aaaaaaaaaaa1": 0.4, "aaaaaaaaaaa2": 5} {
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO cost_actuals (lab_id, day, usd, updated_at) VALUES ($1, $2::timestamptz::date, $3, $2)`,
+			id, f.clk.Now(), usd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sp, err := f.s.spend(ctx, f.plat, "forge", "")
+	if err != nil || !closeTo(sp.SpentUSD, 6) || sp.ActualUSD != 0 {
+		t.Fatalf("no successful ingestion yet: estimates only, got %+v %v", sp, err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE aws_ops SET ingest_ok_at = $1`, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	sp, _ = f.s.spend(ctx, f.plat, "forge", "")
+	if !closeTo(sp.SpentUSD, 4.4) || !closeTo(sp.ActualUSD, 0.4) || !closeTo(sp.CommittedUSD, 4.4) {
+		t.Fatalf("only the settled, reported lab uses its actual ($0.40 + $2 + $2): %+v", sp)
+	}
+}
+
+func TestBudgetCapSetsTheTimer(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 12 // 1 h TTL → $12: the team leader's tier
+	v := f.request(t, f.u)
+	// Approval re-checks the cap, so the squeeze happens while the lab provisions: another lab books $240 of the
+	// team's $250 hard cap.
+	f.run.provision = func() { f.spent(t, "bbbbbbbbbbb9", "forge-101", 240) }
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := f.waitState(t, f.u, v.ID, Ready)
+	inst, _ := f.s.owned(ctx, f.u, v.ID)
+	if got.LimitReason != "budget" || !inst.EndsAt.Equal(inst.ReadyAt.Add(50*time.Minute)) || got.CanExtend {
+		t.Fatalf("$10 of headroom at $12/h is 50 minutes, ending at the cap, no extension: %+v ends %v", got, inst.EndsAt)
+	}
+	inst.OverCap = true
+	if lim := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
+		t.Fatal("a lab an admin approved over the cap has no budget limit")
+	}
+	inst.OverCap, inst.HourlyUSD = false, 0
+	if lim := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
+		t.Fatal("a free lab has no budget limit")
 	}
 }

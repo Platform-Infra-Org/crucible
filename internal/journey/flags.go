@@ -3,10 +3,12 @@ package journey
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"crucible/internal/content"
 	"crucible/internal/gitsync"
 )
 
@@ -106,8 +108,8 @@ func (s *Service) signals(ctx context.Context, st *gitsync.State, team string, u
 	}); err != nil {
 		return nil, err
 	}
-	// Last activity by the trainee, for the inactive flag. item_progress is left out on purpose: scorer decisions bump it.
-	// ponytail: reading-item completions therefore do not count as activity; add a trainee-only timestamp if that matters.
+	// Last activity by the trainee, for the inactive flag. item_progress counts only for readings (below): scorer
+	// decisions bump quiz and lab rows, but only the trainee ever marks a reading done.
 	rows, err = s.DB.Query(ctx, `SELECT user_id, training, max(at) FROM (
 		SELECT user_id, training, created_at AS at FROM quiz_attempts WHERE user_id = ANY($1) AND team = $2
 		UNION ALL SELECT user_id, training, last_activity_at FROM lab_instances WHERE user_id = ANY($1) AND team = $2
@@ -120,6 +122,25 @@ func (s *Service) signals(ctx context.Context, st *gitsync.State, team string, u
 		return nil, err
 	}
 	if _, err = pgx.ForEachRow(rows, []any{&k.uid, &k.training, &at}, func() error { at := at; sg.last[k] = &at; return nil }); err != nil {
+		return nil, err
+	}
+	rows, err = s.DB.Query(ctx, `SELECT user_id, training, module, item, updated_at FROM item_progress
+		WHERE user_id = ANY($1) AND team = $2 AND status = 'complete'`, uids, team)
+	if err != nil {
+		return nil, err
+	}
+	var rm, ri string
+	if _, err = pgx.ForEachRow(rows, []any{&k.uid, &k.training, &rm, &ri, &at}, func() error {
+		t, _ := st.ProgramTraining(team, k.training)
+		if t == nil || !isReading(t, rm, ri) {
+			return nil
+		}
+		if prev := sg.last[k]; prev == nil || at.After(*prev) {
+			at := at
+			sg.last[k] = &at
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	// Submissions waiting for a scorer: the stuck party is the scorer, not the trainee.
@@ -142,4 +163,9 @@ func BusinessDays(from, to time.Time) int {
 		}
 	}
 	return n
+}
+
+func isReading(t *content.Training, module, item string) bool {
+	m := t.Module(module)
+	return m != nil && slices.ContainsFunc(m.Items, func(it content.Item) bool { return it.Kind == "reading" && it.ID == item })
 }

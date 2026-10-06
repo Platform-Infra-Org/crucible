@@ -200,6 +200,22 @@ func TestInactiveIgnoresScorerWritesAndWaitingOnScorer(t *testing.T) {
 	}
 }
 
+func TestReadingCountsAsActivity(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	f.s.Now = func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }
+	f.attempt(t, "2026-10-05T10:00:00Z")
+	// marking a reading done is always the trainee's own action
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO item_progress (user_id, team, training, module, item, status, score, updated_at)
+		VALUES ($1, 'forge', 'forge-101', '01-welcome', 'how-we-work', 'complete', 1, '2026-10-13T10:00:00Z')`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := f.s.Team(ctx, f.leader, "forge")
+	if _, ok := flagKinds(rows[0])["inactive"]; ok {
+		t.Fatalf("a reading finished yesterday is activity: %+v", rows[0].Flags)
+	}
+}
+
 func TestNoActivityIsNotStarted(t *testing.T) {
 	f := setup(t)
 	f.s.Now = func() time.Time { return f.now.AddDate(0, 0, 90) }

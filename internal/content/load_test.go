@@ -1,6 +1,8 @@
 package content
 
 import (
+	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,5 +272,105 @@ func TestForge301Loads(t *testing.T) {
 	}
 	if lab := tr.Module("02-review-lab").Lab; !lab.Task("t2-proof").HumanReview || lab.Task("t1-light").Check == nil {
 		t.Fatal("forge-301's lab needs one checked task and one review task")
+	}
+}
+
+// awsTree is base with its lab turned into a minimal valid aws lab; override replaces or adds files on top.
+func awsTree(t *testing.T, override map[string]string) string {
+	t.Helper()
+	files := map[string]string{
+		"modules/m1/lab/lab.yaml": `id: l1
+runtime: aws
+terminals: [{name: ws, service: workspace}]
+tasks:
+  - id: t1
+    instructions: tasks/t1.md
+    check: {script: checks/t1.sh, run_in: workspace}
+aws: {region: eu-west-1, max_hourly_usd: 0.1}
+`,
+		"modules/m1/lab/compose.yaml":      "<delete>",
+		"modules/m1/lab/setup/t2.sh":       "<delete>",
+		"modules/m1/lab/hints/sol.md":      "<delete>",
+		"modules/m1/lab/terraform/main.tf": "resource \"aws_s3_bucket\" \"b\" {\n  bucket = \"crucible-lab-${var.crucible_lab_id}\"\n}\n",
+	}
+	maps.Copy(files, override)
+	return tree(t, files)
+}
+
+func TestAWSLabModuleRules(t *testing.T) {
+	if _, probs := Load(awsTree(t, nil)); len(probs) > 0 {
+		t.Fatalf("a minimal aws lab must load: %v", probs)
+	}
+	withAWS := func(aws string) map[string]string {
+		lab := strings.Replace(`id: l1
+runtime: aws
+terminals: [{name: ws, service: workspace}]
+tasks:
+  - id: t1
+    instructions: tasks/t1.md
+    check: {script: checks/t1.sh, run_in: workspace}
+AWS`, "AWS", aws, 1)
+		return map[string]string{"modules/m1/lab/lab.yaml": lab}
+	}
+	tf := func(name, body string) map[string]string {
+		return map[string]string{"modules/m1/lab/terraform/" + name: body}
+	}
+	cases := map[string]struct {
+		override map[string]string
+		want     string
+	}{
+		"no region":      {withAWS("aws: {max_hourly_usd: 0.1}\n"), "aws.region is required"},
+		"odd region":     {withAWS("aws: {region: \"eu-west-1; rm -rf\", max_hourly_usd: 0.1}\n"), "aws.region is required"},
+		"no ceiling":     {withAWS("aws: {region: eu-west-1}\n"), "aws.max_hourly_usd must be set"},
+		"no module":      {tf("main.tf", "<delete>"), "needs a terraform/ directory"},
+		"own provider":   {tf("p.tf", "provider \"aws\" {\n  region = \"us-east-1\"\n}\n"), `do not declare provider "aws"`},
+		"own backend":    {tf("b.tf", "terraform {\n  backend \"local\" {}\n}\n"), "do not declare a backend"},
+		"registry mod":   {tf("m.tf", "module \"vpc\" {\n  source = \"terraform-aws-modules/vpc/aws\"\n}\n"), "must be a local path"},
+		"git module":     {tf("m.tf", "module \"x\" {\n  source = \"git::https://example.com/x.git\"\n}\n"), "must be a local path"},
+		"too big":        {tf("big.tf", "# "+strings.Repeat("x", 600<<10)+"\n"), "keep it under 512 KiB"},
+		"wrong terminal": {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, probs := Load(awsTree(t, c.override))
+			for _, p := range probs {
+				if strings.Contains(p.Msg, c.want) {
+					return
+				}
+			}
+			t.Fatalf("want a problem containing %q, got %v", c.want, probs)
+		})
+	}
+	// Provider sources in required_providers are not module sources; local modules are fine.
+	ok := awsTree(t, map[string]string{
+		"modules/m1/lab/terraform/versions.tf": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n    }\n  }\n}\n",
+		"modules/m1/lab/terraform/mod.tf":      "module \"x\" {\n  source = \"./x\"\n}\n",
+		"modules/m1/lab/terraform/x/main.tf":   "# a local module\n",
+	})
+	if _, probs := Load(ok); len(probs) > 0 {
+		t.Fatalf("provider sources and local modules are allowed: %v", probs)
+	}
+}
+
+func TestForge401IsAnAWSLab(t *testing.T) {
+	tr, probs := Load("../../examples/forge-401")
+	if len(probs) > 0 {
+		t.Fatalf("forge-401: %v", probs)
+	}
+	lab := tr.Module("01-cloud-heat").Lab
+	if lab.ID != "cloud-heat" || lab.Runtime != "aws" || lab.AWS.Region != "eu-west-1" || lab.AWS.MaxHourlyUSD != 0.05 || len(lab.Tasks) != 2 {
+		t.Fatalf("cloud-heat: %+v", lab)
+	}
+}
+
+func TestLabTFVarsIsJSON(t *testing.T) {
+	var v map[string]string
+	if err := json.Unmarshal(LabTFVars("abcdefabcdef", `te"am`, "tr", "eu-west-1"), &v); err != nil || v["crucible_team"] != `te"am` || v["crucible_region"] != "eu-west-1" {
+		t.Fatalf("tfvars must be JSON so no value escapes its string: %v %v", v, err)
+	}
+	for _, want := range []string{`backend "s3" {}`, `provider "aws"`, `"crucible:lab-id"   = var.crucible_lab_id`} {
+		if !strings.Contains(LabTF, want) {
+			t.Fatalf("LabTF lacks %q", want)
+		}
 	}
 }

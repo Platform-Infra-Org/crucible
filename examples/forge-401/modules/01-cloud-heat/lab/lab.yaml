@@ -1,0 +1,19 @@
+id: cloud-heat
+runtime: aws
+ttl: 1h
+idle_timeout: 30m
+task_order: free
+terminals:
+  - { name: workspace, service: workspace }
+tasks:
+  - id: t1-region
+    instructions: tasks/01-region.md
+    check: { script: checks/01-region.sh, run_in: workspace }
+    points: 1
+  - id: t2-bucket
+    instructions: tasks/02-bucket.md
+    check: { script: checks/02-bucket.sh, run_in: workspace, timeout: 60s }
+    points: 2
+aws:
+  region: eu-west-1
+  max_hourly_usd: 0.05

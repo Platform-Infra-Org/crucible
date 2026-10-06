@@ -13,9 +13,10 @@ import (
 )
 
 // Files the trainee's environment must never see: instructions, checks, setups and hints are sent per call.
+// terraform/ is the aws lab's module: it runs in the runner pod, never in the trainee's workspace.
 // quiz.yaml/module.yaml only matter if a lab sits in its module dir (the loader rejects that; this is defence in depth).
 var bundleSkip = map[string]bool{"tasks": true, "checks": true, "setup": true, "hints": true, "lab.yaml": true,
-	"quiz.yaml": true, "module.yaml": true}
+	"quiz.yaml": true, "module.yaml": true, "terraform": true}
 
 // maxBundleBytes caps the gzipped bundle (it travels over the agent websocket); a var so tests can lower it.
 var maxBundleBytes = 32 << 20

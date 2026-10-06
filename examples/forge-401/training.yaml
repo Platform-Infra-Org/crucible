@@ -1,0 +1,6 @@
+id: forge-401
+title: "Forge 401: Cloud Heat"
+description: One AWS lab. make cluster-check runs it in dry-run mode; a sandbox account runs it for real (docs/runbooks/aws.md).
+maintainers: [senior@crucible.local]
+progression: free
+modules: [01-cloud-heat]

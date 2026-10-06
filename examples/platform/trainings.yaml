@@ -8,3 +8,6 @@ trainings:
   forge-301:
     repo: file:///git/forge-301.git   # human-scoring e2e fixture; the e2e enrolls the trainee through the UI
     branch: main
+  forge-401:
+    repo: file:///git/forge-401.git   # aws lab e2e fixture (dry run on kind); the e2e enrols the team through the UI
+    branch: main

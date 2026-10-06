@@ -344,7 +344,8 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			}
 		}
 	case "aws":
-		services["workspace"] = true // AWS labs get one workspace pod (spec §8.2)
+		services["workspace"] = true // AWS labs get one workspace container (spec §8.2)
+		l.awsModule(dir, lf, lab)
 	default:
 		l.add(lf, "runtime must be cluster, local or aws")
 	}
@@ -697,4 +698,63 @@ func interpolates(n *yaml.Node) bool {
 		}
 	}
 	return false
+}
+
+var (
+	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
+	tfProvider  = regexp.MustCompile(`(?m)^\s*provider\s+"aws"`)
+	tfBackend   = regexp.MustCompile(`(?m)^\s*backend\s+"`)
+	tfSource    = regexp.MustCompile(`(?m)^\s*source\s*=\s*"([^"]*)"`)
+	// a provider source in required_providers ("hashicorp/aws", "registry.terraform.io/hashicorp/aws"), not a module
+	providerSource = regexp.MustCompile(`^([a-z0-9-]+\.[a-z0-9.-]+/)?[a-z0-9-]+/[a-z0-9-]+$`)
+)
+
+const maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
+
+// awsModule checks an aws lab (spec §4.5, §8.2). Region and price ceiling are required. terraform/ holds a module
+// Crucible runs as-is after adding its own provider and backend, so the module must not declare them, and module
+// sources must be local so neither infracost (in the API pod) nor terraform fetches code from the network.
+func (l *loader) awsModule(dir, lf string, lab *Lab) {
+	if lab.AWS == nil || !awsRegionRe.MatchString(lab.AWS.Region) {
+		l.add(lf, "aws.region is required for runtime: aws (e.g. eu-west-1)")
+	}
+	if lab.AWS == nil || lab.AWS.MaxHourlyUSD <= 0 {
+		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
+	}
+	files, size := 0, int64(0)
+	_ = filepath.WalkDir(filepath.Join(dir, "terraform"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if info, err := d.Info(); err == nil {
+			size += info.Size()
+		}
+		if !strings.HasSuffix(p, ".tf") {
+			return nil
+		}
+		files++
+		b, err := os.ReadFile(p)
+		if err != nil {
+			l.add(p, "%v", err)
+			return nil
+		}
+		if tfProvider.Match(b) {
+			l.add(p, `do not declare provider "aws": Crucible adds it with the lab's region and tags`)
+		}
+		if tfBackend.Match(b) {
+			l.add(p, "do not declare a backend: Crucible stores state per lab")
+		}
+		for _, m := range tfSource.FindAllSubmatch(b, -1) {
+			if s := string(m[1]); !strings.HasPrefix(s, "./") && !providerSource.MatchString(s) {
+				l.add(p, "module source %q must be a local path (./…)", s)
+			}
+		}
+		return nil
+	})
+	if files == 0 {
+		l.add(lf, "runtime: aws needs a terraform/ directory with at least one .tf file")
+	}
+	if size > maxModuleBytes {
+		l.add(lf, "terraform/ is %d KiB; keep it under %d KiB", size>>10, maxModuleBytes>>10)
+	}
 }

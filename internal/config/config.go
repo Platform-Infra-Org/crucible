@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,12 +27,13 @@ type Platform struct {
 }
 
 type Settings struct {
-	DefaultTheme    string               `yaml:"default_theme"`
-	CostTiers       *CostTiers           `yaml:"cost_tiers"`
-	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
-	Schedules       map[string]*Schedule `yaml:"schedules"`
-	Ranks           RankThresholds       `yaml:"ranks"` // forge rank thresholds; missing keys take DefaultRanks
-	Quotes          []string             `yaml:"-"`
+	DefaultTheme      string               `yaml:"default_theme"`
+	CostTiers         *CostTiers           `yaml:"cost_tiers"`
+	ClusterUSDPerHour *float64             `yaml:"cluster_usd_per_hour"` // rate card for cluster labs (spec §9.1); 0 = free on the node; unset = cluster labs unavailable
+	EscalationHours   float64              `yaml:"escalation_hours"`     // default 4, counted inside the program's schedule
+	Schedules         map[string]*Schedule `yaml:"schedules"`
+	Ranks             RankThresholds       `yaml:"ranks"` // forge rank thresholds; missing keys take DefaultRanks
+	Quotes            []string             `yaml:"-"`
 }
 
 // CostTiers routes lab requests by estimate (spec §9.1). There are no built-in defaults: platform.yaml must set them.
@@ -207,6 +209,9 @@ func Load(dir string) (*Platform, error) {
 		errs = append(errs, errors.New("platform.yaml: cost_tiers is required (auto_approve_usd, tier1_usd, tier2_usd); Crucible has no built-in defaults"))
 	} else if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
 		errs = append(errs, errors.New("platform.yaml: cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0"))
+	}
+	if r := p.Settings.ClusterUSDPerHour; r != nil && (*r < 0 || math.IsNaN(*r) || math.IsInf(*r, 0)) {
+		errs = append(errs, errors.New("platform.yaml: cluster_usd_per_hour must be a number >= 0"))
 	}
 	if p.Settings.EscalationHours == 0 {
 		p.Settings.EscalationHours = 4

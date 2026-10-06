@@ -187,3 +187,22 @@ func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
 		t.Fatalf("named schedule still works: %v", err)
 	}
 }
+
+func TestClusterRateFromConfig(t *testing.T) {
+	tiers := "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n"
+	load := func(extra string) (*Platform, error) {
+		return Load(platformDir(t, map[string]string{"platform.yaml": tiers + extra}))
+	}
+	if p, err := load(""); err != nil || p.Settings.ClusterUSDPerHour != nil {
+		t.Fatalf("unset stays nil (cluster labs unavailable): %v", err)
+	}
+	if _, err := load("cluster_usd_per_hour: -1\n"); err == nil || !strings.Contains(err.Error(), "cluster_usd_per_hour") {
+		t.Fatalf("negative: %v", err)
+	}
+	if p, err := load("cluster_usd_per_hour: 0.5\n"); err != nil || p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0.5 {
+		t.Fatalf("0.5: %v", err)
+	}
+	if p, err := load("cluster_usd_per_hour: 0\n"); err != nil || p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0 {
+		t.Fatalf("0: %v", err)
+	}
+}

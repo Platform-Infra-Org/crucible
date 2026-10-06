@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"crucible/internal/apperr"
+	"crucible/internal/rbac"
 	"io"
 	"slices"
 	"strings"
@@ -365,5 +366,34 @@ func TestLabPodStoppedByTheIMDSGuardSaysWhy(t *testing.T) {
 	err := testRunner(cs, &fakeExec{}).waitReady(context.Background(), "lab-x")
 	if err == nil || !strings.Contains(err.Error(), "imds-guard: IMDS is reachable") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestClusterLabAboveAutoApproveNeedsApproval(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	st := f.s.Learn.State()
+	st.Platform.Settings.ClusterUSDPerHour = nil
+	f.s.Runners["cluster"] = f.run
+	f.s.Estimators["cluster"] = PlatformRate{State: f.s.Learn.State}
+	if m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || !strings.Contains(m.Blocked, "cluster_usd_per_hour") {
+		t.Fatalf("no cluster rate: the lab must be blocked with a message, not free: %+v %v", m, err)
+	}
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("no cluster rate: a request must fail closed: %v", err)
+	}
+	rate := 0.0
+	st.Platform.Settings.ClusterUSDPerHour = &rate
+	if m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || m.NeedsApproval {
+		t.Fatalf("rate 0 auto-approves: %+v %v", m, err)
+	}
+	rate = 1
+	m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat")
+	if err != nil || !m.NeedsApproval || m.EstimateUSD <= 0 {
+		t.Fatalf("a priced cluster lab routes to approval: %+v %v", m, err)
+	}
+	if v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || v.State != PendingApproval || v.Tier != rbac.TierApprover {
+		t.Fatalf("request %+v %v", v, err)
 	}
 }

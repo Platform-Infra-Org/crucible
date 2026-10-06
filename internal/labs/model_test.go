@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/content"
+	"crucible/internal/gitsync"
 	"crucible/internal/yamlx"
 )
 
@@ -106,5 +110,31 @@ func TestParseRates(t *testing.T) {
 		if _, err := ParseRates(bad); err == nil {
 			t.Errorf("%q must be rejected", bad)
 		}
+	}
+}
+
+func TestPlatformRatePricesClusterLabs(t *testing.T) {
+	ctx := context.Background()
+	lab := &content.Lab{ID: "cluster-heat"}
+	st := &gitsync.State{Platform: &config.Platform{}}
+	r := PlatformRate{State: func() *gitsync.State { return st }, Override: FixedRates{"dev-lab": 9}}
+	if _, err := r.HourlyUSD(ctx, lab); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("no rate configured must be Unavailable, never $0: %v", err)
+	}
+	if _, err := (PlatformRate{}).HourlyUSD(ctx, lab); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("nil state: %v", err)
+	}
+	half := 0.5
+	st.Platform.Settings.ClusterUSDPerHour = &half
+	if v, err := r.HourlyUSD(ctx, lab); err != nil || v != 0.5 {
+		t.Fatalf("rate %v %v", v, err)
+	}
+	if v, _ := r.HourlyUSD(ctx, &content.Lab{ID: "dev-lab"}); v != 9 {
+		t.Fatalf("dev override wins: %v", v)
+	}
+	zero := 0.0
+	st.Platform.Settings.ClusterUSDPerHour = &zero
+	if v, err := r.HourlyUSD(ctx, lab); err != nil || v != 0 {
+		t.Fatalf("0 means free on the node: %v %v", v, err)
 	}
 }

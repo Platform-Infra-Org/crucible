@@ -163,7 +163,7 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("cluster labs: %w", err)
 		}
-		runners["cluster"], estimators["cluster"] = cr, rates // M4 ruling 6: priced like local labs until M6
+		runners["cluster"], estimators["cluster"] = cr, labs.PlatformRate{State: syncer.Current, Override: rates}
 		slog.Info("cluster labs enabled", "api", cfg.Host, "privileged", privileged)
 	}
 	var cloud awscloud.Cloud

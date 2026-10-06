@@ -2,6 +2,7 @@ package learn
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,7 +24,14 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 	r.Post("/api/me/forge/seen", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID))
+		var in struct {
+			Level int `json:"level"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in) != nil {
+			httpx.Error(w, apperr.Wrap(apperr.Invalid, "level required"))
+			return
+		}
+		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID, in.Level))
 	})
 	r.Get("/api/programs", func(w http.ResponseWriter, r *http.Request) {
 		cards, err := s.Programs(r.Context(), auth.UserFrom(r.Context()))

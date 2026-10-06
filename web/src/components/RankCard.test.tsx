@@ -24,7 +24,7 @@ describe('RankCard', () => {
     expect(html).toContain('The highest rank')
   })
   test('a rank-up is a status banner, not a dialog', () => {
-    const html = renderToStaticMarkup(<RankUp rank="Blade" onDone={() => {}} />)
+    const html = renderToStaticMarkup(<RankUp rank="Blade" level={3} onDone={() => {}} />)
     expect(html).toContain('role="status"')
     expect(html).toContain('aria-live="polite"')
     expect(html).not.toContain('role="dialog"')
@@ -32,7 +32,7 @@ describe('RankCard', () => {
     expect(html).toContain('class="hammer"')
   })
   test('calm motion drops the hammer and glow but keeps the message', () => {
-    const html = renderToStaticMarkup(<CalmContext value={true}><RankUp rank="Blade" onDone={() => {}} /></CalmContext>)
+    const html = renderToStaticMarkup(<CalmContext value={true}><RankUp rank="Blade" level={3} onDone={() => {}} /></CalmContext>)
     expect(html).not.toContain('hammer')
     expect(html).not.toContain('strike-glow')
     expect(html).toContain('You reached Blade')

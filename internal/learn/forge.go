@@ -47,6 +47,12 @@ func RankFor(pct float64, ladder []RankStep) int {
 	return lvl
 }
 
+// forgePercent is done/total as a percent, floored to one decimal. The epsilon keeps values that sit exactly on a
+// threshold (0.22 of 1.1 is 19.999...) from flooring to the rank below.
+func forgePercent(done, total float64) float64 {
+	return math.Floor(done*1000/total+1e-6) / 10
+}
+
 type Badge struct {
 	Training string    `json:"training"`
 	Title    string    `json:"title"`
@@ -95,18 +101,26 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	}
 	v := &ForgeView{Ladder: Ladder(st.Platform.Settings.Ranks), Badges: []Badge{}}
 	if total > 0 {
-		v.Percent = math.Floor(done*1000/total) / 10
+		v.Percent = forgePercent(done, total)
 	}
-	var raised int
-	err = s.DB.QueryRow(ctx, `INSERT INTO ranks AS r (user_id, level, seen) VALUES ($1, $2, $2 = 0)
-		ON CONFLICT (user_id) DO UPDATE SET level = EXCLUDED.level, earned_at = now(), seen = false WHERE r.level < EXCLUDED.level
-		RETURNING level`, userID, RankFor(v.Percent, v.Ladder)).Scan(&raised)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows): // not above the stored rank
-	case err != nil:
+	lvl := RankFor(v.Percent, v.Ladder)
+	// The first computation for a user only records where they already are (seen, no notification), so deploying this
+	// does not announce a rank to everyone with existing progress.
+	tag, err := s.DB.Exec(ctx, `INSERT INTO ranks (user_id, level, seen) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`, userID, lvl)
+	if err != nil {
 		return nil, err
-	case raised > 0:
-		s.rankUp(ctx, st.Platform, email, name, v.Ladder[raised].Name)
+	}
+	if tag.RowsAffected() == 0 {
+		var raised int
+		err = s.DB.QueryRow(ctx, `UPDATE ranks SET level = $2, earned_at = now(), seen = false WHERE user_id = $1 AND level < $2 RETURNING level`,
+			userID, lvl).Scan(&raised)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows): // not above the stored rank
+		case err != nil:
+			return nil, err
+		default:
+			s.rankUp(ctx, st.Platform, email, name, v.Ladder[raised].Name)
+		}
 	}
 	if err := s.DB.QueryRow(ctx, `SELECT level, NOT seen FROM ranks WHERE user_id = $1`, userID).Scan(&v.Level, &v.RankUp); err != nil {
 		return nil, err
@@ -152,7 +166,8 @@ func (s *Service) rankUp(ctx context.Context, p *config.Platform, email, name, r
 	}
 }
 
-func (s *Service) SeenRankUp(ctx context.Context, userID int64) error {
-	_, err := s.DB.Exec(ctx, `UPDATE ranks SET seen = true WHERE user_id = $1`, userID)
+// SeenRankUp clears the banner only for the level the client was shown; a rank raised since stays unseen.
+func (s *Service) SeenRankUp(ctx context.Context, userID int64, level int) error {
+	_, err := s.DB.Exec(ctx, `UPDATE ranks SET seen = true WHERE user_id = $1 AND level = $2`, userID, level)
 	return err
 }

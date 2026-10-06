@@ -20,7 +20,7 @@ export function Hearth() {
     <section className="page">
       <Embers count={12} />
       <h1>Hearth</h1>
-      {forge.data?.rank_up && !dismissed && <RankUp rank={forge.data.rank} onDone={() => setDismissed(true)} />}
+      {forge.data?.rank_up && !dismissed && <RankUp rank={forge.data.rank} level={forge.data.level} onDone={() => setDismissed(true)} />}
       <p className="lede">
         Welcome back, {first}. <em>“{quote}”</em>
       </p>

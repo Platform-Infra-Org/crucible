@@ -23,11 +23,11 @@ export function RankCard({ forge }: { forge: Forge }) {
 }
 
 // RankUp celebrates a new rank once: hammer strike + glow, or a static line under calm motion. It never blocks the page or takes focus.
-export function RankUp({ rank, onDone }: { rank: string; onDone: () => void }) {
+export function RankUp({ rank, level, onDone }: { rank: string; level: number; onDone: () => void }) {
   const calm = useCalm()
   useEffect(() => {
-    api('/api/me/forge/seen', { method: 'POST' }).catch(() => {})
-  }, [])
+    api('/api/me/forge/seen', { method: 'POST', json: { level } }).catch(() => {})
+  }, [level])
   return (
     <section className="rank-up" role="status" aria-live="polite">
       {!calm && (

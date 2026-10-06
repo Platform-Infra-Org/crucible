@@ -22,6 +22,7 @@ import (
 
 const usage = `usage:
   crucible lint <content-or-platform-dir>
+  crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION --domain HOSTNAME
   crucible aws labs-init --region REGION [--crucible-account ID]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
@@ -44,6 +45,8 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(lint(os.Args[2], os.Stdout))
+	case "preview":
+		os.Exit(preview(os.Args[2:]))
 	case "aws":
 		os.Exit(awsCmd(os.Args[2:]))
 	default:

@@ -31,3 +31,18 @@ uses a fixed development value; the local compose stack sets a dev value.
 
 Content lives in git: see `examples/forge-101` and the spec in `docs/superpowers/specs/`.
 Validate a content repo with `go run ./cmd/crucible lint <dir>`.
+
+## Previewing content (`crucible preview`)
+
+Needs Docker and a locally built image:
+
+```bash
+docker build -t crucible:dev .                   # once, from this repo
+go run ./cmd/crucible preview path/to/your-training --free
+```
+
+It prints a one-time sign-in link for http://localhost:8090 (bound to 127.0.0.1 only). Readings, quizzes and laptop
+(`local`) labs run against your working tree, including setup scripts for break-fix tasks; the lab agent runs inside
+the CLI. Only files git tracks or has staged are previewed (untracked files such as `.env` never are): `git add` a new
+file to see it. Save a file and the preview picks it up within seconds; lint problems print in the terminal. `--free`
+opens every module. Ctrl-C removes the containers, network and volumes.

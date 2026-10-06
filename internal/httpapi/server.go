@@ -45,6 +45,8 @@ type Deps struct {
 	PublicURL  string
 	HookSecret string
 	WebDir     string
+	// PreviewToken is set only by crucible preview (see auth.PreviewAllowed): /auth/preview replaces the OIDC sign-in.
+	PreviewToken string
 }
 
 func NewRouter(d Deps) chi.Router {
@@ -56,6 +58,13 @@ func NewRouter(d Deps) chi.Router {
 		r.Get("/auth/login", d.OIDC.Login)
 		r.Get("/auth/callback", d.OIDC.Callback)
 		r.Post("/auth/logout", d.OIDC.Logout)
+	}
+	if d.PreviewToken != "" {
+		r.Get("/auth/preview", d.Auth.PreviewLogin(d.PreviewToken, false))
+		r.Get("/auth/login", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte("Crucible preview: open the sign-in link that `crucible preview` printed in your terminal.\n"))
+		})
 	}
 	r.Get("/api/meta", func(w http.ResponseWriter, _ *http.Request) {
 		meta := map[string]any{"quotes": []string{}, "default_theme": "forge"}

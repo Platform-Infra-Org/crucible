@@ -32,6 +32,7 @@ need 'name: CRUCIBLE_CLUSTER_LABS'
 need 'requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: 500m, memory: 1Gi }'   # postgres: Guaranteed QoS
 need 'requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: 250m, memory: 512Mi }'  # api: Guaranteed QoS
 base="--set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso"
+if grep -q CRUCIBLE_PREVIEW <<<"$out"; then echo "preview mode must never be rendered by the chart"; exit 1; fi
 if grep -q CRUCIBLE_CLUSTER_PRIVILEGED <<<"$out"; then echo "privileged lab pods must be opt-in"; exit 1; fi
 rbac=$(helm template t "$chart" $base --show-only templates/rbac.yaml)
 if grep -qE 'secrets|"\*"|- \*$|\[\*\]' <<<"$rbac"; then echo "crucible-labs must not touch secrets or use wildcards"; exit 1; fi

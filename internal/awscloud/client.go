@@ -219,8 +219,26 @@ func terminate(ctx context.Context, e *ec2.Client, id string) error {
 var notYet = map[string]bool{"DependencyViolation": true, "VolumeInUse": true, "InvalidVolume.InUse": true,
 	"IncorrectState": true, "IncorrectInstanceState": true, "BucketNotEmpty": true}
 
-// deleteBucket removes every object version and delete marker, then the bucket.
+// deleteBucket aborts unfinished multipart uploads, removes every object version and delete marker, then the bucket.
+// A per-object delete error is returned as that object's API error (DeleteObjects answers 200 with Errors).
 func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {
+	up := &s3.ListMultipartUploadsInput{Bucket: aws.String(bucket)}
+	for {
+		out, err := cl.ListMultipartUploads(ctx, up)
+		if err != nil {
+			return err
+		}
+		for _, u := range out.Uploads {
+			if _, err := cl.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{Bucket: aws.String(bucket), Key: u.Key,
+				UploadId: u.UploadId}); err != nil {
+				return err
+			}
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		up.KeyMarker, up.UploadIdMarker = out.NextKeyMarker, out.NextUploadIdMarker
+	}
 	in := &s3.ListObjectVersionsInput{Bucket: aws.String(bucket)}
 	for {
 		out, err := cl.ListObjectVersions(ctx, in)
@@ -235,9 +253,15 @@ func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {
 			ids = append(ids, s3types.ObjectIdentifier{Key: m.Key, VersionId: m.VersionId})
 		}
 		if len(ids) > 0 {
-			if _, err := cl.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(bucket),
-				Delete: &s3types.Delete{Objects: ids, Quiet: aws.Bool(true)}}); err != nil {
+			del, err := cl.DeleteObjects(ctx, &s3.DeleteObjectsInput{Bucket: aws.String(bucket),
+				Delete: &s3types.Delete{Objects: ids, Quiet: aws.Bool(true)}})
+			if err != nil {
 				return err
+			}
+			if len(del.Errors) > 0 {
+				e := del.Errors[0]
+				return fmt.Errorf("deleting %s (%d object(s) failed): %w", aws.ToString(e.Key), len(del.Errors),
+					&smithy.GenericAPIError{Code: aws.ToString(e.Code), Message: aws.ToString(e.Message)})
 			}
 		}
 		if !aws.ToBool(out.IsTruncated) {

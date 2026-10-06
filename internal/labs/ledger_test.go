@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -119,5 +120,45 @@ func TestRefreshQueuesUniqueJobsRateLimitedAndAudited(t *testing.T) {
 	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'finops.refresh' AND actor = 'admin@crucible.local'`).Scan(&audits)
 	if n != 2 || audits != 2 {
 		t.Fatalf("jobs stay unique while queued (got %d), both refreshes audited (got %d)", n, audits)
+	}
+}
+
+// AWS labs cost money without ever being ready (a long failed apply), and sit in 'destroying' with live resources
+// for up to an hour: the Ledger shows both.
+func TestLedgerShowsFailedAWSLabsWithActualsAndDestroyingOnes(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{}
+	now := f.clk.Now()
+	add := func(id string, st State) {
+		in := &Instance{ID: id, UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "02-first-lab", SHA: "abc",
+			Runtime: "aws", State: st, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute,
+			Tier: "approver", HourlyUSD: 1, EstimateUSD: 1}
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("bbbbbbbbbbb1", Failed)     // apply failed after 50 minutes; Cost Explorer reported it
+	add("bbbbbbbbbbb2", Failed)     // failed, nothing reported: nothing to show
+	add("bbbbbbbbbbb3", Destroying) // failed apply, terraform destroy running
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO cost_actuals (lab_id, day, usd, updated_at) VALUES ('bbbbbbbbbbb1', $1::timestamptz::date, 0.3, $1::timestamptz)`, now); err != nil {
+		t.Fatal(err)
+	}
+	l, err := f.s.Ledger(ctx, f.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := func(ls []LedgerLab) (out []string) {
+		for _, x := range ls {
+			out = append(out, x.ID)
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got := ids(l.Labs); !slices.Equal(got, []string{"bbbbbbbbbbb1", "bbbbbbbbbbb3"}) {
+		t.Fatalf("labs: %v", got)
+	}
+	if got := ids(l.Running); !slices.Equal(got, []string{"bbbbbbbbbbb3"}) {
+		t.Fatalf("a destroying aws lab still has live resources: %v", got)
 	}
 }

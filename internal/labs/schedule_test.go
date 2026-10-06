@@ -95,3 +95,20 @@ func TestEscalateAtFallsBackWhenScheduleIsDegenerate(t *testing.T) {
 		t.Fatalf("escalate_at %v, want %v", v.EscalateAt, want)
 	}
 }
+
+func TestScheduleInfoNamesAnInlineSchedule(t *testing.T) {
+	f := setup(t, true)
+	pr := f.plat.Teams["forge"].Programs["forge-101"]
+	now := f.clk.Now()
+	if info := scheduleInfo(f.plat, "forge", "forge-101", now); info.Name != "" {
+		t.Fatalf("any time: no name: %+v", info)
+	}
+	onSchedule(f)
+	if info := scheduleInfo(f.plat, "forge", "forge-101", now); info.Name != "business-hours" {
+		t.Fatalf("named: %+v", info)
+	}
+	pr.Schedule, pr.Inline = "", f.plat.Settings.Schedules["business-hours"]
+	if info := scheduleInfo(f.plat, "forge", "forge-101", now); info.Name != "inline" || info.Text == "" {
+		t.Fatalf("inline: %+v", info)
+	}
+}

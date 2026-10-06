@@ -11,7 +11,10 @@ const (
 // LabTF is added to every aws lab module. It declares the S3 backend (configured per lab at init), the AWS provider
 // with the lab's region and the crucible:* default tags that IAM, the tag sweep, the reaper and Cost Explorer rely
 // on, and the variables a module may use (var.crucible_lab_id names lab buckets: crucible-lab-<id>…). Lab modules
-// must not declare a provider "aws" or a backend themselves (lint).
+// must not declare a provider "aws" or a backend themselves (lint). The provider version is pinned here, in the
+// provider block, so apply and destroy run the same build: a required_providers block in this file would clash with a
+// module's own (terraform allows one per module); terraform intersects this constraint with the module's. The pin
+// matches deploy/aws's lock files; bump them together. Terraform warns that the attribute is deprecated.
 const LabTF = `# Added by Crucible. Lab modules must not declare provider "aws" or a backend.
 terraform {
   backend "s3" {}
@@ -23,7 +26,8 @@ variable "crucible_training" { type = string }
 variable "crucible_region" { type = string }
 
 provider "aws" {
-  region = var.crucible_region
+  version = "6.67.0"
+  region  = var.crucible_region
   default_tags {
     tags = {
       "crucible:lab-id"   = var.crucible_lab_id

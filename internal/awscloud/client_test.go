@@ -134,6 +134,8 @@ func TestDeleteKnowsItsTypes(t *testing.T) {
 			return 200, "text/xml", ec2XML("TerminateInstances", `<instancesSet/>`)
 		case c.form.Get("Action") == "DeleteVolume":
 			return 400, "text/xml", `<Response><Errors><Error><Code>InvalidVolume.NotFound</Code><Message>gone</Message></Error></Errors><RequestID>r</RequestID></Response>`
+		case c.method == "GET" && strings.Contains(c.query, "uploads"):
+			return 200, "application/xml", `<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>crucible-lab-aaaaaaaaaaaa</Bucket><IsTruncated>false</IsTruncated></ListMultipartUploadsResult>`
 		case c.method == "GET" && strings.Contains(c.query, "versions"):
 			return 200, "application/xml", `<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>crucible-lab-aaaaaaaaaaaa</Name><IsTruncated>false</IsTruncated><Version><Key>forged.txt</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest></Version></ListVersionsResult>`
 		case c.method == "POST" && strings.Contains(c.query, "delete"):
@@ -161,7 +163,7 @@ func TestDeleteKnowsItsTypes(t *testing.T) {
 	for _, c := range calls()[n:] {
 		methods = append(methods, c.method)
 	}
-	if strings.Join(methods, " ") != "GET POST DELETE" {
+	if strings.Join(methods, " ") != "GET GET POST DELETE" {
 		t.Fatalf("a bucket is emptied (every version) before it is deleted: %v", methods)
 	}
 }
@@ -263,5 +265,37 @@ func TestLabWritesSaysWhenItStoppedEarly(t *testing.T) {
 	}
 	if !errors.Is(err, ErrTruncated) || len(got) != 20 || lookups != 20 {
 		t.Fatalf("20 pages kept, then ErrTruncated: %d events, %d lookups, %v", len(got), lookups, err)
+	}
+}
+
+// A bucket is emptied completely before DeleteBucket: unfinished multipart uploads are aborted, and a per-object
+// delete error (DeleteObjects answers 200 with Errors) is the error, not a later misleading BucketNotEmpty.
+func TestDeleteBucketAbortsUploadsAndSurfacesObjectErrors(t *testing.T) {
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		switch {
+		case c.method == "GET" && strings.Contains(c.query, "uploads"):
+			return 200, "application/xml", `<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>crucible-lab-aaaaaaaaaaaa</Bucket><IsTruncated>false</IsTruncated>
+				<Upload><Key>big.bin</Key><UploadId>up-1</UploadId></Upload></ListMultipartUploadsResult>`
+		case c.method == "DELETE" && strings.Contains(c.query, "uploadId=up-1"):
+			return 204, "application/xml", ""
+		case c.method == "GET" && strings.Contains(c.query, "versions"):
+			return 200, "application/xml", `<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>crucible-lab-aaaaaaaaaaaa</Name><IsTruncated>false</IsTruncated><Version><Key>held.txt</Key><VersionId>v1</VersionId><IsLatest>true</IsLatest></Version></ListVersionsResult>`
+		case c.method == "POST" && strings.Contains(c.query, "delete"):
+			return 200, "application/xml", `<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Error><Key>held.txt</Key><VersionId>v1</VersionId><Code>AccessDenied</Code><Message>Access Denied</Message></Error></DeleteResult>`
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	creds := Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}
+	ok, err := cl.Delete(context.Background(), "eu-west-1", creds, "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa")
+	if ok || err == nil || !strings.Contains(err.Error(), "held.txt") || !strings.Contains(err.Error(), "AccessDenied") || errors.Is(err, ErrNotYet) {
+		t.Fatalf("the object's own error: %v %v", ok, err)
+	}
+	aborted, bucketDeleted := false, false
+	for _, c := range calls() {
+		aborted = aborted || c.method == "DELETE" && strings.Contains(c.query, "uploadId=up-1")
+		bucketDeleted = bucketDeleted || c.method == "DELETE" && c.query == ""
+	}
+	if !aborted || bucketDeleted {
+		t.Fatalf("uploads aborted (%v), bucket not deleted after a failed object (%v)", aborted, bucketDeleted)
 	}
 }

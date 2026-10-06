@@ -151,7 +151,8 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 		SELECT labs.id, labs.team, labs.training, labs.module, coalesce(u.email, ''), labs.runtime, labs.state,
 			labs.hourly_usd, labs.estimate_usd, labs.est_spent, labs.actual, labs.settled, labs.created_at, labs.ends_at
 		FROM labs LEFT JOIN users u ON u.id = labs.user_id
-		WHERE labs.ready_at IS NOT NULL OR labs.state = 'provisioning'`, now, teams, month)
+		WHERE labs.ready_at IS NOT NULL OR labs.state = 'provisioning' OR labs.actual IS NOT NULL
+			OR (labs.runtime = 'aws' AND labs.state = 'destroying')`, now, teams, month)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +178,7 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 	}
 	spenders := map[[2]string]float64{}
 	for _, x := range all {
-		if x.State == Provisioning || x.State == Ready {
+		if x.State == Provisioning || x.State == Ready || x.State == Destroying && x.Runtime == "aws" { // aws: live resources until terraform destroy ends
 			l.Running = append(l.Running, x)
 		}
 		if i, ok := day[x.CreatedAt.UTC().Format(time.DateOnly)]; ok {

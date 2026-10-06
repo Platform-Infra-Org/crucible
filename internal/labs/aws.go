@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	DefaultWorkspaceImage = "amazon/aws-cli:2.27.0" // bump deliberately: dind pulls it once per lab
+	DefaultWorkspaceImage = "amazon/aws-cli:2.27.0@sha256:e3e329e1d2894b7b4bbb0aacacd0a155262159b2e7a3b4275eb1f24046d3e06c" // multi-arch index; bump deliberately: dind pulls it once per lab
 	workspaceCompose      = "crucible-workspace.yaml"
 	refreshBefore         = 15 * time.Minute // the sweep refreshes one-hour credentials at about 45 minutes
 	tfCredsMargin         = 5 * time.Minute  // a terraform pod starts only with its deadline plus this left
@@ -298,6 +298,15 @@ func (a *AWSRunner) runTF(ctx context.Context, inst *Instance, name, action stri
 	return nil
 }
 
+// moduleExists asks the API server whether the module ConfigMap exists with a server-side dry-run create (RBAC grants
+// configmaps create only). Nothing deletes it, and every terraform pod mounts it, so without it no apply ever ran.
+// Any other answer (an error, no namespace) counts as "maybe": runTF decides as before.
+func (a *AWSRunner) moduleExists(ctx context.Context, id string) bool {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: tfConfigMap, Namespace: labNamespace(id), Labels: map[string]string{labLabel: id}}}
+	_, err := a.Cluster.Client.CoreV1().ConfigMaps(cm.Namespace).Create(ctx, cm, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+	return err != nil
+}
+
 func stuckReason(p *corev1.Pod) bool { r, _ := stuckOneShot(p); return r != "" }
 
 // Destroy stops a running apply (cancelling an in-process ProvisionLab, then deleting the apply pod), runs terraform
@@ -324,6 +333,8 @@ func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 	var errs []error
 	if err := a.Cluster.deletePod(ctx, labNamespace(inst.ID), tfApplyPod); err != nil {
 		errs = append(errs, fmt.Errorf("stopping terraform apply: %w", err))
+	} else if !a.moduleExists(ctx, inst.ID) {
+		// provisioning failed before the module existed: no apply ever ran, so there is nothing for terraform
 	} else if err := a.runTF(ctx, inst, tfDestroyPod, "destroy"); err != nil && !gone(err) {
 		errs = append(errs, err)
 	} else if err == nil && a.DryRun != nil {

@@ -44,6 +44,11 @@ func kubelet(cs *fake.Clientset, phase corev1.PodPhase, msg string) {
 	})
 }
 
+// tfModule is the module ConfigMap a provision that got that far created: destroy runs terraform only with it.
+func tfModule() *corev1.ConfigMap {
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: tfConfigMap, Namespace: labNamespace(testID)}}
+}
+
 func cloudHeat(t *testing.T) *content.Lab {
 	t.Helper()
 	tr, probs := content.Load("../../examples/forge-401")
@@ -116,7 +121,7 @@ func TestAWSProvisionBuildsTheWorkspaceThenApplies(t *testing.T) {
 	}
 	ws := untar(t, fe.calls[0].stdin) // the first exec unpacks the workspace bundle
 	compose := ws[workspaceCompose]
-	if !strings.Contains(compose, `image: "amazon/aws-cli:2.27.0"`) || !strings.Contains(compose, `AWS_REGION: "eu-west-1"`) ||
+	if !strings.Contains(compose, `image: "amazon/aws-cli:2.27.0@sha256:e3e329e1d2894b7b4bbb0aacacd0a155262159b2e7a3b4275eb1f24046d3e06c"`) || !strings.Contains(compose, `AWS_REGION: "eu-west-1"`) ||
 		!strings.Contains(compose, `"/aws:/aws:ro"`) {
 		t.Fatalf("workspace compose:\n%s", compose)
 	}
@@ -148,13 +153,13 @@ func TestAWSDestroyStopsTheApplyFirst(t *testing.T) {
 	ctx := context.Background()
 	running := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tfApplyPod, Namespace: labNamespace(testID)},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning}}
-	cs := fake.NewClientset(labNS(testID, false), running)
+	cs := fake.NewClientset(labNS(testID, false), running, tfModule())
 	kubelet(cs, corev1.PodSucceeded, "Destroy complete!")
 	a, _, _ := testAWS(cs)
 	if err := a.Destroy(ctx, &Instance{ID: testID}); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"delete pods", "create secrets", "create pods", "delete namespaces"}
+	want := []string{"delete pods", "create configmaps", "create secrets", "create pods", "delete namespaces"}
 	if got := steps(cs, "create", "update", "delete"); !slices.Equal(got, want) {
 		t.Fatalf("stop apply, fresh credentials, terraform destroy, then the namespace: %v", got)
 	}
@@ -168,13 +173,13 @@ func TestAWSDestroyRetriesAFailedDestroyPodOnce(t *testing.T) {
 	ctx := context.Background()
 	failed := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: tfDestroyPod, Namespace: labNamespace(testID)},
 		Status: corev1.PodStatus{Phase: corev1.PodFailed}}
-	cs := fake.NewClientset(labNS(testID, false), failed)
+	cs := fake.NewClientset(labNS(testID, false), failed, tfModule())
 	kubelet(cs, corev1.PodSucceeded, "Destroy complete!")
 	a, _, _ := testAWS(cs)
 	if err := a.Destroy(ctx, &Instance{ID: testID}); err != nil {
 		t.Fatalf("an earlier failed destroy is run again: %v", err)
 	}
-	if got := steps(cs, "create"); !slices.Equal(got, []string{"create secrets", "create pods", "create pods"}) {
+	if got := steps(cs, "create"); !slices.Equal(got, []string{"create configmaps", "create secrets", "create pods", "create pods"}) {
 		t.Fatalf("create (exists), delete the failed one, create again: %v", got)
 	}
 }
@@ -272,7 +277,7 @@ func TestAWSUnschedulableTerraformPodFails(t *testing.T) {
 func TestAWSTerraformNeverStartsOnShortCredentials(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
-	cs := fake.NewClientset(labNS(testID, false))
+	cs := fake.NewClientset(labNS(testID, false), tfModule())
 	kubelet(cs, corev1.PodSucceeded, "Destroy complete!")
 	a, cloud, _ := testAWS(cs)
 	cloud.Now, a.Now = func() time.Time { return now }, func() time.Time { return now }
@@ -478,5 +483,24 @@ func TestAWSTerraformLogTailNeverCarriesCredentials(t *testing.T) {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("%q leaked: %v", secret, err)
 		}
+	}
+}
+
+// A provision that failed before the module ConfigMap existed applied nothing: destroy runs no terraform (its pod
+// could never mount the module and would wait minutes for nothing), and the namespace still goes.
+func TestAWSDestroyWithoutModuleRunsNoTerraform(t *testing.T) {
+	cs := fake.NewClientset(labNS(testID, false))
+	cs.PrependReactor("create", "configmaps", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if !slices.Equal(a.(k8stesting.CreateActionImpl).GetCreateOptions().DryRun, []string{metav1.DryRunAll}) {
+			t.Error("destroy only asks whether the module exists")
+		}
+		return true, nil, nil // the server-side dry run would have created it: it does not exist
+	})
+	a, _, _ := testAWS(cs)
+	if err := a.Destroy(context.Background(), &Instance{ID: testID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := steps(cs, "create", "delete"); slices.Contains(got, "create pods") || !slices.Contains(got, "delete namespaces") {
+		t.Fatalf("no terraform without a module: %v", got)
 	}
 }

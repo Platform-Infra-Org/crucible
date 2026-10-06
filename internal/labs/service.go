@@ -725,14 +725,18 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		s.failProvision(ctx, inst, cleanText(s.runnerErr(err).Error()), cleanText(err.Error()))
 		return
 	}
+	// Apply and setup may have used up ctx: the rest runs on a fresh one, or a lab with live resources would sit in
+	// 'provisioning' until the hung sweep destroys it.
+	wctx, wcancel := finalCtx(ctx)
+	defer wcancel()
 	now := s.Now()
-	bl, berr := s.budgetLimit(ctx, inst, now)
+	bl, berr := s.budgetLimit(wctx, inst, now)
 	if berr != nil { // no budget headroom (or it can't be read): don't hand out a lab that would expire at once
 		s.failProvision(ctx, inst, cleanText(berr.Error()), cleanText(berr.Error()))
 		return
 	}
 	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now), bl)
-	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
+	tag, err := s.DB.Exec(wctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
 		if inst.Runtime == "aws" {
@@ -744,7 +748,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		_ = s.destroyRuntime(dctx, inst)
 		return
 	}
-	s.event(ctx, inst.ID, "ready", "")
+	s.event(wctx, inst.ID, "ready", "")
 }
 
 // failProvision cleans up after a failed provisioning and ends the row 'failed'. An aws lab shows its error at once
@@ -1370,7 +1374,10 @@ func (s *Service) retryDestroy(ctx context.Context, inst *Instance) {
 	}
 	wctx, wcancel := finalCtx(ctx)
 	defer wcancel()
-	s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
+	// a failed provision (failProvision's destroy, cut short by a restart) stays 'failed' with its own error
+	s.endRow(wctx, inst.ID, `UPDATE lab_instances SET destroyed_at = $2,
+		state = CASE WHEN end_reason = 'failed' THEN 'failed' ELSE 'destroyed' END,
+		error = CASE WHEN end_reason = 'failed' THEN concat_ws('; ', nullif(error, ''), nullif($3, '')) ELSE $3 END
 		WHERE id = $1 AND state = 'destroying'`, s.Now(), note)
 }
 

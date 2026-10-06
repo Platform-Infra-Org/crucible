@@ -367,3 +367,57 @@ func TestTagSweepRefusesAnInvalidLabID(t *testing.T) {
 	f.s.Cloud = listCloud{t: t}
 	f.s.sweepLab(context.Background(), "")
 }
+
+// Apply and setup may use up the provision ctx: the budget check, the ready write and its event still land.
+func TestProvisionReadyWriteSurvivesASpentContext(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	v := f.start(t)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'provisioning', ready_at = NULL WHERE id = $1`, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	spent, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	f.run.provision = func() { <-spent.Done() } // the runner finished just as the provision ctx ran out
+	f.s.provision(spent, &Instance{ID: v.ID, Runtime: "local", Team: "forge", Training: "forge-101", TTL: time.Hour, HourlyUSD: 0.04},
+		&content.Lab{Dir: t.TempDir(), Runtime: "local"})
+	var st State
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, v.ID).Scan(&st)
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_events WHERE lab_id = $1 AND kind = 'ready'`, v.ID).Scan(&n)
+	if st != Ready || n != 2 {
+		t.Fatalf("state %s, %d ready events", st, n)
+	}
+}
+
+// A restart during failProvision's terraform destroy leaves the row 'destroying' with end_reason 'failed': the stuck
+// retry ends it 'failed' with its error, so the "recent failure" retry allowance survives.
+func TestStuckDestroyOfAFailedProvisionEndsFailed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withAWS(t)
+	now := f.clk.Now()
+	in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-401", Module: "01-cloud-heat", SHA: "abc", Runtime: "aws",
+		State: Destroying, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "approver"}
+	if err := f.s.insert(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET destroyed_at = $2, end_reason = 'failed', error = 'apply: quota exceeded',
+		decided_by = 'lead@crucible.local', decided_at = $2 WHERE id = $1`, in.ID, now.Add(-15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Add(60 * time.Minute) // 75 minutes: stuck
+	f.s.Sweep(ctx)
+	var st State
+	var errText string
+	for i := 0; i < 300; i++ {
+		_ = f.s.DB.QueryRow(ctx, `SELECT state, error FROM lab_instances WHERE id = $1`, in.ID).Scan(&st, &errText)
+		if st != Destroying {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st != Failed || errText != "apply: quota exceeded" {
+		t.Fatalf("state %s, error %q", st, errText)
+	}
+}

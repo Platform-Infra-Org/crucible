@@ -119,6 +119,9 @@ func scheduleInfo(p *config.Platform, team, training string, now time.Time) Sche
 	info := ScheduleInfo{Text: sc.String(), Open: sc.Open(now)}
 	if t := p.Teams[team]; t != nil && t.Programs[training] != nil {
 		info.Name = t.Programs[training].Schedule
+		if t.Programs[training].Inline != nil {
+			info.Name = "inline" // windows written in the program file itself
+		}
 	}
 	if end := sc.End(now); !end.IsZero() {
 		info.ClosesAt = &end

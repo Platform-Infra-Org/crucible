@@ -25,7 +25,7 @@ func TestHourlyPricesALocalCopy(t *testing.T) {
 		vars, _ := os.ReadFile(filepath.Join(d, "crucible.auto.tfvars.json"))
 		var v map[string]string
 		_ = json.Unmarshal(vars, &v)
-		if !strings.Contains(string(tf), "region = var.crucible_region") || v["crucible_region"] != "us-east-2" {
+		if !strings.Contains(string(tf), "region  = var.crucible_region") || v["crucible_region"] != "us-east-2" {
 			t.Fatalf("infracost must see Crucible's provider in the lab's region: %s %s", tf, vars)
 		}
 		if _, err := os.Stat(filepath.Join(d, "main.tf")); err != nil || !slices.Contains(env, "INFRACOST_SKIP_UPDATE_CHECK=true") {

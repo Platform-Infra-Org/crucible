@@ -17,6 +17,7 @@ make build
 echo "== lint content"
 ./bin/crucible lint examples/forge-101
 ./bin/crucible lint examples/forge-201
+./bin/crucible lint examples/forge-301
 ./bin/crucible lint examples/platform
 
 echo "== seed git repos"

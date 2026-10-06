@@ -52,7 +52,7 @@ type Deps struct {
 
 func NewRouter(d Deps) chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, securityHeaders, sameOrigin(d.PublicURL))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 
 	if d.OIDC != nil {

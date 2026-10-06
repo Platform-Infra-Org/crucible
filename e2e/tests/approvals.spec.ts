@@ -64,4 +64,9 @@ test('a leader enrolls a trainee via git, approves a paid lab, and an admin paus
   // Resume so the rest of the suite can run labs.
   await admin.getByRole('button', { name: 'Resume labs' }).click()
   await expect(admin.getByTestId('kill-switch-status')).toContainText('Labs are running')
+
+  // The Ledger shows the leader the team's budget burn and the paid lab (local-check has no AWS: estimates only).
+  await leader.getByRole('link', { name: 'Ledger' }).click()
+  await expect(leader.getByRole('meter', { name: 'The Forge spend' })).toBeVisible()
+  await expect(leader.getByTestId('ledger-labs')).toContainText('forge-201 / 01-paid-lab')
 })

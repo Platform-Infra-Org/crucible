@@ -37,6 +37,7 @@ render() { # $1 = true for the dev (privileged) policy, false for the production
   helm template crucible deploy/helm/crucible -n crucible --set clusterLabs.unsafePrivileged="$1" \
     --set clusterLabs.iUnderstandPrivilegedLabsAreUnsafe="$1" \
     --set backup.bucket=unused --set backup.region=unused --set oidc.issuer=https://unused --show-only templates/rbac.yaml \
+    --set awsLabs.enabled=true --set awsLabs.labRoleArn=unused --set awsLabs.opsRoleArn=unused --set awsLabs.stateBucket=unused \
     | kubectl --context "$ctx" -n crucible apply -f -
 }
 render true
@@ -46,6 +47,19 @@ kubectl --context "$ctx" create namespace crucible-probe --dry-run=client -o yam
 kubectl --context "$ctx" -n crucible-probe get pod probe >/dev/null 2>&1 \
   || kubectl --context "$ctx" -n crucible-probe run probe --image=nginx:1.29-alpine --port=80
 kubectl --context "$ctx" -n crucible-probe wait --for=condition=Ready pod/probe --timeout=180s
+echo "== a stand-in IMDS on the node (kind has none), so the lab IMDS checks below mean the NetworkPolicy blocked it"
+docker exec "$name-control-plane" sh -c 'ip addr show dev lo | grep -q 169.254.169.254 || ip addr add 169.254.169.254/32 dev lo'
+kubectl --context "$ctx" -n crucible-probe get pod imds >/dev/null 2>&1 || kubectl --context "$ctx" -n crucible-probe apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata: { name: imds }
+spec:
+  hostNetwork: true # nginx on the node's port 80, so 169.254.169.254:80 answers
+  containers: [{ name: imds, image: "nginx:1.29-alpine" }]
+EOF
+kubectl --context "$ctx" -n crucible-probe wait --for=condition=Ready pod/imds --timeout=180s
+kubectl --context "$ctx" -n crucible-probe exec probe -- wget -T 3 -q -O /dev/null http://169.254.169.254/ \
+  || { echo "the stand-in IMDS is not reachable from an unpoliced pod: the lab IMDS checks would prove nothing"; exit 1; }
 probe_ip=$(kubectl --context "$ctx" -n crucible-probe get pod probe -o jsonpath='{.status.podIP}')
 api_ip=$(kubectl --context "$ctx" get svc kubernetes -o jsonpath='{.spec.clusterIP}')
 node_ip=$(kubectl --context "$ctx" get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -73,10 +87,24 @@ CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_STRICT=1 \
   go test -tags cluster -run TestClusterPSAPolicy -count=1 -timeout 5m -v ./internal/labs/
 render true # the dev policy for the real run: lab pods are privileged on kind
 
-echo "== cluster runner against kind"
+echo "== aws labs: the service account may delete pods only inside lab namespaces"
+kubectl --context "$ctx" create namespace lab-e2edelete --dry-run=client -o yaml | kubectl --context "$ctx" apply -f -
+kubectl --context "$ctx" label namespace lab-e2edelete crucible.io/lab=e2edelete --overwrite >/dev/null
+kubectl --context "$ctx" -n lab-e2edelete get pod victim >/dev/null 2>&1 \
+  || kubectl --context "$ctx" -n lab-e2edelete run victim --image=nginx:1.29-alpine >/dev/null
+out=$(kubectl --kubeconfig .local/kind/kubeconfig -n crucible-probe delete pod probe --dry-run=server 2>&1) \
+  && { echo "the service account deleted a pod outside lab namespaces: $out"; exit 1; }
+[[ $out == *"only create lab pods, policies and terminals inside lab namespaces"* ]] \
+  || { echo "pod delete outside lab namespaces failed for the wrong reason: $out"; exit 1; }
+kubectl --kubeconfig .local/kind/kubeconfig -n lab-e2edelete delete pod victim --dry-run=server >/dev/null \
+  || { echo "the service account cannot delete pods in a lab namespace"; exit 1; }
+kubectl --context "$ctx" delete namespace lab-e2edelete --wait=false >/dev/null
+echo "denied outside lab namespaces, allowed inside"
+
+echo "== cluster runner against kind (and an aws lab's workspace and terraform pod cannot reach IMDS)"
 CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_PROBE_IP="$probe_ip" CRUCIBLE_TEST_API_IP="$api_ip" \
   CRUCIBLE_TEST_NODE_IP="$node_ip" CRUCIBLE_TEST_DNS_POD="$dns_pod" CRUCIBLE_CLUSTER_PRIVILEGED=1 \
-  go test -tags cluster -run TestClusterLabOnKind -count=1 -timeout 20m -v ./internal/labs/
+  go test -tags cluster -run 'TestClusterLabOnKind|TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
 
 echo "== browser: Forge 101 end to end, including the cluster lab"
 CLUSTER=1 ./scripts/local-check.sh

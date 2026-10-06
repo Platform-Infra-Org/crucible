@@ -101,6 +101,11 @@ func TestTFScripts(t *testing.T) {
 			t.Fatalf("crucible_* variables go on the command line (highest precedence), no state migration:\n%s", sc)
 		}
 	}
+	for _, sc := range []string{apply, destroy, dry} {
+		if !strings.HasPrefix(sc, "set -eu\n"+imdsGuard) {
+			t.Fatalf("no author code before the lab's NetworkPolicy is seen blocking IMDS:\n%s", sc)
+		}
+	}
 	if strings.Contains(dry, "terraform init") || strings.Contains(dry, "terraform destroy") || !strings.Contains(dry, "terraform version") {
 		t.Fatalf("a dry run touches no backend and no cloud:\n%s", dry)
 	}

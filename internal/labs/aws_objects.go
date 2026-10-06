@@ -99,6 +99,13 @@ func tfPod(id, name, image, script string) *corev1.Pod {
 	}
 }
 
+// imdsGuard holds a runner pod back until IMDS is unreachable from it. A NetworkPolicy engine enforces a new pod's
+// policy only once it has seen the pod's IP: make cluster-check measured a fresh pod on kind reaching 169.254.169.254
+// in its first second, and the node's IMDS (hop limit 2) hands out the node role, which can assume lab roles. It fails
+// closed after about a minute. ponytail: one probe of IMDS on port 80; the policy blocks the whole range anyway.
+const imdsGuard = "n=0; while echo | nc -w 2 169.254.169.254 80 >/dev/null 2>&1; do n=$((n+1)); " +
+	"[ $n -lt 30 ] || { echo 'IMDS is reachable: the lab NetworkPolicy is not in force'; exit 1; }; sleep 1; done\n"
+
 // tfScript is the runner pod's shell script. Crucible's variables go on the command line (-var-file there has the
 // highest precedence, so no author *.auto.tfvars can override the lab id the tags and IAM conditions rely on). init
 // runs in an empty directory with no -force-copy, so there is no local state to migrate. Destroy runs only after
@@ -106,7 +113,7 @@ func tfPod(id, name, image, script string) *corev1.Pod {
 // A dry run (CRUCIBLE_AWS_LABS=dryrun) proves the pod, its mounts and the module unpack, and touches no backend
 // and no cloud.
 func tfScript(action string, dryRun bool) string {
-	s := "set -eu\ntar xzf /module/module.tgz -C /w\n"
+	s := "set -eu\n" + imdsGuard + "tar xzf /module/module.tgz -C /w\n"
 	if dryRun {
 		return s + "terraform version\nls /w\necho 'dry run (CRUCIBLE_AWS_LABS=dryrun): nothing was applied or destroyed'\n"
 	}

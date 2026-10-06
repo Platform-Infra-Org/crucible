@@ -6,6 +6,9 @@ services:
       CRUCIBLE_CLUSTER_LABS: "1"
       CRUCIBLE_CLUSTER_PRIVILEGED: "1"
       KUBECONFIG: /kube/config
+      CRUCIBLE_AWS_LABS: dryrun          # aws labs on kind: real workspace + terraform pods, a fake lab account (never AWS)
+      CRUCIBLE_INFRACOST: "off"          # price aws labs from CRUCIBLE_DEV_LAB_USD_PER_HOUR
+      CRUCIBLE_DEV_LAB_USD_PER_HOUR: "paid-heat=0.5,cloud-heat=0.04"
     volumes: ["../../.local/kind/kubeconfig-internal:/kube/config:ro"]
     networks: [default, kind]
 networks:

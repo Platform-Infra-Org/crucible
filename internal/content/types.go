@@ -99,6 +99,7 @@ type Task struct {
 	Quiz         string  `yaml:"quiz"`
 	Points       float64 `yaml:"points"`
 	HumanReview  bool    `yaml:"human_review"`
+	Rubric       string  `yaml:"rubric"` // human_review only: what the scorer looks for; never sent to trainees
 	Hints        []*Hint `yaml:"hints"`
 }
 

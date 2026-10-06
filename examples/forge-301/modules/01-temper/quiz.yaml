@@ -1,0 +1,21 @@
+pass_threshold: 0.6
+questions:
+  - id: q-quench
+    type: single
+    prompt: What does quenching do to hot steel?
+    options: ["Hardens it", "Melts it", "Paints it"]
+    answer: 0
+  - id: q-why
+    type: text
+    prompt: In two sentences, why do we temper steel after quenching?
+    rubric: "Full marks: quenched steel is hard but brittle, and tempering trades a little hardness for toughness. Half marks for 'less brittle' alone."
+    points: 5
+  - id: q-log
+    type: upload
+    prompt: Attach the log of your last forge run (a file or a link).
+    rubric: "A log file or a link to one that shows a full heat cycle. Return screenshots: we want text we can search."
+    points: 2
+  - id: q-demo
+    type: signoff
+    prompt: Show a scorer how you would recover a cracked blade (live demo).
+    points: 3

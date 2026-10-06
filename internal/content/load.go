@@ -286,7 +286,11 @@ func (l *loader) quiz(path string) *Quiz {
 			if x.Check == "" {
 				bad("terminal questions need a check script")
 			}
-		case "text", "upload", "signoff":
+		case "text", "upload":
+			if strings.TrimSpace(x.Rubric) == "" {
+				bad("needs a rubric: scorers grade against it")
+			}
+		case "signoff":
 		default:
 			bad("unknown type %q", x.Type)
 		}
@@ -384,6 +388,15 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 		}
 		if t.Check == nil && t.Quiz == "" && !t.HumanReview {
 			l.add(lf, "%s: needs a check, a quiz or human_review", where)
+		}
+		if t.HumanReview && (t.Check != nil || t.Quiz != "") {
+			l.add(lf, "%s: human_review tasks are scored by a person: drop check and quiz", where)
+		}
+		if t.HumanReview && strings.TrimSpace(t.Rubric) == "" {
+			l.add(lf, "%s: human_review tasks need a rubric for the scorer", where)
+		}
+		if !t.HumanReview && t.Rubric != "" {
+			l.add(lf, "%s: rubric is only read for human_review tasks", where)
 		}
 		if t.Check != nil {
 			l.script(dir, lf, where+" check", t.Check, services, 30*time.Second)

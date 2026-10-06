@@ -113,6 +113,11 @@ func TestLoadProblems(t *testing.T) {
 		override map[string]string
 		want     string
 	}{
+		"text needs rubric":            {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: text, prompt: \"Why?\"}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "needs a rubric"},
+		"upload needs rubric":          {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: upload, prompt: Attach}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "needs a rubric"},
+		"review needs rubric":          {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    check: {script: checks/t1.sh, run_in: box}\n", "    human_review: true\n", 1)}, "human_review tasks need a rubric"},
+		"review with check":            {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    points: 2\n", "    points: 2\n    human_review: true\n    rubric: R\n", 1)}, "scored by a person: drop check and quiz"},
+		"rubric on a checked task":     {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    points: 2\n", "    points: 2\n    rubric: R\n", 1)}, "rubric is only read for human_review tasks"},
 		"missing title":                {map[string]string{"training.yaml": "id: t1\nmodules: [m1]\n"}, "title is required"},
 		"bad runtime":                  {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "local", "moon", 1)}, "runtime must be"},
 		"unknown service":              {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "service: box", "service: nope", 1)}, `service "nope"`},
@@ -236,5 +241,34 @@ func TestClusterComposeMayUseHostAccess(t *testing.T) {
 		"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    privileged: true\n"}))
 	if len(probs) > 0 {
 		t.Fatalf("cluster runtime is not restricted here: %v", probs)
+	}
+}
+
+func TestHumanItemsLoad(t *testing.T) {
+	tr, probs := Load(tree(t, map[string]string{
+		"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: text, prompt: \"Why?\", rubric: Mentions X, points: 5}\n" +
+			"  - {id: q3, type: signoff, prompt: Demo}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n",
+		"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    check: {script: checks/t1.sh, run_in: box}\n",
+			"    human_review: true\n    rubric: The transcript shows it\n", 1),
+	}))
+	if len(probs) > 0 {
+		t.Fatalf("unexpected problems: %v", probs)
+	}
+	if got := tr.Modules[0].Lab.Task("t1").Rubric; got != "The transcript shows it" {
+		t.Fatalf("task rubric = %q", got)
+	}
+}
+
+func TestForge301Loads(t *testing.T) {
+	tr, probs := Load("../../examples/forge-301")
+	if len(probs) > 0 {
+		t.Fatalf("forge-301: %v", probs)
+	}
+	q := tr.Module("01-temper").Quiz
+	if q.Question("q-why").Type != "text" || q.Question("q-log").Type != "upload" || q.Question("q-demo").Type != "signoff" {
+		t.Fatal("forge-301 must have text, upload and signoff questions")
+	}
+	if lab := tr.Module("02-review-lab").Lab; !lab.Task("t2-proof").HumanReview || lab.Task("t1-light").Check == nil {
+		t.Fatal("forge-301's lab needs one checked task and one review task")
 	}
 }

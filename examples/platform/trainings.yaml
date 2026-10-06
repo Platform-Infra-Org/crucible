@@ -5,3 +5,6 @@ trainings:
   forge-201:
     repo: file:///git/forge-201.git   # fixture for the approvals e2e; no team is enrolled until the UI does it
     branch: main
+  forge-301:
+    repo: file:///git/forge-301.git   # human-scoring e2e fixture; the e2e enrolls the trainee through the UI
+    branch: main

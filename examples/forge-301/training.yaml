@@ -1,0 +1,6 @@
+id: forge-301
+title: "Forge 301: Under the Hammer"
+description: Answers a person reads and a lab task a person reviews. The local check uses it to prove human scoring end to end.
+maintainers: [senior@crucible.local]
+progression: linear
+modules: [01-temper, 02-review-lab]

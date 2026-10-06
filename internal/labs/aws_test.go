@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	k8stesting "k8s.io/client-go/testing"
 
 	"crucible/internal/awscloud"
@@ -284,5 +286,174 @@ func TestAWSTerraformNeverStartsOnShortCredentials(t *testing.T) {
 	}
 	if n := len(cloud.Assumed()); n != 2 {
 		t.Fatalf("fresh credentials before the terraform pod: %d sessions", n)
+	}
+}
+
+// applyRunning starts ProvisionLab with the apply pod kept Running (a destroy pod succeeds) and returns once the
+// apply pod exists, with a channel for ProvisionLab's result.
+func applyRunning(t *testing.T, a *AWSRunner, cs *fake.Clientset, ctx context.Context) <-chan error {
+	t.Helper()
+	onPodCreate(cs, func(p *corev1.Pod) {
+		switch p.Name {
+		case labPod:
+			podReady(p)
+		case tfApplyPod:
+			p.Status.Phase = corev1.PodRunning
+		default:
+			p.Status.Phase = corev1.PodSucceeded
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- a.ProvisionLab(ctx, &Instance{ID: testID}, cloudHeat(t)) }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if _, err := cs.CoreV1().Pods(labNamespace(testID)).Get(ctx, tfApplyPod, metav1.GetOptions{}); err == nil {
+			return done
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the apply pod never started")
+		}
+	}
+}
+
+func TestAWSDestroyInterruptsARunningApply(t *testing.T) {
+	cs := fake.NewClientset()
+	a, _, _ := testAWS(cs)
+	provisioned := applyRunning(t, a, cs, context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := a.Destroy(ctx, &Instance{ID: testID}); err != nil {
+		t.Fatalf("End during apply: the apply stops and terraform destroy runs: %v", err)
+	}
+	if err := <-provisioned; err == nil {
+		t.Fatal("the interrupted provision fails")
+	}
+	got := steps(cs, "delete", "create")
+	if i := slices.Index(got, "delete pods"); i < 0 || !slices.Contains(got[i:], "create pods") {
+		t.Fatalf("the apply pod is deleted before terraform destroy starts: %v", got)
+	}
+	if _, err := cs.CoreV1().Pods(labNamespace(testID)).Get(ctx, tfApplyPod, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the apply pod is gone: %v", err)
+	}
+	if len(a.locks) != 0 {
+		t.Fatal("a destroyed lab's lock is pruned")
+	}
+}
+
+func TestAWSRefreshIsNotBlockedByALongApply(t *testing.T) {
+	now := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	cs := fake.NewClientset()
+	a, cloud, _ := testAWS(cs)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	cloud.Now, a.Now = clock, clock
+	ctx, cancel := context.WithCancel(context.Background())
+	provisioned := applyRunning(t, a, cs, ctx)
+	defer func() { cancel(); <-provisioned }()
+	mu.Lock()
+	now = now.Add(50 * time.Minute)
+	mu.Unlock()
+	if err := a.Refresh(context.Background(), &Instance{ID: testID}); err != nil || len(cloud.Assumed()) != 2 {
+		t.Fatalf("the workspace credentials are renewed during the apply: %v, %d sessions", err, len(cloud.Assumed()))
+	}
+}
+
+func TestAWSLockWaiterOnAPrunedLockTakesTheNewOne(t *testing.T) {
+	ctx := context.Background()
+	a := &AWSRunner{}
+	release, err := a.acquire(ctx, testID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan func(), 1)
+	go func() { r, _ := a.acquire(ctx, testID); got <- r }()
+	time.Sleep(10 * time.Millisecond) // the waiter is parked on the old lock
+	a.prune(testID)
+	release()
+	second := <-got
+	short, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if _, err := a.acquire(short, testID); err == nil {
+		t.Fatal("the waiter holds the current lock: a third caller waits")
+	}
+	second()
+}
+
+// ctxClient makes namespace deletes honour their ctx, as the real API client does.
+type ctxClient struct{ *fake.Clientset }
+type ctxCore struct{ typedcorev1.CoreV1Interface }
+type ctxNamespaces struct{ typedcorev1.NamespaceInterface }
+
+func (c ctxClient) CoreV1() typedcorev1.CoreV1Interface { return ctxCore{c.Clientset.CoreV1()} }
+func (c ctxCore) Namespaces() typedcorev1.NamespaceInterface {
+	return ctxNamespaces{c.CoreV1Interface.Namespaces()}
+}
+func (n ctxNamespaces) Delete(ctx context.Context, name string, o metav1.DeleteOptions) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return n.NamespaceInterface.Delete(ctx, name, o)
+}
+
+func TestAWSDestroyDeletesTheNamespaceAfterTheCallerGaveUp(t *testing.T) {
+	cs := fake.NewClientset(labNS(testID, false))
+	kubelet(cs, corev1.PodSucceeded, "Destroy complete!")
+	a, _, _ := testAWS(cs)
+	a.Cluster.Client = ctxClient{cs}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = a.Destroy(ctx, &Instance{ID: testID})
+	if !slices.Contains(steps(cs, "delete"), "delete namespaces") {
+		t.Fatal("the namespace (with live credentials) is deleted even when the caller's ctx is over")
+	}
+}
+
+func TestAWSDryRunNeverCallsTheRealCloud(t *testing.T) {
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodSucceeded, "dry run")
+	a, real, _ := testAWS(cs)
+	dry := &awscloud.Fake{}
+	a.DryRun = dry
+	if err := a.ProvisionLab(context.Background(), &Instance{ID: testID}, cloudHeat(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(real.Assumed()) != 0 || len(dry.Assumed()) != 1 {
+		t.Fatalf("dry run: STS goes to the fake only: real %d, fake %d", len(real.Assumed()), len(dry.Assumed()))
+	}
+}
+
+func TestAWSDestroyOfATerminatingNamespace(t *testing.T) {
+	cs := fake.NewClientset(labNS(testID, true))
+	cs.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 403,
+			Reason: metav1.StatusReasonForbidden, Details: &metav1.StatusDetails{
+				Causes: []metav1.StatusCause{{Type: corev1.NamespaceTerminatingCause}}}}}
+	})
+	cs.PrependReactor("delete", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "namespaces"}, labNamespace(testID), nil)
+	})
+	a, _, _ := testAWS(cs)
+	if err := a.Destroy(context.Background(), &Instance{ID: testID}); err != nil {
+		t.Fatalf("a namespace already being deleted is already being destroyed: %v", err)
+	}
+}
+
+func TestAWSTerraformPodThatNeverMountsIsStuck(t *testing.T) {
+	cs := fake.NewClientset()
+	onPodCreate(cs, func(p *corev1.Pod) {
+		if p.Name == labPod {
+			podReady(p)
+			return
+		}
+		p.CreationTimestamp = metav1.NewTime(time.Now().Add(-4 * time.Minute))
+		p.Status.Phase = corev1.PodPending
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{
+			Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}
+	})
+	a, _, _ := testAWS(cs)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := a.ProvisionLab(ctx, &Instance{ID: testID}, cloudHeat(t))
+	if err == nil || !strings.Contains(err.Error(), "ContainerCreating") {
+		t.Fatalf("a terraform pod whose volumes never mount fails: %v", err)
 	}
 }

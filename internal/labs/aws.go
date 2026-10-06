@@ -37,8 +37,9 @@ type AWSRunner struct {
 	Now            func() time.Time
 
 	mu      sync.Mutex
-	expires map[string]time.Time   // lab id → when its mounted credentials expire (empty after a restart)
-	locks   map[string]*sync.Mutex // one provision/destroy/refresh per lab at a time in this process
+	expires map[string]time.Time           // lab id → when its mounted credentials expire (empty after a restart)
+	locks   map[string]chan struct{}       // one provision/destroy per lab at a time in this process
+	cancels map[string]*context.CancelFunc // lab id → stops its running ProvisionLab (Destroy calls it)
 }
 
 var _ Runner = (*AWSRunner)(nil)
@@ -50,17 +51,54 @@ func (a *AWSRunner) now() time.Time {
 	return time.Now()
 }
 
+// acquire takes the lab's lock, giving up when ctx ends. Destroy prunes the lock; a waiter that wakes on a pruned
+// lock releases it and takes the current one.
 // ponytail: in-process per-lab lock and expiry map, like setupLocks; a second API replica would need DB state.
-func (a *AWSRunner) lock(id string) *sync.Mutex {
+func (a *AWSRunner) acquire(ctx context.Context, id string) (release func(), err error) {
+	for {
+		a.mu.Lock()
+		if a.locks == nil {
+			a.locks = map[string]chan struct{}{}
+		}
+		l := a.locks[id]
+		if l == nil {
+			l = make(chan struct{}, 1)
+			a.locks[id] = l
+		}
+		a.mu.Unlock()
+		select {
+		case l <- struct{}{}: // a free lock wins even over a ctx that is already done
+		default:
+			select {
+			case l <- struct{}{}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		a.mu.Lock()
+		current := a.locks[id] == l
+		a.mu.Unlock()
+		if current {
+			return func() { <-l }, nil
+		}
+		<-l
+	}
+}
+
+// prune drops a destroyed lab's lock and remembered expiry.
+func (a *AWSRunner) prune(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.locks == nil {
-		a.locks = map[string]*sync.Mutex{}
+	delete(a.locks, id)
+	delete(a.expires, id)
+}
+
+// cloud is where STS calls go: the dry-run fake whenever it is set, so a wiring slip never reaches real AWS.
+func (a *AWSRunner) cloud() awscloud.Cloud {
+	if a.DryRun != nil {
+		return a.DryRun
 	}
-	if a.locks[id] == nil {
-		a.locks[id] = &sync.Mutex{}
-	}
-	return a.locks[id]
+	return a.Cloud
 }
 
 func (a *AWSRunner) remember(id string, exp time.Time) {
@@ -70,12 +108,6 @@ func (a *AWSRunner) remember(id string, exp time.Time) {
 		a.expires = map[string]time.Time{}
 	}
 	a.expires[id] = exp
-}
-
-func (a *AWSRunner) forget(id string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.expires, id)
 }
 
 // fresh reports whether the mounted credentials are known to last at least `need` longer.
@@ -146,7 +178,7 @@ func (a *AWSRunner) putCreds(ctx context.Context, id string, c awscloud.Credenti
 
 // renew assumes the lab role again and mounts the new credentials.
 func (a *AWSRunner) renew(ctx context.Context, inst *Instance) error {
-	creds, err := a.Cloud.AssumeLab(ctx, labSession(inst))
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
 	if err != nil {
 		return fmt.Errorf("getting lab credentials: %w", err)
 	}
@@ -159,10 +191,27 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 	if !validLabID(inst.ID) || lab.AWS == nil {
 		return errors.New("invalid aws lab")
 	}
-	l := a.lock(inst.ID)
-	l.Lock()
-	defer l.Unlock()
-	creds, err := a.Cloud.AssumeLab(ctx, labSession(inst))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.mu.Lock()
+	if a.cancels == nil {
+		a.cancels = map[string]*context.CancelFunc{}
+	}
+	a.cancels[inst.ID] = &cancel
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		if a.cancels[inst.ID] == &cancel {
+			delete(a.cancels, inst.ID)
+		}
+		a.mu.Unlock()
+	}()
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
 	if err != nil {
 		return fmt.Errorf("getting lab credentials: %w", err)
 	}
@@ -235,45 +284,55 @@ func (a *AWSRunner) runTF(ctx context.Context, inst *Instance, name, action stri
 	return nil
 }
 
-func stuckReason(p *corev1.Pod) bool { r, _ := stuck(p); return r != "" }
+func stuckReason(p *corev1.Pod) bool { r, _ := stuckOneShot(p); return r != "" }
 
-// Destroy stops a running apply, runs terraform destroy (with fresh credentials), then deletes the namespace.
-// Service.destroyRuntime runs the tag sweep afterwards. Without a namespace there is nothing to run terraform in:
-// the tag sweep and the reaper clean up instead.
+// Destroy stops a running apply (cancelling an in-process ProvisionLab, then deleting the apply pod), runs terraform
+// destroy (with fresh credentials), then deletes the namespace. Service.destroyRuntime runs the tag sweep afterwards.
+// Without a namespace, or with one already terminating, there is nothing to run terraform in: the tag sweep and the
+// reaper clean up instead.
 func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 	if !validLabID(inst.ID) {
 		return errors.New("invalid lab id")
 	}
-	l := a.lock(inst.ID)
-	l.Lock()
-	defer l.Unlock()
+	a.mu.Lock()
+	if c := a.cancels[inst.ID]; c != nil {
+		(*c)()
+	}
+	a.mu.Unlock()
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return fmt.Errorf("waiting for the lab's provisioning to stop: %w", err)
+	}
+	defer release()
+	gone := func(err error) bool {
+		return apierrors.IsNotFound(err) || apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause)
+	}
 	var errs []error
 	if err := a.Cluster.deletePod(ctx, labNamespace(inst.ID), tfApplyPod); err != nil {
 		errs = append(errs, fmt.Errorf("stopping terraform apply: %w", err))
-	} else if err := a.runTF(ctx, inst, tfDestroyPod, "destroy"); err != nil && !apierrors.IsNotFound(err) {
+	} else if err := a.runTF(ctx, inst, tfDestroyPod, "destroy"); err != nil && !gone(err) {
 		errs = append(errs, err)
 	} else if err == nil && a.DryRun != nil {
 		a.DryRun.SimulateDestroy(inst.ID)
 	}
-	a.forget(inst.ID)
-	if err := a.Cluster.Destroy(ctx, inst); err != nil {
+	// Terraform may have used up ctx; the namespace (with live credentials) is deleted regardless.
+	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	if err := a.Cluster.Destroy(dctx, inst); err != nil {
 		errs = append(errs, err)
 	}
+	a.prune(inst.ID)
 	return errors.Join(errs...)
 }
 
 // Refresh re-assumes the lab role when the mounted credentials have less than refreshBefore left (spec §14: one
 // hour, auto-refreshed); kubelet updates the mounted file within about a minute. After a restart nothing is
-// remembered, so the first sweep refreshes every ready lab once. A lab busy provisioning or destroying is skipped
-// this round: those renew before every terraform pod themselves.
+// remembered, so the first sweep refreshes every ready lab once. It takes no lab lock, so a long apply never holds it
+// up: a concurrent renew only writes another valid session, and in a namespace already deleted or terminating the
+// secret write fails. ponytail: a refresh racing Destroy can leave one stale expiry entry; harmless.
 func (a *AWSRunner) Refresh(ctx context.Context, inst *Instance) error {
 	if !validLabID(inst.ID) || a.fresh(inst.ID, refreshBefore) {
 		return nil
 	}
-	l := a.lock(inst.ID)
-	if !l.TryLock() {
-		return nil
-	}
-	defer l.Unlock()
 	return a.renew(ctx, inst)
 }

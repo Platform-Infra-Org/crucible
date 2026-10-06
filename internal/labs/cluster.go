@@ -151,6 +151,24 @@ func stuck(p *corev1.Pod) (reason, msg string) {
 	return "", ""
 }
 
+// mountWait bounds how long a one-shot pod may sit in ContainerCreating (a volume that never mounts reports only
+// events, never a container state).
+const mountWait = 3 * time.Minute
+
+// stuckOneShot is stuck plus a pod still creating its container after mountWait.
+func stuckOneShot(p *corev1.Pod) (reason, msg string) {
+	if reason, msg = stuck(p); reason != "" {
+		return reason, msg
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil && w.Reason == "ContainerCreating" &&
+			!p.CreationTimestamp.IsZero() && time.Since(p.CreationTimestamp.Time) > mountWait {
+			return w.Reason, "still creating after " + mountWait.String() + " (a volume that does not mount?)"
+		}
+	}
+	return "", ""
+}
+
 func (c *ClusterRunner) poll() time.Duration {
 	if c.Poll == 0 {
 		return 2 * time.Second
@@ -168,7 +186,7 @@ func (c *ClusterRunner) waitDone(ctx context.Context, ns, name string) (ok bool,
 		if err != nil {
 			return false, "", err
 		}
-		if reason, m := stuck(p); reason != "" {
+		if reason, m := stuckOneShot(p); reason != "" {
 			return false, reason + ": " + m, nil
 		}
 		for _, cond := range p.Status.Conditions {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"crucible/internal/content"
@@ -173,5 +174,14 @@ func TestVersionLoadsAnOldSHAAfterARestart(t *testing.T) {
 	if fresh.Version(context.Background(), "t1", "0000000000000000000000000000000000000000") != nil ||
 		fresh.Version(context.Background(), "nope", old) != nil {
 		t.Fatal("unknown sha / training must be nil")
+	}
+	out := filepath.Join(t.TempDir(), "pwn")
+	for _, bad := range []string{"HEAD", "main", "HEAD~0", "--output=" + out, "../../etc", strings.ToUpper(old)} {
+		if fresh.Version(context.Background(), "t1", bad) != nil {
+			t.Fatalf("%q is not a commit sha and must not load", bad)
+		}
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("a sha must never reach git as an option")
 	}
 }

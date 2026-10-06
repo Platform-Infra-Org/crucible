@@ -59,7 +59,7 @@ func (m Mirror) Export(ctx context.Context, sha, dest string) error {
 	}
 	tarPath := tmp + ".tar"
 	defer os.Remove(tarPath)
-	if _, err := git(ctx, m.Dir, "archive", "--format=tar", "-o", tarPath, sha); err != nil {
+	if _, err := git(ctx, m.Dir, "archive", "--format=tar", "-o", tarPath, "--end-of-options", sha); err != nil {
 		return err
 	}
 	if out, err := exec.CommandContext(ctx, "tar", "-xf", tarPath, "-C", tmp).CombinedOutput(); err != nil {

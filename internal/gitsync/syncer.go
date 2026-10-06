@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -224,12 +225,14 @@ func (s *State) programSHA(key string) (string, bool) {
 	return sha, ok
 }
 
+var commitSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // Version returns training id at sha, exporting it from the mirror (which keeps full history) when it is not in
 // memory, e.g. a lab started on a version that a restart dropped. nil if the training is unregistered or that version
 // is invalid; the failure is recorded in Problems until the next sync, which retries it on the next call.
 func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training {
-	if t := s.Current().Training(id, sha); t != nil || sha == "" {
-		return t
+	if t := s.Current().Training(id, sha); t != nil || !commitSHA.MatchString(sha) {
+		return t // only a full commit id: never a ref that moves, a path, or something git would read as an option
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

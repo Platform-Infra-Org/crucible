@@ -27,6 +27,18 @@ type Service struct {
 	QuizSecret string
 	// Scoring stores human-scored answers (M5). nil in tests that only exercise instant quizzes.
 	Scoring *scoring.Service
+	// Versions loads a training at an exact sha from the mirror when it isn't in memory (gitsync.Syncer.Version).
+	// nil: only in-memory versions (tests).
+	Versions func(ctx context.Context, id, sha string) *content.Training
+}
+
+// Version returns training id at exactly sha, or nil if that version isn't available. Never another version: labs
+// and answers are scored against the content they ran on.
+func (s *Service) Version(ctx context.Context, id, sha string) *content.Training {
+	if t := s.State().Training(id, sha); t != nil || s.Versions == nil {
+		return t
+	}
+	return s.Versions(ctx, id, sha)
 }
 
 type ProgramCard struct {
@@ -398,7 +410,7 @@ func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
 	}
 	t, _ := st.ProgramTraining(sub.Team, sub.Training)
 	if t == nil || t.Module(sub.Module) == nil {
-		t = st.Training(sub.Training, sub.SHA)
+		t = s.Version(ctx, sub.Training, sub.SHA)
 	}
 	if t == nil {
 		return apperr.Wrap(apperr.Unavailable, "this training's content is unavailable right now")

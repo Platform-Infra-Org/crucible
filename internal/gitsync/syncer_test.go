@@ -148,3 +148,30 @@ func TestOnProblemFiresOncePerNewProblem(t *testing.T) {
 		t.Fatalf("OnProblem keys = %v", keys)
 	}
 }
+
+// After a restart only the versions programs run are in memory; an older one still loads from the mirror on demand.
+func TestVersionLoadsAnOldSHAAfterARestart(t *testing.T) {
+	s, platformRepo, trainingRepo := setup(t)
+	_, old := s.Current().ProgramTraining("a", "t1")
+	commit(t, trainingRepo, map[string]string{"training.yaml": "id: t1\ntitle: T1 v2\nmodules: [m1]\n"})
+	fresh := New(t.TempDir(), platformRepo, "main", slog.Default()) // the restarted API
+	if err := fresh.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Current().Training("t1", old) != nil {
+		t.Fatal("the old version should not be loaded yet")
+	}
+	if tr := fresh.Version(context.Background(), "t1", old); tr == nil || tr.Title != "T1" {
+		t.Fatalf("old version: %+v %v", tr, fresh.Current().Problems)
+	}
+	if cur, _ := fresh.Current().ProgramTraining("a", "t1"); cur == nil || cur.Title != "T1 v2" {
+		t.Fatalf("program still on head: %+v", cur)
+	}
+	if err := fresh.SyncOnce(context.Background()); err != nil || fresh.Current().Training("t1", old) == nil {
+		t.Fatalf("a loaded version survives the next sync: %v", err)
+	}
+	if fresh.Version(context.Background(), "t1", "0000000000000000000000000000000000000000") != nil ||
+		fresh.Version(context.Background(), "nope", old) != nil {
+		t.Fatal("unknown sha / training must be nil")
+	}
+}

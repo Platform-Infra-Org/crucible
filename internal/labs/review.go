@@ -59,7 +59,7 @@ func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
 	if err != nil {
 		return err
 	}
-	lab, _, err := s.labContent(inst)
+	lab, _, err := s.labContent(ctx, inst)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (s *Service) Override(ctx context.Context, labID, taskID string, points flo
 	if err != nil {
 		return err
 	}
-	lab, _, err := s.labContent(inst)
+	lab, _, err := s.labContent(ctx, inst)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func (s *Service) Evidence(ctx context.Context, labID string) (*scoring.LabEvide
 	if err != nil {
 		return nil, err
 	}
-	lab, _, err := s.labContent(inst)
+	lab, _, err := s.labContent(ctx, inst)
 	if err != nil {
 		return nil, err
 	}

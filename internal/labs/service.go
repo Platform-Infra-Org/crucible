@@ -200,29 +200,17 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 	}
 }
 
-// trainingOf returns the content version a lab runs, or nil while syncing / if it vanished. Old versions live only as
-// long as the process, so after a restart it falls back to the program's current version if that still has the lab.
-func (s *Service) trainingOf(inst *Instance) *content.Training {
-	st := s.Learn.State()
-	if st == nil {
-		return nil
-	}
-	if t := st.Training(inst.Training, inst.SHA); t != nil {
-		return t
-	}
-	if t, _ := st.ProgramTraining(inst.Team, inst.Training); t != nil {
-		if m := t.Module(inst.Module); m != nil && m.Lab != nil {
-			return t
-		}
-	}
-	return nil
+// trainingOf returns exactly the content version a lab runs (loaded from the mirror if a restart dropped it), or nil
+// while syncing / if it can't be loaded. Never another version: its tasks, points and scripts may differ.
+func (s *Service) trainingOf(ctx context.Context, inst *Instance) *content.Training {
+	return s.Learn.Version(ctx, inst.Training, inst.SHA)
 }
 
-func (s *Service) labContent(inst *Instance) (*content.Lab, *content.Quiz, error) {
+func (s *Service) labContent(ctx context.Context, inst *Instance) (*content.Lab, *content.Quiz, error) {
 	if s.Learn.State() == nil {
 		return nil, nil, apperr.Wrap(apperr.Unavailable, "content is still syncing")
 	}
-	t := s.trainingOf(inst)
+	t := s.trainingOf(ctx, inst)
 	if t == nil {
 		return nil, nil, apperr.Wrap(apperr.Unavailable, "this lab's content is no longer available")
 	}
@@ -347,7 +335,7 @@ func taskTitle(lab *content.Lab, t *content.Task) string {
 }
 
 func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
-	lab, quiz, err := s.labContent(inst)
+	lab, quiz, err := s.labContent(ctx, inst)
 	if err != nil {
 		return nil, err
 	}
@@ -739,7 +727,7 @@ func (s *Service) runSetup(ctx context.Context, inst *Instance, lab *content.Lab
 		last = fmt.Errorf("setup exited with %d", res.ExitCode)
 	}
 	s.Log.Warn("setup script failed twice", "lab", inst.ID, "task", taskID)
-	if t := s.trainingOf(inst); t != nil {
+	if t := s.trainingOf(ctx, inst); t != nil {
 		step := "the lab-level setup"
 		if taskID != "" {
 			step = "the setup for task " + taskID
@@ -762,7 +750,7 @@ func (s *Service) readyTask(ctx context.Context, u *auth.User, labID, taskID str
 	if inst.State != Ready {
 		return nil, nil, nil, nil, nil, apperr.Wrap(apperr.Conflict, "the lab is not ready")
 	}
-	lab, quiz, err := s.labContent(inst)
+	lab, quiz, err := s.labContent(ctx, inst)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

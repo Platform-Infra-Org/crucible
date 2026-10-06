@@ -85,7 +85,7 @@ func run(ctx context.Context) error {
 		quizSecret = "crucible-dev-quiz-secret"
 	}
 	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce}
-	learnSvc := &learn.Service{DB: pool, State: syncer.Current, QuizSecret: quizSecret}
+	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
 			Username: os.Getenv("CRUCIBLE_SMTP_USERNAME"), Password: os.Getenv("CRUCIBLE_SMTP_PASSWORD")}}

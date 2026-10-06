@@ -29,7 +29,12 @@ type State struct {
 	validated map[string]bool // keys whose Problems come from content validation (permanent), not transient export errors
 }
 
-func (s *State) Training(id, sha string) *content.Training { return s.Trainings[id+"@"+sha] }
+func (s *State) Training(id, sha string) *content.Training {
+	if s == nil {
+		return nil
+	}
+	return s.Trainings[id+"@"+sha]
+}
 
 func (s *State) ProgramTraining(team, training string) (*content.Training, string) {
 	sha := s.ProgramSHAs[team+"/"+training]
@@ -217,4 +222,29 @@ func (s *State) programSHA(key string) (string, bool) {
 	}
 	sha, ok := s.ProgramSHAs[key]
 	return sha, ok
+}
+
+// Version returns training id at sha, exporting it from the mirror (which keeps full history) when it is not in
+// memory, e.g. a lab started on a version that a restart dropped. nil if the training is unregistered or that version
+// is invalid; the failure is recorded in Problems until the next sync, which retries it on the next call.
+func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training {
+	if t := s.Current().Training(id, sha); t != nil || sha == "" {
+		return t
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.cur.Load()
+	if cur == nil || cur.Platform == nil {
+		return nil
+	}
+	key := id + "@" + sha
+	ref, ok := cur.Platform.Trainings[id]
+	if !ok || cur.Trainings[key] != nil || cur.Problems[key] != nil {
+		return cur.Training(id, sha)
+	}
+	next := *cur
+	next.Trainings, next.Problems, next.validated = maps.Clone(cur.Trainings), maps.Clone(cur.Problems), maps.Clone(cur.validated)
+	s.load(ctx, &next, cur, s.mirror(ref.Repo), id, sha)
+	s.cur.Store(&next)
+	return next.Training(id, sha)
 }

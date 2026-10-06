@@ -9,6 +9,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -242,26 +244,123 @@ func TestDecisionsSettleOnPageLoad(t *testing.T) {
 	}
 }
 
-// A pin bump plus an API restart drops the lab's content version from memory; a pending review must still be scorable.
-func TestReviewOnAnUnloadedVersionCanStillBeScored(t *testing.T) {
+// restartOnNewVersion simulates a pin bump to a changed forge-301 ("new", edited by change) followed by an API restart:
+// the lab's own version "def" is no longer in memory and only loads on demand, as the mirror would (nil: it can't).
+func (f *fx) restartOnNewVersion(t *testing.T, loads bool, change func(dir string)) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../examples/forge-301")); err != nil {
+		t.Fatal(err)
+	}
+	change(filepath.Join(dir, "modules/02-review-lab/lab"))
+	tr, probs := content.Load(dir)
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	st := f.s.Learn.State()
+	old := st.Trainings["forge-301@def"]
+	delete(st.Trainings, "forge-301@def")
+	st.Trainings["forge-301@new"] = tr
+	st.ProgramSHAs["forge/forge-301"] = "new"
+	f.s.Learn.Versions = func(_ context.Context, id, sha string) *content.Training {
+		if loads && id == "forge-301" && sha == "def" {
+			return old
+		}
+		return nil
+	}
+}
+
+func edit(t *testing.T, path, from, to string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), from) {
+		t.Fatalf("%s has no %q: %v", path, from, err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(b), from, to, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// After a restart a pending review scores against the lab's own version, not a newer one whose points changed.
+func TestReviewOnAnUnloadedVersionScoresAgainstThatVersion(t *testing.T) {
 	ctx := context.Background()
 	f := setupReview(t)
 	v := f.startReviewLab(t)
 	_, _ = f.s.Check(ctx, f.u, v.ID, "t1-light", "")
 	v, _ = f.s.SubmitReview(ctx, f.u, v.ID, "t2-proof", "done", nil)
 	id := taskOf(v, "t2-proof").Review.ID
-	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET sha = 'gone' WHERE id = $1`, v.ID); err != nil {
-		t.Fatal(err)
-	}
+	f.restartOnNewVersion(t, true, func(lab string) { edit(t, filepath.Join(lab, "lab.yaml"), "points: 3", "points: 10") })
 	d, err := f.sc.Detail(ctx, f.other, id)
 	if err != nil || d.Lab == nil || len(d.Lab.Tasks) != 2 {
-		t.Fatalf("the program's current version still has this lab: %+v %v", d, err)
+		t.Fatalf("detail on the lab's own version: %+v %v", d, err)
 	}
 	if _, err := f.sc.Score(ctx, f.other, id, 3, ""); err != nil {
 		t.Fatal(err)
 	}
+	if st, score := f.item(t, "02-review-lab"); st != "complete" || math.Abs(score-1) > 1e-9 {
+		t.Fatalf("lab item scored on the old points: %s %.3f", st, score)
+	}
+	if v, _ = f.s.Get(ctx, f.u, v.ID); !v.Complete || taskOf(v, "t2-proof").Awarded != 3 {
+		t.Fatalf("view: %+v", v)
+	}
+}
+
+// A newer version renamed a task: the lab keeps its own task list, so finishing it completes it.
+func TestRenamedTaskInANewerVersionDoesNotLeakIntoAnOldLab(t *testing.T) {
+	ctx := context.Background()
+	f := setupReview(t)
+	v := f.startReviewLab(t)
+	_, _ = f.s.Check(ctx, f.u, v.ID, "t1-light", "")
+	v, _ = f.s.SubmitReview(ctx, f.u, v.ID, "t2-proof", "done", nil)
+	id := taskOf(v, "t2-proof").Review.ID
+	f.restartOnNewVersion(t, true, func(lab string) { edit(t, filepath.Join(lab, "lab.yaml"), "id: t1-light", "id: t1-glow") })
+	if _, err := f.sc.Score(ctx, f.other, id, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = f.s.Get(ctx, f.u, v.ID)
+	if taskOf(v, "t1-light").Status != "passed" || taskOf(v, "t1-glow").ID != "" || !v.Complete {
+		t.Fatalf("old task list: %+v", v.Tasks)
+	}
 	if st, _ := f.item(t, "02-review-lab"); st != "complete" {
 		t.Fatalf("lab item: %s", st)
+	}
+	// and if the lab's version can't be loaded at all, nothing is scored against the newer one
+	f.restartOnNewVersion(t, false, func(string) {})
+	if _, err := f.s.Get(ctx, f.u, v.ID); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("unloadable version: %v", err)
+	}
+}
+
+// Check on an old lab runs that version's script, never the newer one's; unloadable means no script at all.
+func TestCheckOnAnOldLabNeverRunsNewerScripts(t *testing.T) {
+	ctx := context.Background()
+	f := setupReview(t)
+	v := f.startReviewLab(t)
+	f.restartOnNewVersion(t, true, func(lab string) {
+		if err := os.WriteFile(filepath.Join(lab, "checks/01-light.sh"), []byte("echo NEW\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	})
+	f.run.mu.Lock()
+	f.run.scripts = nil
+	f.run.mu.Unlock()
+	if _, err := f.s.Check(ctx, f.u, v.ID, "t1-light", ""); err != nil {
+		t.Fatal(err)
+	}
+	f.run.mu.Lock()
+	if len(f.run.scripts) != 1 || strings.Contains(string(f.run.scripts[0].Script), "NEW") {
+		t.Fatalf("ran: %d scripts, %q", len(f.run.scripts), f.run.scripts)
+	}
+	f.run.scripts = nil
+	f.run.mu.Unlock()
+	f.restartOnNewVersion(t, false, func(string) {})
+	if _, err := f.s.Check(ctx, f.u, v.ID, "t1-light", ""); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("unloadable version: %v", err)
+	}
+	f.run.mu.Lock()
+	defer f.run.mu.Unlock()
+	if len(f.run.scripts) != 0 {
+		t.Fatalf("a script ran against another version: %d", len(f.run.scripts))
 	}
 }
 

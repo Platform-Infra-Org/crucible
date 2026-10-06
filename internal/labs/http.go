@@ -164,7 +164,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, apperr.Wrap(apperr.Conflict, "the lab is not ready"))
 		return
 	}
-	lab, _, err := s.labContent(inst)
+	lab, _, err := s.labContent(r.Context(), inst)
 	if err != nil {
 		httpx.Error(w, err)
 		return

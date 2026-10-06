@@ -1,4 +1,4 @@
-.PHONY: test build web local-check
+.PHONY: test build web local-check cluster-check
 test:
 	go test ./...
 build:
@@ -8,3 +8,5 @@ web:
 	cd web && npm ci && npm run build
 local-check:
 	./scripts/local-check.sh
+cluster-check:
+	./scripts/cluster-check.sh

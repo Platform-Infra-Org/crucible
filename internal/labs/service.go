@@ -641,7 +641,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	r, err := s.runner(inst.Runtime)
 	var bundle []byte
 	if err == nil {
-		bundle, err = Bundle(lab.Dir)
+		bundle, err = Bundle(lab.Dir, lab.Runtime)
 	}
 	if err == nil {
 		err = r.Provision(ctx, inst, bundle, lab.Compose)

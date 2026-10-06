@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
@@ -223,7 +224,9 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		_ = pty.Close()
 		ws.CloseNow()
 		<-done
-		s.saveTranscript(context.WithoutCancel(ctx), inst.ID, chi.URLParam(r, "name"), started, rec)
+		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second) // a hung store must not pin the handler
+		s.saveTranscript(saveCtx, inst.ID, chi.URLParam(r, "name"), started, rec)
+		cancel()
 	}()
 	for {
 		typ, data, err := ws.Read(ctx)

@@ -717,6 +717,8 @@ const (
 	maxModuleBytes = 512 << 10 // the module travels in a ConfigMap (1 MiB, base64)
 	maxTFFileBytes = 128 << 10
 	maxTFDepth     = 64 // HCL's parsers recurse per nesting level; deep input overflows the stack (a fatal error)
+	maxTFOpeners   = 20000
+	maxTFFiles     = 200
 )
 
 // The parts of a terraform file awsModule looks at; PartialContent ignores the rest.
@@ -746,7 +748,7 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	}
 	root := filepath.Join(dir, "terraform")
 	var tfs []string
-	size, tooBig := int64(0), false
+	size, files, tooBig := int64(0), 0, false
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -773,6 +775,11 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 			l.add(p, "do not ship %s: Crucible stores state per lab", d.Name())
 		case strings.HasSuffix(name, ".tf") || strings.HasSuffix(name, ".tf.json"):
 			tfs = append(tfs, p)
+		}
+		if files++; files > maxTFFiles {
+			l.add(root, "more than %d files; keep the module smaller", maxTFFiles)
+			tooBig = true
+			return filepath.SkipAll
 		}
 		return nil
 	})
@@ -801,8 +808,8 @@ func (l *loader) tfFile(p string, isJSON bool) {
 		l.add(p, "%v", err)
 		return
 	}
-	if d := tfDepth(b, isJSON); d > maxTFDepth {
-		l.add(p, "nested too deeply (%d levels; keep it under %d)", d, maxTFDepth)
+	if prob := tfShape(b, isJSON); prob != "" {
+		l.add(p, "%s", prob)
 		return
 	}
 	var f *hcl.File
@@ -868,9 +875,13 @@ func (l *loader) providerSource(p string, src []byte, name string, a *hcl.Attrib
 		return
 	}
 	for _, kv := range kvs {
-		k := hcl.ExprAsKeyword(kv.Key)
+		k, ok := tfLiteral(kv.Key, src)
+		if !ok {
+			k = tfIdent(kv.Key)
+		}
 		if k == "" {
-			k, _ = tfLiteral(kv.Key, src)
+			l.add(p, "required_providers entry %q: keys must be literal (a name or a plain string)", name)
+			continue
 		}
 		v, ok := tfLiteral(kv.Value, src)
 		if !ok {
@@ -881,6 +892,18 @@ func (l *loader) providerSource(p string, src []byte, name string, a *hcl.Attrib
 			l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
 		}
 	}
+}
+
+// tfIdent is a native object key written as a bare identifier (source = …), else "".
+func tfIdent(e hcl.Expression) string {
+	k, ok := e.(*hclsyntax.ObjectConsKeyExpr)
+	if !ok || k.ForceNonLiteral {
+		return ""
+	}
+	if t, ok := k.Wrapped.(*hclsyntax.ScopeTraversalExpr); ok && len(t.Traversal) == 1 {
+		return t.Traversal.RootName()
+	}
+	return ""
 }
 
 // tfLiteral returns e's value when it is a literal string, without evaluating anything: a native "…" with no
@@ -909,43 +932,87 @@ func tfLiteral(e hcl.Expression, src []byte) (string, bool) {
 	return s, true
 }
 
-// tfDepth is the deepest bracket/brace/paren/template nesting in a terraform file, found without the recursive
-// parser: HCL's own lexer (a state machine) for .tf, encoding/json's tokenizer for .tf.json. Strings are tokens to
-// both, so brackets inside strings neither add nor hide depth. A lex error counts as too deep: the parse would fail.
-func tfDepth(b []byte, isJSON bool) int {
-	depth, deepest := 0, 0
+// tfShape rejects, before the recursive HCL parser runs, any terraform file whose nesting could overflow its stack or
+// whose bytes the parser would not see the way this check does. .tf: HCL's own lexer (a state machine); a lex error,
+// a closer that does not match the innermost opener (hclsyntax recovers per line, so unmatched closers would let the
+// openers that follow nest without bound), an unclosed opener, more than maxTFDepth levels or more than
+// maxTFOpeners openers is a problem. .tf.json: it must be valid JSON to encoding/json (HCL's JSON scanner is more
+// lenient and would keep going where encoding/json stops), and the same depth/opener caps apply. Strings are tokens
+// to both, so brackets inside strings neither add nor hide depth.
+func tfShape(b []byte, isJSON bool) string {
+	depth, deepest, openers := 0, 0, 0
+	open := func() {
+		depth++
+		openers++
+		deepest = max(deepest, depth)
+	}
+	verdict := func() string {
+		switch {
+		case deepest > maxTFDepth:
+			return fmt.Sprintf("nested too deeply (%d levels; keep it under %d)", deepest, maxTFDepth)
+		case openers > maxTFOpeners:
+			return fmt.Sprintf("too many brackets (%d; keep it under %d)", openers, maxTFOpeners)
+		}
+		return ""
+	}
 	if isJSON {
 		dec := json.NewDecoder(bytes.NewReader(b))
 		for {
 			tok, err := dec.Token()
 			if err == io.EOF {
-				return deepest
+				if !json.Valid(b) { // e.g. a second top-level value, which the decoder takes as a stream
+					return "invalid JSON"
+				}
+				return verdict()
 			}
 			if err != nil {
-				return deepest // the parser reports the syntax error; it never got deeper than this
+				return "invalid JSON: " + err.Error()
 			}
 			switch tok {
 			case json.Delim('['), json.Delim('{'):
-				depth++
-				deepest = max(deepest, depth)
+				open()
 			case json.Delim(']'), json.Delim('}'):
 				depth--
 			}
+			if deepest > maxTFDepth || openers > maxTFOpeners {
+				return verdict()
+			}
 		}
 	}
-	toks, _ := hclsyntax.LexConfig(b, "", hcl.InitialPos)
+	toks, diags := hclsyntax.LexConfig(b, "", hcl.InitialPos)
+	if diags.HasErrors() {
+		return diags.Error()
+	}
+	closes := map[hclsyntax.TokenType]hclsyntax.TokenType{
+		hclsyntax.TokenOBrace: hclsyntax.TokenCBrace, hclsyntax.TokenOBrack: hclsyntax.TokenCBrack,
+		hclsyntax.TokenOParen: hclsyntax.TokenCParen, hclsyntax.TokenOQuote: hclsyntax.TokenCQuote,
+		hclsyntax.TokenOHeredoc: hclsyntax.TokenCHeredoc, hclsyntax.TokenTemplateInterp: hclsyntax.TokenTemplateSeqEnd,
+		hclsyntax.TokenTemplateControl: hclsyntax.TokenTemplateSeqEnd,
+	}
+	isCloser := map[hclsyntax.TokenType]bool{}
+	for _, c := range closes {
+		isCloser[c] = true
+	}
+	var stack []hclsyntax.TokenType // expected closers, innermost last
 	for _, t := range toks {
-		switch t.Type {
-		case hclsyntax.TokenOBrace, hclsyntax.TokenOBrack, hclsyntax.TokenOParen, hclsyntax.TokenOQuote,
-			hclsyntax.TokenOHeredoc, hclsyntax.TokenTemplateInterp, hclsyntax.TokenTemplateControl:
-			depth++
-			deepest = max(deepest, depth)
-		case hclsyntax.TokenCBrace, hclsyntax.TokenCBrack, hclsyntax.TokenCParen, hclsyntax.TokenCQuote,
-			hclsyntax.TokenCHeredoc, hclsyntax.TokenTemplateSeqEnd:
+		if c, ok := closes[t.Type]; ok {
+			stack = append(stack, c)
+			open()
+			if v := verdict(); v != "" {
+				return v
+			}
+		} else if isCloser[t.Type] {
+			if len(stack) == 0 || stack[len(stack)-1] != t.Type {
+				return fmt.Sprintf("unbalanced brackets at line %d", t.Range.Start.Line)
+			}
+			stack = stack[:len(stack)-1]
 			depth--
 		}
 	}
-	return deepest
+	if len(stack) > 0 {
+		return "unbalanced brackets: unclosed at end of file"
+	}
+	return ""
 }
 
 // localModule: ./ prefix, no .. element after cleaning (so it stays inside terraform/), no backslashes.

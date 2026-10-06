@@ -2,6 +2,7 @@ package content
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -297,6 +298,14 @@ aws: {region: eu-west-1, max_hourly_usd: 0.1}
 	return tree(t, files)
 }
 
+func manyTF(n int) map[string]string {
+	m := map[string]string{}
+	for i := range n {
+		m[fmt.Sprintf("modules/m1/lab/terraform/f%d.tf", i)] = "\n"
+	}
+	return m
+}
+
 func TestAWSLabModuleRules(t *testing.T) {
 	if _, probs := Load(awsTree(t, nil)); len(probs) > 0 {
 		t.Fatalf("a minimal aws lab must load: %v", probs)
@@ -364,6 +373,9 @@ AWS`, "AWS", aws, 1)
 		"json non-string source": {tf("m.tf.json", `{"module": {"x": {"source": ["./x"]}}}`), "must be a literal"},
 		"computed provider":      {tf("v.tf", "terraform {\n  required_providers {\n    aws = { source = lower(\"HASHICORP/AWS\") }\n  }\n}\n"), "must be a literal"},
 		"for provider":           {tf("v.tf", "terraform {\n  required_providers {\n    aws = { for k in [1] : \"source\" => \"hashicorp/aws\" }\n  }\n}\n"), "must be a literal"},
+		"templated key":          {tf("v.tf", "terraform {\n  required_providers {\n    x = { \"${\"source\"}\" = \"evil/x\" }\n  }\n}\n"), "keys must be literal"},
+		"paren key":              {tf("v.tf", "terraform {\n  required_providers {\n    y = { (\"source\") = \"evil2/y\" }\n  }\n}\n"), "keys must be literal"},
+		"too many files":         {manyTF(201), "files"},
 		"big file":               {tf("big.tf", "# "+strings.Repeat("x", 200<<10)+"\n"), "keep each file under 128 KiB"},
 		"wrong terminal":         {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
 	}
@@ -406,6 +418,15 @@ func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
 			"must be a literal"},
 		"provider for bomb": {"v.tf", "terraform {\n  required_providers {\n    aws = [for a in " + list + " : [for b in " + list + " : [for c in " + list + " : 1]]]\n  }\n}\n",
 			"must be a literal"},
+		// fix round 3: unmatched closers let the depth go negative; hclsyntax recovers per line and recursed anyway
+		"closers then openers": {"d.tf", "a = " + strings.Repeat("}", 65000) + "\nb = " + strings.Repeat("{", 65000), "unbalanced"},
+		"brack closers":        {"d.tf", "a = " + strings.Repeat("]", 65000) + "\nb = " + strings.Repeat("[", 65000), "unbalanced"},
+		"paren closers":        {"d.tf", "a = " + strings.Repeat(")", 65000) + "\nb = " + strings.Repeat("(", 65000), "unbalanced"},
+		"lexer error":          {"d.tf", "a = 1 @\n", "Invalid character"},
+		"many openers":         {"d.tf", "locals {\n  x = [" + strings.Repeat("[1],", 21000) + "]\n}\n", "brackets"},
+		// HCL's JSON scanner accepts 01 and keeps going where encoding/json stopped
+		"lenient json":    {"d.tf.json", `{"a": 01, "b": ` + strings.Repeat("[", 131000) + "}", "invalid JSON"},
+		"two json values": {"d.tf.json", `{} {}`, "invalid JSON"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

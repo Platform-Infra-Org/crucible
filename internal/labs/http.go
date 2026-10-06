@@ -1,7 +1,9 @@
 package labs
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -117,6 +119,25 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 	r.Get("/api/labs/{id}/terminals/{name}/ws", s.terminal)
+	r.Get("/api/labs/{id}/transcripts/{tid}", func(w http.ResponseWriter, r *http.Request) {
+		tid, err := strconv.ParseInt(p(r, "tid"), 10, 64)
+		if err != nil {
+			httpx.Error(w, apperr.Wrap(apperr.NotFound, "transcript not found"))
+			return
+		}
+		rc, err := s.Transcript(r.Context(), user(r), p(r, "id"), tid)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		defer rc.Close()
+		h := w.Header() // blob Get has no content type; terminal output is untrusted, never rendered
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+		h.Set("Content-Disposition", `attachment; filename="transcript.txt"`)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Content-Security-Policy", "sandbox")
+		_, _ = io.Copy(w, rc)
+	})
 }
 
 func reply(w http.ResponseWriter, v any, err error) {
@@ -178,6 +199,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.SetReadLimit(1 << 20)
 	ctx := r.Context()
+	rec, started := &tail{}, s.Now() // spec §7: the scorer sees what the terminal printed
 
 	done := make(chan struct{})
 	go func() {
@@ -185,8 +207,11 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 32<<10)
 		for {
 			n, err := pty.Read(buf)
-			if n > 0 && ws.Write(ctx, websocket.MessageBinary, buf[:n]) != nil {
-				return
+			if n > 0 {
+				rec.Write(buf[:n]) // only this goroutine touches rec until done is closed
+				if ws.Write(ctx, websocket.MessageBinary, buf[:n]) != nil {
+					return
+				}
 			}
 			if err != nil {
 				_ = ws.Close(websocket.StatusNormalClosure, "terminal closed")
@@ -198,6 +223,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		_ = pty.Close()
 		ws.CloseNow()
 		<-done
+		s.saveTranscript(context.WithoutCancel(ctx), inst.ID, chi.URLParam(r, "name"), started, rec)
 	}()
 	for {
 		typ, data, err := ws.Read(ctx)

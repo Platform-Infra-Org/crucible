@@ -350,6 +350,12 @@ func (s *Service) canScore(u *auth.User, team, training, owner string) (bool, er
 	return c.Can(u.Email, rbac.Score, team, training, owner), nil
 }
 
+// CanScore reports whether u scores this program (used to gate evidence such as terminal transcripts).
+func (s *Service) CanScore(u *auth.User, team, training, owner string) bool {
+	ok, err := s.canScore(u, team, training, owner)
+	return err == nil && ok
+}
+
 // CanView: the trainee themself, their program's scorers and managers, team leader/seniors, their mentor, admins
 // (spec §5.3 "View trainee progress").
 func (s *Service) CanView(u *auth.User, team, training, owner string) bool {

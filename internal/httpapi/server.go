@@ -19,6 +19,7 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/config"
 	"crucible/internal/configapi"
+	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpx"
 	"crucible/internal/journey"
@@ -39,6 +40,7 @@ type Deps struct {
 	Notify     *notify.Service
 	Config     *configapi.Service
 	Journey    *journey.Service
+	Edits      *edits.Service
 	Hub        *agenthub.Hub
 	PublicURL  string
 	HookSecret string
@@ -102,7 +104,8 @@ func NewRouter(d Deps) chi.Router {
 				}
 				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor})
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor,
+				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email)})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
@@ -148,6 +151,9 @@ func NewRouter(d Deps) chi.Router {
 		}
 		if d.Journey != nil {
 			d.Journey.Routes(r)
+		}
+		if d.Edits != nil {
+			d.Edits.Routes(r)
 		}
 	})
 

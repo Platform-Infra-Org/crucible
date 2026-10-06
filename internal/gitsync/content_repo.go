@@ -80,9 +80,9 @@ func (c *ContentRepo) lock(ctx context.Context) (func(), error) {
 	}
 }
 
-// checkEditFiles enforces what a UI edit may touch: 1–20 text files (.md/.yaml/.yml/.sh, ≤256 KiB): training.yaml or
+// CheckEditFiles enforces what a UI edit may touch: 1–20 text files (.md/.yaml/.yml/.sh, ≤256 KiB): training.yaml or
 // files inside modules/<id>/ (editPath). There are no deletes: every entry is the file's new content.
-func checkEditFiles(files map[string]string) error {
+func CheckEditFiles(files map[string]string) error {
 	if len(files) == 0 || len(files) > maxEditFiles {
 		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("an edit changes 1 to %d files", maxEditFiles))
 	}
@@ -169,7 +169,7 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files m
 	if msg, err = cleanMsg(msg); err != nil {
 		return "", "", err
 	}
-	if err := checkEditFiles(files); err != nil {
+	if err := CheckEditFiles(files); err != nil {
 		return "", "", err
 	}
 	unlock, err := c.lock(ctx)

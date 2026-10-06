@@ -48,6 +48,7 @@ const (
 	SubmissionScored  Kind = "submission_scored" // also returned for rework
 	ReaperReport      Kind = "reaper_report"
 	RankUp            Kind = "rank_up"
+	ContentEdit       Kind = "content_edit"
 )
 
 type KindInfo struct {
@@ -68,6 +69,7 @@ var Kinds = []KindInfo{
 	{SubmissionScored, "My submission was scored or returned"},
 	{ReaperReport, "Leftover AWS lab resources need attention"},
 	{RankUp, "I or one of my mentees reached a new forge rank"},
+	{ContentEdit, "A content edit waits for my review, or mine was decided"},
 }
 
 type Event struct {

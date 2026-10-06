@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
@@ -25,6 +28,7 @@ import (
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
+	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
 	"crucible/internal/infracost"
@@ -197,10 +201,35 @@ func run(ctx context.Context) error {
 		_ = jobClient.Stop(stop)
 	}()
 
+	// One ContentRepo per repo and branch for the whole process: its lock serializes git work on its clone, so a second
+	// value on the same dir would race it. A training moved to another repo gets a new value and a new dir.
+	var repoMu sync.Mutex
+	repos := map[string]*gitsync.ContentRepo{}
+	editsSvc := &edits.Service{DB: pool, State: syncer.Current, Notify: notifySvc, Resync: syncer.SyncOnce, Log: slog.Default(),
+		Repo: func(id string) *gitsync.ContentRepo {
+			st := syncer.Current()
+			if st == nil || st.Platform == nil {
+				return nil
+			}
+			ref, ok := st.Platform.Trainings[id]
+			if !ok {
+				return nil
+			}
+			sum := sha256.Sum256([]byte(ref.Repo + "\x00" + ref.Branch))
+			key := hex.EncodeToString(sum[:8])
+			repoMu.Lock()
+			defer repoMu.Unlock()
+			if repos[key] == nil {
+				repos[key] = &gitsync.ContentRepo{URL: ref.Repo, Branch: ref.Branch, Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "edits", key),
+					Name: writer.Name, Email: writer.Email}
+			}
+			return repos[key]
+		}}
+
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
-			Journey:   &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now},
+			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

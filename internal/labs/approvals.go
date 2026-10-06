@@ -35,14 +35,16 @@ func monthStart(t time.Time) time.Time {
 }
 
 // labCostSQL selects lab_instances (alias l) with three more columns: actual (Cost Explorer total, NULL when never
-// reported), settled (use the actual instead of the estimate: reported, and the lab ended 48 h before the last
-// successful ingestion, so Cost Explorer has caught up) and est_spent (hourly estimate × time run). $1 is now.
+// reported), settled (use the actual instead of the estimate: a positive total, and both the last successful
+// ingestion and the newest actuals row came 48 h or more after the lab ended, so Cost Explorer has caught up; a $0 or
+// stale row keeps the estimate) and est_spent (hourly estimate × time run). $1 is now.
 // Conservative on purpose: a lab Cost Explorer never reported keeps its estimate (tags not activated != free).
 const labCostSQL = `SELECT l.*, a.usd AS actual,
-	coalesce(a.usd IS NOT NULL AND l.destroyed_at < (SELECT ingest_ok_at FROM aws_ops) - interval '48 hours', false) AS settled,
+	coalesce(a.usd > 0 AND a.updated_at >= l.destroyed_at + interval '48 hours'
+		AND (SELECT ingest_ok_at FROM aws_ops) >= l.destroyed_at + interval '48 hours', false) AS settled,
 	CASE WHEN l.ready_at IS NULL THEN 0
 		ELSE l.hourly_usd * extract(epoch FROM least(coalesce(l.destroyed_at, $1), $1) - l.ready_at)::float8 / 3600 END AS est_spent
-	FROM lab_instances l LEFT JOIN (SELECT lab_id, sum(usd) AS usd FROM cost_actuals GROUP BY lab_id) a ON a.lab_id = l.id`
+	FROM lab_instances l LEFT JOIN (SELECT lab_id, sum(usd)::float8 AS usd, max(updated_at) AS updated_at FROM cost_actuals GROUP BY lab_id) a ON a.lab_id = l.id`
 
 // spend sums this calendar month (UTC) for a team, or one program when training != "".
 // ponytail: a lab counts in the month it was requested; one running across midnight on the 1st stays in the old month.
@@ -298,7 +300,7 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 				inst.OverCap = true // an admin approving it now is an audited override
 			}
 		}
-		if lab, _, err = s.labContent(inst); err != nil {
+		if lab, _, err = s.labContent(ctx, inst); err != nil {
 			return "", err
 		}
 		if _, err := s.runner(inst.Runtime); err != nil {

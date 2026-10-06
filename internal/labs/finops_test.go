@@ -303,12 +303,147 @@ func TestBudgetCapSetsTheTimer(t *testing.T) {
 	if got.LimitReason != "budget" || !inst.EndsAt.Equal(inst.ReadyAt.Add(50*time.Minute)) || got.CanExtend {
 		t.Fatalf("$10 of headroom at $12/h is 50 minutes, ending at the cap, no extension: %+v ends %v", got, inst.EndsAt)
 	}
+	if _, err := f.s.Extend(ctx, f.u, v.ID); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "budget cap") {
+		t.Fatalf("extending a budget-limited lab: %v", err)
+	}
 	inst.OverCap = true
-	if lim := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
+	if lim, _ := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
 		t.Fatal("a lab an admin approved over the cap has no budget limit")
 	}
 	inst.OverCap, inst.HourlyUSD = false, 0
-	if lim := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
+	if lim, _ := f.s.budgetLimit(ctx, inst, f.clk.Now()); !lim.At.IsZero() {
 		t.Fatal("a free lab has no budget limit")
+	}
+}
+
+// squeeze starts a $12/h lab whose approval races another lab booking usd of the team's $250 cap.
+func (f *fx) squeeze(t *testing.T, usd float64) *View {
+	t.Helper()
+	f.rates["first-heat"] = 12
+	v := f.request(t, f.u)
+	f.run.provision = func() { f.spent(t, "bbbbbbbbbbb9", "forge-101", usd) }
+	if _, err := f.s.Decide(context.Background(), f.leader, v.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestSettleRuleNeedsPositiveFreshActuals(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // Cost Explorer says $0 so far
+	f.spent(t, "aaaaaaaaaaa2", "forge-101", 2) // $0.40, but the row was last read 1 day after the lab ended
+	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
+	f.endedAgo(t, "aaaaaaaaaaa2", 72*time.Hour)
+	for id, row := range map[string][2]any{"aaaaaaaaaaa1": {0.0, 0}, "aaaaaaaaaaa2": {0.4, 48}} {
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO cost_actuals (lab_id, day, usd, updated_at)
+			SELECT $1, destroyed_at::date, $2, destroyed_at + $3 * interval '1 hour' FROM lab_instances WHERE id = $1`,
+			id, row[0], row[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE aws_ops SET ingest_ok_at = $1`, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// lab 2's row: destroyed 72h ago, updated at +48h is fine, so make it stale instead
+	if _, err := f.s.DB.Exec(ctx, `UPDATE cost_actuals SET updated_at = updated_at - interval '1 day' WHERE lab_id = 'aaaaaaaaaaa2'`); err != nil {
+		t.Fatal(err)
+	}
+	sp, err := f.s.spend(ctx, f.plat, "forge", "")
+	if err != nil || !closeTo(sp.SpentUSD, 4) || sp.ActualUSD != 0 {
+		t.Fatalf("a $0 row and a stale row keep the estimates ($2 + $2): %+v %v", sp, err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE cost_actuals SET updated_at = updated_at + interval '1 day' WHERE lab_id = 'aaaaaaaaaaa2'`); err != nil {
+		t.Fatal(err)
+	}
+	if sp, _ = f.s.spend(ctx, f.plat, "forge", ""); !closeTo(sp.ActualUSD, 0.4) {
+		t.Fatalf("a positive row read after the 48 h catch-up settles: %+v", sp)
+	}
+}
+
+func TestCostActualsRejectsNegative(t *testing.T) {
+	f := setup(t, true)
+	if _, err := f.s.DB.Exec(context.Background(), `INSERT INTO cost_actuals (lab_id, day, usd, updated_at) VALUES ('x', '2026-10-01', -1, now())`); err == nil {
+		t.Fatal("a negative row must be refused")
+	}
+}
+
+func TestBudgetLimitMonthBoundary(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.spent(t, "bbbbbbbbbbb9", "forge-101", 238)
+	lab := func(created time.Time) *Instance {
+		f.s.DB.Exec(ctx, `DELETE FROM lab_instances WHERE id = 'cccccccccccc'`) //nolint:errcheck
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
+			created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, hourly_usd, estimate_usd)
+			VALUES ('cccccccccccc', $1, 'forge', 'forge-101', 'old', 'abc', 'local', 'provisioning', $2, $2, 3600, 1800, 300, 0, 12, 12)`,
+			f.u.ID, created); err != nil {
+			t.Fatal(err)
+		}
+		return &Instance{ID: "cccccccccccc", Team: "forge", Training: "forge-101", HourlyUSD: 12, EstimateUSD: 12, CreatedAt: created}
+	}
+	now := f.clk.Now()
+	if lim, err := f.s.budgetLimit(ctx, lab(now), now); err != nil || !lim.At.Equal(now.Add(time.Hour)) {
+		t.Fatalf("this month: its own $12 is in committed, so it comes back out ($12 headroom = 1 h): %+v %v", lim, err)
+	}
+	// Created before the 1st it is not in this month's sum: subtracting would overstate headroom ($24 = 2 h).
+	if lim, err := f.s.budgetLimit(ctx, lab(monthStart(now).Add(-time.Hour)), now); err != nil || !lim.At.Equal(now.Add(time.Hour)) {
+		t.Fatalf("created before the 1st: nothing to subtract: %+v %v", lim, err)
+	}
+}
+
+func TestBudgetLimitFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.spent(t, "bbbbbbbbbbb9", "forge-101", 262) // the cap is gone
+	inst := &Instance{ID: "cccccccccccc", Team: "forge", Training: "forge-101", HourlyUSD: 12, EstimateUSD: 12, CreatedAt: f.clk.Now()}
+	if _, err := f.s.budgetLimit(ctx, inst, f.clk.Now()); !errors.Is(err, apperr.Conflict) {
+		t.Fatalf("no headroom refuses: %v", err)
+	}
+	inst.HourlyUSD = 1e-12                                                  // tiny rate, huge headroom: clamped, no overflow
+	f.s.DB.Exec(ctx, `DELETE FROM lab_instances WHERE id = 'bbbbbbbbbbb9'`) //nolint:errcheck
+	if lim, err := f.s.budgetLimit(ctx, inst, f.clk.Now()); err != nil || !lim.At.After(f.clk.Now()) {
+		t.Fatalf("clamped: %+v %v", lim, err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := f.s.budgetLimit(cctx, inst, f.clk.Now()); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("a spend error fails closed: %v", err)
+	}
+}
+
+func TestNoHeadroomLabFailsInsteadOfProvisioningDead(t *testing.T) {
+	f := setup(t, true)
+	v := f.squeeze(t, 250)
+	if got := f.waitState(t, f.u, v.ID, Failed); !strings.Contains(got.Error, "budget hard cap") {
+		t.Fatalf("refused with the over-cap message: %+v", got)
+	}
+}
+
+func TestBudgetVersusScheduleAndTTL(t *testing.T) {
+	f := setup(t, true)
+	onSchedule(f)
+	f.clk.Set(time.Date(2026, 10, 7, 15, 30, 0, 0, time.UTC)) // window closes in 30 min
+	v := f.squeeze(t, 248)                                    // $2 headroom at $12/h: 10 min
+	if got := f.waitState(t, f.u, v.ID, Ready); got.LimitReason != "budget" {
+		t.Fatalf("budget ends before the window: %+v", got)
+	}
+}
+
+func TestScheduleBeatsALaterBudget(t *testing.T) {
+	f := setup(t, true)
+	onSchedule(f)
+	f.clk.Set(time.Date(2026, 10, 7, 15, 30, 0, 0, time.UTC))
+	v := f.squeeze(t, 241) // $9 headroom: 45 min, after the window
+	if got := f.waitState(t, f.u, v.ID, Ready); got.LimitReason != "schedule" {
+		t.Fatalf("the window closes first: %+v", got)
+	}
+}
+
+func TestTTLBeatsALaterBudget(t *testing.T) {
+	f := setup(t, true)
+	v := f.squeeze(t, 100) // plenty of headroom, TTL is 1 h
+	if got := f.waitState(t, f.u, v.ID, Ready); got.LimitReason != "ttl" {
+		t.Fatalf("ttl first: %+v", got)
 	}
 }

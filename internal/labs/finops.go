@@ -156,26 +156,34 @@ func (s *Service) killAll(ctx context.Context) {
 
 // budgetLimit is when this lab's running cost would reach the team's or the program's hard cap (spec §8.6): the
 // headroom other labs leave, divided by this lab's hourly rate, from when it is ready. Called while the lab is
-// still provisioning, so spend() counts its whole estimate: take that back out. Labs an admin approved over the cap
-// and free labs have no budget limit.
-func (s *Service) budgetLimit(ctx context.Context, inst *Instance, now time.Time) Limit {
+// still provisioning, so spend() counts its whole estimate (if it falls in this month): take that back out. Labs an
+// admin approved over the cap and free labs have no budget limit. It fails closed: if spend can't be read, or no
+// headroom is left, it returns an error and the caller must not hand the lab out (an instantly expired lab is worse).
+func (s *Service) budgetLimit(ctx context.Context, inst *Instance, now time.Time) (Limit, error) {
 	st := s.Learn.State()
 	if inst.HourlyUSD <= 0 || inst.OverCap || st == nil || st.Platform == nil {
-		return Limit{}
+		return Limit{}, nil
 	}
 	var best Limit
 	for _, scope := range []string{"", inst.Training} {
 		sp, err := s.spend(ctx, st.Platform, inst.Team, scope)
 		if err != nil {
 			s.Log.Warn("budget limit: reading spend failed", "lab", inst.ID, "err", err)
-			continue
+			return Limit{}, apperr.Wrap(apperr.Unavailable, "couldn't check the budget cap just now; try again shortly")
 		}
 		if sp.CapUSD <= 0 {
 			continue
 		}
-		headroom := max(0, sp.CapUSD-(sp.CommittedUSD-inst.EstimateUSD))
-		at := now.Add(time.Duration(headroom / inst.HourlyUSD * float64(time.Hour)))
-		best = EffectiveEnd(best, Limit{At: at, Reason: "budget"})
+		committed := sp.CommittedUSD
+		if !inst.CreatedAt.Before(monthStart(now)) { // only a lab in this month's sum is in committed
+			committed -= inst.EstimateUSD
+		}
+		headroom := sp.CapUSD - committed
+		if headroom <= 0 {
+			return Limit{}, apperr.Wrap(apperr.Conflict, "this lab would pass the budget hard cap; ask an admin")
+		}
+		d := min(headroom/inst.HourlyUSD, 24*365*10) * float64(time.Hour) // clamp: no Duration overflow
+		best = EffectiveEnd(best, Limit{At: now.Add(time.Duration(d)), Reason: "budget"})
 	}
-	return best
+	return best, nil
 }

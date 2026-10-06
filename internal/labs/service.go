@@ -675,7 +675,19 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		return
 	}
 	now := s.Now()
-	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now), s.budgetLimit(ctx, inst, now))
+	bl, berr := s.budgetLimit(ctx, inst, now)
+	if berr != nil { // no budget headroom (or it can't be read): don't hand out a lab that would expire at once
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer dcancel()
+		if r != nil {
+			_ = r.Destroy(dctx, inst)
+		}
+		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
+			WHERE id = $1 AND state = 'provisioning'`, inst.ID, cleanText(berr.Error()), s.Now())
+		s.event(dctx, inst.ID, "failed", cleanText(berr.Error()))
+		return
+	}
+	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now), bl)
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
@@ -1079,6 +1091,9 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	}
 	if inst.State != Ready || inst.Extended || inst.MaxExtension == 0 || inst.EndsAt == nil {
 		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
+	}
+	if inst.LimitReason == "budget" {
+		return nil, apperr.Wrap(apperr.Conflict, "this lab ends at the budget cap; it can't be extended")
 	}
 	end, reason := inst.EndsAt.Add(inst.MaxExtension), "ttl"
 	if lim := s.scheduleLimit(inst, s.Now()); !lim.At.IsZero() && lim.At.Before(end) {

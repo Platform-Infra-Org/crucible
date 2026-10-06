@@ -38,6 +38,15 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 
+	r.Get("/api/ledger", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Ledger(r.Context(), user(r))
+		reply(w, v, err)
+	})
+	r.Post("/api/admin/finops/refresh", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.RefreshFinOps(r.Context(), user(r))
+		reply(w, v, err)
+	})
+
 	r.Get(mod, func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.ModuleLab(r.Context(), user(r), p(r, "team"), p(r, "training"), p(r, "module"))
 		reply(w, v, err)

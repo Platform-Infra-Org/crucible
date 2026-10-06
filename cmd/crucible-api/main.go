@@ -184,7 +184,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	notifySvc.Jobs = jobClient
+	notifySvc.Jobs, labSvc.Jobs = jobClient, jobClient
 	syncer.OnProblem = func(key string, probs []content.Problem) { notifySvc.ReportSyncProblem(ctx, key, probs) }
 	go syncer.Run(ctx, every)
 	if err := jobClient.Start(ctx); err != nil {

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
@@ -49,6 +50,11 @@ type Service struct {
 	Blobs      blob.Store       // transcripts (Task 6)
 	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
+
+	Jobs *river.Client[pgx.Tx] // queue for "Refresh now" on the Ledger; nil in tests that don't need it
+
+	refreshMu   sync.Mutex
+	refreshedAt time.Time
 
 	sweepMu  sync.Mutex // one sweep at a time in this process
 	inflight sync.Map   // lab ids with a slow (aws) destroy running in this process

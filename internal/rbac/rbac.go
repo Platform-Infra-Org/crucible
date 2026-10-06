@@ -2,6 +2,7 @@
 package rbac
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -181,4 +182,20 @@ func (c Checker) MayApprove(actor, requester, team, training string, estimateUSD
 		return estimateUSD <= tiers.Tier1USD
 	}
 	return false
+}
+
+// SpendTeams lists, sorted, the teams whose lab spend email may see (spec §5.3 "View team spend"): every team for
+// admins; otherwise teams they lead, or where they manage or approve any program.
+func (c Checker) SpendTeams(email string) []string {
+	var out []string
+	for _, id := range slices.Sorted(maps.Keys(c.P.Teams)) {
+		ok := c.IsAdmin(email) || c.Can(email, ViewSpend, id, "", "")
+		for tr := range c.P.Teams[id].Programs {
+			ok = ok || c.Can(email, ViewSpend, id, tr, "")
+		}
+		if ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }

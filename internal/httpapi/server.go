@@ -82,11 +82,12 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme, teams, canApprove, scorer := false, "forge", []string{}, false, false
+			admin, theme, teams, canApprove, scorer, canSpend := false, "forge", []string{}, false, false, false
 			if st := state(d); st != nil && st.Platform != nil {
 				c := rbac.Checker{P: st.Platform}
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
 				canApprove, scorer = admin, canScore(st.Platform, u.Email)
+				canSpend = len(c.SpendTeams(u.Email)) > 0
 				for id, t := range st.Platform.Teams {
 					if configapi.Role(t, u.Email) != "" { // team role or a program role in one of its programs
 						teams = append(teams, id)
@@ -98,7 +99,7 @@ func NewRouter(d Deps) chi.Router {
 				}
 				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer})
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {

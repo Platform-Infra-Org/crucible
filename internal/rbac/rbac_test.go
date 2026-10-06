@@ -1,6 +1,7 @@
 package rbac
 
 import (
+	"slices"
 	"testing"
 
 	"crucible/internal/config"
@@ -132,5 +133,25 @@ func TestApprovalRules(t *testing.T) {
 	p.Teams["forge"].Programs["forge-101"].Roles.Approvers = []string{senior}
 	if !may(senior, trainee, 5, false) || may(senior, trainee, 5.5, false) {
 		t.Error("a program approver approves up to tier 1 only")
+	}
+}
+func TestSpendTeams(t *testing.T) {
+	p, err := config.Load("../../examples/platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Checker{P: p}
+	if got := c.SpendTeams("admin@crucible.local"); !slices.Equal(got, []string{"forge"}) {
+		t.Fatalf("admins see every team: %v", got)
+	}
+	if got := c.SpendTeams("leader@crucible.local"); !slices.Equal(got, []string{"forge"}) {
+		t.Fatalf("leaders see their team: %v", got)
+	}
+	if got := c.SpendTeams("trainee@crucible.local"); len(got) != 0 {
+		t.Fatalf("trainees see no spend: %v", got)
+	}
+	p.Teams["forge"].Programs["forge-101"].Roles.Approvers = []string{"senior@crucible.local"}
+	if got := c.SpendTeams("senior@crucible.local"); !slices.Equal(got, []string{"forge"}) {
+		t.Fatalf("a program approver sees the team's spend (spec §5.3): %v", got)
 	}
 }

@@ -155,11 +155,20 @@ func (c *Client) Delete(ctx context.Context, region string, cr Credentials, s st
 		}
 	}
 	var api smithy.APIError
-	if errors.As(err, &api) && (strings.HasSuffix(api.ErrorCode(), ".NotFound") || api.ErrorCode() == "NoSuchBucket") {
-		return false, nil
+	if errors.As(err, &api) {
+		switch code := api.ErrorCode(); {
+		case strings.HasSuffix(code, ".NotFound") || code == "NoSuchBucket":
+			return false, nil
+		case notYet[code]:
+			return false, fmt.Errorf("%w: %s", ErrNotYet, api.ErrorMessage())
+		}
 	}
 	return err == nil, err
 }
+
+// notYet are the error codes of a dependency that goes away by itself (an instance terminating, a writer finishing).
+var notYet = map[string]bool{"DependencyViolation": true, "VolumeInUse": true, "InvalidVolume.InUse": true,
+	"IncorrectState": true, "IncorrectInstanceState": true, "BucketNotEmpty": true}
 
 // deleteBucket removes every object version and delete marker, then the bucket.
 func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {

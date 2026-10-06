@@ -197,3 +197,13 @@ func TestLabWritesKeepsUntaggedCreatesOnly(t *testing.T) {
 		t.Fatalf("lookup: %+v", last)
 	}
 }
+
+func TestDeleteOfAResourceStillInUseIsNotYet(t *testing.T) {
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		return 400, "text/xml", `<Response><Errors><Error><Code>VolumeInUse</Code><Message>vol-1 is attached to i-1</Message></Error></Errors><RequestID>r</RequestID></Response>`
+	})
+	creds := Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}
+	if ok, err := cl.Delete(context.Background(), "eu-west-1", creds, "arn:aws:ec2:eu-west-1:1:volume/vol-1"); ok || !errors.Is(err, ErrNotYet) {
+		t.Fatalf("an attached volume is retried later, not a failure: %v %v", ok, err)
+	}
+}

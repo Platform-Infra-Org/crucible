@@ -50,7 +50,8 @@ type Service struct {
 	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
 
-	sweepMu sync.Mutex // one sweep at a time in this process
+	sweepMu  sync.Mutex // one sweep at a time in this process
+	inflight sync.Map   // lab ids with a slow (aws) destroy running in this process
 
 	touchMu sync.Mutex
 	touched map[string]time.Time
@@ -648,16 +649,53 @@ func (s *Service) runner(runtime string) (Runner, error) {
 	return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("%s labs are not enabled on this server", runtime))
 }
 
+// once runs fn in the background unless a run for this lab is already in flight in this process.
+func (s *Service) once(labID string, fn func()) bool {
+	if _, busy := s.inflight.LoadOrStore(labID, true); busy {
+		return false
+	}
+	go func() {
+		defer s.inflight.Delete(labID)
+		fn()
+	}()
+	return true
+}
+
+// labProvisioner is a runner that needs the lab itself, not a bundle (aws: module, region, workspace compose).
+type labProvisioner interface {
+	ProvisionLab(ctx context.Context, inst *Instance, lab *content.Lab) error
+}
+
+// Time limits per runtime. An aws lab runs terraform in pods with a 50-minute deadline (tfPod), so its provisioning
+// and destroy get longer than that, and the sweep calls them hung or stuck only after they had their full time.
+// The SQL in Sweep mirrors these.
+func provisionTimeout(runtime string) time.Duration {
+	if runtime == "aws" {
+		return 60 * time.Minute // sweep: hung after 65
+	}
+	return 15 * time.Minute // sweep: hung after 15
+}
+
+// destroyTimeout bounds one destroy: terraform destroy for aws labs (the namespace delete and the tag sweep get
+// their own few minutes afterwards), a namespace or a compose project otherwise.
+func destroyTimeout(runtime string) time.Duration {
+	if runtime == "aws" {
+		return 55 * time.Minute // sweep: stuck after 70
+	}
+	return 2 * time.Minute // sweep: stuck after 10
+}
+
 func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.Lab) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, provisionTimeout(inst.Runtime))
 	defer cancel()
 	r, err := s.runner(inst.Runtime)
-	var bundle []byte
-	if err == nil {
-		bundle, err = Bundle(lab.Dir, lab.Runtime)
-	}
-	if err == nil {
-		err = r.Provision(ctx, inst, bundle, lab.Compose)
+	if lp, ok := r.(labProvisioner); ok {
+		err = lp.ProvisionLab(ctx, inst, lab) // aws: builds its own workspace bundle and terraform module
+	} else if err == nil {
+		var bundle []byte
+		if bundle, err = Bundle(lab.Dir, lab.Runtime); err == nil {
+			err = r.Provision(ctx, inst, bundle, lab.Compose)
+		}
 	}
 	if err == nil && lab.Setup != nil {
 		err = s.runSetup(ctx, inst, lab, "", lab.Setup)
@@ -665,11 +703,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	if err != nil {
 		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
 		// a fresh ctx: after a provisioning timeout ctx is already expired and would leak the namespace
-		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 		defer dcancel()
-		if r != nil {
-			_ = r.Destroy(dctx, inst)
-		}
+		_ = s.destroyRuntime(dctx, inst)
 		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
 			WHERE id = $1 AND state = 'provisioning'`,
 			inst.ID, cleanText(s.runnerErr(err).Error()), s.Now())
@@ -679,11 +715,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	now := s.Now()
 	bl, berr := s.budgetLimit(ctx, inst, now)
 	if berr != nil { // no budget headroom (or it can't be read): don't hand out a lab that would expire at once
-		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 		defer dcancel()
-		if r != nil {
-			_ = r.Destroy(dctx, inst)
-		}
+		_ = s.destroyRuntime(dctx, inst)
 		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
 			WHERE id = $1 AND state = 'provisioning'`, inst.ID, cleanText(berr.Error()), s.Now())
 		s.event(dctx, inst.ID, "failed", cleanText(berr.Error()))
@@ -694,11 +728,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
 		// the lab was ended while provisioning: nobody else will clean these containers up
-		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 		defer dcancel()
-		if r != nil {
-			_ = r.Destroy(dctx, inst)
-		}
+		_ = s.destroyRuntime(dctx, inst)
 		return
 	}
 	s.event(ctx, inst.ID, "ready", "")
@@ -1166,23 +1198,38 @@ func (s *Service) withdraw(ctx context.Context, u *auth.User, inst *Instance) (*
 
 func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 	// the request may be cancelled mid-way; a half-finished destroy would wedge the lab in 'destroying'
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 	// destroyed_at doubles as "destroying since" until the final update (see Sweep)
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', end_reason = $2, destroyed_at = $3
 		WHERE id = $1 AND state IN ('provisioning', 'ready')`, inst.ID, reason, s.Now())
 	if err != nil || tag.RowsAffected() == 0 {
+		cancel()
 		return
 	}
+	if inst.Runtime == "aws" { // terraform destroy takes minutes: End, the sweep and the kill switch must not wait
+		if !s.once(inst.ID, func() { defer cancel(); s.finishDestroy(ctx, inst, reason) }) {
+			cancel()
+		}
+		return
+	}
+	defer cancel()
 	s.finishDestroy(ctx, inst, reason)
 }
 
+// destroyRuntime tears a lab's environment down. For aws labs, terraform destroy is followed by a tag sweep (spec
+// §8.2) with its own few minutes: terraform may have used up ctx.
 func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
 		return err
 	}
-	return r.Destroy(ctx, inst)
+	err = r.Destroy(ctx, inst)
+	if inst.Runtime == "aws" {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		defer cancel()
+		s.sweepLab(sctx, inst.ID)
+	}
+	return err
 }
 
 func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason string) {
@@ -1218,8 +1265,10 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
-		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 - interval '15 minutes')
-		   OR (state = 'destroying' AND destroyed_at < $1 - interval '10 minutes')
+		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 -
+		       CASE WHEN runtime = 'aws' THEN interval '65 minutes' ELSE interval '15 minutes' END)
+		   OR (state = 'destroying' AND destroyed_at < $1 -
+		       CASE WHEN runtime = 'aws' THEN interval '70 minutes' ELSE interval '10 minutes' END)
 		   OR (state = 'pending_approval' AND escalate_at <= $1)`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)
@@ -1242,15 +1291,11 @@ func (s *Service) Sweep(ctx context.Context) {
 			}
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-			err := s.destroyRuntime(ctx, inst)
-			note := map[bool]string{true: "cleanup timed out", false: ""}[err != nil]
-			if errors.Is(err, apperr.Unavailable) {
-				note = "cleanup skipped: " + err.Error() + "; delete the lab namespace by hand"
+			if inst.Runtime == "aws" {
+				s.once(inst.ID, func() { s.retryDestroy(context.WithoutCancel(ctx), inst) }) // never hold up the sweep
+			} else {
+				s.retryDestroy(ctx, inst)
 			}
-			_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
-				WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), note)
-			cancel()
 			continue
 		case inst.State == Provisioning:
 			reason = "provision_timeout"
@@ -1263,6 +1308,20 @@ func (s *Service) Sweep(ctx context.Context) {
 		s.destroy(ctx, inst, reason)
 	}
 	s.reconcileCluster(ctx)
+	s.refreshAWS(ctx)
+}
+
+// retryDestroy is the last attempt for a destroy that never finished; the row ends 'destroyed' either way.
+func (s *Service) retryDestroy(ctx context.Context, inst *Instance) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
+	defer cancel()
+	err := s.destroyRuntime(ctx, inst)
+	note := map[bool]string{true: "cleanup timed out", false: ""}[err != nil]
+	if errors.Is(err, apperr.Unavailable) {
+		note = "cleanup skipped: " + err.Error() + "; delete the lab namespace by hand"
+	}
+	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
+		WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), note)
 }
 
 // reconcileCluster deletes lab namespaces whose lab is over or unknown: a destroy that failed, a lab ended while

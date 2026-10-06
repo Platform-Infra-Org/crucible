@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -19,12 +20,14 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/awscloud"
 	"crucible/internal/blob"
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
+	"crucible/internal/infracost"
 	"crucible/internal/jobs"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
@@ -120,8 +123,53 @@ func run(ctx context.Context) error {
 		runners["cluster"], estimators["cluster"] = cr, rates // M4 ruling 6: priced like local labs until M6
 		slog.Info("cluster labs enabled", "api", cfg.Host, "privileged", privileged)
 	}
+	var cloud awscloud.Cloud
+	var awsRegions []string
+	switch mode := os.Getenv("CRUCIBLE_AWS_LABS"); mode {
+	case "":
+	case "1", "dryrun":
+		cr, ok := runners["cluster"].(*labs.ClusterRunner)
+		if !ok {
+			return errors.New("CRUCIBLE_AWS_LABS needs CRUCIBLE_CLUSTER_LABS=1: the workspace and terraform pods run in the cluster")
+		}
+		ar := &labs.AWSRunner{Cluster: cr, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
+			WorkspaceImage: env("CRUCIBLE_AWS_WORKSPACE_IMAGE", labs.DefaultWorkspaceImage),
+			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage)}
+		for r := range strings.SplitSeq(env("CRUCIBLE_AWS_LAB_REGIONS", "eu-west-1"), ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				awsRegions = append(awsRegions, r)
+			}
+		}
+		if mode == "dryrun" { // never constructs the real SDK client
+			fake := &awscloud.Fake{}
+			ar.Cloud, ar.DryRun = fake, fake
+			slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in). Development only")
+		} else {
+			if ar.StateBucket == "" || ar.StateRegion == "" {
+				return errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
+			}
+			if ar.Cloud, err = awscloud.New(ctx, awscloud.Config{LabRoleARN: os.Getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"),
+				OpsRoleARN: os.Getenv("CRUCIBLE_AWS_OPS_ROLE_ARN")}); err != nil {
+				return fmt.Errorf("aws labs: %w", err)
+			}
+		}
+		runners["aws"], cloud = ar, ar.Cloud
+		_, cliErr := exec.LookPath("infracost")
+		switch {
+		case os.Getenv("CRUCIBLE_INFRACOST") == "off":
+			estimators["aws"] = rates
+			slog.Warn("CRUCIBLE_INFRACOST=off: aws labs are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR")
+		case cliErr != nil || os.Getenv("INFRACOST_API_KEY") == "":
+			slog.Warn("aws labs need the infracost CLI and INFRACOST_API_KEY for an estimate: until then they show no cost estimate and cannot be requested")
+		default:
+			estimators["aws"] = &labs.InfracostEstimator{Run: infracost.Exec}
+		}
+		slog.Info("aws labs enabled", "mode", mode, "regions", awsRegions)
+	default:
+		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
+	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
-		Now: time.Now, Log: slog.Default()}
+		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
 		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))

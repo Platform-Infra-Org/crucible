@@ -53,3 +53,18 @@ func TestFakeBehavesLikeTheLabAccount(t *testing.T) {
 		t.Fatal("Err makes every call fail")
 	}
 }
+
+func TestFakeNotYet(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	f.SimulateApply("eu-west-1", Session{LabID: "aaaaaaaaaaaa"})
+	c, _ := f.AssumeLab(ctx, Session{LabID: "aaaaaaaaaaaa"})
+	vol := "arn:aws:ec2:eu-west-1:000000000000:volume/vol-aaaaaaaaaaaa"
+	f.NotYet(vol, 1)
+	if ok, err := f.Delete(ctx, "eu-west-1", c, vol); ok || !errors.Is(err, ErrNotYet) || !f.Has(vol) {
+		t.Fatalf("refused once: %v %v", ok, err)
+	}
+	if ok, err := f.Delete(ctx, "eu-west-1", c, vol); !ok || err != nil {
+		t.Fatalf("then deleted: %v %v", ok, err)
+	}
+}

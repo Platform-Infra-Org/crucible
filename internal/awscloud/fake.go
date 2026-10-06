@@ -21,6 +21,7 @@ type Fake struct {
 	assumed   []Session
 	costs     []DailyCost
 	events    []TrailEvent
+	notYet    map[string]int // ARN → deletes still refused with ErrNotYet
 }
 
 type fakeRes struct {
@@ -52,6 +53,16 @@ func (f *Fake) AddEvent(e TrailEvent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, e)
+}
+
+// NotYet makes the next n deletes of arn fail with ErrNotYet (a volume still attached, a security group in use).
+func (f *Fake) NotYet(arn string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.notYet == nil {
+		f.notYet = map[string]int{}
+	}
+	f.notYet[arn] = n
 }
 
 func (f *Fake) Has(arn string) bool {
@@ -110,6 +121,10 @@ func (f *Fake) Delete(_ context.Context, region string, c Credentials, arn strin
 	}
 	if c.SessionToken != token(x.r.LabID) {
 		return false, errors.New("AccessDenied: not this lab's resource")
+	}
+	if f.notYet[arn] > 0 {
+		f.notYet[arn]--
+		return false, fmt.Errorf("%w: DependencyViolation (fake)", ErrNotYet)
 	}
 	delete(f.resources, arn)
 	return true, nil

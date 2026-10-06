@@ -53,13 +53,17 @@ type TrailEvent struct {
 
 var ErrUnsupported = errors.New("Crucible cannot delete this resource type; delete it by hand")
 
+// ErrNotYet is a delete AWS refuses for now (a volume still attached, a security group still in use, an instance
+// still terminating): not a failure, the next run tries again.
+var ErrNotYet = errors.New("not deletable yet")
+
 type Cloud interface {
 	// AssumeLab returns one-hour credentials for the lab role, tagged with the session's lab, team and training.
 	AssumeLab(ctx context.Context, s Session) (Credentials, error)
 	// Tagged lists resources in region tagged crucible:lab-id (= labID, or any value when labID is "").
 	Tagged(ctx context.Context, region, labID string) ([]Resource, error)
 	// Delete removes one resource with lab credentials. deleted is false when it was already gone;
-	// ErrUnsupported for types Crucible does not delete.
+	// ErrUnsupported for types Crucible does not delete; ErrNotYet while something still holds it.
 	Delete(ctx context.Context, region string, c Credentials, arn string) (deleted bool, err error)
 	// Costs is daily cost per lab for [from, to); untagged spend is left out.
 	Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error)

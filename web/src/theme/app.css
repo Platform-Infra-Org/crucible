@@ -20,7 +20,7 @@ button.primary.big { font-size: 1.15rem; padding: 0.8rem 1.8rem; }
 button.ghost { background: transparent; }
 input, select, textarea { font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.6rem; }
 
-.nav { display: flex; gap: 1rem; align-items: center; padding: 0.6rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+.nav { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.6rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .nav a { color: var(--muted); text-decoration: none; }
 .nav a.active, .nav a:hover { color: var(--text); }
 .brand { font-family: Cinzel, serif; font-size: 1.2rem; color: var(--text) !important; }
@@ -184,22 +184,25 @@ meter { width: 8rem; vertical-align: middle; }
 .rank-name { font-family: Cinzel, serif; font-size: 1.4rem; margin: 0; }
 .badges { display: flex; flex-wrap: wrap; gap: 0.5rem; list-style: none; padding: 0; }
 .badge-token { padding: 0.2rem 0.7rem; border-radius: 999px; border: 1px solid var(--accent-2); }
-.rank-up { position: relative; display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem 1rem; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); box-shadow: var(--glow); overflow: hidden; }
+.rank-up { position: relative; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; padding: 0.75rem 1rem; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); box-shadow: var(--glow); overflow: hidden; }
 .hammer { display: inline-block; font-size: 1.6rem; transform-origin: 80% 80%; }
 .strike-glow { position: absolute; left: 1.2rem; top: 50%; width: 2rem; height: 2rem; margin-top: -1rem; border-radius: 50%; background: radial-gradient(var(--accent-2), transparent 70%); pointer-events: none; }
 /* heat shimmer on hovered cards; the calm rules above switch every animation off */
 @keyframes shimmer { 0%, 100% { filter: none; } 50% { filter: brightness(1.07) saturate(1.15); } }
-.card:hover, .card:focus-visible { animation: shimmer 1.6s ease-in-out infinite; }
+.card:hover, .card:focus-visible { animation: shimmer 1.6s ease-in-out 2; }
+.forge-slot { min-height: 9rem; } /* reserve the rank card's space so it does not shift the page */
 
 /* journey heat map: glyph + label carry the meaning, colour only reinforces it */
 .journey-row { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.75rem 1rem; margin: 0.75rem 0; }
 .heat-cells { display: flex; flex-wrap: wrap; gap: 0.35rem; list-style: none; padding: 0; margin: 0.5rem 0; }
 .heat { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: 6px; border: 1px solid var(--border); }
-.heat:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+/* glyph chips use solid colours: text >= 4.5:1, dashed/solid border >= 3:1 in every theme */
+.heat-cell { display: inline-flex; align-items: center; gap: 0.35rem; }
 .heat-cold { background: var(--surface-2); color: var(--muted); }
-.heat-glowing { background: linear-gradient(135deg, var(--surface-2), var(--accent)); color: var(--text); border-style: dashed; }
-.heat-forged { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #1a0f05; box-shadow: var(--glow); }
+.heat-glowing { background: var(--surface-2); color: var(--text); border: 2px dashed var(--accent); }
+.heat-forged { background: var(--text); color: var(--bg); box-shadow: var(--glow); }
 .heat-cells.calm .heat-forged { box-shadow: none; }
 .heat-summary { margin: 0; }
 .flags { list-style: none; padding: 0; margin: 0; }
+.flags .warn { color: var(--text); }
 .legend { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; }

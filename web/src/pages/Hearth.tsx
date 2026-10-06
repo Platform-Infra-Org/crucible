@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { useMe } from '../App'
 import { useFetch } from '../useFetch'
@@ -7,24 +7,27 @@ import { randomQuote } from '../lib/quotes'
 import { Embers } from '../components/Embers'
 import { Loader } from '../components/Loader'
 import { MoltenBar } from '../components/MoltenBar'
-import { RankCard, RankUp } from '../components/RankCard'
+import { RankCard, RankUp, RankUpSlot } from '../components/RankCard'
 
 export function Hearth() {
   const { me } = useMe()
   const { data, error } = useFetch<ProgramCard[]>('/api/programs')
   const forge = useFetch<Forge>('/api/me/forge') // an error shows nothing; the cards still render
   const [dismissed, setDismissed] = useState(false)
+  const h1 = useRef<HTMLHeadingElement>(null)
   const quote = useMemo(randomQuote, [])
   const first = (me.user.name || me.user.email).split(/[ @]/)[0]
   return (
     <section className="page">
       <Embers count={12} />
-      <h1>Hearth</h1>
-      {forge.data?.rank_up && !dismissed && <RankUp rank={forge.data.rank} level={forge.data.level} onDone={() => setDismissed(true)} />}
+      <h1 ref={h1} tabIndex={-1}>Hearth</h1>
+      <RankUpSlot>
+        {forge.data?.rank_up && !dismissed && <RankUp rank={forge.data.rank} level={forge.data.level} onDone={() => { setDismissed(true); h1.current?.focus() }} />}
+      </RankUpSlot>
       <p className="lede">
         Welcome back, {first}. <em>“{quote}”</em>
       </p>
-      {forge.data && <RankCard forge={forge.data} />}
+      <div className="forge-slot">{forge.data && <RankCard forge={forge.data} />}</div>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <Loader label="Gathering your trainings…" />}
       {data && data.length === 0 && <p className="muted">You're not enrolled in any training yet. Your team leader can enroll you.</p>}

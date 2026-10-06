@@ -16,13 +16,18 @@ const row: JourneyRow = {
 
 test('cells carry their heat in text and aria, flags are notes', () => {
   const html = renderToStaticMarkup(<HeatMap rows={[row]} />)
-  expect(html).toContain('aria-label="Welcome: forged"')
-  expect(html).toContain('aria-label="First Lab: glowing"')
-  expect(html).toContain('aria-label="Cluster Heat: cold"')
+  expect(html).toContain('Welcome<span class="sr-only">: forged</span>')
+  expect(html).toContain('First Lab<span class="sr-only">: glowing</span>')
+  expect(html).toContain('Cluster Heat<span class="sr-only">: cold</span>')
+  expect(html).not.toContain('tabindex')
+  expect(html).not.toContain('title=')
+  expect(html).toContain('<h2>')
   expect(html).toContain('class="heat heat-forged"')
   expect(html).toContain('>●<')
   expect(html).toContain('1 complete, 1 in progress, 1 not started')
   expect(html).toContain('role="note"')
+  expect(html).toContain('<li><span role="note"')
+  expect(html).toContain('aria-hidden="true">⚠ </span>')
   expect(html).toContain('May be stuck: 3 failed checks on t1')
   expect(html).not.toMatch(/rank #|top /i)
 })
@@ -41,5 +46,5 @@ test('legend names every heat in words', () => {
 })
 
 test('empty state', () => {
-  expect(renderToStaticMarkup(<HeatMap rows={[]} />)).toContain('Nobody to show')
+  expect(renderToStaticMarkup(<HeatMap rows={[]} />)).toContain('Nothing to show for you here yet')
 })

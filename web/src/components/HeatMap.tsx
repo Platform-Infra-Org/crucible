@@ -15,27 +15,30 @@ export function Legend() {
   )
 }
 
-export function HeatMap({ rows }: { rows: JourneyRow[] }) {
+// Cells are a plain list with the module name as visible text: no hover needed, no per-cell tab stops.
+export function HeatMap({ rows, level = 2 }: { rows: JourneyRow[]; level?: 2 | 3 }) {
+  const H = `h${level}` as 'h2' | 'h3'
   const calm = useCalm()
-  if (rows.length === 0) return <p className="muted">Nobody to show here yet.</p>
+  if (rows.length === 0) return <p className="muted">Nothing to show for you here yet.</p>
   return (
     <div className="journey">
       {rows.map((r) => {
         const n = (h: Heat) => r.cells.filter((c) => c.heat === h).length
         return (
           <section key={r.email + r.training} className="journey-row" aria-label={`${r.name || r.email} in ${r.title}`} data-testid={`journey-${r.email}-${r.training}`}>
-            <h3>{r.name || r.email} <span className="muted">· {r.title} · {r.percent}% forged</span></h3>
+            <H>{r.name || r.email} <span className="muted">· {r.title} · {r.percent}% forged</span></H>
             <ol className={`heat-cells${calm ? ' calm' : ''}`}>
               {r.cells.map((c) => (
-                <li key={c.module} tabIndex={0} className={`heat heat-${c.heat}`} aria-label={`${c.title}: ${c.heat}`} title={`${c.title}: ${c.heat}`}>
-                  <span aria-hidden="true">{glyph[c.heat]}</span>
+                <li key={c.module} className="heat-cell">
+                  <span className={`heat heat-${c.heat}`} aria-hidden="true">{glyph[c.heat]}</span>
+                  <span>{c.title}<span className="sr-only">: {c.heat}</span></span>
                 </li>
               ))}
             </ol>
             <p className="heat-summary muted">{n('forged')} complete, {n('glowing')} in progress, {n('cold')} not started</p>
             {r.flags.length > 0 && (
               <ul className="flags">
-                {r.flags.map((f, i) => <li key={i} role="note" className="warn">⚠ {why[f.kind] ?? ''}{f.detail}{f.module ? ` (${f.module})` : ''}</li>)}
+                {r.flags.map((f, i) => <li key={i}><span role="note" className="warn"><span aria-hidden="true">⚠ </span>{why[f.kind] ?? ''}{f.detail}{f.module ? ` (${f.module})` : ''}</span></li>)}
               </ul>
             )}
           </section>

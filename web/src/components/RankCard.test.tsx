@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RankCard, RankUp } from './RankCard'
+import { RankCard, RankUp, RankUpSlot } from './RankCard'
 import { CalmContext } from '../me'
 import type { Forge } from '../types'
 
@@ -17,6 +17,8 @@ describe('RankCard', () => {
     expect(html).toContain('>Tempered<')
     expect(html).toContain('Blade at 75%')
     expect(html).toContain('Forge 102: Sparks')
+    expect(html).toContain('earned ')
+    expect(html).not.toContain('title=')
     expect(html).not.toMatch(/leaderboard|rank #|position/i) // ranks are personal (spec §7)
   })
   test('masterwork has no next rank', () => {
@@ -25,8 +27,8 @@ describe('RankCard', () => {
   })
   test('a rank-up is a status banner, not a dialog', () => {
     const html = renderToStaticMarkup(<RankUp rank="Blade" level={3} onDone={() => {}} />)
-    expect(html).toContain('role="status"')
-    expect(html).toContain('aria-live="polite"')
+    expect(renderToStaticMarkup(<RankUpSlot />)).toBe('<div role="status" aria-live="polite"></div>')
+    expect(html).not.toContain('role="status"')
     expect(html).not.toContain('role="dialog"')
     expect(html).toContain('You reached Blade')
     expect(html).toContain('class="hammer"')

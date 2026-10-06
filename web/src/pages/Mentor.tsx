@@ -14,10 +14,10 @@ export function MentorPage() {
       {data.length === 0 && <p className="muted">You have no mentees yet.</p>}
       {data.length > 0 && <Legend />}
       {data.map((m) => (
-        <section key={m.email} data-testid={`mentee-${m.email}`} aria-label={m.name || m.email}>
+        <section key={m.email + m.team} data-testid={`mentee-${m.email}`} aria-label={m.name || m.email}>
           <h2>{m.name || m.email} <small className="muted">{m.email}</small></h2>
           <p>Rank: {m.rank}</p>
-          <HeatMap rows={m.programs} />
+          <HeatMap rows={m.programs} level={3} />
           <h3>Waiting for a scorer</h3>
           {m.pending.length === 0 ? <p className="muted">Nothing waiting.</p> : (
             <ul>{m.pending.map((p) => <li key={p.id}>{p.type}: {p.item} <span className="muted">({p.module}, {new Date(p.created_at).toLocaleDateString()})</span></li>)}</ul>

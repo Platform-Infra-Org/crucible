@@ -15,21 +15,21 @@ export function RankCard({ forge }: { forge: Forge }) {
       <p className="muted">{next ? `Next: ${next.name} at ${next.at}%` : 'The highest rank. The forge salutes you.'}</p>
       {forge.badges.length > 0 && (
         <ul className="badges" data-testid="badges" aria-label="Badges">
-          {forge.badges.map((b) => <li key={b.training} className="badge-token" title={`Earned ${new Date(b.earned_at).toLocaleDateString()}`}>🏅 {b.title}</li>)}
+          {forge.badges.map((b) => <li key={b.training} className="badge-token"><span aria-hidden="true">🏅</span> {b.title} <span className="muted">· earned {new Date(b.earned_at).toLocaleDateString()}</span></li>)}
         </ul>
       )}
     </section>
   )
 }
 
-// RankUp celebrates a new rank once: hammer strike + glow, or a static line under calm motion. It never blocks the page or takes focus.
+// RankUp celebrates a new rank once: hammer strike + glow, or a static line under calm motion. It never blocks the page or takes focus. Mount it inside a persistent role="status" region (see RankUpSlot) so it is announced.
 export function RankUp({ rank, level, onDone }: { rank: string; level: number; onDone: () => void }) {
   const calm = useCalm()
   useEffect(() => {
     api('/api/me/forge/seen', { method: 'POST', json: { level } }).catch(() => {})
   }, [level])
   return (
-    <section className="rank-up" role="status" aria-live="polite">
+    <section className="rank-up" aria-label="Rank up">
       {!calm && (
         <motion.span className="hammer" aria-hidden="true" initial={{ rotate: -50, y: -10 }} animate={{ rotate: [-50, 8, 0], y: [-10, 2, 0] }} transition={{ duration: 0.6, ease: 'easeIn' }}>
           🔨
@@ -40,4 +40,9 @@ export function RankUp({ rank, level, onDone }: { rank: string; level: number; o
       <button className="ghost" onClick={onDone}>Nice</button>
     </section>
   )
+}
+
+// RankUpSlot is the always-mounted live region; the banner is inserted into it after the forge fetch, which screen readers announce.
+export function RankUpSlot({ children }: { children?: React.ReactNode }) {
+  return <div role="status" aria-live="polite">{children}</div>
 }

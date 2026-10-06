@@ -32,6 +32,29 @@ uses a fixed development value; the local compose stack sets a dev value.
 Content lives in git: see `examples/forge-101` and the spec in `docs/superpowers/specs/`.
 Validate a content repo with `go run ./cmd/crucible lint <dir>`.
 
+Things that catch authors out:
+
+- **A score-rule module can get stuck.** With `completion: score` and a `threshold`, a module completes only when the
+  weighted score of its completed items reaches the threshold. If a trainee has finished every item but scored under
+  it, nothing is left to do and the module never completes. Keep the threshold reachable, or allow quiz retries
+  (`max_attempts`). An admin can reset one trainee's attempts or final score from that trainee's submission on the
+  Anvil (items with a human-scored part).
+- **Quiz attempts count across content versions.** For an instant-only quiz, raising `max_attempts` in git is the
+  escape hatch.
+- **`crucible preview` runs the repo's scripts.** Local-lab compose files and setup scripts run on your Docker. Read
+  a repo you did not write before previewing it (see below).
+
+### Running `crucible-api` outside the image
+
+The image sets `CRUCIBLE_GIT_CONFIG` and the local compose stack sets `CRUCIBLE_GIT_ALLOW_FILE`; a developer running
+the API directly from a shell sets them by hand:
+
+- `CRUCIBLE_GIT_ALLOW_FILE=1` lets repo URLs be local paths or `file://` (seeded repos on disk). It is off by
+  default so a configured repo URL cannot read the server's own disk. Leave it unset in production.
+- `CRUCIBLE_GIT_CONFIG` is the only git config the bot's git uses (credential helper, `safe.directory`); your
+  `~/.gitconfig` and the system config are ignored. Point it at a file with your credential helper when the repos
+  need auth, or leave it unset for none.
+
 ## Previewing content (`crucible preview`)
 
 Needs Docker and a locally built image:

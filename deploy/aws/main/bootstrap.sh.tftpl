@@ -136,6 +136,7 @@ helm upgrade --install crucible "$work/chart.tgz" -n crucible \
   --set backup.bucket="$DATA_BUCKET" --set backup.region="$REGION" \
   --set-string backup.schedule="$BACKUP_CRON" --set-string backup.timeZone="$TIMEZONE" \
   --set-string gitBot.name="$GIT_BOT_NAME" --set-string gitBot.email="$GIT_BOT_EMAIL" \
+  --set-string bootstrapAdmin="$BOOTSTRAP_ADMIN" \
   -f "$work/values.yaml" \
   --wait --timeout 10m
 echo "deployed $sha"

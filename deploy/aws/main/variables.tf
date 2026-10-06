@@ -115,3 +115,12 @@ variable "infracost_api_key" {
   sensitive   = true
   description = "Free key from `infracost auth login`. Without it aws labs cannot be priced, so they cannot be requested."
 }
+variable "bootstrap_admin" {
+  type        = string
+  default     = ""
+  description = "Email of the first admin. Seeds admins.yaml once, only while it lists no admin; after that admins are edited in git. Invite the same email in Cognito first."
+  validation {
+    condition     = var.bootstrap_admin == "" || can(regex("^[^@\\s]+@[^@\\s]+$", var.bootstrap_admin))
+    error_message = "bootstrap_admin must be empty or an email address."
+  }
+}

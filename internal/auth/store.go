@@ -3,6 +3,7 @@ package auth
 
 import (
 	"context"
+	"crucible/internal/audit"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -93,6 +94,20 @@ func (s Store) CreateAgentToken(ctx context.Context, userID int64) (string, erro
 		return "", err
 	}
 	return tok, tx.Commit(ctx)
+}
+
+// RevokeAgentTokens revokes every pairing token of the user (spec §5.1 "revocable"). Idempotent; audited only when a
+// token was actually revoked.
+func (s Store) RevokeAgentTokens(ctx context.Context, userID int64) error {
+	tag, err := s.DB.Exec(ctx, `UPDATE agent_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	var email string
+	if err := s.DB.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email); err != nil {
+		return err
+	}
+	return audit.Log(ctx, s.DB, email, "agent.token.revoke", email, nil, "")
 }
 
 func (s Store) UserByAgentToken(ctx context.Context, token string) (*User, error) {

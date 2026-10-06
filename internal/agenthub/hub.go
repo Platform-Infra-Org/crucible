@@ -173,6 +173,16 @@ func (h *Hub) get(userID int64) (*conn, error) {
 	return nil, ErrOffline
 }
 
+// Drop disconnects the user's agent now (pairing revoked); the agent stops instead of reconnecting.
+func (h *Hub) Drop(userID int64) {
+	h.mu.Lock()
+	c := h.agents[userID]
+	h.mu.Unlock()
+	if c != nil {
+		go func() { _ = c.ws.Close(CloseReplaced, "pairing revoked") }()
+	}
+}
+
 func (h *Hub) Online(userID int64) bool {
 	_, err := h.get(userID)
 	return err == nil

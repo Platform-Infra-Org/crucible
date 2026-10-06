@@ -85,6 +85,25 @@ run "node_settings_come_from_ssm" {
   }
 }
 
+run "bootstrap_admin_reaches_helm" {
+  command = plan
+  variables {
+    bootstrap_admin = "boss@example.com"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "BOOTSTRAP_ADMIN=boss@example.com\n") && strcontains(aws_instance.node.user_data, "bootstrapAdmin=\"$BOOTSTRAP_ADMIN\"")
+    error_message = "bootstrap_admin must reach the helm install"
+  }
+}
+
+run "bootstrap_admin_must_be_an_email" {
+  command = plan
+  variables {
+    bootstrap_admin = "not an email"
+  }
+  expect_failures = [var.bootstrap_admin]
+}
+
 run "node_may_write_only_snapshots_latest_and_uploads" {
   command = plan
 

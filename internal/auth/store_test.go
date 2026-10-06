@@ -65,3 +65,26 @@ func TestMiddlewareAndRequireUser(t *testing.T) {
 		t.Fatalf("with cookie: %d %q", w.Code, w.Body.String())
 	}
 }
+
+func TestRevokeAgentTokensIsAuditedAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	s := Store{DB: dbtest.New(t)}
+	u, _ := s.UpsertUser(ctx, "s1", "a@x", "A")
+	tok, err := s.CreateAgentToken(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.RevokeAgentTokens(ctx, u.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := s.UserByAgentToken(ctx, tok); got != nil {
+		t.Fatal("a revoked token no longer pairs")
+	}
+	var n int
+	_ = s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'agent.token.revoke' AND actor = 'a@x'`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("want exactly one audit row, got %d", n)
+	}
+}

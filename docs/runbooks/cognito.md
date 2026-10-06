@@ -70,6 +70,8 @@ A person needs **two things** to use Crucible:
 
 The email must be the same in both places. Crucible compares emails in lowercase.
 
+Invite the `bootstrap_admin` email (see `aws.md`) first. Crucible makes that address the first admin only when it signs in through this pool with a verified email.
+
 ### Invite with the CLI
 ```bash
 POOL=$(terraform -chdir=deploy/aws/persistent output -raw cognito_user_pool_id)

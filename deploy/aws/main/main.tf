@@ -92,6 +92,7 @@ resource "aws_ssm_parameter" "env" {
     TIMEZONE=${var.schedule_timezone}
     GIT_BOT_NAME='${var.git_bot_name}'
     GIT_BOT_EMAIL=${var.git_bot_email}
+    BOOTSTRAP_ADMIN=${var.bootstrap_admin}
   ENV
 }
 

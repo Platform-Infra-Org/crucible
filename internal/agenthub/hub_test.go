@@ -196,3 +196,20 @@ func TestHelloReachesCallback(t *testing.T) {
 		t.Fatal("OnHello not called")
 	}
 }
+
+func TestDropDisconnectsWithTheStopCode(t *testing.T) {
+	h := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, server(t, h), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return h.Online(7) })
+	h.Drop(7)
+	h.Drop(99) // no agent: no-op
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != CloseReplaced {
+		t.Fatalf("want the stop-don't-reconnect close, got %v", err)
+	}
+	waitFor(t, func() bool { return !h.Online(7) })
+}

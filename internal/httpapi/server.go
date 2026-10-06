@@ -144,6 +144,15 @@ func NewRouter(d Deps) chi.Router {
 			httpx.JSON(w, http.StatusOK, map[string]string{"token": tok,
 				"command": "CRUCIBLE_TOKEN=" + tok + " crucible-agent --server " + d.PublicURL}) // env, not argv: other local users can read argv
 		})
+		r.Delete("/api/agent/tokens", func(w http.ResponseWriter, r *http.Request) {
+			u := auth.UserFrom(r.Context()) // only ever the caller's own tokens
+			if err := d.Auth.RevokeAgentTokens(r.Context(), u.ID); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			d.Hub.Drop(u.ID) // the laptop's labs keep running until idle/TTL, as on any disconnect (spec §14)
+			w.WriteHeader(http.StatusNoContent)
+		})
 		r.Get("/api/agent/status", func(w http.ResponseWriter, r *http.Request) {
 			httpx.JSON(w, http.StatusOK, map[string]bool{"online": d.Hub.Online(auth.UserFrom(r.Context()).ID)})
 		})

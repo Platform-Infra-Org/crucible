@@ -5,6 +5,7 @@ import { useFetch } from '../useFetch'
 export function ConnectPage() {
   const [cmd, setCmd] = useState<{ token: string; command: string }>()
   const [err, setErr] = useState<string>()
+  const [revoked, setRevoked] = useState(false)
   const { data: status } = useFetch<{ online: boolean }>('/api/agent/status', 3000)
   return (
     <section className="page">
@@ -28,6 +29,18 @@ export function ConnectPage() {
           setErr((e as Error).message)
         }
       }}>Generate pairing token</button>
+      <button className="ghost" onClick={async () => {
+        if (!window.confirm('Revoke pairing? Your laptop agent is disconnected and its token stops working.')) return
+        setErr(undefined)
+        try {
+          await api('/api/agent/tokens', { method: 'DELETE' })
+          setCmd(undefined)
+          setRevoked(true)
+        } catch (e) {
+          setErr((e as Error).message)
+        }
+      }}>Revoke pairing</button>
+      {revoked && <p className="muted" role="status">Pairing revoked. Your laptop agent is disconnected.</p>}
       {err && <p className="error" role="alert">{err}</p>}
       {cmd && (
         <>

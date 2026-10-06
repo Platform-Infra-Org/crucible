@@ -11,11 +11,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
 	"crucible/internal/awsops"
 	"crucible/internal/config"
 	"crucible/internal/content"
+	"crucible/internal/infracost"
 )
 
 const usage = `usage:
@@ -115,6 +117,7 @@ func lint(dir string, w io.Writer) int {
 	}
 	t, probs := content.Load(dir)
 	probs = append(probs, shellcheck(dir)...)
+	probs = append(probs, priceCheck(t, w, priceRunner())...)
 	for _, p := range probs {
 		fmt.Fprintln(w, p)
 	}
@@ -124,6 +127,43 @@ func lint(dir string, w io.Writer) int {
 	}
 	fmt.Fprintf(w, "%s: %d module(s) OK. Ready for the forge.\n", t.ID, len(t.Modules))
 	return 0
+}
+
+// priceRunner is the real infracost CLI when it is installed and INFRACOST_API_KEY is set, else nil.
+func priceRunner() infracost.Runner {
+	if _, err := exec.LookPath("infracost"); err != nil || os.Getenv("INFRACOST_API_KEY") == "" {
+		return nil
+	}
+	return infracost.Exec
+}
+
+// priceCheck fails aws labs whose infracost estimate exceeds aws.max_hourly_usd (spec §4.5). Without a runner (no CLI
+// or no key) it says so and checks nothing. t is nil when content failed to load.
+func priceCheck(t *content.Training, w io.Writer, run infracost.Runner) []content.Problem {
+	if t == nil {
+		return nil
+	}
+	var probs []content.Problem
+	for _, m := range t.Modules {
+		if m.Lab == nil || m.Lab.Runtime != "aws" || m.Lab.AWS == nil {
+			continue
+		}
+		if run == nil {
+			fmt.Fprintf(w, "note: %s: price check skipped (needs the infracost CLI and INFRACOST_API_KEY)\n", m.Lab.ID)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		h, err := infracost.Hourly(ctx, run, filepath.Join(m.Lab.Dir, "terraform"), m.Lab.AWS.Region)
+		cancel()
+		switch {
+		case err != nil:
+			probs = append(probs, content.Problem{File: m.Lab.ID, Msg: "infracost: " + err.Error()})
+		case h > m.Lab.AWS.MaxHourlyUSD:
+			probs = append(probs, content.Problem{File: m.Lab.ID,
+				Msg: fmt.Sprintf("infracost prices this lab at $%.4f/h, above aws.max_hourly_usd $%.2f", h, m.Lab.AWS.MaxHourlyUSD)})
+		}
+	}
+	return probs
 }
 
 // shellcheck runs shellcheck on every *.sh file if it is installed (spec §6). Missing shellcheck is not an error.

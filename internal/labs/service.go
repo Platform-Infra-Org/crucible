@@ -22,6 +22,7 @@ import (
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/awscloud"
 	"crucible/internal/blob"
 	"crucible/internal/config"
 	"crucible/internal/content"
@@ -46,6 +47,8 @@ type Service struct {
 	Log        *slog.Logger
 	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
 	Blobs      blob.Store       // transcripts (Task 6)
+	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
+	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
 
 	sweepMu sync.Mutex // one sweep at a time in this process
 
@@ -509,6 +512,15 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		q.Blocked = "Labs for this program run " + sc.String() + "."
 		if n := sc.NextOpen(now); !n.IsZero() {
 			q.Blocked += " Next window opens " + n.In(sc.Location()).Format("Mon 15:04") + "."
+		}
+	}
+	if lab.Runtime == "aws" && lab.AWS != nil && q.Blocked == "" {
+		switch {
+		case hourly > lab.AWS.MaxHourlyUSD:
+			q.Blocked = fmt.Sprintf("This lab is priced at $%.2f/h, above its $%.2f/h limit; its maintainers need to make it cheaper.",
+				hourly, lab.AWS.MaxHourlyUSD)
+		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
+			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)
 		}
 	}
 	return q, nil

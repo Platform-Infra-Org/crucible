@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"crucible/internal/content"
+	"crucible/internal/infracost"
 )
 
 func TestLintExamplesPass(t *testing.T) {
@@ -28,5 +33,31 @@ func TestLintReportsProblems(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "title is required") {
 		t.Fatalf("output: %s", out.String())
+	}
+}
+
+func TestPriceCheck(t *testing.T) {
+	tr, probs := content.Load("../../examples/forge-401")
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	price := func(p string) infracost.Runner {
+		return func(context.Context, string, []string, ...string) ([]byte, error) {
+			return []byte(`{"totalHourlyCost":"` + p + `"}`), nil
+		}
+	}
+	var out bytes.Buffer
+	if p := priceCheck(tr, &out, nil); len(p) != 0 || !strings.Contains(out.String(), "price check skipped") {
+		t.Fatalf("no key: a note, no problems: %v %q", p, out.String())
+	}
+	if p := priceCheck(tr, &out, price("0.04")); len(p) != 0 {
+		t.Fatalf("within the ceiling: %v", p)
+	}
+	if p := priceCheck(tr, &out, price("0.06")); len(p) != 1 || !strings.Contains(p[0].Msg, "above aws.max_hourly_usd") {
+		t.Fatalf("over the ceiling: %v", p)
+	}
+	failing := func(context.Context, string, []string, ...string) ([]byte, error) { return nil, errors.New("boom") }
+	if p := priceCheck(tr, &out, failing); len(p) != 1 {
+		t.Fatalf("a failing estimate fails lint: %v", p)
 	}
 }

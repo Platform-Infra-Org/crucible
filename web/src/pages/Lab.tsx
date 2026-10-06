@@ -19,13 +19,18 @@ import { Terminal } from '../components/Terminal'
 import { Timer } from '../components/Timer'
 
 const endMessages: Record<string, string> = {
-  idle: 'Your lab was closed after a period of inactivity.',
   ttl: 'Time ran out on this lab.',
   user: 'You ended the lab.',
   provision_timeout: 'The lab took too long to start.',
   schedule: "The program's schedule window closed.",
   kill_switch: 'An admin paused all labs.',
   agent_restarted: 'Your laptop agent restarted — start the lab again.',
+  budget: 'The budget cap was reached.',
+}
+
+function endMessage(lab: LabView): string {
+  if (lab.end_reason === 'idle') return `Your lab was closed after ${Math.round(lab.idle_timeout_s / 60)} minutes of inactivity.`
+  return endMessages[lab.end_reason ?? ''] ?? 'This lab has ended.'
 }
 
 function firstOpen(lab: LabView): string {
@@ -59,7 +64,7 @@ export function LabPage() {
   const back = `/p/${team}/${training}`
   if (error) return <ErrorBox error={error} />
   if (!info) return <Loader label="Opening the workshop…" />
-  if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" />
+  if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" lines={lab.log} />
   if (lab?.state === 'destroying' && lab.runtime === 'aws') return <Loader label="Quenching: terraform is tearing down your cloud resources…" />
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
@@ -92,7 +97,7 @@ export function LabPage() {
       {cooled && lab && (
         <div className="cooled" role="status">
           <h2>The forge has cooled</h2>
-          <p>{endMessages[lab.end_reason ?? ''] ?? 'This lab has ended.'} Your progress is saved; passed tasks stay passed.</p>
+          <p>{endMessage(lab)} Your progress is saved; passed tasks stay passed.</p>
           <p>
             Score {lab.score} / {lab.max_score} · {lab.tasks.filter((t) => t.status === 'passed').length} of {lab.tasks.length} tasks passed · hints used{' '}
             {lab.tasks.reduce((n, t) => n + t.hints_revealed, 0)}
@@ -168,6 +173,22 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
     e.preventDefault()
     setActive(tabs[next].key)
     tabRefs.current[next]?.focus()
+  }
+  // Full screen (spec §8.3): the Fullscreen API where the browser allows it, else a fixed overlay. Esc exits; inside a
+  // terminal Esc belongs to the shell (vim), so Ctrl+Alt+↑ leaves the terminal first.
+  const termsRef = useRef<HTMLElement>(null)
+  const [full, setFull] = useState(false)
+  useEffect(() => {
+    const sync = () => setFull(document.fullscreenElement === termsRef.current)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+  const toggleFull = () => {
+    if (document.fullscreenElement) return void document.exitFullscreen().catch(() => setFull(false))
+    if (full) return setFull(false)
+    const el = termsRef.current
+    if (el?.requestFullscreen && document.fullscreenEnabled) el.requestFullscreen().catch(() => setFull(true))
+    else setFull(true)
   }
   const leaveTerminal = () => tabRefs.current[tabs.findIndex((t) => t.key === active)]?.focus()
 
@@ -260,7 +281,10 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
             if (e.key === 'ArrowRight') setSplit((s) => Math.min(70, s + 2))
           }}
         />
-        <section className="terms">
+        <section
+          className={`terms${full ? ' fullscreen' : ''}`} ref={termsRef}
+          onKeyDown={(e) => { if (e.key === 'Escape' && full && !(e.target as HTMLElement).closest('.terminal')) toggleFull() }}
+        >
           <div className="tabs" role="tablist" aria-label="Terminals">
             {tabs.map((t, i) => (
               <button
@@ -273,6 +297,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
             <button className="ghost" aria-label="Smaller text" onClick={() => bump(-1)}>A−</button>
             <button className="ghost" aria-label="Larger text" onClick={() => bump(1)}>A+</button>
             <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>
+            <button className="ghost" aria-pressed={full} title="Esc exits full screen" onClick={toggleFull}>Full screen</button>
           </div>
           {tabs.map((t, i) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} idx={i} onLeave={leaveTerminal} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
         </section>

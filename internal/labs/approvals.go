@@ -141,6 +141,16 @@ func (s *Service) requester(ctx context.Context, userID int64) (email, name stri
 	return
 }
 
+// labTitle is the lab's module title in the content version it runs, or the module id when that can't be loaded.
+func (s *Service) labTitle(ctx context.Context, inst *Instance) string {
+	if t := s.trainingOf(ctx, inst); t != nil {
+		if m := t.Module(inst.Module); m != nil && m.Title != "" {
+			return m.Title
+		}
+	}
+	return inst.Module
+}
+
 func labLink(inst *Instance) string {
 	return fmt.Sprintf("/p/%s/%s/m/%s/lab", inst.Team, inst.Training, inst.Module)
 }
@@ -155,7 +165,7 @@ func (s *Service) notifyRequest(ctx context.Context, p *config.Platform, inst *I
 		Team:    inst.Team,
 		Subject: fmt.Sprintf("Lab request from %s (%s, est. $%.2f)", requester, inst.Training, inst.EstimateUSD),
 		Text: fmt.Sprintf("%s requested the %s lab in %s/%s, estimated at $%.2f. It %s.",
-			requester, inst.Module, inst.Team, inst.Training, inst.EstimateUSD, verb),
+			requester, s.labTitle(ctx, inst), inst.Team, inst.Training, inst.EstimateUSD, verb),
 		Link: "/approvals"})
 }
 
@@ -301,7 +311,10 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 		return apperr.Wrap(apperr.Conflict, "this extension was already decided")
 	}
 	action := "lab.extension.reject"
-	if approve && !closed {
+	switch {
+	case closed:
+		action = "lab.extension.closed"
+	case approve:
 		action = "lab.extension.approve"
 	}
 	if err := audit.Log(ctx, tx, u.Email, action, inst.ID, map[string]any{"requester": email, "team": inst.Team, "training": inst.Training,
@@ -313,6 +326,9 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 	}
 	if closed {
 		s.event(ctx, inst.ID, "extension_closed", "the schedule window closes first")
+		s.notify(ctx, notify.Event{Kind: notify.LabRejected, To: []string{email}, Subject: fmt.Sprintf("Your %s lab extension was closed", inst.Training),
+			Text: "The schedule window closes before your extension would start, so the request was closed. Your lab keeps its current end.",
+			Link: labLink(inst)})
 		return apperr.Wrap(apperr.Conflict, "the schedule window closes before this extension would start; the request was closed")
 	}
 	kind, verb, text := notify.LabRejected, "not approved", "Your lab extension was not approved."

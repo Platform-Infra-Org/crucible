@@ -198,3 +198,54 @@ func TestExtensionDecisionRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestClosedExtensionTellsTheTrainee(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	onSchedule(f)
+	f.plat.Teams["forge"].Programs["forge-101"].LabDefaults.MaxExtension = yamlx.Duration(45 * time.Minute)
+	f.clk.Set(time.Date(2026, 10, 7, 14, 30, 0, 0, time.UTC)) // Wed 17:30 local; window closes 19:00 (16:00 UTC)
+	ready := readyPaidLab(t, f)
+	if _, err := f.s.Extend(ctx, f.u, ready.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ev := f.notes.last(notify.LabPending); ev == nil || !strings.Contains(ev.Text, "First Heat: Your First Lab") {
+		t.Fatalf("the approver notice names the lab: %+v", ev)
+	}
+	// the lab already ends at the window close (the schedule moved), so no extension can start
+	closeAt := time.Date(2026, 10, 7, 16, 0, 0, 0, time.UTC)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2 WHERE id = $1`, ready.ID, closeAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.DecideExtension(ctx, f.leader, ready.ID, true, ""); !errors.Is(err, apperr.Conflict) {
+		t.Fatalf("closed: %v", err)
+	}
+	var action string
+	_ = f.s.DB.QueryRow(ctx, `SELECT action FROM audit_log WHERE target = $1 ORDER BY id DESC LIMIT 1`, ready.ID).Scan(&action)
+	if action != "lab.extension.closed" {
+		t.Fatalf("audit %q", action)
+	}
+	if ev := f.notes.last(notify.LabRejected); ev == nil || ev.To[0] != "trainee@crucible.local" || !strings.Contains(ev.Text, "schedule window closes") {
+		t.Fatalf("the trainee hears why: %+v", ev)
+	}
+}
+
+func TestPendingExtensionLapsesWithTheLab(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	ready := readyPaidLab(t, f)
+	if v, err := f.s.Extend(ctx, f.u, ready.ID); err != nil || !v.ExtensionPending {
+		t.Fatalf("extend: %+v %v", v, err)
+	}
+	if _, err := f.s.End(ctx, f.u, ready.ID); err != nil {
+		t.Fatal(err)
+	}
+	var pending bool
+	_ = f.s.DB.QueryRow(ctx, `SELECT ext_until IS NOT NULL FROM lab_instances WHERE id = $1`, ready.ID).Scan(&pending)
+	if pending {
+		t.Fatal("the request is cleared")
+	}
+	if ev := f.notes.last(notify.LabRejected); ev == nil || ev.To[0] != "trainee@crucible.local" || !strings.Contains(ev.Text, "lapsed") {
+		t.Fatalf("the trainee hears it lapsed: %+v", ev)
+	}
+}

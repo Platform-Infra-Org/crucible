@@ -112,6 +112,7 @@ type View struct {
 	EndReason        string             `json:"end_reason,omitempty"`
 	IdleDeadline     *time.Time         `json:"idle_deadline,omitempty"`
 	IdleWarningS     int                `json:"idle_warning_s"`
+	IdleTimeoutS     int                `json:"idle_timeout_s"`
 	CanExtend        bool               `json:"can_extend"`
 	ExtensionPending bool               `json:"extension_pending"`
 	SelfReported     bool               `json:"self_reported"`
@@ -125,6 +126,7 @@ type View struct {
 	EscalateAt       *time.Time         `json:"escalate_at,omitempty"`
 	DecidedBy        string             `json:"decided_by,omitempty"`
 	DecisionNote     string             `json:"decision_note,omitempty"`
+	Log              []string           `json:"log,omitempty"` // provisioning only: the lab's latest events (spec §8.3)
 }
 
 type TaskDetail struct {
@@ -397,8 +399,8 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	v := &View{ID: inst.ID, State: inst.State, Error: inst.Error, Runtime: inst.Runtime, Team: inst.Team,
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
-		IdleWarningS: int(inst.IdleWarning.Seconds()),
-		EstimateUSD:  inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true,
+		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -429,6 +431,11 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if rv != nil && rv.Status == scoring.Pending { // the lab is with a scorer, not forged yet
 		v.Complete = false
 	}
+	if inst.State == Provisioning {
+		if v.Log, err = s.provisionLog(ctx, inst.ID); err != nil {
+			return nil, err
+		}
+	}
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
@@ -436,6 +443,29 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
 	}
 	return v, nil
+}
+
+// provisionLog is the lab's last 20 events, oldest first, for the loader. Event details never hold credentials:
+// runner errors pass through tailOf, which masks them, and secrets are never written to lab_events.
+func (s *Service) provisionLog(ctx context.Context, labID string) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT kind, detail FROM (SELECT id, kind, detail FROM lab_events WHERE lab_id = $1
+		ORDER BY id DESC LIMIT 20) e ORDER BY id`, labID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (string, error) {
+		var kind, detail string
+		if err := r.Scan(&kind, &detail); err != nil {
+			return "", err
+		}
+		switch {
+		case kind == "progress":
+			return cleanText(detail), nil
+		case detail == "":
+			return kind, nil
+		}
+		return cleanText(kind + ": " + detail), nil
+	})
 }
 
 func (s *Service) active(ctx context.Context, userID int64, team, training, module string) (*Instance, error) {
@@ -726,15 +756,19 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	ctx, cancel := context.WithTimeout(ctx, provisionTimeout(inst.Runtime))
 	defer cancel()
 	r, err := s.runner(inst.Runtime)
+	s.event(ctx, inst.ID, "progress", "preparing workspace") // the loader shows these (spec §8.3)
 	if lp, ok := r.(labProvisioner); ok {
+		s.event(ctx, inst.ID, "progress", "starting services")
 		err = lp.ProvisionLab(ctx, inst, lab) // aws: builds its own workspace bundle and terraform module
 	} else if err == nil {
 		var bundle []byte
 		if bundle, err = Bundle(lab.Dir, lab.Runtime); err == nil {
+			s.event(ctx, inst.ID, "progress", "starting services")
 			err = r.Provision(ctx, inst, bundle, lab.Compose)
 		}
 	}
 	if err == nil && lab.Setup != nil {
+		s.event(ctx, inst.ID, "progress", "running lab setup")
 		err = s.runSetup(ctx, inst, lab, "", lab.Setup)
 	}
 	if err != nil {
@@ -1265,7 +1299,7 @@ func (s *Service) requestExtension(ctx context.Context, u *auth.User, p *config.
 	s.notify(ctx, notify.Event{Kind: notify.LabPending, To: c.TierApprovers(tier, inst.Team, inst.Training, u.Email), Team: inst.Team,
 		Subject: fmt.Sprintf("Lab extension from %s (%s, est. $%.2f)", strings.ToLower(u.Email), inst.Training, estimate),
 		Text: fmt.Sprintf("%s asks to extend the %s lab in %s/%s until %s, which lifts its estimate to $%.2f. It is waiting for approval.",
-			strings.ToLower(u.Email), inst.Module, inst.Team, inst.Training, until.UTC().Format("15:04 UTC"), estimate),
+			strings.ToLower(u.Email), s.labTitle(ctx, inst), inst.Team, inst.Training, until.UTC().Format("15:04 UTC"), estimate),
 		Link: "/approvals"})
 	return s.Get(ctx, u, inst.ID)
 }
@@ -1305,11 +1339,23 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 	// the request may be cancelled mid-way; a half-finished destroy would wedge the lab in 'destroying'
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 	// destroyed_at doubles as "destroying since" until the final update (see Sweep)
-	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroying', end_reason = $2, destroyed_at = $3
-		WHERE id = $1 AND state IN ('provisioning', 'ready')`, inst.ID, reason, s.Now())
-	if err != nil || tag.RowsAffected() == 0 {
+	// a pending extension lapses with the lab: old reads it under the row lock, before this update clears it
+	var lapsed *time.Time
+	err := s.DB.QueryRow(ctx, `UPDATE lab_instances l SET state = 'destroying', end_reason = $2, destroyed_at = $3,
+			ext_until = NULL, ext_requested_at = NULL, ext_tier = ''
+		FROM (SELECT ext_until FROM lab_instances WHERE id = $1 FOR UPDATE) old
+		WHERE l.id = $1 AND l.state IN ('provisioning', 'ready') RETURNING old.ext_until`,
+		inst.ID, reason, s.Now()).Scan(&lapsed)
+	if err != nil {
 		cancel()
 		return
+	}
+	if lapsed != nil {
+		if email, _, err := s.requester(ctx, inst.UserID); err == nil {
+			s.notify(ctx, notify.Event{Kind: notify.LabRejected, To: []string{email},
+				Subject: fmt.Sprintf("Your %s lab extension lapsed", inst.Training),
+				Text:    "Your lab ended before anyone decided on its extension, so the request lapsed.", Link: labLink(inst)})
+		}
 	}
 	if inst.Runtime == "aws" { // terraform destroy takes minutes: End, the sweep and the kill switch must not wait
 		if !s.once(inst.ID, func() { defer cancel(); s.finishDestroy(ctx, inst, reason) }) {

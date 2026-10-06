@@ -70,6 +70,11 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await page.getByRole('button', { name: 'Ignite the forge' }).click()
   await expect(page.getByRole('tab', { name: 'shell', exact: true })).toBeVisible({ timeout: 5 * 60_000 }) // first run pulls images
   await expect(page.getByTestId('lab-timer')).toHaveText(/\d{2}:\d{2}/)
+  const full = page.getByRole('button', { name: 'Full screen' })
+  await full.click()
+  await expect(full).toHaveAttribute('aria-pressed', 'true')
+  await full.click()
+  await expect(full).toHaveAttribute('aria-pressed', 'false')
 
   // Task 1: create the file in the shell terminal, then Check
   await typeIn(page, 'shell', "echo 'hello forge' > /tmp/forged.txt")

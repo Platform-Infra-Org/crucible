@@ -32,8 +32,17 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
     fitRef.current = fit
     term.open(el.current!)
     // xterm swallows Tab, so give keyboard users a way out (no focus trap).
+    // Ctrl+C is SIGINT in a shell, so copy/paste is Ctrl+Shift+C/V as in Linux terminals; Cmd+C/V on a Mac stays native.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.ctrlKey && e.altKey && e.key === 'ArrowUp') { leaveRef.current(); return false }
+      if (e.ctrlKey && e.shiftKey && !e.altKey && (e.code === 'KeyC' || e.code === 'KeyV')) {
+        if (e.type === 'keydown') {
+          e.preventDefault() // no browser paste on top of ours
+          if (e.code === 'KeyC') { const sel = term.getSelection(); if (sel) navigator.clipboard?.writeText(sel).catch(() => {}) }
+          else navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {})
+        }
+        return false
+      }
       return true
     })
     try { fit.fit() } catch { /* hidden tab: fitted when shown */ }

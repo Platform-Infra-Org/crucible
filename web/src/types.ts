@@ -34,9 +34,10 @@ export type Tier = 'auto' | 'approver' | 'leader' | 'admin'
 export type LabView = {
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
   terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
-  limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number
+  limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number
   can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
+  log?: string[]
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }

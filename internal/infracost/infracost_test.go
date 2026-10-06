@@ -31,7 +31,7 @@ func TestHourlyPricesALocalCopy(t *testing.T) {
 		if !slices.Equal(args, []string{"breakdown", "--path", ".", "--format", "json", "--log-level", "warn", "--no-cache"}) {
 			t.Fatalf("args %v", args)
 		}
-		return []byte(`{"totalHourlyCost":"0.0104","totalMonthlyCost":"7.592"}`), nil
+		return []byte(`{"projects":[{"metadata":{}}],"totalHourlyCost":"0.0104","totalMonthlyCost":"7.592"}`), nil
 	}
 	h, err := Hourly(context.Background(), run, module, "us-east-2")
 	if err != nil || h != 0.0104 {
@@ -43,14 +43,17 @@ func TestHourlyPricesALocalCopy(t *testing.T) {
 	if _, err := os.Stat(filepath.Dir(dir)); !os.IsNotExist(err) {
 		t.Fatal("the copy is removed afterwards")
 	}
-	for _, out := range []string{`{"totalHourlyCost":"-1"}`, `{"totalHourlyCost":"NaN"}`, `<html>`} {
+	for _, out := range []string{`{"projects":[{}],"totalHourlyCost":"-1"}`, `{"projects":[{}],"totalHourlyCost":"NaN"}`, `<html>`, `{}`,
+		`{"error":"invalid API key"}`, `{"projects":[{"name":"x"}]}`, `{"totalHourlyCost":null}`,
+		`{"totalHourlyCost":null,"projects":[{"metadata":{"errors":[{"message":"parse failed"}]}}]}`,
+		`{"totalHourlyCost":"0.01","projects":[{"metadata":{}},{"metadata":{"errors":[{"message":"x"}]}}]}`} {
 		bad := func(context.Context, string, []string, ...string) ([]byte, error) { return []byte(out), nil }
 		if _, err := Hourly(context.Background(), bad, module, "us-east-2"); err == nil {
 			t.Fatalf("%s is an error, never a price", out)
 		}
 	}
 	usageOnly := func(context.Context, string, []string, ...string) ([]byte, error) {
-		return []byte(`{"totalHourlyCost":null}`), nil
+		return []byte(`{"totalHourlyCost":null,"projects":[{"metadata":{"errors":[]}}]}`), nil
 	}
 	if h, err := Hourly(context.Background(), usageOnly, module, "us-east-2"); err != nil || h != 0 {
 		t.Fatalf("usage-based only (e.g. one S3 bucket) is $0: %v %v", h, err)

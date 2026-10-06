@@ -474,7 +474,9 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured")
 	}
 	hourly, err := est.HourlyUSD(ctx, lab)
-	if err != nil {
+	if errors.Is(err, apperr.Unavailable) {
+		return nil, err // "estimate pending, try again shortly" reaches the trainee as is
+	} else if err != nil {
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}
 	q := &quote{Timing: ResolveTiming(lab, p.Teams[team].Programs[training].LabDefaults), HourlyUSD: hourly}
@@ -517,7 +519,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	if lab.Runtime == "aws" && lab.AWS != nil && q.Blocked == "" {
 		switch {
 		case hourly > lab.AWS.MaxHourlyUSD:
-			q.Blocked = fmt.Sprintf("This lab is priced at $%.2f/h, above its $%.2f/h limit; its maintainers need to make it cheaper.",
+			q.Blocked = fmt.Sprintf("This lab is priced at $%.4f/h, above its $%g/h limit; its maintainers need to make it cheaper.",
 				hourly, lab.AWS.MaxHourlyUSD)
 		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
 			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)

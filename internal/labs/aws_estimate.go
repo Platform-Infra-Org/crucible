@@ -5,41 +5,101 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"time"
 
+	"crucible/internal/apperr"
 	"crucible/internal/content"
 	"crucible/internal/infracost"
 )
 
-// InfracostEstimator prices aws labs (spec §9.1). Results are cached per content version: lab.Dir is an immutable
-// export, so the CLI runs once per lab per pushed commit (the first lobby view after a sync waits for it).
-// Failures are not cached. The CLI has its own timeout (infracost.Exec).
-// ponytail: the cache never shrinks (one float per lab version); concurrent first views may each run the CLI.
+const (
+	estimateSlots   = 2               // infracost runs at once, across all labs
+	estimateFailTTL = 5 * time.Minute // how long a failed run is remembered
+)
+
+// InfracostEstimator prices aws labs (spec §9.1). Trainee lobby views call it, so runs are bounded: results are
+// cached per content version (lab.Dir is an immutable export, so the CLI runs once per lab per pushed commit),
+// concurrent views of one version share one run, failures are remembered for estimateFailTTL, and at most
+// estimateSlots runs go at once; a view that finds no free slot is told to retry rather than queueing. A run is
+// detached from the request that started it (the CLI has its own timeout, infracost.Exec), so a closed tab does not
+// waste it.
+// ponytail: the caches never shrink (one entry per lab version).
 type InfracostEstimator struct {
 	Run infracost.Runner
+	Now func() time.Time // nil = time.Now
 
-	mu    sync.Mutex
-	cache map[string]float64
+	mu       sync.Mutex
+	cache    map[string]float64
+	failed   map[string]estimateFailure
+	inflight map[string]*estimateCall
+	running  int
+}
+
+type estimateFailure struct {
+	err   error
+	until time.Time
+}
+
+type estimateCall struct {
+	done chan struct{}
+	h    float64
+	err  error
+}
+
+func (e *InfracostEstimator) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
 }
 
 func (e *InfracostEstimator) HourlyUSD(ctx context.Context, lab *content.Lab) (float64, error) {
 	if lab.AWS == nil {
 		return 0, errors.New("not an aws lab")
 	}
+	key := lab.Dir
 	e.mu.Lock()
-	h, ok := e.cache[lab.Dir]
-	e.mu.Unlock()
-	if ok {
+	if h, ok := e.cache[key]; ok {
+		e.mu.Unlock()
 		return h, nil
 	}
-	h, err := infracost.Hourly(ctx, e.Run, filepath.Join(lab.Dir, "terraform"), lab.AWS.Region)
-	if err != nil {
-		return 0, err
+	if f, ok := e.failed[key]; ok && e.now().Before(f.until) {
+		e.mu.Unlock()
+		return 0, f.err
 	}
-	e.mu.Lock()
-	if e.cache == nil {
-		e.cache = map[string]float64{}
+	c := e.inflight[key]
+	if c == nil {
+		if e.running >= estimateSlots {
+			e.mu.Unlock()
+			return 0, apperr.Wrap(apperr.Unavailable, "estimate pending, try again shortly")
+		}
+		if e.inflight == nil {
+			e.cache, e.failed, e.inflight = map[string]float64{}, map[string]estimateFailure{}, map[string]*estimateCall{}
+		}
+		c = &estimateCall{done: make(chan struct{})}
+		e.inflight[key] = c
+		e.running++
+		go e.run(context.WithoutCancel(ctx), key, lab.AWS.Region, c)
 	}
-	e.cache[lab.Dir] = h
 	e.mu.Unlock()
-	return h, nil
+	select {
+	case <-c.done:
+		return c.h, c.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (e *InfracostEstimator) run(ctx context.Context, key, region string, c *estimateCall) {
+	c.h, c.err = infracost.Hourly(ctx, e.Run, filepath.Join(key, "terraform"), region)
+	e.mu.Lock()
+	if c.err != nil {
+		e.failed[key] = estimateFailure{c.err, e.now().Add(estimateFailTTL)}
+	} else {
+		e.cache[key] = c.h
+	}
+	delete(e.inflight, key)
+	e.running--
+	e.mu.Unlock()
+	close(c.done)
 }

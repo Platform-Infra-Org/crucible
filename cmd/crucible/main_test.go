@@ -43,7 +43,7 @@ func TestPriceCheck(t *testing.T) {
 	}
 	price := func(p string) infracost.Runner {
 		return func(context.Context, string, []string, ...string) ([]byte, error) {
-			return []byte(`{"totalHourlyCost":"` + p + `"}`), nil
+			return []byte(`{"projects":[{}],"totalHourlyCost":"` + p + `"}`), nil
 		}
 	}
 	var out bytes.Buffer

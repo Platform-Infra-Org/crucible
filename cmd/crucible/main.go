@@ -160,7 +160,7 @@ func priceCheck(t *content.Training, w io.Writer, run infracost.Runner) []conten
 			probs = append(probs, content.Problem{File: m.Lab.ID, Msg: "infracost: " + err.Error()})
 		case h > m.Lab.AWS.MaxHourlyUSD:
 			probs = append(probs, content.Problem{File: m.Lab.ID,
-				Msg: fmt.Sprintf("infracost prices this lab at $%.4f/h, above aws.max_hourly_usd $%.2f", h, m.Lab.AWS.MaxHourlyUSD)})
+				Msg: fmt.Sprintf("infracost prices this lab at $%.4f/h, above aws.max_hourly_usd $%g", h, m.Lab.AWS.MaxHourlyUSD)})
 		}
 	}
 	return probs

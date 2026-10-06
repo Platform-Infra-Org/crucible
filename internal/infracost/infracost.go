@@ -101,18 +101,37 @@ func Hourly(ctx context.Context, run Runner, moduleDir, region string) (float64,
 	if err != nil {
 		return 0, err
 	}
+	// Only a clean parse is a price: no projects, an error object, a project with errors or a missing total would
+	// otherwise read as $0 and slip under the ceiling and the tier.
 	var r struct {
-		TotalHourlyCost *string `json:"totalHourlyCost"`
+		TotalHourlyCost json.RawMessage `json:"totalHourlyCost"`
+		Projects        []struct {
+			Metadata struct {
+				Errors []json.RawMessage `json:"errors"`
+			} `json:"metadata"`
+		} `json:"projects"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
 		return 0, fmt.Errorf("reading infracost output: %w", err)
 	}
-	if r.TotalHourlyCost == nil {
+	if r.TotalHourlyCost == nil || len(r.Projects) == 0 {
+		return 0, errors.New("infracost output has no projects or no totalHourlyCost")
+	}
+	for _, p := range r.Projects {
+		if len(p.Metadata.Errors) > 0 {
+			return 0, fmt.Errorf("infracost could not read the module: %.300s", p.Metadata.Errors[0])
+		}
+	}
+	var total *string
+	if err := json.Unmarshal(r.TotalHourlyCost, &total); err != nil {
+		return 0, fmt.Errorf("infracost price %s is not a price", r.TotalHourlyCost)
+	}
+	if total == nil { // usage-based resources only (e.g. one S3 bucket)
 		return 0, nil
 	}
-	h, err := strconv.ParseFloat(*r.TotalHourlyCost, 64)
+	h, err := strconv.ParseFloat(*total, 64)
 	if err != nil || h < 0 || math.IsNaN(h) || math.IsInf(h, 0) {
-		return 0, fmt.Errorf("infracost price %q is not a price", *r.TotalHourlyCost)
+		return 0, fmt.Errorf("infracost price %q is not a price", *total)
 	}
 	return h, nil
 }

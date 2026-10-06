@@ -38,6 +38,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
   const [idle, setIdle] = useState(prog.lab_defaults.idle_timeout)
   const [ext, setExt] = useState(prog.lab_defaults.max_extension)
   const [budget, setBudget] = useState(String(prog.budget_usd_month))
+  const [reviewSelf, setReviewSelf] = useState(prog.review_self_reported)
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const toggle = (p: string, on: boolean) => {
@@ -56,7 +57,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
       const res = await api<{ sha: string }>(`/api/teams/${team.id}/programs/${prog.training}`, { method: 'PUT', json: {
         base_sha: team.platform_sha, enrolled: [...enrolled],
         roles: { manager: parseEmails(managers), scorers: parseEmails(scorers), approvers: parseEmails(approvers) },
-        schedule, lab_defaults: { ttl, idle_timeout: idle, max_extension: ext }, budget_usd_month: Number(budget) || 0 } })
+        schedule, lab_defaults: { ttl, idle_timeout: idle, max_extension: ext }, budget_usd_month: Number(budget) || 0, review_self_reported: reviewSelf } })
       onSaved(res.sha)
     } catch (err) {
       setConflict(reportSaveError(err))
@@ -94,6 +95,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
         <label>Idle timeout <input value={idle} placeholder="lab default, e.g. 30m" onChange={(e) => setIdle(e.target.value)} /></label>
         <label>Max extension <input value={ext} placeholder="none, e.g. 30m" onChange={(e) => setExt(e.target.value)} /></label>
         <label>Monthly budget (USD, 0 = none) <input type="number" min={0} step="0.01" value={budget} onChange={(e) => setBudget(e.target.value)} /></label>
+        <label><input type="checkbox" checked={reviewSelf} onChange={(e) => setReviewSelf(e.target.checked)} /> Scorers review self-reported (laptop) lab results</label>
       </fieldset>
       <button className="primary" disabled={off}>Save program</button>
     </form>

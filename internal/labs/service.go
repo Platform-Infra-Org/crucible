@@ -115,6 +115,7 @@ type View struct {
 	CanExtend        bool               `json:"can_extend"`
 	ExtensionPending bool               `json:"extension_pending"`
 	SelfReported     bool               `json:"self_reported"`
+	LabReview        *scoring.Feedback  `json:"lab_review,omitempty"` // a scorer's review of the whole self-reported lab
 	Complete         bool               `json:"complete"`
 	Score            float64            `json:"score"`
 	MaxScore         float64            `json:"max_score"`
@@ -374,7 +375,12 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.settle(ctx, inst, lab, done, reviews) {
+	wrote := s.settle(ctx, inst, lab, done, reviews)
+	rv, err := s.labReview(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	if s.settleLab(ctx, inst, lab, reviews, rv) || wrote {
 		if done, err = s.taskRows(ctx, inst); err != nil {
 			return nil, err
 		}
@@ -392,7 +398,8 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()),
-		EstimateUSD:  inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true}
+		EstimateUSD:  inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true,
+		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
 			Awarded: done[t.ID].Points, HasSetup: t.Setup != nil, HintsTotal: len(t.Hints), HintsRevealed: counts[t.ID]}
@@ -1061,6 +1068,16 @@ func (s *Service) recompute(ctx context.Context, inst *Instance, lab *content.La
 		return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "in_progress", 0)
 	case waiting:
 		return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "pending_review", 0)
+	}
+	wait, decided, err := s.selfReportReview(ctx, inst, lab, maxScore, done)
+	if err != nil {
+		return err
+	}
+	if wait {
+		return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "pending_review", 0)
+	}
+	if decided != nil {
+		score = *decided // the scorer's points replace the self-reported total
 	}
 	if maxScore == 0 {
 		maxScore = 1 // everything skipped

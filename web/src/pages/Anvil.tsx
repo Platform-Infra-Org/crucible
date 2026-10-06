@@ -8,7 +8,7 @@ import { Loader } from '../components/Loader'
 import { TranscriptView } from '../components/Transcript'
 import { toast } from '../lib/alerts'
 
-const typeLabel: Record<SubmissionType, string> = { text: 'Written answer', upload: 'Upload', signoff: 'Live sign-off', review: 'Lab review' }
+const typeLabel: Record<SubmissionType, string> = { text: 'Written answer', upload: 'Upload', signoff: 'Live sign-off', review: 'Lab review', self_reported: 'Self-reported lab' }
 const kb = (n: number) => (n < 1024 ? `${n} B` : `${Math.ceil(n / 1024)} KiB`)
 
 export function AnvilPage() {
@@ -121,7 +121,7 @@ export function AnvilDetailPage() {
       <p className="pre">{s.prompt}</p>
       <h2>Rubric</h2>
       <p className="rubric pre" data-testid="rubric">{s.rubric || 'No rubric: use your judgement.'}</p>
-      <h2>{s.type === 'review' ? 'Notes' : 'Answer'}</h2>
+      <h2>{s.type === 'review' ? 'Notes' : s.type === 'self_reported' ? 'Reported results' : 'Answer'}</h2>
       <div className="answer" data-testid="answer">
         {isLink ? <a href={s.answer} target="_blank" rel="noopener noreferrer">{s.answer}</a> : <p className="pre">{s.answer || '—'}</p>}
         {(s.files ?? []).map((f, i) => (

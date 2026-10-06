@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"mime/multipart"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -63,7 +64,77 @@ func (s *Service) Refresh(ctx context.Context, sub *scoring.Submission) error {
 	if err != nil {
 		return err
 	}
+	if sub.Kind == scoring.KindLab {
+		return s.applyLab(ctx, inst, lab, sub)
+	}
 	return s.apply(ctx, inst, lab, sub)
+}
+
+// applyLab records a decision on a whole self-reported lab. Returned: the doubted results are cleared so the trainee
+// redoes the lab; hint reveals stay, so no hint is charged twice. Scored: recompute uses the scorer's points.
+func (s *Service) applyLab(ctx context.Context, inst *Instance, lab *content.Lab, sub *scoring.Submission) error {
+	if sub.Status != scoring.Returned {
+		return s.recompute(ctx, inst, lab)
+	}
+	if _, err := s.DB.Exec(ctx, `DELETE FROM lab_task_progress WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`,
+		inst.UserID, inst.Team, inst.Training, inst.Module); err != nil {
+		return err
+	}
+	s.event(ctx, inst.ID, "returned", "self-reported results returned for a redo")
+	return s.Learn.SetItem(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, "lab", "in_progress", 0)
+}
+
+// labReview returns the latest whole-lab submission of this trainee's module (nil for labs that are not local).
+func (s *Service) labReview(ctx context.Context, inst *Instance) (*scoring.Submission, error) {
+	if s.Scoring == nil || inst.Runtime != "local" {
+		return nil, nil
+	}
+	latest, err := s.Scoring.Latest(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, scoring.KindLab)
+	return latest["lab"], err
+}
+
+// selfReportReview files a whole local lab for a scorer when its program asks for self-reported results to be
+// reviewed (spec §8.2). wait reports that the lab item must stay pending_review; points is the scorer's decision once
+// one exists.
+func (s *Service) selfReportReview(ctx context.Context, inst *Instance, lab *content.Lab, maxScore float64, done map[string]taskRow) (wait bool, points *float64, err error) {
+	st := s.Learn.State()
+	if maxScore == 0 || st == nil || st.Platform == nil {
+		return false, nil, nil
+	}
+	t := st.Platform.Teams[inst.Team]
+	if t == nil || t.Programs[inst.Training] == nil || !t.Programs[inst.Training].ReviewSelfReported {
+		return false, nil, nil
+	}
+	sub, err := s.labReview(ctx, inst)
+	switch {
+	case err != nil || s.Scoring == nil || inst.Runtime != "local":
+		return false, nil, err
+	case sub != nil && sub.Status == scoring.Scored:
+		return false, &sub.Points, nil
+	case sub != nil && sub.Status == scoring.Pending:
+		return true, nil, nil
+	}
+	email, name, err := s.requester(ctx, inst.UserID)
+	if err != nil {
+		return false, nil, err
+	}
+	var b strings.Builder
+	b.WriteString("Results the laptop agent reported (self-reported, local runtime):\n")
+	for _, tk := range lab.Tasks {
+		r := done[tk.ID]
+		fmt.Fprintf(&b, "- %s (%s): %s, %.2f / %g points\n", tk.ID, taskTitle(lab, tk), r.Status, r.Points, tk.Points)
+	}
+	_, err = s.Scoring.Submit(ctx, &auth.User{ID: inst.UserID, Email: email, Name: name}, &scoring.Submission{
+		Team: inst.Team, Training: inst.Training, Module: inst.Module, SHA: inst.SHA, Kind: scoring.KindLab, Item: "lab", LabID: inst.ID,
+		QType: "self_reported", Prompt: "Self-reported lab results",
+		Rubric: "Check these self-reported results against the check output and terminal transcripts. Award the points the " +
+			"evidence supports (hint costs are already taken off). Return the lab if the trainee should run it again: " +
+			"their task results are cleared, their hint charges stay.",
+		MaxPoints: maxScore, Answer: b.String()}, nil)
+	if errors.Is(err, apperr.Conflict) { // a concurrent recompute filed it first
+		err = nil
+	}
+	return err == nil, nil, err
 }
 
 // apply records a decision. Scored: the task passes with the scorer's points minus the hint costs (M5 ruling 5).
@@ -96,6 +167,30 @@ func (s *Service) settle(ctx context.Context, inst *Instance, lab *content.Lab, 
 		wrote = true
 	}
 	return wrote
+}
+
+// settleLab applies a decided whole-lab review whose Refresh never ran: the item still waits (pending_review) although
+// the lab submission is decided and no review task is waiting or was submitted after it (that would be redo work).
+func (s *Service) settleLab(ctx context.Context, inst *Instance, lab *content.Lab, reviews map[string]*scoring.Submission, rv *scoring.Submission) bool {
+	if rv == nil || rv.Status == scoring.Pending {
+		return false
+	}
+	for _, r := range reviews {
+		if r.Status == scoring.Pending || r.ID > rv.ID {
+			return false
+		}
+	}
+	var st string
+	err := s.DB.QueryRow(ctx, `SELECT status FROM item_progress WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4
+		AND item = 'lab'`, inst.UserID, inst.Team, inst.Training, inst.Module).Scan(&st)
+	if err != nil || st != "pending_review" {
+		return false
+	}
+	if err := s.applyLab(ctx, inst, lab, rv); err != nil {
+		s.Log.Error("applying a lab review decision failed", "lab", inst.ID, "submission", rv.ID, "err", err)
+		return false
+	}
+	return true
 }
 
 // Override sets the awarded points of an auto-checked task (spec §7). record writes the audit entry inside the same

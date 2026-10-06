@@ -35,6 +35,7 @@ import (
 const (
 	KindQuestion = "question"
 	KindTask     = "task"
+	KindLab      = "lab" // a whole self-reported lab (spec §8.2): item "lab", qtype "self_reported"
 
 	Pending  = "pending"
 	Scored   = "scored"
@@ -286,6 +287,9 @@ const alreadyLive = "this answer is already with a scorer or scored"
 // Submit stores the files and the submission (pending), then tells the program's scorers. Callers have already checked
 // that u may answer this item; Submit fills in the user and validates sizes.
 func (s *Service) Submit(ctx context.Context, u *auth.User, sub *Submission, files []*multipart.FileHeader) (*Submission, error) {
+	if sub.Kind == KindLab && (sub.LabID == "" || sub.Item != "lab" || sub.QType != "self_reported") {
+		return nil, apperr.Wrap(apperr.Invalid, "a lab submission needs its lab, item \"lab\" and type \"self_reported\"")
+	}
 	sub.Answer = Clean(strings.TrimSpace(sub.Answer))
 	if utf8.RuneCountInString(sub.Answer) > maxAnswer {
 		return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("answers are limited to %d characters", maxAnswer))
@@ -517,7 +521,7 @@ func (s *Service) SignOff(ctx context.Context, u *auth.User, in SignOffInput) (*
 // refresh recomputes the trainee's item. A failure is logged, never shown to the scorer: the decision is stored.
 func (s *Service) refresh(ctx context.Context, sub *Submission) {
 	var p Progress = s.Quiz
-	if sub.Kind == KindTask {
+	if sub.Kind != KindQuestion {
 		p = s.Labs
 	}
 	if p == nil {
@@ -568,7 +572,7 @@ func (s *Service) tellTrainee(ctx context.Context, sub *Submission) {
 		verb = fmt.Sprintf("was scored %g/%g", sub.Points, sub.MaxPoints)
 	}
 	page := "quiz"
-	if sub.Kind == KindTask {
+	if sub.Kind != KindQuestion {
 		page = "lab"
 	}
 	s.send(ctx, notify.Event{Kind: notify.SubmissionScored, To: []string{sub.Email},

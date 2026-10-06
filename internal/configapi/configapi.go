@@ -55,15 +55,16 @@ type LabDefaultsView struct {
 }
 
 type ProgramView struct {
-	Training       string          `json:"training"`
-	Title          string          `json:"title"`
-	Enrolled       []string        `json:"enrolled"`
-	Roles          RolesView       `json:"roles"`
-	Schedule       string          `json:"schedule"`
-	InlineSchedule string          `json:"inline_schedule,omitempty"` // read-only: inline windows live in git
-	LabDefaults    LabDefaultsView `json:"lab_defaults"`
-	BudgetUSDMonth float64         `json:"budget_usd_month"`
-	CanManage      bool            `json:"can_manage"`
+	Training           string          `json:"training"`
+	Title              string          `json:"title"`
+	Enrolled           []string        `json:"enrolled"`
+	Roles              RolesView       `json:"roles"`
+	Schedule           string          `json:"schedule"`
+	InlineSchedule     string          `json:"inline_schedule,omitempty"` // read-only: inline windows live in git
+	LabDefaults        LabDefaultsView `json:"lab_defaults"`
+	BudgetUSDMonth     float64         `json:"budget_usd_month"`
+	ReviewSelfReported bool            `json:"review_self_reported"`
+	CanManage          bool            `json:"can_manage"`
 }
 
 type TrainingOption struct {
@@ -97,12 +98,13 @@ type RosterBody struct {
 }
 
 type ProgramBody struct {
-	BaseSHA        string          `json:"base_sha"`
-	Enrolled       []string        `json:"enrolled"`
-	Roles          RolesView       `json:"roles"`
-	Schedule       string          `json:"schedule"`
-	LabDefaults    LabDefaultsView `json:"lab_defaults"`
-	BudgetUSDMonth float64         `json:"budget_usd_month"`
+	BaseSHA            string          `json:"base_sha"`
+	Enrolled           []string        `json:"enrolled"`
+	Roles              RolesView       `json:"roles"`
+	Schedule           string          `json:"schedule"`
+	LabDefaults        LabDefaultsView `json:"lab_defaults"`
+	BudgetUSDMonth     float64         `json:"budget_usd_month"`
+	ReviewSelfReported *bool           `json:"review_self_reported"` // nil keeps what git has
 }
 
 type BudgetBody struct {
@@ -260,7 +262,7 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 		}
 		v.Programs = append(v.Programs, ProgramView{InlineSchedule: inline, Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
 			Roles:    RolesView{Manager: emails(p.Roles.Manager), Scorers: emails(p.Roles.Scorers), Approvers: emails(p.Roles.Approvers)},
-			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
+			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
 			LabDefaults: LabDefaultsView{TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout), MaxExtension: dur(p.LabDefaults.MaxExtension)}})
 	}
 	if spend { // spec §5.3 "view team spend"
@@ -404,6 +406,12 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	if b.BudgetUSDMonth > 0 {
 		set["budget_usd_month"] = b.BudgetUSDMonth
 	}
+	if b.ReviewSelfReported != nil {
+		set["review_self_reported"] = nil // off is the default: drop the key
+		if *b.ReviewSelfReported {
+			set["review_self_reported"] = true
+		}
+	}
 	schedule := b.Schedule
 	if exists && t.Programs[training].Inline != nil {
 		if b.Schedule != "" {
@@ -419,7 +427,8 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	}
 	return s.write(ctx, u, gitsync.Change{Action: action, Base: b.BaseSHA, Paths: []string{rel}, Allow: allow, Edit: edit(rel, set)},
 		auditAction, team+"/"+training, map[string]any{
-			"enrolled": set["enrolled"], "roles": set["roles"], "schedule": schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth})
+			"enrolled": set["enrolled"], "roles": set["roles"], "schedule": schedule, "lab_defaults": b.LabDefaults, "budget_usd_month": b.BudgetUSDMonth,
+			"review_self_reported": b.ReviewSelfReported})
 }
 
 func (s *Service) SetBudget(ctx context.Context, u *auth.User, team string, b BudgetBody) (string, error) {

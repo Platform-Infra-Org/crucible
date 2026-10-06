@@ -97,6 +97,7 @@ export function LabPage() {
             Score {lab.score} / {lab.max_score} · {lab.tasks.filter((t) => t.status === 'passed').length} of {lab.tasks.length} tasks passed · hints used{' '}
             {lab.tasks.reduce((n, t) => n + t.hints_revealed, 0)}
           </p>
+          {lab.lab_review && <FeedbackBox f={lab.lab_review} />}
           {lab.tasks.filter((t) => t.review).map((t) => (
             <div key={t.id}><h3>{t.title}</h3><FeedbackBox f={t.review!} /></div>
           ))}
@@ -217,7 +218,8 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
         <button className="ghost" onClick={end}>End lab</button>
       </header>
       <div>
-        {lab.complete && <div className="banner pass" role="status">✦ Lab forged: {lab.score} / {lab.max_score} points</div>}
+        {lab.complete && !lab.lab_review && <div className="banner pass" role="status">✦ Lab forged: {lab.score} / {lab.max_score} points</div>}
+        {lab.lab_review && <FeedbackBox f={lab.lab_review} />}
         {askAlerts && (
           <div className="banner">
             Get a heads-up when your lab is about to cool down, even from another tab.{' '}

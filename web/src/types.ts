@@ -5,7 +5,7 @@ export type Roles = { manager: string[]; scorers: string[]; approvers: string[] 
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
 export type ProgramConfig = {
   training: string; title: string; enrolled: string[]; roles: Roles; schedule: string; inline_schedule?: string
-  lab_defaults: LabDefaults; budget_usd_month: number; can_manage: boolean
+  lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
 }
 export type TeamView = {
   id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
@@ -33,7 +33,7 @@ export type LabView = {
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
   terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number
-  can_extend: boolean; extension_pending: boolean; self_reported: boolean; complete: boolean; score: number; max_score: number
+  can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
@@ -62,7 +62,7 @@ export type PlatformView = {
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
 }
 
-export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review'
+export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review' | 'self_reported'
 export type SubmissionFile = { name: string; size: number }
 export type Feedback = {
   id: number; status: 'pending' | 'scored' | 'returned'; answer: string; files: SubmissionFile[] | null
@@ -70,7 +70,7 @@ export type Feedback = {
 }
 export type Submission = {
   id: number; trainee: string; trainee_name: string; team: string; training: string; module: string
-  kind: 'question' | 'task'; item: string; lab_id?: string; type: SubmissionType; prompt: string; rubric: string
+  kind: 'question' | 'task' | 'lab'; item: string; lab_id?: string; type: SubmissionType; prompt: string; rubric: string
   max_points: number; answer: string; files: SubmissionFile[]; status: Feedback['status']; points: number
   feedback: string; scored_by?: string; scored_at?: string; created_at: string
 }

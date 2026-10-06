@@ -333,6 +333,20 @@ func TestSetProgramKeepsInlineSchedule(t *testing.T) {
 	if !strings.Contains(detail, `"schedule": "inline"`) {
 		t.Fatalf("audit must record the kept inline schedule: %s", detail)
 	}
+	if err := f.sync.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tv, _ = f.s.Team(f.leader, "forge"); !tv.Programs[0].ReviewSelfReported {
+		t.Fatal("the view shows the review flag")
+	}
+	off := false
+	b.BaseSHA, b.ReviewSelfReported = f.sha(), &off
+	if _, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", b); err != nil {
+		t.Fatal(err)
+	}
+	if got := sh(t, "", "--git-dir", f.remote, "show", "main:teams/forge/programs/forge-101.yaml"); strings.Contains(got, "review_self_reported") {
+		t.Fatalf("turning the flag off drops it:\n%s", got)
+	}
 }
 
 func TestSetProgramRefusesToReplaceInlineSchedule(t *testing.T) {

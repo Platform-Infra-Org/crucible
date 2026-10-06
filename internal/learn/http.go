@@ -11,6 +11,7 @@ import (
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/content"
 	"crucible/internal/httpx"
 	"crucible/internal/scoring"
 )
@@ -37,7 +38,7 @@ func (s *Service) Routes(r chi.Router) {
 			return
 		}
 		p := filepath.Join(t.Dir, "assets", rel)
-		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || !assetTypes[strings.ToLower(filepath.Ext(p))] {
+		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() || !content.AssetTypes[strings.ToLower(filepath.Ext(p))] {
 			httpx.Error(w, apperr.Wrap(apperr.NotFound, "asset not found"))
 			return
 		}
@@ -86,9 +87,6 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, q, err)
 	})
 }
-
-// assetTypes are the only files served from a training's assets/ (images and fonts).
-var assetTypes = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true, ".ico": true, ".woff2": true}
 
 func param(r *http.Request, k string) string { return chi.URLParam(r, k) }
 

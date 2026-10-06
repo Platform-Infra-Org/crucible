@@ -81,6 +81,9 @@ func Load(dir string) (*Training, []Problem) {
 	if t.Progression != "linear" && t.Progression != "free" {
 		l.add(tf, "progression must be linear or free")
 	}
+	if t.EstimatedHours < 0 {
+		l.add(tf, "estimated_hours must not be negative")
+	}
 	if len(t.ModuleIDs) == 0 {
 		l.add(tf, "at least one module is required")
 	}
@@ -96,6 +99,7 @@ func Load(dir string) (*Training, []Problem) {
 			t.Modules = append(t.Modules, m)
 		}
 	}
+	l.links(dir)
 	if len(l.probs) > 0 {
 		return nil, l.probs
 	}
@@ -126,6 +130,21 @@ func (l *loader) module(dir, id string) *Module {
 	}
 	if m.Title == "" {
 		l.add(mf, "title is required")
+	}
+	switch {
+	case m.Completion == "":
+		m.Completion = "all_items"
+		if m.Threshold != 0 {
+			l.add(mf, "threshold only applies to completion: score")
+		}
+	case m.Completion == "all_items" && m.Threshold != 0:
+		l.add(mf, "threshold only applies to completion: score")
+	case m.Completion == "score":
+		if m.Threshold <= 0 || m.Threshold > 1 {
+			l.add(mf, "completion: score needs a threshold between 0 and 1 (e.g. 0.7)")
+		}
+	case m.Completion != "all_items":
+		l.add(mf, "completion must be all_items or score")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "quiz.yaml")); err == nil {
 		m.Quiz = l.quiz(filepath.Join(dir, "quiz.yaml"))
@@ -217,6 +236,12 @@ func (l *loader) quiz(path string) *Quiz {
 	}
 	if q.PassThreshold < 0 || q.PassThreshold > 1 {
 		l.add(path, "pass_threshold must be between 0 and 1")
+	}
+	if q.MaxAttempts < 0 {
+		l.add(path, "max_attempts must not be negative (0 = unlimited)")
+	}
+	if q.Cooldown < 0 {
+		l.add(path, "cooldown must not be negative")
 	}
 	ids := map[string]bool{}
 	for i, x := range q.Questions {
@@ -1255,4 +1280,48 @@ func (l *loader) tfDiags(p string, diags hcl.Diagnostics) {
 	if diags.HasErrors() {
 		l.add(p, "%v", diags)
 	}
+}
+
+var (
+	mdLink  = regexp.MustCompile(`!?\[[^\]]*\]\(\s*<?([^)\s>]+)`)
+	mdFence = regexp.MustCompile("(?ms)^(```|~~~).*?^(```|~~~)")
+	mdCode  = regexp.MustCompile("`[^`\\n]*`")
+)
+
+// links checks Markdown links and images under modules/ (spec §6 "broken links/assets"). assets/... must exist under
+// the repo's assets/ with a type the app serves; other relative targets can't resolve inside Crucible. Absolute paths,
+// URLs, mailto: and #anchors are external and skipped (nothing is fetched). Fenced blocks and inline code spans are skipped.
+// ponytail: a regex scan, not a Markdown parser.
+func (l *loader) links(dir string) {
+	_ = filepath.WalkDir(filepath.Join(dir, "modules"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(p), ".md") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, m := range mdLink.FindAllSubmatch(mdCode.ReplaceAll(mdFence.ReplaceAll(b, nil), nil), -1) {
+			target := string(m[1])
+			switch {
+			case strings.HasPrefix(target, "#"), strings.HasPrefix(target, "/"), strings.Contains(target, "://"), strings.HasPrefix(target, "mailto:"):
+			case strings.HasPrefix(target, "assets/"):
+				rel, _, _ := strings.Cut(strings.TrimPrefix(target, "assets/"), "#")
+				rel, _, _ = strings.Cut(rel, "?")
+				if !filepath.IsLocal(filepath.FromSlash(rel)) {
+					l.add(p, "asset link %q leaves assets/", target)
+					continue
+				}
+				fp := filepath.Join(dir, "assets", filepath.FromSlash(rel))
+				if fi, err := os.Stat(fp); err != nil || !fi.Mode().IsRegular() {
+					l.add(p, "broken asset link %q", target)
+				} else if !AssetTypes[strings.ToLower(filepath.Ext(fp))] {
+					l.add(p, "asset %q is not an image or font Crucible serves", target)
+				}
+			default:
+				l.add(p, "relative link %q won't resolve in Crucible; use assets/... or a full URL", target)
+			}
+		}
+		return nil
+	})
 }

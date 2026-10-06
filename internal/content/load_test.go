@@ -116,6 +116,17 @@ func TestLoadProblems(t *testing.T) {
 		override map[string]string
 		want     string
 	}{
+		"negative hours":               {map[string]string{"training.yaml": "id: t1\ntitle: T\nmodules: [m1]\nestimated_hours: -1\n"}, "estimated_hours"},
+		"unknown completion":           {map[string]string{"modules/m1/module.yaml": "title: M\ncompletion: vibes\nitems:\n  - reading: reading/intro.md\n"}, "completion must be all_items or score"},
+		"score needs threshold":        {map[string]string{"modules/m1/module.yaml": "title: M\ncompletion: score\nitems:\n  - reading: reading/intro.md\n"}, "threshold"},
+		"threshold without score":      {map[string]string{"modules/m1/module.yaml": "title: M\nthreshold: 0.5\nitems:\n  - reading: reading/intro.md\n"}, "threshold only applies"},
+		"negative attempts":            {map[string]string{"modules/m1/quiz.yaml": "max_attempts: -1\nquestions:\n  - {id: q1, type: single, prompt: P, options: [a, b], answer: 1}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "max_attempts"},
+		"negative cooldown":            {map[string]string{"modules/m1/quiz.yaml": "cooldown: -5m\nquestions:\n  - {id: q1, type: single, prompt: P, options: [a, b], answer: 1}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "cooldown must not be negative"},
+		"broken asset link":            {map[string]string{"modules/m1/reading/intro.md": "# R\n\n![x](assets/missing.png)\n"}, "broken asset link"},
+		"asset traversal":              {map[string]string{"modules/m1/reading/intro.md": "# R\n\n![x](assets/../training.yaml)\n"}, "leaves assets/"},
+		"asset not servable":           {map[string]string{"modules/m1/reading/intro.md": "# R\n\n[x](assets/a.sh)\n", "assets/a.sh": "x"}, "not an image or font"},
+		"relative link":                {map[string]string{"modules/m1/reading/intro.md": "# R\n\nSee [the lab](../m2/lab/tasks/01.md).\n"}, "won't resolve"},
+		"lab task link":                {map[string]string{"modules/m1/lab/tasks/t1.md": "see [x](other.md)"}, "won't resolve"},
 		"text needs rubric":            {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: text, prompt: \"Why?\"}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "needs a rubric"},
 		"upload needs rubric":          {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: upload, prompt: Attach}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "needs a rubric"},
 		"review needs rubric":          {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    check: {script: checks/t1.sh, run_in: box}\n", "    human_review: true\n", 1)}, "human_review tasks need a rubric"},
@@ -516,5 +527,35 @@ func TestLabTFVarsIsJSON(t *testing.T) {
 		if !strings.Contains(LabTF, want) {
 			t.Fatalf("LabTF lacks %q", want)
 		}
+	}
+}
+
+func TestLinksThatResolve(t *testing.T) {
+	dir := tree(t, map[string]string{
+		"modules/m1/reading/intro.md": "# R\n\n![logo](assets/logo.png?v=1) [docs](https://example.com) [top](#r) [mail](mailto:a@b) [abs](/x)\n\n```md\n[not a link](nowhere.md)\n```\n",
+		"assets/logo.png":             "png",
+	})
+	tr, probs := Load(dir)
+	if len(probs) > 0 {
+		t.Fatalf("valid links flagged: %v", probs)
+	}
+	if m := tr.Module("m1"); m.Completion != "all_items" {
+		t.Errorf("completion default = %q", m.Completion)
+	}
+}
+
+func TestCompletionAndAttempts(t *testing.T) {
+	dir := tree(t, map[string]string{
+		"training.yaml":          "id: t1\ntitle: T\nestimated_hours: 1.5\nmodules: [m1]\n",
+		"modules/m1/module.yaml": "title: M\ncompletion: score\nthreshold: 0.7\nitems:\n  - reading: reading/intro.md\n  - quiz: quiz.yaml\n  - lab: lab\n",
+		"modules/m1/quiz.yaml":   "max_attempts: 3\ncooldown: 10m\n" + base["modules/m1/quiz.yaml"],
+	})
+	tr, probs := Load(dir)
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	m := tr.Module("m1")
+	if tr.EstimatedHours != 1.5 || m.Completion != "score" || m.Threshold != 0.7 || m.Quiz.MaxAttempts != 3 || m.Quiz.Cooldown.D() != 10*time.Minute {
+		t.Errorf("parsed: %+v %+v", tr, m)
 	}
 }

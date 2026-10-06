@@ -12,24 +12,27 @@ type Problem struct{ File, Msg string }
 func (p Problem) String() string { return p.File + ": " + p.Msg }
 
 type Training struct {
-	ID          string    `yaml:"id"`
-	Title       string    `yaml:"title"`
-	Description string    `yaml:"description"`
-	Maintainers []string  `yaml:"maintainers"`
-	Progression string    `yaml:"progression"` // linear | free
-	ModuleIDs   []string  `yaml:"modules"`
-	Modules     []*Module `yaml:"-"`
-	Dir         string    `yaml:"-"`
+	ID             string    `yaml:"id"`
+	Title          string    `yaml:"title"`
+	Description    string    `yaml:"description"`
+	Maintainers    []string  `yaml:"maintainers"`
+	Progression    string    `yaml:"progression"` // linear | free
+	EstimatedHours float64   `yaml:"estimated_hours" json:"estimated_hours"`
+	ModuleIDs      []string  `yaml:"modules"`
+	Modules        []*Module `yaml:"-"`
+	Dir            string    `yaml:"-"`
 }
 
 type Module struct {
-	ID       string              `yaml:"-"`
-	Title    string              `yaml:"title"`
-	RawItems []map[string]string `yaml:"items"`
-	Items    []Item              `yaml:"-"`
-	Quiz     *Quiz               `yaml:"-"`
-	Lab      *Lab                `yaml:"-"`
-	Dir      string              `yaml:"-"`
+	ID         string              `yaml:"-"`
+	Title      string              `yaml:"title"`
+	Completion string              `yaml:"completion"` // all_items (default) | score
+	Threshold  float64             `yaml:"threshold"`  // score only: 0 < t <= 1
+	RawItems   []map[string]string `yaml:"items"`
+	Items      []Item              `yaml:"-"`
+	Quiz       *Quiz               `yaml:"-"`
+	Lab        *Lab                `yaml:"-"`
+	Dir        string              `yaml:"-"`
 }
 
 type Item struct {
@@ -40,8 +43,10 @@ type Item struct {
 }
 
 type Quiz struct {
-	PassThreshold float64     `yaml:"pass_threshold"`
-	Questions     []*Question `yaml:"questions"`
+	PassThreshold float64        `yaml:"pass_threshold"`
+	MaxAttempts   int            `yaml:"max_attempts"` // 0 = unlimited
+	Cooldown      yamlx.Duration `yaml:"cooldown"`     // 0 = none
+	Questions     []*Question    `yaml:"questions"`
 }
 
 type Question struct {
@@ -146,3 +151,6 @@ func (l *Lab) Task(id string) *Task {
 func IsHuman(questionType string) bool {
 	return questionType == "text" || questionType == "upload" || questionType == "signoff"
 }
+
+// AssetTypes are the only files served from a training's assets/ (images and fonts).
+var AssetTypes = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true, ".ico": true, ".woff2": true}

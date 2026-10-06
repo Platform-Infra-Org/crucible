@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -258,7 +261,8 @@ func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training 
 type Changes struct {
 	From    string   `json:"from"`
 	To      string   `json:"to"`
-	Commits []string `json:"commits"` // "abc1234 subject", newest first, at most 50
+	Commits []string `json:"commits"` // "abc1234 subject", newest first, at most maxCommits
+	More    bool     `json:"more"`    // there are older commits than Commits lists
 	Stat    string   `json:"stat"`    // git diff --stat: file names and line counts, never content
 }
 
@@ -274,6 +278,21 @@ func (s *Syncer) trainingMirror(training string) (Mirror, error) {
 	return s.mirror(ref.Repo), nil
 }
 
+const (
+	maxCommits = 50
+	gitTimeout = 30 * time.Second
+)
+
+// gitErr tells a git that could not run (timeout, cancelled, not started) from one that answered no (unknown object,
+// not an ancestor): only the latter is the caller's mistake.
+func gitErr(ctx context.Context, err error, no error) error {
+	var x *exec.ExitError
+	if ctx.Err() == nil && errors.As(err, &x) {
+		return no
+	}
+	return apperr.Wrap(apperr.Unavailable, "could not read the training's history; try again")
+}
+
 func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Changes, error) {
 	m, err := s.trainingMirror(training)
 	if err != nil {
@@ -282,21 +301,26 @@ func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Chang
 	if !commitSHA.MatchString(from) || !commitSHA.MatchString(to) {
 		return nil, apperr.Wrap(apperr.Invalid, "from and to must be 40-character commit ids")
 	}
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
 	out := &Changes{From: from, To: to, Commits: []string{}}
 	if from == to {
 		return out, nil
 	}
-	log, err := git(ctx, m.Dir, "log", "--format=%h %s", "-n", "50", "--end-of-options", from+".."+to)
+	log, err := git(ctx, m.Dir, "log", "--format=%h %s", "-n", strconv.Itoa(maxCommits+1), "--end-of-options", from+".."+to)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.Invalid, "those versions are not in the training's history")
+		return nil, gitErr(ctx, err, apperr.Wrap(apperr.Invalid, "those versions are not in the training's history"))
 	}
 	for _, l := range strings.Split(log, "\n") {
 		if l != "" {
 			out.Commits = append(out.Commits, l)
 		}
 	}
-	if out.Stat, err = git(ctx, m.Dir, "diff", "--stat", "--end-of-options", from, to); err != nil {
-		return nil, err
+	if len(out.Commits) > maxCommits {
+		out.Commits, out.More = out.Commits[:maxCommits], true
+	}
+	if out.Stat, err = git(ctx, m.Dir, "diff", "--no-ext-diff", "--no-textconv", "--stat", "--stat-count=100", "--end-of-options", from, to); err != nil {
+		return nil, gitErr(ctx, err, err)
 	}
 	return out, nil
 }
@@ -312,9 +336,11 @@ func (s *Syncer) CheckPin(ctx context.Context, training, sha string) error {
 	if !commitSHA.MatchString(sha) {
 		return bad
 	}
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
 	head := s.Current().Heads[training]
 	if _, err := git(ctx, m.Dir, "merge-base", "--is-ancestor", sha, head); err != nil {
-		return bad
+		return gitErr(ctx, err, bad)
 	}
 	if s.Version(ctx, training, sha) == nil {
 		return bad

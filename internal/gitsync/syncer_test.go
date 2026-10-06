@@ -3,6 +3,7 @@ package gitsync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -217,5 +218,45 @@ func TestChangesAndCheckPin(t *testing.T) {
 	}
 	if err := s.CheckPin(ctx, "t1", side); !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("a commit off the branch must be refused: %v", err)
+	}
+}
+
+func TestCheckPinRefusesAnAncestorThatFailsToLoad(t *testing.T) {
+	ctx := context.Background()
+	s, _, repo := setup(t)
+	commit(t, repo, map[string]string{"training.yaml": "id: t1\ntitle: [broken\n"})
+	bad := strings.TrimSpace(gitOut(t, repo, "rev-parse", "HEAD"))
+	commit(t, repo, map[string]string{"training.yaml": "id: t1\ntitle: T1 fixed\nmodules: [m1]\n"})
+	if err := s.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckPin(ctx, "t1", bad); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("an ancestor whose content fails validation must be refused: %v", err)
+	}
+}
+
+func TestChangesFlagsTruncationAndReportsGitFailures(t *testing.T) {
+	ctx := context.Background()
+	s, _, repo := setup(t)
+	first := s.Current().Heads["t1"]
+	for i := 0; i < 52; i++ {
+		commit(t, repo, map[string]string{"modules/m1/r.md": fmt.Sprintf("# v%d\n", i)})
+	}
+	if err := s.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	head := s.Current().Heads["t1"]
+	ch, err := s.Changes(ctx, "t1", first, head)
+	if err != nil || len(ch.Commits) != 50 || !ch.More {
+		t.Fatalf("50 commits and more=true expected: %d %v %v", len(ch.Commits), ch != nil && ch.More, err)
+	}
+	// a git that cannot run is an unavailable service, not a bad request
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.Changes(cctx, "t1", first, head); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("a cancelled git must be Unavailable: %v", err)
+	}
+	if err := s.CheckPin(cctx, "t1", first); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("a cancelled git must be Unavailable: %v", err)
 	}
 }

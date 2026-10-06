@@ -2,7 +2,8 @@ import { expect, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DiffView } from './DiffView'
 import { editProblem } from '../lib/editLimits'
-import { conflictNotice } from '../pages/EditReview'
+import { conflictNotice } from '../lib/conflictNotice'
+import { byteLen, changedFiles, headVersions } from '../lib/editDraft'
 
 test('diff lines are marked added, removed or context', () => {
   const html = renderToStaticMarkup(<DiffView diff={'diff --git a/x.md b/x.md\n@@ -1,2 +1,2 @@\n # Intro\n-Hello.\n+Hello, smith.\n'} />)
@@ -32,6 +33,27 @@ test('carriage returns, tabs, trailing spaces and control characters are visible
   expect(html).not.toContain('\u0007')
 })
 
+test('every invisible code point is marked, astral ones included', () => {
+  for (const cp of [0x61c, 0x180e, 0xfff9, 0x3164, 0x34f, 0xfe0f, 0xe0041, 0xe0100]) {
+    const u = cp.toString(16).toUpperCase().padStart(4, '0')
+    expect(renderToStaticMarkup(<DiffView diff={`+a${String.fromCodePoint(cp)}b`} />), u).toContain(`‹U+${u}›`)
+  }
+  expect(renderToStaticMarkup(<DiffView diff={'+plain 😀 ünï'} />)).not.toContain('‹')
+})
+
+test('CRLF files keep their line endings, unchanged files are not submitted', () => {
+  const orig = { 'a.md': 'x\r\ny\r\n', 'b.md': 'k\n' }
+  expect(changedFiles(orig, { 'a.md': 'x\r\ny\r\n', 'b.md': 'k\n' })).toEqual({})
+  expect(changedFiles(orig, { 'a.md': 'x\nz\n', 'b.md': 'k\nm\n' })).toEqual({ 'a.md': 'x\r\nz\r\n', 'b.md': 'k\nm\n' })
+  expect(byteLen('é')).toBe(2)
+})
+
+test('redo seeds paths with the head text, not the stale edit', async () => {
+  const head = await headVersions(['a.md', 'new.md'], async (p) => { if (p === 'new.md') throw new Error('404'); return 'HEAD ' + p })
+  expect(head).toEqual({ 'a.md': 'HEAD a.md' })
+  expect(changedFiles(head, head)).toEqual({})
+})
+
 test('client limits mirror the server', () => {
   expect(editProblem({ 'training.yaml': 'a' })).toBeUndefined()
   expect(editProblem({ 'modules/m1/a.md': 'a' })).toBeUndefined()
@@ -44,5 +66,5 @@ test('client limits mirror the server', () => {
 
 test('409s are told apart', () => {
   expect(conflictNotice('this edit changed since it was reviewed; review it again')).toMatch(/^Edit moved/)
-  expect(conflictNotice('this edit no longer applies to the current content; the author can redo it')).toMatch(/^Needs re-approval/)
+  expect(conflictNotice('this edit no longer applies to the current content; the author can redo it')).toMatch(/^No longer applies — redo it/)
 })

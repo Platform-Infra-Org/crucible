@@ -6,7 +6,9 @@ export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: st
 export type ProgramConfig = {
   training: string; title: string; enrolled: string[]; roles: Roles; schedule: string; inline_schedule?: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
+  running_sha: string; head_sha: string; pinned_ref: string
 }
+export type Changes = { commits: string[]; stat: string; more?: boolean }
 export type TeamView = {
   id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
   mentors: Record<string, string>; budget?: { monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]

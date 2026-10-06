@@ -8,13 +8,8 @@ import { DiffView } from '../components/DiffView'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
-
-// The server answers 409 for two different things; say which one happened.
-export function conflictNotice(msg: string): string {
-  if (/changed since it was reviewed/.test(msg)) return `Edit moved: ${msg} Nothing was merged; read the new diff below and approve again.`
-  if (/no longer applies/.test(msg)) return `Needs re-approval: ${msg}`
-  return msg
-}
+import { conflictNotice } from '../lib/conflictNotice'
+import { byteLen } from '../lib/editDraft'
 
 export function EditReviewPage() {
   const { id } = useParams()
@@ -48,7 +43,7 @@ export function EditReviewPage() {
       </p>
       {e.status === 'stale' && <p role="alert" className="error">This edit no longer applies to the current content.</p>}
       {e.note && <p>Note: {e.note}</p>}
-      {msg && <p role="alert" className="error">{msg}</p>}
+      <p role="alert" className="error">{msg}</p>
       <h2>Changes</h2>
       <DiffView diff={e.diff ?? ''} />
       <h2>Files</h2>
@@ -60,13 +55,13 @@ export function EditReviewPage() {
       ))}
       {(e.can_review || e.can_withdraw) && (
         <p>
-          {e.can_review && <><label>Review note <textarea value={note} maxLength={2000} onChange={(x) => setNote(x.target.value)} /></label>{' '}</>}
+          {e.can_review && <><label>Review note <textarea value={note} onChange={(x) => byteLen(x.target.value) <= 2000 && setNote(x.target.value)} /></label>{' '}</>}
           {e.can_review && <><button disabled={busy} onClick={() => act('approve')}>Approve and merge</button>{' '}
             <button className="ghost" disabled={busy} onClick={() => act('reject')}>Reject</button>{' '}</>}
           {e.can_withdraw && <button className="ghost" disabled={busy} onClick={() => act('withdraw')}>Withdraw</button>}
         </p>
       )}
-      {e.status === 'stale' && e.author === me.user.email.toLowerCase() && (
+      {e.status === 'stale' && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
         <Link to={`/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Redo on the current version</Link>
       )}
     </section>

@@ -3,7 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '../api'
 import type { ContentEdit } from '../types'
 import { Markdown } from '../components/Markdown'
+import { DiffView } from '../components/DiffView'
 import { editProblem } from '../lib/editLimits'
+import { byteLen, changedFiles, headVersions } from '../lib/editDraft'
 
 type FileList = { head_sha: string; files: { path: string; size: number }[] }
 
@@ -14,32 +16,39 @@ export function EditFilesPage() {
   const from = q.get('from')
   const [list, setList] = useState<FileList>()
   const [files, setFiles] = useState<Record<string, string>>({})
-  const [orig, setOrig] = useState<Record<string, string>>({}) // as loaded from the head; seeded files have no entry
+  const [orig, setOrig] = useState<Record<string, string>>({}) // as loaded from the head
   const [open, setOpen] = useState('')
   const [title, setTitle] = useState('')
   const [err, setErr] = useState('')
+  const [old, setOld] = useState<ContentEdit>() // the stale edit being redone, for reference only
   const [busy, setBusy] = useState(false)
 
+  const loadFile = async (p: string) =>
+    (await api<{ content: string }>(`/api/content/${encodeURIComponent(training)}/file?path=${encodeURIComponent(p)}`)).content
   useEffect(() => {
     api<FileList>(`/api/content/${encodeURIComponent(training)}/files`).then(setList).catch((e: Error) => setErr(e.message))
   }, [training])
   useEffect(() => {
     if (!from) return
+    // Redo starts from the CURRENT head text of the same paths: the old text would undo whatever made the edit stale.
     api<ContentEdit>(`/api/edits/${encodeURIComponent(from)}`)
-      .then((e) => { setTitle(e.title); setFiles(e.files ?? {}); setOpen(Object.keys(e.files ?? {})[0] ?? '') })
+      .then(async (e) => {
+        const head = await headVersions(Object.keys(e.files ?? {}), loadFile)
+        setOld(e); setTitle(e.title); setOrig(head); setFiles(head); setOpen(Object.keys(head)[0] ?? '')
+      })
       .catch((e: Error) => setErr(e.message))
-  }, [from])
+  }, [from]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openFile = async (p: string) => {
     setOpen(p)
     if (p in files) return
     try {
-      const f = await api<{ content: string }>(`/api/content/${encodeURIComponent(training)}/file?path=${encodeURIComponent(p)}`)
-      setOrig((o) => ({ ...o, [p]: f.content }))
-      setFiles((s) => ({ ...s, [p]: f.content }))
+      const content = await loadFile(p)
+      setOrig((o) => ({ ...o, [p]: content }))
+      setFiles((s) => ({ ...s, [p]: content }))
     } catch (e) { setErr((e as Error).message) }
   }
-  const changed = Object.fromEntries(Object.entries(files).filter(([p, t]) => orig[p] !== t))
+  const changed = changedFiles(orig, files)
   const problem = Object.keys(changed).length ? editProblem(changed) : undefined
 
   const submit = async () => {
@@ -47,9 +56,10 @@ export function EditFilesPage() {
     const p = editProblem(changed)
     if (p) return setErr(p)
     if (!title.trim()) return setErr('Give the edit a title.')
+    if (!list) return setErr('The file list has not loaded yet.')
     setBusy(true)
     try {
-      const e = await api<ContentEdit>('/api/edits', { method: 'POST', json: { training, base_sha: list?.head_sha, title: title.trim(), files: changed } })
+      const e = await api<ContentEdit>('/api/edits', { method: 'POST', json: { training, base_sha: list.head_sha, title: title.trim(), files: changed } })
       nav(`/edits/${e.id}`)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
@@ -58,12 +68,22 @@ export function EditFilesPage() {
     <section className="page">
       <h1>Edit {training}</h1>
       {err && <p role="alert" className="error">{err}</p>}
-      {problem && <p className="muted">{problem}</p>}
+      <p role="status" className="muted">{problem ?? ''}</p>
+      {old && (
+        <div role="note">
+          <p>Redoing <strong>{old.title}</strong>. The files below hold the current version; the old edit no longer applied, so re-apply
+            your changes here. Its diff, for reference:</p>
+          <DiffView diff={old.diff ?? ''} />
+        </div>
+      )}
       <div className="editor">
         <div>
           <ul>
             {(list?.files ?? []).map((f) => (
-              <li key={f.path}><button className={open === f.path ? '' : 'ghost'} onClick={() => openFile(f.path)}>{f.path}</button>{f.path in changed && ' *'}</li>
+              <li key={f.path}>
+                <button className={open === f.path ? '' : 'ghost'} aria-current={open === f.path ? 'true' : undefined} onClick={() => openFile(f.path)}>{f.path}</button>
+                {f.path in changed && <span aria-hidden="true"> *<span className="sr-only"> (changed)</span></span>}
+              </li>
             ))}
           </ul>
         </div>
@@ -76,8 +96,8 @@ export function EditFilesPage() {
         )}
       </div>
       <p>
-        <label>Title <input value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} /></label>{' '}
-        <button disabled={busy} onClick={submit}>Submit for review</button>
+        <label>Title <input value={title} onChange={(e) => byteLen(e.target.value) <= 200 && setTitle(e.target.value)} /></label>{' '}
+        <button disabled={busy || !list} onClick={submit}>Submit for review</button>
       </p>
     </section>
   )

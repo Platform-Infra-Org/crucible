@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"crucible/internal/yamlx"
 )
@@ -27,6 +30,7 @@ type Settings struct {
 	CostTiers       *CostTiers           `yaml:"cost_tiers"`
 	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
 	Schedules       map[string]*Schedule `yaml:"schedules"`
+	Ranks           RankThresholds       `yaml:"ranks"` // forge rank thresholds; missing keys take DefaultRanks
 	Quotes          []string             `yaml:"-"`
 }
 
@@ -35,6 +39,46 @@ type CostTiers struct {
 	AutoApproveUSD float64 `yaml:"auto_approve_usd" json:"auto_approve_usd"`
 	Tier1USD       float64 `yaml:"tier1_usd" json:"tier1_usd"`
 	Tier2USD       float64 `yaml:"tier2_usd" json:"tier2_usd"`
+}
+
+// RankThresholds are the % of enrolled training completed at which each forge rank is earned (spec §7). Ore is 0.
+type RankThresholds struct {
+	Ingot      float64 `yaml:"ingot" json:"ingot"`
+	Tempered   float64 `yaml:"tempered" json:"tempered"`
+	Blade      float64 `yaml:"blade" json:"blade"`
+	Sword      float64 `yaml:"sword" json:"sword"`
+	Masterwork float64 `yaml:"masterwork" json:"masterwork"`
+}
+
+// DefaultRanks are spec §7's thresholds: Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Sword 90% → Masterwork 100%.
+var DefaultRanks = RankThresholds{Ingot: 20, Tempered: 45, Blade: 75, Sword: 90, Masterwork: 100}
+
+// Steps lists the thresholds from Ore to Masterwork.
+func (r RankThresholds) Steps() []float64 {
+	return []float64{0, r.Ingot, r.Tempered, r.Blade, r.Sword, r.Masterwork}
+}
+
+// fill applies the defaults to unset keys and checks that every rank needs more than the one before.
+func (r *RankThresholds) fill() error {
+	d := DefaultRanks
+	for _, f := range []struct {
+		v   *float64
+		def float64
+	}{{&r.Ingot, d.Ingot}, {&r.Tempered, d.Tempered}, {&r.Blade, d.Blade}, {&r.Sword, d.Sword}, {&r.Masterwork, d.Masterwork}} {
+		if *f.v == 0 {
+			*f.v = f.def
+		}
+	}
+	s := r.Steps()
+	for i := 1; i < len(s); i++ {
+		if s[i] <= s[i-1] {
+			return fmt.Errorf("each rank must need more than the one before (0 < ingot < tempered < blade < sword < masterwork), got %v", s[1:])
+		}
+	}
+	if r.Masterwork != 100 {
+		return errors.New("masterwork must be 100")
+	}
+	return nil
 }
 
 // Escalation is how long a lab request may wait at one tier before it moves up.
@@ -80,8 +124,31 @@ type Program struct {
 	Enrolled    []string    `yaml:"enrolled"`
 	LabDefaults LabDefaults `yaml:"lab_defaults"`
 
-	Schedule       string  `yaml:"schedule"`         // named schedule from platform.yaml; "" = any time
-	BudgetUSDMonth float64 `yaml:"budget_usd_month"` // the program's monthly budget and hard cap; 0 = none
+	ScheduleSpec       ScheduleRef `yaml:"schedule"`             // a schedule name from platform.yaml, or inline windows (spec §4.3)
+	Schedule           string      `yaml:"-"`                    // the named schedule; "" = inline or any time
+	Inline             *Schedule   `yaml:"-"`                    // inline windows, validated
+	BudgetUSDMonth     float64     `yaml:"budget_usd_month"`     // the program's monthly budget and hard cap; 0 = none
+	ReviewSelfReported bool        `yaml:"review_self_reported"` // spec §8.2: completed local labs wait for a scorer
+}
+
+// ScheduleRef is a program's `schedule:` value: a name, or a mapping with timezone and windows.
+type ScheduleRef struct {
+	Name   string
+	Inline *Schedule
+}
+
+func (r *ScheduleRef) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&r.Name)
+	}
+	b, err := yaml.Marshal(n) // re-decode strictly, like a named schedule in platform.yaml
+	if err != nil {
+		return err
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	r.Inline = &Schedule{}
+	return dec.Decode(r.Inline)
 }
 
 // ProgramSchedule returns the schedule a program runs on, or nil for "any time".
@@ -89,6 +156,9 @@ func (p *Platform) ProgramSchedule(team, training string) *Schedule {
 	t := p.Teams[team]
 	if t == nil || t.Programs[training] == nil {
 		return nil
+	}
+	if pr := t.Programs[training]; pr.Inline != nil {
+		return pr.Inline
 	}
 	return p.Settings.Schedules[t.Programs[training].Schedule]
 }
@@ -143,6 +213,9 @@ func Load(dir string) (*Platform, error) {
 	}
 	if p.Settings.EscalationHours < 0 {
 		errs = append(errs, errors.New("platform.yaml: escalation_hours must be positive"))
+	}
+	if err := p.Settings.Ranks.fill(); err != nil {
+		errs = append(errs, fmt.Errorf("platform.yaml: ranks: %w", err))
 	}
 	for name, s := range p.Settings.Schedules {
 		if s == nil {
@@ -264,6 +337,13 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 		if err := yamlx.ReadFile(f, pr, true); err != nil {
 			bad("%v", err)
 			continue
+		}
+		pr.Schedule, pr.Inline = pr.ScheduleSpec.Name, pr.ScheduleSpec.Inline
+		if pr.Inline != nil {
+			if err := pr.Inline.validate(); err != nil {
+				bad("programs/%s.yaml: schedule: %v", name, err)
+				continue
+			}
 		}
 		if pr.Training == "" {
 			pr.Training = name

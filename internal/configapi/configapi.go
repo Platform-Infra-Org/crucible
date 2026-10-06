@@ -62,6 +62,7 @@ type ProgramView struct {
 	Enrolled       []string        `json:"enrolled"`
 	Roles          RolesView       `json:"roles"`
 	Schedule       string          `json:"schedule"`
+	InlineSchedule string          `json:"inline_schedule,omitempty"` // read-only: inline windows live in git
 	LabDefaults    LabDefaultsView `json:"lab_defaults"`
 	BudgetUSDMonth float64         `json:"budget_usd_month"`
 	CanManage      bool            `json:"can_manage"`
@@ -255,7 +256,11 @@ func (s *Service) Team(u *auth.User, id string) (*TeamView, error) {
 			continue
 		}
 		spend = spend || c.Can(u.Email, rbac.ViewSpend, id, tr, "") // program managers and approvers
-		v.Programs = append(v.Programs, ProgramView{Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
+		inline := ""
+		if p.Inline != nil {
+			inline = p.Inline.String()
+		}
+		v.Programs = append(v.Programs, ProgramView{InlineSchedule: inline, Training: tr, Title: trainingTitle(st, id, tr), Enrolled: emails(p.Enrolled),
 			Roles:    RolesView{Manager: emails(p.Roles.Manager), Scorers: emails(p.Roles.Scorers), Approvers: emails(p.Roles.Approvers)},
 			Schedule: p.Schedule, BudgetUSDMonth: p.BudgetUSDMonth, CanManage: c.Can(u.Email, rbac.ManageProgram, id, tr, ""),
 			LabDefaults: LabDefaultsView{TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout), MaxExtension: dur(p.LabDefaults.MaxExtension)}})
@@ -419,6 +424,9 @@ func (s *Service) SetProgram(ctx context.Context, u *auth.User, team, training s
 	}
 	if b.BudgetUSDMonth > 0 {
 		set["budget_usd_month"] = b.BudgetUSDMonth
+	}
+	if b.Schedule == "" && exists && t.Programs[training].Inline != nil {
+		delete(set, "schedule") // inline windows live in git; the UI only picks named schedules, so keep them
 	}
 	rel := path.Join("teams", team, "programs", training+".yaml")
 	action, auditAction := "update program "+team+"/"+training, "program.update"

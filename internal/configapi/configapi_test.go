@@ -306,3 +306,26 @@ func TestWriterRefusesSymlinks(t *testing.T) {
 		t.Fatalf("plain file: %v", err)
 	}
 }
+
+func TestSetProgramKeepsInlineSchedule(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	inline := "training: forge-101\nenrolled: [trainee@crucible.local]\nreview_self_reported: true\nschedule:\n  timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]\n"
+	f.push(t, map[string]string{"teams/forge/programs/forge-101.yaml": inline})
+	if err := f.sync.SyncOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	tv, err := f.s.Team(f.leader, "forge")
+	if err != nil || tv.Programs[0].InlineSchedule == "" || tv.Programs[0].Schedule != "" {
+		t.Fatalf("view shows the inline schedule: %+v %v", tv.Programs, err)
+	}
+	b := emptyProgram(f.sha())
+	b.Enrolled = []string{"trainee@crucible.local"}
+	if _, err := f.s.SetProgram(ctx, f.leader, "forge", "forge-101", b); err != nil {
+		t.Fatal(err)
+	}
+	got := sh(t, "", "--git-dir", f.remote, "show", "main:teams/forge/programs/forge-101.yaml")
+	if !strings.Contains(got, "timezone: Europe/Bucharest") || !strings.Contains(got, "review_self_reported: true") {
+		t.Fatalf("saving must keep the inline schedule and the review flag:\n%s", got)
+	}
+}

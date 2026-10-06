@@ -2,6 +2,8 @@ default_theme: forge
 # Lab requests are routed by estimated cost in USD (spec §9.1). Crucible has no defaults: set these at install.
 cost_tiers: { auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25 }
 escalation_hours: 4   # business hours, counted inside the program's schedule
+# Forge rank thresholds: % of enrolled training completed. Ore is 0; masterwork must be 100. These are the defaults.
+ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 }
 schedules:
   business-hours:
     timezone: Europe/Bucharest

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +105,82 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", c.want, err)
 			}
 		})
+	}
+}
+
+// platformDir writes a minimal valid platform repo plus overrides.
+func platformDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	all := map[string]string{
+		"platform.yaml":            "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n",
+		"trainings.yaml":           "trainings:\n  t1: {repo: file:///nowhere}\n",
+		"teams/a/team.yaml":        "name: A\nleader: l@x\ntrainees: [u@x]\n",
+		"teams/a/programs/t1.yaml": "enrolled: [u@x]\n",
+	}
+	for k, v := range files {
+		all[k] = v
+	}
+	for rel, body := range all {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestRankLadderFromConfig(t *testing.T) {
+	tiers := "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n"
+	p, err := Load(platformDir(t, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Settings.Ranks.Steps(); !slices.Equal(got, []float64{0, 20, 45, 75, 90, 100}) {
+		t.Fatalf("defaults: %v", got)
+	}
+	p, err = Load(platformDir(t, map[string]string{"platform.yaml": tiers + "ranks: {blade: 70}\n"}))
+	if err != nil || !slices.Equal(p.Settings.Ranks.Steps(), []float64{0, 20, 45, 70, 90, 100}) {
+		t.Fatalf("one override: %v %v", p.Settings.Ranks.Steps(), err)
+	}
+	for _, bad := range []string{"ranks: {ingot: 50, tempered: 40}\n", "ranks: {masterwork: 120}\n", "ranks: {masterwork: 95}\n", "ranks: {ingot: -1}\n", "ranks: {blade: 95}\n"} {
+		if _, err := Load(platformDir(t, map[string]string{"platform.yaml": tiers + bad})); err == nil || !strings.Contains(err.Error(), "ranks") {
+			t.Errorf("%q must be rejected, got %v", bad, err)
+		}
+	}
+}
+
+func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
+	prog := "enrolled: [u@x]\nreview_self_reported: true\nschedule:\n  timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]\n"
+	p, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": prog}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := p.Teams["a"].Programs["t1"]
+	if pr.Schedule != "" || pr.Inline == nil || !pr.ReviewSelfReported || p.ProgramSchedule("a", "t1") != pr.Inline {
+		t.Fatalf("inline schedule: %+v", pr)
+	}
+	if !strings.Contains(pr.Inline.String(), "08:00") {
+		t.Fatalf("inline schedule is validated and printable: %q", pr.Inline.String())
+	}
+	for _, sched := range []string{
+		"timezone: Mars/Olympus\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]",
+		"timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"10:00\", end: \"08:00\"}]",
+		"timezone: Europe/Bucharest\n  windows: []",
+		"timezone: UTC\n  tz: x\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]",
+	} {
+		bad := "enrolled: [u@x]\nschedule:\n  " + sched + "\n"
+		if _, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": bad})); err == nil || !strings.Contains(err.Error(), "t1.yaml") {
+			t.Fatalf("a bad inline schedule names the file: %v", err)
+		}
+	}
+	named, err := Load(platformDir(t, map[string]string{
+		"platform.yaml":            "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\nschedules:\n  bh: {timezone: UTC, windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]}\n",
+		"teams/a/programs/t1.yaml": "enrolled: [u@x]\nschedule: bh\n"}))
+	if err != nil || named.Teams["a"].Programs["t1"].Schedule != "bh" || named.ProgramSchedule("a", "t1") == nil {
+		t.Fatalf("named schedule still works: %v", err)
 	}
 }

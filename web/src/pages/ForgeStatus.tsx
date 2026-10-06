@@ -51,7 +51,7 @@ export function ForgeStatusPage() {
         <thead><tr><th>Program</th><th>Runs</th><th>Branch head</th></tr></thead>
         <tbody>{p.programs.map((g) => (
           <tr key={g.team + g.training}><td>{g.team}/{g.training}</td><td><code>{g.running.slice(0, 7)}</code>{g.pinned_ref && <span className="badge"> pinned</span>}</td>
-            <td><code>{g.head.slice(0, 7)}</code>{g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
+            <td><code>{g.head.slice(0, 7)}</code>{!g.pinned_ref && g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
         ))}</tbody>
       </table>
 

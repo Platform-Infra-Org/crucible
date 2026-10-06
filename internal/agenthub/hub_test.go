@@ -208,8 +208,8 @@ func TestDropDisconnectsWithTheStopCode(t *testing.T) {
 	waitFor(t, func() bool { return h.Online(7) })
 	h.Drop(7)
 	h.Drop(99) // no agent: no-op
-	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != CloseReplaced {
-		t.Fatalf("want the stop-don't-reconnect close, got %v", err)
+	if _, _, err := ws.Read(ctx); websocket.CloseStatus(err) != CloseRevoked {
+		t.Fatalf("want the token-revoked close, got %v", err)
 	}
 	waitFor(t, func() bool { return !h.Online(7) })
 }

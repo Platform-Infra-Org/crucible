@@ -75,7 +75,7 @@ func TestRevokeAgentTokensIsAuditedAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := s.RevokeAgentTokens(ctx, u.ID); err != nil {
+		if err := s.RevokeAgentTokens(ctx, u.ID, ""); err != nil {
 			t.Fatal(err)
 		}
 	}

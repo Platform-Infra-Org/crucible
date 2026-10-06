@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -97,8 +98,8 @@ func (s Store) CreateAgentToken(ctx context.Context, userID int64) (string, erro
 }
 
 // RevokeAgentTokens revokes every pairing token of the user (spec §5.1 "revocable"). Idempotent; audited only when a
-// token was actually revoked.
-func (s Store) RevokeAgentTokens(ctx context.Context, userID int64) error {
+// token was actually revoked, with actor (the admin, or "" for the user themselves) and the user's email as target.
+func (s Store) RevokeAgentTokens(ctx context.Context, userID int64, actor string) error {
 	tag, err := s.DB.Exec(ctx, `UPDATE agent_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
@@ -107,7 +108,20 @@ func (s Store) RevokeAgentTokens(ctx context.Context, userID int64) error {
 	if err := s.DB.QueryRow(ctx, `SELECT email FROM users WHERE id = $1`, userID).Scan(&email); err != nil {
 		return err
 	}
-	return audit.Log(ctx, s.DB, email, "agent.token.revoke", email, nil, "")
+	if actor == "" {
+		actor = email
+	}
+	return audit.Log(ctx, s.DB, actor, "agent.token.revoke", email, nil, "")
+}
+
+// UserIDByEmail returns 0 when nobody has signed in with that address.
+func (s Store) UserIDByEmail(ctx context.Context, email string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRow(ctx, `SELECT id FROM users WHERE email = lower($1)`, strings.TrimSpace(email)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func (s Store) UserByAgentToken(ctx context.Context, token string) (*User, error) {

@@ -120,7 +120,7 @@ variable "bootstrap_admin" {
   default     = ""
   description = "Email of the first admin. Seeds admins.yaml once, only while it lists no admin; after that admins are edited in git. Invite the same email in Cognito first."
   validation {
-    condition     = var.bootstrap_admin == "" || can(regex("^[^@\\s]+@[^@\\s]+$", var.bootstrap_admin))
-    error_message = "bootstrap_admin must be empty or an email address."
+    condition     = var.bootstrap_admin == "" || can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$", var.bootstrap_admin))
+    error_message = "bootstrap_admin must be empty or a plain email address (letters, digits and . _ % + - only)."
   }
 }

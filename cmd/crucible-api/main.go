@@ -22,7 +22,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"crucible/internal/agenthub"
-	"crucible/internal/audit"
 	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
@@ -86,17 +85,12 @@ func run(ctx context.Context) error {
 		Dir:  filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "writer"),
 		Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	if email := strings.ToLower(strings.TrimSpace(os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))); email != "" {
-		// Only seeds git while admins.yaml names no admin; sign-in still needs the IdP to verify this email.
-		if st := syncer.Current(); st != nil && st.Platform != nil && len(st.Platform.Admins) == 0 {
-			if ok, err := configapi.SeedAdmin(ctx, writer, email); err != nil {
-				slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
-			} else if ok {
-				slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
-				if err := audit.Log(ctx, pool, email, "admin.bootstrap", email, nil, ""); err != nil {
-					slog.Warn("audit of the bootstrap admin failed", "err", err)
-				}
-				_ = syncer.SyncOnce(ctx)
-			}
+		// Once per deployment, only while admins.yaml names no admin; sign-in still needs the IdP to verify this email.
+		if ok, err := configapi.BootstrapAdmin(ctx, pool, writer, email); err != nil {
+			slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
+		} else if ok {
+			slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
+			_ = syncer.SyncOnce(ctx)
 		}
 	}
 	every, err := time.ParseDuration(env("CRUCIBLE_SYNC_INTERVAL", "60s"))

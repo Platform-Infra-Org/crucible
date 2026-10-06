@@ -40,6 +40,7 @@ export function TeamPage() {
       <p className="lede">Led by {data.leader} · <Link to={`/teams/${data.id}/journey`}>Journey</Link></p>
       <Roster key={`r-${data.platform_sha}`} team={data} onSaved={reload} />
       <Programs key={`p-${data.platform_sha}`} team={data} onConflict={reload} />
+      {data.is_admin && <RevokeAgents people={[data.leader, ...data.seniors, ...data.members, ...data.trainees]} />}
       <Budget key={`b-${data.platform_sha}`} team={data} onSaved={reload} />
     </section>
   )
@@ -91,6 +92,32 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
       <label>Mentors (one “trainee = mentor” per line) <textarea rows={3} value={mentors} onChange={(e) => setMentors(e.target.value)} /></label>
       <button className="primary" disabled={busy}>Save roster</button>
     </form>
+  )
+}
+
+// Offboarding: an admin disconnects a person's laptop agent and revokes its pairing token (audited).
+function RevokeAgents({ people }: { people: string[] }) {
+  const emails = [...new Set(people.filter(Boolean))]
+  return (
+    <>
+      <h2>Laptop agents</h2>
+      <p className="muted">Revoke a person's pairing token when they leave. Their agent is disconnected at once; labs already running end by idle or TTL.</p>
+      <ul>
+        {emails.map((email) => (
+          <li key={email}>{email}{' '}
+            <button className="ghost" onClick={async () => {
+              if (!window.confirm(`Revoke the pairing token of ${email}?`)) return
+              try {
+                await api(`/api/admin/agent/tokens?email=${encodeURIComponent(email)}`, { method: 'DELETE' })
+                toast(`Pairing revoked for ${email}`)
+              } catch (err) {
+                reportSaveError(err)
+              }
+            }}>Revoke agent</button>
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }
 

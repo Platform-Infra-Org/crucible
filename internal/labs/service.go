@@ -1432,7 +1432,7 @@ func (s *Service) alertStuck(ctx context.Context, inst *Instance) {
 		return
 	}
 	s.notify(ctx, notify.Event{Kind: notify.LabStuck, To: st.Platform.Admins, Subject: "A lab is stuck while being destroyed",
-		Text: fmt.Sprintf("Lab %s (%s, %s/%s, %s) has been destroying since %s. Crucible keeps retrying; see Forge Status.",
+		Text: fmt.Sprintf("Lab %s (%s, %s/%s, %s) has been destroying since %s. Crucible makes one more attempt and then gives up on it; see Forge Status.",
 			inst.ID, inst.Runtime, inst.Team, inst.Training, inst.Module, since.UTC().Format(time.RFC3339)), Link: "/admin"})
 }
 

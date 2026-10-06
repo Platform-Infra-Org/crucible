@@ -19,6 +19,9 @@ import (
 
 var ErrOffline = errors.New("agent offline")
 
+// CloseRevoked tells an agent its pairing token was revoked; it must stop, not reconnect.
+const CloseRevoked = websocket.StatusCode(4002)
+
 // CloseReplaced tells an agent that a newer agent for the same user took over; it must stop, not reconnect.
 const CloseReplaced = websocket.StatusCode(4001)
 
@@ -179,7 +182,7 @@ func (h *Hub) Drop(userID int64) {
 	c := h.agents[userID]
 	h.mu.Unlock()
 	if c != nil {
-		go func() { _ = c.ws.Close(CloseReplaced, "pairing revoked") }()
+		go func() { _ = c.ws.Close(CloseRevoked, "token revoked") }()
 	}
 }
 

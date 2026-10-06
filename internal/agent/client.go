@@ -21,6 +21,9 @@ import (
 // ErrReplaced means another crucible-agent connected with the same account (one laptop agent per user).
 var ErrReplaced = errors.New("another crucible-agent connected with your account; this one stops (run one agent per user)")
 
+// ErrRevoked means the pairing token was revoked (by the user or an admin); the agent stops.
+var ErrRevoked = errors.New("this pairing token was revoked; generate a new one on the Connect page to start the agent again")
+
 var errRejected = errors.New("pairing token rejected — generate a new one")
 
 type Client struct {
@@ -44,7 +47,7 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(err, errRejected) || errors.Is(err, ErrReplaced) {
+		if errors.Is(err, errRejected) || errors.Is(err, ErrReplaced) || errors.Is(err, ErrRevoked) {
 			return err
 		}
 		c.Log.Warn("disconnected from Crucible, retrying in 3s", "err", err)
@@ -78,8 +81,11 @@ func (c *Client) runOnce(ctx context.Context) error {
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
-			if websocket.CloseStatus(err) == agenthub.CloseReplaced {
+			switch websocket.CloseStatus(err) {
+			case agenthub.CloseReplaced:
 				return ErrReplaced
+			case agenthub.CloseRevoked:
+				return ErrRevoked
 			}
 			return err
 		}

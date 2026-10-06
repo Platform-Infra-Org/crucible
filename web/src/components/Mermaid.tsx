@@ -1,5 +1,18 @@
 import { useEffect, useId, useState } from 'react'
 
+// `secure` replaces mermaid's default list, so the defaults are repeated; the extra keys stop an in-diagram
+// %%{init}%% directive from re-enabling HTML labels or injecting CSS.
+export function mermaidConfig(dark: boolean) {
+  return {
+    startOnLoad: false,
+    securityLevel: 'strict' as const,
+    theme: dark ? ('dark' as const) : ('default' as const),
+    flowchart: { htmlLabels: false },
+    secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'suppressErrorRendering', 'maxEdges',
+      'htmlLabels', 'flowchart', 'themeCSS', 'themeVariables', 'fontFamily'],
+  }
+}
+
 // Mermaid renders a diagram on the client; mermaid is imported only when a page has one.
 // Diagram source is untrusted: strict security level (mermaid sanitizes labels and blocks click handlers),
 // and flowchart labels are SVG text, not HTML.
@@ -12,7 +25,7 @@ export function Mermaid({ source }: { source: string }) {
     import('mermaid')
       .then(async ({ default: m }) => {
         const dark = document.documentElement.dataset.theme !== 'anvil'
-        m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default', flowchart: { htmlLabels: false } })
+        m.initialize(mermaidConfig(dark))
         const { svg } = await m.render(id, source)
         if (live) setSvg(svg)
       })

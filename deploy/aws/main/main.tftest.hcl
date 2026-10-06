@@ -91,7 +91,7 @@ run "bootstrap_admin_reaches_helm" {
     bootstrap_admin = "boss@example.com"
   }
   assert {
-    condition     = strcontains(aws_ssm_parameter.env.value, "BOOTSTRAP_ADMIN=boss@example.com\n") && strcontains(aws_instance.node.user_data, "bootstrapAdmin=\"$BOOTSTRAP_ADMIN\"")
+    condition     = strcontains(aws_ssm_parameter.env.value, "BOOTSTRAP_ADMIN='boss@example.com'\n") && strcontains(aws_instance.node.user_data, "bootstrapAdmin=\"$BOOTSTRAP_ADMIN\"")
     error_message = "bootstrap_admin must reach the helm install"
   }
 }
@@ -100,6 +100,22 @@ run "bootstrap_admin_must_be_an_email" {
   command = plan
   variables {
     bootstrap_admin = "not an email"
+  }
+  expect_failures = [var.bootstrap_admin]
+}
+
+run "bootstrap_admin_rejects_shell_characters" {
+  command = plan
+  variables {
+    bootstrap_admin = "x$(id)@example.com"
+  }
+  expect_failures = [var.bootstrap_admin]
+}
+
+run "bootstrap_admin_rejects_a_quote" {
+  command = plan
+  variables {
+    bootstrap_admin = "o'brien@example.com"
   }
   expect_failures = [var.bootstrap_admin]
 }

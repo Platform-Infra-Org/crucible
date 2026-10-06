@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
@@ -7,13 +7,8 @@ import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
 import { MoltenBar } from '../components/MoltenBar'
 
-export function ReadingPage() {
-  const { team, training, module, item } = useParams()
-  const nav = useNavigate()
-  const path = `/api/programs/${team}/${training}/modules/${module}/reading/${item}`
-  const { data, error } = useFetch<{ title: string; markdown: string }>(path)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string>()
+// Owns the scroll state so scrolling re-renders only this bar, never the parsed Markdown.
+function ReadingProgress() {
   const [depth, setDepth] = useState(0)
   useEffect(() => {
     const on = () => {
@@ -24,7 +19,19 @@ export function ReadingPage() {
     on()
     window.addEventListener('scroll', on, { passive: true })
     return () => window.removeEventListener('scroll', on)
-  }, [data])
+  }, [])
+  return <div className="reading-progress"><MoltenBar percent={depth} label="Reading progress" caption={`${depth}% read`} /></div>
+}
+
+const ReadingBody = memo(Markdown)
+
+export function ReadingPage() {
+  const { team, training, module, item } = useParams()
+  const nav = useNavigate()
+  const path = `/api/programs/${team}/${training}/modules/${module}/reading/${item}`
+  const { data, error } = useFetch<{ title: string; markdown: string }>(path)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Unrolling the scroll…" />
   const markRead = async () => {
@@ -40,9 +47,9 @@ export function ReadingPage() {
   }
   return (
     <article className="page">
-      <div className="reading-progress"><MoltenBar percent={depth} label="Reading progress" caption={`${depth}% read`} /></div>
+      <ReadingProgress />
       <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
-      <Markdown text={data.markdown} assetBase={`/api/programs/${team}/${training}/assets`} />
+      <ReadingBody text={data.markdown} assetBase={`/api/programs/${team}/${training}/assets`} />
       {err && <p className="error" role="alert">{err}</p>}
       <button className="primary" disabled={busy} onClick={markRead}>Mark as read</button>
     </article>

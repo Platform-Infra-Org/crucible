@@ -527,8 +527,8 @@ func (s *Service) Status(ctx context.Context, u *auth.User) (*PlatformView, erro
 	rows, err := s.DB.Query(ctx, `SELECT li.id, u.email, li.team, li.training, li.module, li.state, li.error,
 		coalesce(li.destroyed_at, li.created_at) AS since
 		FROM lab_instances li JOIN users u ON u.id = li.user_id
-		WHERE (li.state = 'failed' AND li.created_at > now() - interval '24 hours')
-		   OR (li.state = 'destroying' AND li.destroyed_at < now() - interval '10 minutes')
+		WHERE (li.state = 'failed' AND coalesce(li.destroyed_at, li.created_at) > now() - interval '24 hours')
+		   OR (li.state = 'destroying' AND li.stuck_alerted_at IS NOT NULL)
 		ORDER BY 8 DESC LIMIT 50`)
 	if err != nil {
 		return nil, err

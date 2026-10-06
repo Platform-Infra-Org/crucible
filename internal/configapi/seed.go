@@ -3,10 +3,13 @@ package configapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
+	"crucible/internal/audit"
 	"crucible/internal/config"
 	"crucible/internal/gitsync"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var errSeeded = errors.New("admins already set")
@@ -21,6 +24,9 @@ func SeedAdmin(ctx context.Context, w *gitsync.Writer, email string) (bool, erro
 	}
 	_, changed, err := w.Apply(ctx, gitsync.Change{Action: "seed the bootstrap admin", Actor: email, Paths: []string{"admins.yaml"},
 		Allow: func(p *config.Platform) error {
+			if _, err := config.Load(w.Dir); err != nil { // a file that fails to parse can look like "no admins": never overwrite it
+				return fmt.Errorf("the platform repo does not load cleanly, not seeding the bootstrap admin: %w", err)
+			}
 			if len(p.Admins) > 0 {
 				return errSeeded
 			}
@@ -31,4 +37,20 @@ func SeedAdmin(ctx context.Context, w *gitsync.Writer, email string) (bool, erro
 		return false, nil
 	}
 	return changed, err
+}
+
+// BootstrapAdmin seeds at most once per deployment: the first run leaves an admin.bootstrap audit row (actor
+// "bootstrap", target the email), and later starts skip, so emptying admins.yaml in git is not undone by a restart.
+func BootstrapAdmin(ctx context.Context, db *pgxpool.Pool, w *gitsync.Writer, email string) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var done bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = 'admin.bootstrap')`).Scan(&done); err != nil || done {
+		return false, err
+	}
+	ok, err := SeedAdmin(ctx, w, email)
+	if err != nil {
+		return false, err // no marker: the next start tries again
+	}
+	// also recorded when admins.yaml already named admins (seeded=false): the first start has happened either way
+	return ok, audit.Log(ctx, db, "bootstrap", "admin.bootstrap", email, map[string]any{"seeded": ok}, "")
 }

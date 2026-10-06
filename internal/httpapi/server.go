@@ -42,6 +42,7 @@ type Deps struct {
 	Journey    *journey.Service
 	Edits      *edits.Service
 	Hub        *agenthub.Hub
+	IsAdmin    func(email string) bool // tests; nil means "listed in admins.yaml"
 	PublicURL  string
 	HookSecret string
 	WebDir     string
@@ -145,12 +146,33 @@ func NewRouter(d Deps) chi.Router {
 				"command": "CRUCIBLE_TOKEN=" + tok + " crucible-agent --server " + d.PublicURL}) // env, not argv: other local users can read argv
 		})
 		r.Delete("/api/agent/tokens", func(w http.ResponseWriter, r *http.Request) {
-			u := auth.UserFrom(r.Context()) // only ever the caller's own tokens
-			if err := d.Auth.RevokeAgentTokens(r.Context(), u.ID); err != nil {
+			u := auth.UserFrom(r.Context()) // the caller's own tokens
+			if err := d.Auth.RevokeAgentTokens(r.Context(), u.ID, ""); err != nil {
 				httpx.Error(w, err)
 				return
 			}
 			d.Hub.Drop(u.ID) // the laptop's labs keep running until idle/TTL, as on any disconnect (spec §14)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		r.Delete("/api/admin/agent/tokens", func(w http.ResponseWriter, r *http.Request) { // offboarding: any user's pairing
+			u := auth.UserFrom(r.Context())
+			if !isAdmin(d, u.Email) {
+				httpx.Error(w, apperr.Wrap(apperr.Forbidden, "admins only"))
+				return
+			}
+			email := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("email")))
+			id, err := d.Auth.UserIDByEmail(r.Context(), email)
+			if err == nil && id == 0 {
+				err = apperr.Wrap(apperr.NotFound, "nobody with that email has signed in")
+			}
+			if err == nil {
+				err = d.Auth.RevokeAgentTokens(r.Context(), id, u.Email)
+			}
+			if err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			d.Hub.Drop(id)
 			w.WriteHeader(http.StatusNoContent)
 		})
 		r.Get("/api/agent/status", func(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +199,14 @@ func NewRouter(d Deps) chi.Router {
 
 	r.NotFound(spa(d.WebDir))
 	return r
+}
+
+func isAdmin(d Deps, email string) bool {
+	if d.IsAdmin != nil {
+		return d.IsAdmin(email)
+	}
+	st := state(d)
+	return st != nil && st.Platform != nil && rbac.Checker{P: st.Platform}.IsAdmin(email)
 }
 
 func state(d Deps) *gitsync.State {

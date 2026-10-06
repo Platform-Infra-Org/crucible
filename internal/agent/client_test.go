@@ -231,3 +231,27 @@ func TestReplacedAgentStopsInsteadOfReconnecting(t *testing.T) {
 		t.Fatal("the replaced agent kept running")
 	}
 }
+
+func TestRevokedAgentStopsWithItsOwnMessage(t *testing.T) {
+	hub := agenthub.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.Serve(w, r, 1) }))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- (&agent.Client{Server: srv.URL, Token: "t", Exec: &fakeExec{provisioned: map[string]string{}}, Log: slog.Default()}).Run(ctx)
+	}()
+	for i := 0; i < 200 && !hub.Online(1); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	hub.Drop(1)
+	select {
+	case err := <-done:
+		if !errors.Is(err, agent.ErrRevoked) || errors.Is(err, agent.ErrReplaced) {
+			t.Fatalf("got %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("the revoked agent kept running")
+	}
+}

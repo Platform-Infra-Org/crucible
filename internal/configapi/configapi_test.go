@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
@@ -439,9 +440,33 @@ func TestForgeStatusShowsAttention(t *testing.T) {
 		('aaaaaaaaaaaa', $1, 'forge', 'forge-101', '02-first-lab', 'x', 'local', 'failed', 'compose up failed', now(), now(), 3600, 1800, 300, 0)`, uid); err != nil {
 		t.Fatal(err)
 	}
+	ins := `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at, destroyed_at, stuck_alerted_at,
+		last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s) VALUES
+		($2, $1, 'forge', 'forge-101', '02-first-lab', 'x', 'aws', 'destroying', now(), now() - interval '30 minutes', $3, now(), 3600, 1800, 300, 0)`
+	user := func(n string) (id int64) {
+		if err := f.s.DB.QueryRow(ctx, `INSERT INTO users (sub, email) VALUES ($1, $1 || '@crucible.local') RETURNING id`, n).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	if _, err := f.s.DB.Exec(ctx, ins, user("u2"), "bbbbbbbbbbbb", nil); err != nil { // a normal aws destroy: not stuck
+		t.Fatal(err)
+	}
+	// failed long ago, created recently: outside the 24h window by failure time
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at, destroyed_at,
+		last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s) VALUES
+		('dddddddddddd', $1, 'forge', 'forge-101', '02-first-lab', 'x', 'local', 'failed', now(), now() - interval '2 days', now(), 3600, 1800, 300, 0)`, user("u3")); err != nil {
+		t.Fatal(err)
+	}
 	v, err := f.s.Status(ctx, f.admin)
 	if err != nil || len(v.Attention) != 1 || v.Attention[0].Trainee != "trainee@crucible.local" || v.PendingEdits != 0 || len(v.Programs) == 0 {
 		t.Fatalf("status %+v %v", v, err)
+	}
+	if _, err := f.s.DB.Exec(ctx, ins, user("u4"), "cccccccccccc", time.Now()); err != nil { // alerted: listed
+		t.Fatal(err)
+	}
+	if v, err = f.s.Status(ctx, f.admin); err != nil || len(v.Attention) != 2 {
+		t.Fatalf("alerted destroy must be listed: %+v %v", v.Attention, err)
 	}
 	if _, err := f.s.Status(ctx, f.leader); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("admins only: %v", err)

@@ -322,6 +322,9 @@ func TestSweepSkipsClusterRowsWithoutRunner(t *testing.T) {
 		if err := f.s.insert(ctx, in); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2 WHERE id = $1`, in.ID, past); err != nil {
+			t.Fatal(err) // insert doesn't store ends_at
+		}
 		return in
 	}
 	c, l := mk("03-cluster-heat", "cluster"), mk("02-first-lab", "local")

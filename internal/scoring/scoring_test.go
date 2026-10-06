@@ -3,6 +3,7 @@ package scoring
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -331,5 +332,98 @@ func TestReadFormLimits(t *testing.T) {
 	done2()
 	if !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("oversized body must be a 400, got %v", err)
+	}
+}
+
+func TestRubricNeverSerializesByDefault(t *testing.T) {
+	sub := &Submission{ID: 1, Prompt: "p", Rubric: "SECRET-KEY"}
+	b, _ := json.Marshal(sub)
+	if strings.Contains(string(b), "SECRET-KEY") || strings.Contains(string(b), "rubric") {
+		t.Fatalf("rubric leaked: %s", b)
+	}
+	b, _ = json.Marshal(sub.ScorerView())
+	if !strings.Contains(string(b), `"rubric":"SECRET-KEY"`) || !strings.Contains(string(b), `"prompt":"p"`) {
+		t.Fatalf("scorer view: %s", b)
+	}
+}
+
+func TestReadFormIgnoresTheQuery(t *testing.T) {
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	_ = w.WriteField("answer", "body")
+	_ = w.Close()
+	r := httptest.NewRequest(http.MethodPost, "/x?answer=query", &b)
+	r.Header.Set("Content-Type", w.FormDataContentType())
+	r.Header.Set("X-Crucible-Upload", "1")
+	answer, _, done, err := ReadForm(httptest.NewRecorder(), r)
+	done()
+	if err != nil || answer != "body" {
+		t.Fatalf("answer = %q %v", answer, err)
+	}
+}
+
+func TestFileNameHardening(t *testing.T) {
+	for in, want := range map[string]string{
+		"..": "file", "a/..": "file", "evil\u202elmth.exe": "evillmth.exe", "a\x01b\x7f.txt": "ab.txt", "": "file",
+		"\u202e": "file", strings.Repeat("é", 300): strings.Repeat("é", 128),
+	} {
+		if got := fileName(in); got != want {
+			t.Errorf("fileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSubmitNeedsSomething(t *testing.T) {
+	f := fixture(t)
+	_, err := f.s.Submit(context.Background(), f.trainee, &Submission{Team: "forge", Training: "forge-301", Module: "01-temper",
+		SHA: "abc", Kind: KindQuestion, Item: "q-why", QType: "text", Prompt: "p", MaxPoints: 5, Answer: "  "}, nil)
+	if !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("empty answer: %v", err)
+	}
+}
+
+func TestFileOverLimitIsRefused(t *testing.T) {
+	f := fixture(t)
+	fh := formFiles(t, map[string]string{"big.bin": "x"})
+	fh[0].Size = MaxFileBytes + 1
+	_, err := f.s.Submit(context.Background(), f.trainee, &Submission{Team: "forge", Training: "forge-301", Module: "01-temper",
+		SHA: "abc", Kind: KindQuestion, Item: "q-log", QType: "upload", Prompt: "p", MaxPoints: 2}, fh)
+	if !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("21 MiB file: %v", err)
+	}
+}
+
+func TestScoreRacingReturnOneWins(t *testing.T) {
+	f := fixture(t)
+	sub := f.submitText(t)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); _, errs[0] = f.s.Score(context.Background(), f.senior, sub.ID, 3, "") }()
+	go func() { defer wg.Done(); _, errs[1] = f.s.Return(context.Background(), f.admin, sub.ID, "redo") }()
+	wg.Wait()
+	wins := 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+		case !errors.Is(err, apperr.Conflict):
+			t.Fatal(err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("wins = %d (%v)", wins, errs)
+	}
+}
+
+func TestStatusAndKindAreConstrained(t *testing.T) {
+	f := fixture(t)
+	for _, col := range []string{"status", "kind"} {
+		_, err := f.s.DB.Exec(context.Background(), `INSERT INTO submissions (user_id, team, training, module, sha, kind, item, qtype,
+			prompt, max_points, status) VALUES ($1, 't', 't', 'm', 's', $2, 'i', 'text', 'p', 1, $3)`, f.trainee.ID,
+			map[string]string{"status": "question", "kind": "bogus"}[col], map[string]string{"status": "typo", "kind": "pending"}[col])
+		if err == nil {
+			t.Fatalf("bad %s accepted", col)
+		}
 	}
 }

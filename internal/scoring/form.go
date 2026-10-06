@@ -26,5 +26,9 @@ func ReadForm(w http.ResponseWriter, r *http.Request) (string, []*multipart.File
 		return "", nil, done, apperr.Wrap(apperr.Invalid, "the upload is malformed or too large (at most 5 files of 20 MiB each)")
 	}
 	f := r.MultipartForm
-	return r.FormValue("answer"), f.File["file"], func() { _ = f.RemoveAll() }, nil
+	answer := ""
+	if v := f.Value["answer"]; len(v) > 0 { // the body only: r.FormValue would let ?answer= win
+		answer = v[0]
+	}
+	return answer, f.File["file"], func() { _ = f.RemoveAll() }, nil
 }

@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -64,7 +65,7 @@ type Submission struct {
 	LabID     string     `json:"lab_id,omitempty"`
 	QType     string     `json:"type"`
 	Prompt    string     `json:"prompt"`
-	Rubric    string     `json:"rubric"` // scorer views only: trainees get Feedback()
+	Rubric    string     `json:"-"` // never serialized: scorers get ScorerView(), trainees Feedback()
 	MaxPoints float64    `json:"max_points"`
 	Answer    string     `json:"answer"`
 	Files     []File     `json:"files"`
@@ -95,6 +96,15 @@ func (x *Submission) Feedback() *Feedback {
 	}
 	return &Feedback{ID: x.ID, Status: x.Status, Answer: x.Answer, Files: x.Files, Points: x.Points, Max: x.MaxPoints,
 		Feedback: x.Note, ScoredBy: x.ScoredBy}
+}
+
+// ScorerView is the Submission plus its rubric, for the Anvil's scorer endpoints only. Encoding a bare Submission
+// omits the rubric, so forgetting to convert fails closed.
+func (x *Submission) ScorerView() any {
+	return struct {
+		*Submission
+		Rubric string `json:"rubric"`
+	}{x, x.Rubric}
 }
 
 // Progress recomputes the trainee's item (quiz or lab) after a submission was scored or returned.
@@ -198,14 +208,21 @@ func randHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// fileName keeps only the last path element of what the browser sent (either slash), cleaned and at most 200 runes.
+// fileName keeps only the last path element of what the browser sent (either slash), without control or Unicode
+// format characters (U+202E and friends), at most 128 runes; "file" when nothing is left.
 func fileName(name string) string {
 	n := path.Base(strings.ReplaceAll(Clean(name), `\`, "/"))
-	if n == "." || n == "/" || n == "" {
+	n = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, n)
+	if n == "." || n == ".." || n == "/" || n == "" {
 		n = "file"
 	}
-	if r := []rune(n); len(r) > 200 {
-		n = string(r[:200])
+	if r := []rune(n); len(r) > 128 {
+		n = string(r[:128])
 	}
 	return n
 }
@@ -272,6 +289,9 @@ func (s *Service) Submit(ctx context.Context, u *auth.User, sub *Submission, fil
 	sub.Answer = Clean(strings.TrimSpace(sub.Answer))
 	if utf8.RuneCountInString(sub.Answer) > maxAnswer {
 		return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("answers are limited to %d characters", maxAnswer))
+	}
+	if sub.Answer == "" && len(files) == 0 {
+		return nil, apperr.Wrap(apperr.Invalid, "there is nothing to score: write an answer or attach a file")
 	}
 	if len(files) > MaxFiles {
 		return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("attach at most %d files", MaxFiles))

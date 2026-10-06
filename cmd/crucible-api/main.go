@@ -29,6 +29,7 @@ import (
 	"crucible/internal/httpapi"
 	"crucible/internal/infracost"
 	"crucible/internal/jobs"
+	"crucible/internal/journey"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
@@ -199,6 +200,7 @@ func run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
+			Journey:   &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now},
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist")}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

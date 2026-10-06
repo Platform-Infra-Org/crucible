@@ -21,6 +21,7 @@ import (
 	"crucible/internal/configapi"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpx"
+	"crucible/internal/journey"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
@@ -37,6 +38,7 @@ type Deps struct {
 	Scoring    *scoring.Service
 	Notify     *notify.Service
 	Config     *configapi.Service
+	Journey    *journey.Service
 	Hub        *agenthub.Hub
 	PublicURL  string
 	HookSecret string
@@ -82,12 +84,13 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme, teams, canApprove, scorer, canSpend := false, "forge", []string{}, false, false, false
+			admin, theme, teams, canApprove, scorer, canSpend, mentor := false, "forge", []string{}, false, false, false, false
 			if st := state(d); st != nil && st.Platform != nil {
 				c := rbac.Checker{P: st.Platform}
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
 				canApprove, scorer = admin, canScore(st.Platform, u.Email)
 				canSpend = len(c.SpendTeams(u.Email)) > 0
+				mentor = isMentor(st.Platform, u.Email)
 				for id, t := range st.Platform.Teams {
 					if configapi.Role(t, u.Email) != "" { // team role or a program role in one of its programs
 						teams = append(teams, id)
@@ -99,7 +102,7 @@ func NewRouter(d Deps) chi.Router {
 				}
 				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend})
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
@@ -143,6 +146,9 @@ func NewRouter(d Deps) chi.Router {
 		if d.Config != nil {
 			d.Config.Routes(r)
 		}
+		if d.Journey != nil {
+			d.Journey.Routes(r)
+		}
 	})
 
 	r.NotFound(spa(d.WebDir))
@@ -182,6 +188,18 @@ func spa(dir string) http.HandlerFunc {
 }
 
 // canScore: admins, and anyone listed as a scorer of some program (the Anvil link in the nav).
+// isMentor: someone in team.yaml mentors a trainee (spec §11); they get the mentor dashboard.
+func isMentor(p *config.Platform, email string) bool {
+	for _, t := range p.Teams {
+		for _, m := range t.Mentors {
+			if m == strings.ToLower(email) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func canScore(p *config.Platform, email string) bool {
 	if (rbac.Checker{P: p}).IsAdmin(email) {
 		return true

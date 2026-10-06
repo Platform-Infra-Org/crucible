@@ -22,3 +22,13 @@ func TestCanScore(t *testing.T) {
 		}
 	}
 }
+
+func TestIsMentor(t *testing.T) {
+	p, err := config.Load("../../examples/platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isMentor(p, "Senior@crucible.local") || isMentor(p, "leader@crucible.local") || isMentor(p, "trainee@crucible.local") {
+		t.Fatal("only the senior mentors someone in the fixture")
+	}
+}

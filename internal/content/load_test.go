@@ -394,7 +394,22 @@ AWS`, "AWS", aws, 1)
 		"json key":            {tf("f.tf.json", `{"locals": {"${file(\"/x\")}": "x"}}`), "file reads"},
 		"template reads":      {map[string]string{"modules/m1/lab/terraform/t.tf": "locals {\n  x = templatefile(\"t.tpl\", {})\n}\n", "modules/m1/lab/terraform/t.tpl": "${file(\"/etc/passwd\")}"}, "must not read files"},
 		"json dotdot":         {tf("f.tf.json", `{"locals": {"x": "${file(\"${path.module}/../x\")}"}}`), "file reads"},
-		"wrong terminal":      {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
+		// fix round 2 (task-5-review): comments between name and ( beat the regex; terraform 1.16.5 read /etc/passwd
+		"json inline comment":    {tf("f.tf.json", `{"locals": {"x": "${file/**/(\"/etc/passwd\")}"}}`), "file reads"},
+		"json hash comment":      {tf("f.tf.json", `{"locals": {"x": "${file #c\n(\"/etc/passwd\")}"}}`), "file reads"},
+		"json bad template":      {tf("f.tf.json", `{"locals": {"x": "${upper(}"}}`), "terraform/f.tf.json"},
+		"template comment":       {map[string]string{"modules/m1/lab/terraform/t.tf": "locals {\n  x = templatefile(\"t.tpl\", {})\n}\n", "modules/m1/lab/terraform/t.tpl": "${file/**/(\"/etc/passwd\")}"}, "must not read files"},
+		"json templatefile":      {map[string]string{"modules/m1/lab/terraform/t.tf.json": `{"locals": {"x": "${templatefile(\"t.tpl\", {})}"}}`, "modules/m1/lab/terraform/t.tpl": "${file/**/(\"/etc/passwd\")}"}, "must not read files"},
+		"template parse error":   {map[string]string{"modules/m1/lab/terraform/t.tf": "locals {\n  x = templatefile(\"t.tpl\", {})\n}\n", "modules/m1/lab/terraform/t.tpl": "${upper(}"}, "t.tpl"},
+		"local provider":         {tf("v.tf", "terraform {\n  required_providers {\n    l = { source = \"hashicorp/local\" }\n  }\n}\n"), "not allowed"},
+		"implied local provider": {tf("v.tf", "terraform {\n  required_providers {\n    local = \"~> 2.0\"\n  }\n}\n"), "not allowed"},
+		"external provider":      {tf("v.tf.json", `{"terraform": {"required_providers": {"x": {"source": "registry.terraform.io/hashicorp/external"}}}}`), "not allowed"},
+		"data local_file":        {tf("d.tf", "data \"local_file\" \"x\" {\n  filename = \"/etc/passwd\"\n}\n"), "not allowed"},
+		"data local_sensitive":   {tf("d.tf", "data \"local_sensitive_file\" \"x\" {\n  filename = \"/etc/passwd\"\n}\n"), "not allowed"},
+		"data external":          {tf("d.tf", "data \"external\" \"x\" {\n  program = [\"sh\"]\n}\n"), "not allowed"},
+		"json data external":     {tf("d.tf.json", `{"data": {"external": {"x": {"program": ["sh"]}}}}`), "not allowed"},
+		"resource local_file":    {tf("r.tf", "resource \"local_file\" \"x\" {\n  filename = \"/tmp/x\"\n  content = \"x\"\n}\n"), "not allowed"},
+		"wrong terminal":         {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -453,6 +468,15 @@ func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
 		"minus chain": {"d.tf", "x = " + strings.Repeat("-", 130000) + "1\n", "operators in a row"},
 		"splat chain": {"d.tf", "x = a" + strings.Repeat("[*]", 19990) + "\n", "brackets"},
 		"token flood": {"d.tf", "x = [" + strings.Repeat("1,", 60000) + "]\n", "tokens"},
+		// fix round 2: .tf.json strings and templatefile targets go through the same guard before HCL parses them
+		"deep json template": {"d.tf.json", `{"locals": {"x": "${` + nest("[", "]", 50000) + `}"}}`, "nested too deeply"},
+	}
+	tpl := map[string]string{"modules/m1/lab/terraform/t.tf": "locals {\n  x = templatefile(\"t.tpl\", {})\n}\n",
+		"modules/m1/lab/terraform/t.tpl": "${" + nest("(", ")", 50000) + "}"}
+	start := time.Now()
+	_, probs := Load(awsTree(t, tpl))
+	if d := time.Since(start); d > time.Second || !strings.Contains(fmt.Sprint(probs), "nested too deeply") {
+		t.Errorf("deep template: %v %v", d, probs)
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

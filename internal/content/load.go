@@ -711,6 +711,8 @@ var (
 	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
 	// required_providers may only name HashiCorp's own providers: anything else is a downloaded binary on the runner
 	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)
+	// HashiCorp providers that read arbitrary host paths (local_file, local_sensitive_file) or run commands (external)
+	tfBannedProviders = map[string]bool{"hashicorp/local": true, "hashicorp/external": true}
 )
 
 const (
@@ -727,7 +729,9 @@ const (
 var (
 	tfTopSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
 		{Type: "provider", LabelNames: []string{"name"}}, {Type: "terraform"}, {Type: "module", LabelNames: []string{"name"}},
-		{Type: "import"}}}
+		{Type: "import"}, {Type: "resource", LabelNames: []string{"type", "name"}},
+		{Type: "data", LabelNames: []string{"type", "name"}}, {Type: "ephemeral", LabelNames: []string{"type", "name"}},
+		{Type: "action", LabelNames: []string{"type", "name"}}}}
 	tfTerraformSchema = &hcl.BodySchema{Blocks: []hcl.BlockHeaderSchema{
 		{Type: "backend", LabelNames: []string{"type"}}, {Type: "cloud"}, {Type: "required_providers"}}}
 	tfModuleSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "source"}}}
@@ -739,8 +743,9 @@ var (
 // so neither infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed
 // with HCL: a regex cannot be made sound for this. This runs inside crucible-api on an author's push, so sizes are
 // capped before anything is parsed, nesting depth is capped before the (recursive) parser runs, and no expression is
-// ever evaluated: the values lint cares about must be literal strings. What the module does at plan/apply time
-// (data "external", local-exec) is the runner sandbox's job, not lint's.
+// ever evaluated: the values lint cares about must be literal strings. hashicorp/local and hashicorp/external (host
+// file reads, arbitrary commands) are rejected outright; anything else the module does at plan/apply time (local-exec)
+// is the runner sandbox's job, not lint's.
 func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || !awsRegionRe.MatchString(lab.AWS.Region) {
 		l.add(lf, "aws.region is required for runtime: aws (e.g. eu-west-1)")
@@ -836,6 +841,10 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 		switch blk.Type {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
+		case "resource", "data", "ephemeral", "action":
+			if prov, _, _ := strings.Cut(blk.Labels[0], "_"); tfBannedProviders["hashicorp/"+prov] {
+				l.add(p, "%s %q: hashicorp/%s is not allowed (it reads host files or runs commands)", blk.Type, blk.Labels[0], prov)
+			}
 		case "import": // it could adopt another lab's resources into this lab's state
 			l.add(p, "do not declare import blocks: a lab creates its own resources")
 		case "terraform":
@@ -887,17 +896,10 @@ func tfSafePath(s string) bool {
 // tfFileReads finds every call to a file-reading function, anywhere in the file (all blocks, nested expressions,
 // templates), and allows only literal paths: "a/b", "./a/b", "${path.module}/a/b", or path.module itself as fileset's
 // directory; fileset's pattern must be a literal relative path too.
-func (l *loader) tfFileReads(root, p string, body *hclsyntax.Body) {
-	_ = hclsyntax.VisitAll(body, func(n hclsyntax.Node) hcl.Diagnostics {
-		call, ok := n.(*hclsyntax.FunctionCallExpr)
-		if !ok {
-			return nil
-		}
-		name := call.Name
-		if i := strings.LastIndex(name, "::"); i >= 0 {
-			name = name[i+2:] // core::file is file
-		}
-		if !tfFileFuncs[name] {
+func (l *loader) tfFileReads(root, p string, node hclsyntax.Node) {
+	_ = hclsyntax.VisitAll(node, func(n hclsyntax.Node) hcl.Diagnostics {
+		call, name := tfFileCall(n)
+		if call == nil {
 			return nil
 		}
 		if len(call.Args) == 0 || call.ExpandFinal {
@@ -916,6 +918,22 @@ func (l *loader) tfFileReads(root, p string, body *hclsyntax.Body) {
 		}
 		return nil
 	})
+}
+
+// tfFileCall returns n and its function name (core::file is file) when n calls a file-reading function.
+func tfFileCall(n hclsyntax.Node) (*hclsyntax.FunctionCallExpr, string) {
+	call, ok := n.(*hclsyntax.FunctionCallExpr)
+	if !ok {
+		return nil, ""
+	}
+	name := call.Name
+	if i := strings.LastIndex(name, "::"); i >= 0 {
+		name = name[i+2:]
+	}
+	if !tfFileFuncs[name] {
+		return nil, ""
+	}
+	return call, name
 }
 
 // tfPathArg reads a path argument: a literal relative path, or "${path.module}/<literal relative path>" (viaModule).
@@ -950,38 +968,24 @@ func tfIsPathModule(x *hclsyntax.ScopeTraversalExpr) bool {
 	return ok && a.Name == "module"
 }
 
-var (
-	tfFileCallRe = regexp.MustCompile(`\b(file|filebase64|filemd5|filesha1|filesha256|filesha512|filebase64sha256|filebase64sha512|fileexists|fileset|templatefile)\s*\(`)
-	// the one form a .tf.json string may use: fn("<path>" or fn("${path.module}/<path>" then , or )
-	tfJSONPathArgRe = regexp.MustCompile(`^\s*"(\$\{path\.module\}/)?([^"\\$%{}]*)"\s*([,)])`)
-	tfJSONPatternRe = regexp.MustCompile(`^\s*"([^"\\$%{}]*)"\s*\)`)
-)
-
 // tfJSONFileReads is tfFileReads for .tf.json, where expressions hide in strings (keys included, escapes decoded):
-// any file-function call must be followed by a literal path argument. It errs toward rejecting.
+// every string is parsed as the template terraform would evaluate, after the same shape guard as a .tf file, and its
+// calls are checked like native ones. Any string that is not a valid template is a problem (errs toward rejecting).
 func (l *loader) tfJSONFileReads(root, p string, b []byte) {
 	var v any
 	if err := json.Unmarshal(b, &v); err != nil { // tfShape already required valid JSON
 		l.add(p, "%v", err)
 		return
 	}
-	var walk func(any)
 	check := func(s string) {
-		for _, m := range tfFileCallRe.FindAllStringSubmatchIndex(s, -1) {
-			name, rest := s[m[2]:m[3]], s[m[1]:]
-			a := tfJSONPathArgRe.FindStringSubmatch(rest)
-			ok := a != nil && tfSafePath(a[2])
-			if ok && name == "fileset" {
-				pat := tfJSONPatternRe.FindStringSubmatch(rest[len(a[0]):])
-				ok = a[3] == "," && pat != nil && tfSafePath(pat[1])
-			}
-			if !ok {
-				l.add(p, tfFileReadRule, name)
-			} else if name == "templatefile" {
-				l.tfTemplate(root, p, a[2], a[1] != "")
-			}
+		if !strings.Contains(s, "${") && !strings.Contains(s, "%{") {
+			return // no template sequence: a literal
+		}
+		if e := l.tfParseTemplate(p, []byte(s)); e != nil {
+			l.tfFileReads(root, p, e)
 		}
 	}
+	var walk func(any)
 	walk = func(v any) {
 		switch x := v.(type) {
 		case string:
@@ -1000,8 +1004,28 @@ func (l *loader) tfJSONFileReads(root, p string, b []byte) {
 	walk(v)
 }
 
-// tfTemplate checks a templatefile target: it is evaluated too, so it must be a small regular file in the module and
-// make no file reads of its own (function names cannot be escaped in a template, so a plain search is sound).
+// tfParseTemplate parses b as an HCL template behind tfShape's guard (lexed first, depth/opener/token caps), reporting
+// any problem against p; nil means it was reported.
+func (l *loader) tfParseTemplate(p string, b []byte) hclsyntax.Expression {
+	toks, diags := hclsyntax.LexTemplate(b, "", hcl.InitialPos)
+	if diags.HasErrors() {
+		l.add(p, "%v", diags)
+		return nil
+	}
+	if prob := tfTokenShape(toks); prob != "" {
+		l.add(p, "%s", prob)
+		return nil
+	}
+	e, diags := hclsyntax.ParseTemplate(b, filepath.Base(p), hcl.InitialPos)
+	if diags.HasErrors() {
+		l.add(p, "%v", diags)
+		return nil
+	}
+	return e
+}
+
+// tfTemplate checks a templatefile target: it is evaluated too, so it must be a small regular file in the module,
+// parse as a template (behind the same guard as a .tf file) and call no file-reading function itself.
 // A literal path is relative to terraform's working directory (root); ${path.module} to the calling file's directory.
 func (l *loader) tfTemplate(root, p, rel string, viaModule bool) {
 	base := root
@@ -1014,7 +1038,23 @@ func (l *loader) tfTemplate(root, p, rel string, viaModule bool) {
 		l.add(p, "templatefile %q must be a regular file in terraform/ under %d KiB", rel, maxTFFileBytes>>10)
 		return
 	}
-	if b, err := os.ReadFile(t); err != nil || tfFileCallRe.Match(b) {
+	b, err := os.ReadFile(t)
+	if err != nil || int64(len(b)) > maxTFFileBytes {
+		l.add(p, "templatefile %q must be a regular file in terraform/ under %d KiB", rel, maxTFFileBytes>>10)
+		return
+	}
+	e := l.tfParseTemplate(t, b)
+	if e == nil {
+		return
+	}
+	reads := false
+	_ = hclsyntax.VisitAll(e, func(n hclsyntax.Node) hcl.Diagnostics {
+		if call, _ := tfFileCall(n); call != nil {
+			reads = true
+		}
+		return nil
+	})
+	if reads {
 		l.add(p, "templatefile %q must not read files itself", rel)
 	}
 }
@@ -1022,6 +1062,12 @@ func (l *loader) tfTemplate(root, p, rel string, viaModule bool) {
 // providerSource checks one required_providers entry: a version string (implied hashicorp/<name>) or an object of
 // literal strings whose source, if any, is hashicorp/<name> or registry.terraform.io/hashicorp/<name>.
 func (l *loader) providerSource(p string, src []byte, name string, a *hcl.Attribute) {
+	source := "hashicorp/" + strings.ToLower(name) // implied when no source is given
+	defer func() {
+		if tfBannedProviders[strings.TrimPrefix(strings.ToLower(source), "registry.terraform.io/")] {
+			l.add(p, "required_providers entry %q: %s is not allowed (it reads host files or runs commands)", name, source)
+		}
+	}()
 	if _, ok := tfLiteral(a.Expr, src); ok {
 		return
 	}
@@ -1044,8 +1090,11 @@ func (l *loader) providerSource(p string, src []byte, name string, a *hcl.Attrib
 			l.add(p, "required_providers entry %q: %q must be a literal string", name, k)
 			continue
 		}
-		if k == "source" && !hashicorpProvider.MatchString(strings.ToLower(v)) {
-			l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
+		if k == "source" {
+			source = v
+			if !hashicorpProvider.MatchString(strings.ToLower(v)) {
+				l.add(p, "provider source for %q must be hashicorp/<name> or registry.terraform.io/hashicorp/<name>", name)
+			}
 		}
 	}
 }
@@ -1102,15 +1151,7 @@ func tfShape(b []byte, isJSON bool) string {
 		openers++
 		deepest = max(deepest, depth)
 	}
-	verdict := func() string {
-		switch {
-		case deepest > maxTFDepth:
-			return fmt.Sprintf("nested too deeply (%d levels; keep it under %d)", deepest, maxTFDepth)
-		case openers > maxTFOpeners:
-			return fmt.Sprintf("too many brackets (%d; keep it under %d)", openers, maxTFOpeners)
-		}
-		return ""
-	}
+	verdict := func() string { return tfVerdict(deepest, openers) }
 	if isJSON {
 		dec := json.NewDecoder(bytes.NewReader(b))
 		for {
@@ -1139,6 +1180,28 @@ func tfShape(b []byte, isJSON bool) string {
 	if diags.HasErrors() {
 		return diags.Error()
 	}
+	return tfTokenShape(toks)
+}
+
+func tfVerdict(deepest, openers int) string {
+	switch {
+	case deepest > maxTFDepth:
+		return fmt.Sprintf("nested too deeply (%d levels; keep it under %d)", deepest, maxTFDepth)
+	case openers > maxTFOpeners:
+		return fmt.Sprintf("too many brackets (%d; keep it under %d)", openers, maxTFOpeners)
+	}
+	return ""
+}
+
+// tfTokenShape is tfShape's check of lexed HCL (a .tf file, or a template from .tf.json or templatefile).
+func tfTokenShape(toks hclsyntax.Tokens) string {
+	depth, deepest, openers := 0, 0, 0
+	open := func() {
+		depth++
+		openers++
+		deepest = max(deepest, depth)
+	}
+	verdict := func() string { return tfVerdict(deepest, openers) }
 	closes := map[hclsyntax.TokenType]hclsyntax.TokenType{
 		hclsyntax.TokenOBrace: hclsyntax.TokenCBrace, hclsyntax.TokenOBrack: hclsyntax.TokenCBrack,
 		hclsyntax.TokenOParen: hclsyntax.TokenCParen, hclsyntax.TokenOQuote: hclsyntax.TokenCQuote,

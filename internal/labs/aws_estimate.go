@@ -3,6 +3,8 @@ package labs
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"time"
@@ -91,7 +93,18 @@ func (e *InfracostEstimator) HourlyUSD(ctx context.Context, lab *content.Lab) (f
 }
 
 func (e *InfracostEstimator) run(ctx context.Context, key, region string, c *estimateCall) {
+	defer func() { // a panic here would otherwise kill the API (no request handler's recover covers this goroutine)
+		if r := recover(); r != nil {
+			slog.Error("infracost estimate panicked", "lab", key, "panic", r)
+			c.h, c.err = 0, fmt.Errorf("estimate failed: %v", r)
+		}
+		e.finish(key, c)
+	}()
 	c.h, c.err = infracost.Hourly(ctx, e.Run, filepath.Join(key, "terraform"), region)
+}
+
+// finish records c's outcome, frees its slot and wakes its waiters.
+func (e *InfracostEstimator) finish(key string, c *estimateCall) {
 	e.mu.Lock()
 	if c.err != nil {
 		e.failed[key] = estimateFailure{c.err, e.now().Add(estimateFailTTL)}

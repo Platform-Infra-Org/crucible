@@ -121,11 +121,20 @@ func TestInfracostEstimatorBoundsRuns(t *testing.T) {
 	for range 5 {
 		wg.Go(func() { _, err := e.HourlyUSD(context.Background(), lab); results <- err })
 	}
-	<-started
+	waitStarted := func() {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no run started")
+		}
+	}
+	waitStarted()
 	// a second lab takes the other slot; a third finds none and is told to retry, without waiting
 	go func() { _, _ = e.HourlyUSD(context.Background(), other()) }()
-	<-started
-	if _, err := e.HourlyUSD(context.Background(), other()); !errors.Is(err, apperr.Unavailable) ||
+	waitStarted()
+	third, cancel := context.WithTimeout(context.Background(), 2*time.Second) // a missing limit fails, not hangs
+	defer cancel()
+	if _, err := e.HourlyUSD(third, other()); !errors.Is(err, apperr.Unavailable) ||
 		!strings.Contains(err.Error(), "estimate pending, try again shortly") {
 		t.Fatalf("no free slot: %v", err)
 	}
@@ -160,5 +169,29 @@ func TestInfracostEstimatorBoundsRuns(t *testing.T) {
 	_, _ = failing.HourlyUSD(context.Background(), lab)
 	if fails.Load() != 2 {
 		t.Fatal("and retried after a few minutes")
+	}
+}
+
+// A panicking run must not leak its slot or leave its waiters hanging: it is a remembered failure.
+func TestInfracostEstimatorSurvivesPanickingRun(t *testing.T) {
+	tr, _ := content.Load("../../examples/forge-401")
+	lab := tr.Module("01-cloud-heat").Lab
+	var runs atomic.Int32
+	e := &InfracostEstimator{Run: func(context.Context, string, []string, ...string) ([]byte, error) {
+		runs.Add(1)
+		panic("boom")
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for range 2 {
+		if _, err := e.HourlyUSD(ctx, lab); err == nil || !strings.Contains(err.Error(), "boom") {
+			t.Fatalf("the panic is a failure: %v", err)
+		}
+	}
+	e.mu.Lock()
+	running, inflight := e.running, len(e.inflight)
+	e.mu.Unlock()
+	if running != 0 || inflight != 0 || runs.Load() != 1 {
+		t.Fatalf("slot released and failure remembered: running=%d inflight=%d runs=%d", running, inflight, runs.Load())
 	}
 }

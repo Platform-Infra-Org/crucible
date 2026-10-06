@@ -35,5 +35,7 @@ awsLabs:
   stateBucket: ""
   stateRegion: ""           # default: backup.region
   regions: eu-west-1        # comma-separated; must match the labs stack's allowed_regions
-  workspaceImage: amazon/aws-cli:2.27.0
-  terraformImage: hashicorp/terraform:1.16.5
+  # Pinned by digest (multi-arch index): these pods hold lab credentials. Bump deliberately, with
+  # `docker buildx imagetools inspect <image>:<tag>`; keep in step with internal/labs (DefaultTerraformImage).
+  workspaceImage: amazon/aws-cli:2.27.0@sha256:e3e329e1d2894b7b4bbb0aacacd0a155262159b2e7a3b4275eb1f24046d3e06c
+  terraformImage: hashicorp/terraform:1.16.5@sha256:c7926feace05d0f7e73542842bf3945924e955a1f782cf000ccbb8d18fa42d77

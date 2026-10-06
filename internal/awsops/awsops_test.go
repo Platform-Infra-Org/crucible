@@ -401,3 +401,37 @@ func TestUpRefusesToDropLabsItCannotRead(t *testing.T) {
 		t.Fatalf("no labs before, none now: %v", err)
 	}
 }
+
+// fixwave A: the lab roles trust the node role main actually created, not a guessed "crucible-node".
+func TestLabsInitTrustsMainsNodeRole(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "main output -json") {
+			return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"node_role_name":{"value":"forge-node"},"instance_id"`, 1)
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var node_role_name=forge-node") < 0 {
+		t.Fatalf("labs-init must pass main's node role:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitBeforeMainSaysWhichRoleItTrusts(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "main output -json") {
+			return errors.New("no state")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "node_role_name") >= 0 {
+		t.Fatalf("no main outputs: the labs stack default applies:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "crucible-node") || !strings.Contains(r.log.String(), "labs-init again") {
+		t.Fatalf("must warn which role is trusted, got %q", r.log.String())
+	}
+}

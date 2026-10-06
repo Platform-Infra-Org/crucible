@@ -147,6 +147,13 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error
 	if crucibleAccount != "" {
 		args = append(args, "-var", "crucible_account_id="+crucibleAccount)
 	}
+	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
+	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {
+		args = append(args, "-var", "node_role_name="+m["node_role_name"])
+	} else {
+		fmt.Fprintln(o.Log, "note: main's outputs are not readable here (not `up` yet, or other credentials), so the lab roles "+
+			"trust <name>-node (crucible-node by default). If crucible.tfvars sets another name, run labs-init again after `up`.")
+	}
 	return o.Exec(ctx, o.Root, "terraform", args...)
 }
 

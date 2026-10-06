@@ -100,12 +100,12 @@ run "a_lab_cannot_hide_lock_or_inflate_its_resources" {
     error_message = "OwnBuckets never lists a denied S3 call"
   }
   assert { # I2: the sweep can clear termination protection, and nothing else
-    condition     = one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "UnprotectOwnTermination"]).Condition.StringEqualsIgnoreCase["ec2:Attribute/disableApiTermination"] == "false" && length([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if contains(flatten([s.Action]), "ec2:ModifyInstanceAttribute")]) == 1 && alltrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s.Condition.StringEquals["aws:ResourceTag/crucible:lab-id"] == "$${aws:PrincipalTag/crucible:lab-id}" if contains(flatten([s.Action]), "ec2:ModifyInstanceAttribute")])
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "UnprotectOwnTermination"]).Condition.StringEqualsIgnoreCase["ec2:Attribute/disableApiTermination"] == "false" && length([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Effect == "Allow" && contains(flatten([s.Action]), "ec2:ModifyInstanceAttribute")]) == 1 && alltrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s.Condition.StringEquals["aws:ResourceTag/crucible:lab-id"] == "$${aws:PrincipalTag/crucible:lab-id}" if s.Effect == "Allow" && contains(flatten([s.Action]), "ec2:ModifyInstanceAttribute")])
     error_message = "ModifyInstanceAttribute only turns termination protection off, only on the lab's own instances"
   }
   assert { # I4
     condition     = one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "NotOtherLabsNetwork"]).Condition.Null["aws:ResourceTag/crucible:lab-id"] == "false" && one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "NotOtherLabsNetwork"]).Condition.StringNotEquals["aws:ResourceTag/crucible:lab-id"] == "$${aws:PrincipalTag/crucible:lab-id}" && contains(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "NotOtherLabsNetwork"]).Resource, "arn:aws:ec2:*:*:security-group/*")
-    error_message = "another lab's security groups and ENIs cannot be used; untagged shared ones can"
+    error_message = "another lab's security groups and ENIs cannot be used"
   }
   assert { # I4: no standalone ENIs (RunInstances cannot check an existing ENI's tag)
     condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : contains(flatten([s.Action]), "ec2:CreateNetworkInterface") if s.Effect == "Allow"])
@@ -149,5 +149,52 @@ run "a_separate_lab_account_trusts_the_crucible_account" {
   assert {
     condition     = output.regions == "eu-west-1,eu-central-1"
     error_message = "regions output feeds CRUCIBLE_AWS_LAB_REGIONS"
+  }
+}
+
+# Fix wave A (final review I2, I5, I6 and the Should items).
+run "labs_bring_their_own_tagged_network_and_buckets" {
+  command = apply
+
+  assert { # I2: the provider tags a bucket at CreateBucket (S3 ABAC); UntagResource stays out (crucible:* tags)
+    condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnBuckets"]).Action) == toset(["s3:CreateBucket", "s3:DeleteBucket", "s3:Get*", "s3:List*", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:AbortMultipartUpload", "s3:PutObjectTagging", "s3:DeleteObjectTagging", "s3:PutBucketTagging", "s3:TagResource", "s3:PutBucketVersioning", "s3:PutEncryptionConfiguration", "s3:PutLifecycleConfiguration", "s3:PutBucketPublicAccessBlock"])
+    error_message = "OwnBuckets is exactly this allowlist: s3:TagResource in, s3:UntagResource out"
+  }
+  assert { # I5 (ruling O1): no lab may use an untagged security group (the VPC default SG is shared by every lab)
+    condition = (one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSecurityGroupsOnly"]).Effect == "Deny"
+      && one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSecurityGroupsOnly"]).Resource == "arn:aws:ec2:*:*:security-group/*"
+      && one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSecurityGroupsOnly"]).Condition.Null["aws:ResourceTag/crucible:lab-id"] == "true"
+    && toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSecurityGroupsOnly"]).Action) == toset(["ec2:RunInstances", "ec2:CreateNetworkInterface", "ec2:ModifyInstanceAttribute"]))
+    error_message = "RunInstances, CreateNetworkInterface and ModifyInstanceAttribute (groupSet) are denied on untagged security groups"
+  }
+  assert { # I6: aws_vpc_security_group_ingress_rule/_egress_rule tag the rule at create
+    condition     = alltrue([for a in ["RunInstances", "CreateVolume", "CreateSecurityGroup", "AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress"] : contains(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "TagOnCreate"]).Condition.StringEquals["ec2:CreateAction"], a)])
+    error_message = "tag-on-create covers instances, volumes, security groups and security group rules"
+  }
+  assert { # I6: rules are authorized on the rule resource; the group itself still has to be the lab's own (ManageOwn)
+    condition = (one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "RulesOfOwnGroups"]).Resource == "arn:aws:ec2:*:*:security-group-rule/*"
+      && toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "RulesOfOwnGroups"]).Action) == toset(["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:ModifySecurityGroupRules"])
+      && alltrue([for a in ["ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress", "ec2:ModifySecurityGroupRules"] : contains(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "ManageOwn"]).Action, a)])
+    && !anytrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s.Resource == "arn:aws:ec2:*:*:security-group/*" && s.Effect == "Allow" && contains(flatten([s.Action]), "ec2:AuthorizeSecurityGroupIngress")]))
+    error_message = "security group rules only on the lab's own groups"
+  }
+}
+
+run "the_state_region_must_be_an_allowed_region" {
+  command = plan
+  variables {
+    allowed_regions = ["eu-central-1"]
+  }
+  expect_failures = [var.allowed_regions]
+}
+
+run "the_trust_names_the_node_role_main_created" {
+  command = plan
+  variables {
+    node_role_name = "forge-node"
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.lab.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node" && jsondecode(aws_iam_role.ops.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node"
+    error_message = "labs-init passes main's node role name to both trusts"
   }
 }

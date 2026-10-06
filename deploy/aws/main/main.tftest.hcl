@@ -170,4 +170,8 @@ run "aws_labs_wiring" {
     condition     = output.lab_role_arn == "arn:aws:iam::444455556666:role/crucible-lab"
     error_message = "main records the lab role it is wired to, so `up` can refuse to drop it silently"
   }
+  assert {
+    condition     = output.node_role_name == "crucible-node"
+    error_message = "main publishes its node role name; labs-init trusts exactly that role"
+  }
 }

@@ -53,6 +53,11 @@ awsout=$(helm template t "$chart" $aws)
 for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_ARN' 'name: CRUCIBLE_AWS_STATE_BUCKET' 'key: INFRACOST_API_KEY, optional: true' 'name: AWS_REGION'; do
   grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
 done
+# fixwave I1: the runner pod holds the lab credentials, so its images are pinned by digest, never a re-pushable tag.
+for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
+  grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }
+done
+if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
 if grep -q 'CRUCIBLE_INFRACOST' <<<"$awsout"; then echo "real aws labs must not turn infracost off"; exit 1; fi
 dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
 for want in 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' 'name: CRUCIBLE_INFRACOST, value: "off"'; do

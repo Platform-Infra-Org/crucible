@@ -7,6 +7,9 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
+# kind and kubectl use this file only, never the user's ~/.kube/config (kind would switch its current-context)
+mkdir -p .local/kind
+export KUBECONFIG="$root/.local/kind/admin.kubeconfig"
 name=crucible-m4
 ctx="kind-$name"
 
@@ -75,7 +78,7 @@ CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_PROBE_IP="
   CRUCIBLE_TEST_NODE_IP="$node_ip" CRUCIBLE_TEST_DNS_POD="$dns_pod" CRUCIBLE_CLUSTER_PRIVILEGED=1 \
   go test -tags cluster -run TestClusterLabOnKind -count=1 -timeout 20m -v ./internal/labs/
 
-# TASK9: echo "== browser: Forge 101 end to end, including the cluster lab"
-# TASK9: CLUSTER=1 ./scripts/local-check.sh
+echo "== browser: Forge 101 end to end, including the cluster lab"
+CLUSTER=1 ./scripts/local-check.sh
 
 echo "🔥 Cluster check passed. The crucible holds."

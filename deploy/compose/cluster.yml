@@ -1,0 +1,12 @@
+# make cluster-check only: crucible-api joins kind's docker network and runs cluster labs there as the crucible
+# service account (token kubeconfig written by scripts/cluster-check.sh). Privileged dind: kind has no sysbox.
+services:
+  api:
+    environment:
+      CRUCIBLE_CLUSTER_LABS: "1"
+      CRUCIBLE_CLUSTER_PRIVILEGED: "1"
+      KUBECONFIG: /kube/config
+    volumes: ["../../.local/kind/kubeconfig-internal:/kube/config:ro"]
+    networks: [default, kind]
+networks:
+  kind: { external: true }

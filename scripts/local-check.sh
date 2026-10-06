@@ -23,6 +23,11 @@ echo "== seed git repos"
 ./scripts/seed-git.sh
 
 compose="docker compose -f deploy/compose/docker-compose.yml"
+project=local
+if [ "${CLUSTER:-0}" = 1 ]; then # scripts/cluster-check.sh: also run Forge 101's cluster lab on kind
+  compose="$compose -f deploy/compose/cluster.yml"
+  project=cluster
+fi
 cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
     $compose down -v >/dev/null 2>&1 || true
@@ -37,6 +42,6 @@ $compose up -d --build --wait
 
 echo "== end-to-end"
 (cd e2e && npm install --no-audit --no-fund && npx playwright install chromium \
-  && CRUCIBLE_AGENT="$root/bin/crucible-agent" npx playwright test)
+  && CRUCIBLE_AGENT="$root/bin/crucible-agent" npx playwright test --project="$project")
 
 echo "🔥 Local check passed. The forge holds."

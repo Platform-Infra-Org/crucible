@@ -160,7 +160,16 @@ export function QuizPage() {
       if (q.type === 'match') init[q.id] = q.left!.map(() => -1)
     }
     setAnswers(init)
+    setGate(undefined) // fresh data beats a stale gate
   }, [data])
+  const [, tick] = useState(0)
+  const nextAt = (gate ?? data)?.next_attempt_at
+  useEffect(() => { // re-render when the cooldown ends so Submit re-enables
+    const ms = nextAt ? new Date(nextAt).getTime() - Date.now() : 0
+    if (ms <= 0) return
+    const id = setTimeout(() => tick((n) => n + 1), ms + 250)
+    return () => clearTimeout(id)
+  }, [nextAt])
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Heating the test piece…" />
   const submit = async () => {

@@ -27,7 +27,7 @@ func TestCompletionIsWeightedAndHonoursTheScoreRule(t *testing.T) {
 	if p := percent(tr, progress{"m1/r": "complete"}, scores{"m1/r": 1}); p != 12 {
 		t.Fatalf("1/8 = 12%%, got %d", p)
 	}
-	prog := progress{"m1/r": "complete", "m1/quiz": "complete", "m2/lab": "in_progress"}
+	prog := progress{"m1/r": "complete", "m1/quiz": "complete", "m2/lab": "complete"}
 	sc := scores{"m1/r": 1, "m1/quiz": 1, "m2/lab": 0.6}
 	o := outline(tr, prog, sc)
 	if !o[0].Complete || o[1].Locked || !o[1].Complete {
@@ -37,6 +37,7 @@ func TestCompletionIsWeightedAndHonoursTheScoreRule(t *testing.T) {
 		t.Fatalf("a forged module counts fully: %d", p)
 	}
 	sc["m2/lab"] = 0.4
+	prog["m2/lab"] = "complete"
 	if o := outline(tr, prog, sc); o[1].Complete {
 		t.Fatal("0.4 is under the threshold")
 	}
@@ -63,11 +64,17 @@ func TestQuizAttemptLimitAndCooldown(t *testing.T) {
 		t.Fatalf("view shows no attempts left: %+v", v.AttemptsLeft)
 	}
 	q.MaxAttempts, q.Cooldown = 0, yamlx.Duration(time.Hour)
-	if _, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "next attempt") || !strings.Contains(err.Error(), "in 1h") {
+	if _, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "next attempt") || !strings.Contains(err.Error(), "in 1h)") {
 		t.Fatalf("inside the cooldown: %v", err)
 	}
 	if v, _ := s.Quiz(ctx, u, "forge", "forge-101", "01-welcome"); v.NextAttemptAt == nil {
 		t.Fatal("view shows when the next attempt opens")
+	}
+	if _, err := s.DB.Exec(ctx, `UPDATE quiz_attempts SET created_at = created_at - interval '61 minutes' WHERE user_id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SubmitQuiz(ctx, u, "forge", "forge-101", "01-welcome", welcomeAnswers(s, u, bad)); err != nil {
+		t.Fatalf("after the cooldown: %v", err)
 	}
 }
 
@@ -110,5 +117,38 @@ func TestStanding(t *testing.T) {
 	}
 	if st, err := s.Standing(ctx, u.ID, "forge", "nope"); st != nil || err != nil {
 		t.Fatalf("unknown program: %+v %v", st, err)
+	}
+}
+
+func TestPercentReaches100WithFractionalPoints(t *testing.T) {
+	for _, pts := range [][]float64{{1, 0.1, 0.1, 0.2}, {1, 0.1, 0.8, 0.9}} {
+		m := &content.Module{ID: "m", Completion: "all_items", Lab: &content.Lab{}}
+		for _, p := range pts {
+			m.Lab.Tasks = append(m.Lab.Tasks, &content.Task{Points: p})
+		}
+		m.Items = []content.Item{{Kind: "lab", ID: "lab"}}
+		prog := progress{"m/lab": "complete"}
+		tr := &content.Training{Modules: []*content.Module{m}}
+		if p := percent(tr, prog, scores{}); p != 100 {
+			t.Fatalf("%v complete = %d%%", pts, p)
+		}
+	}
+}
+
+func TestTerminalQuestionsAreNotQuizWeight(t *testing.T) {
+	m := &content.Module{Quiz: &content.Quiz{Questions: []*content.Question{{Type: "single", Points: 2}, {Type: "terminal", Points: 5}}}}
+	if w := Weight(m, content.Item{Kind: "quiz"}); w != 2 {
+		t.Fatalf("quiz weight %v, want 2", w)
+	}
+}
+
+func TestScoreRuleIgnoresPendingItems(t *testing.T) {
+	m := &content.Module{ID: "m", Completion: "score", Threshold: 0.5, Items: []content.Item{{Kind: "quiz", ID: "quiz"}},
+		Quiz: &content.Quiz{Questions: []*content.Question{{Points: 1}}}}
+	if moduleComplete(m, progress{"m/quiz": "pending_review"}, scores{"m/quiz": 1}) {
+		t.Fatal("a pending quiz must not forge the module")
+	}
+	if !moduleComplete(m, progress{"m/quiz": "complete"}, scores{"m/quiz": 1}) {
+		t.Fatal("a complete quiz at 1.0 forges it")
 	}
 }

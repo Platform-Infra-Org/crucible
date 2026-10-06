@@ -140,7 +140,9 @@ func Weight(m *content.Module, it content.Item) float64 {
 	case "quiz":
 		if m.Quiz != nil {
 			for _, q := range m.Quiz.Questions {
-				w += q.Points
+				if q.Type != "terminal" { // terminal questions are counted on the lab task that uses them
+					w += q.Points
+				}
 			}
 		}
 	case "lab":
@@ -164,7 +166,9 @@ func moduleComplete(m *content.Module, prog progress, sc scores) bool {
 		for _, it := range m.Items {
 			w := Weight(m, it)
 			total += w
-			got += w * sc[m.ID+"/"+it.ID]
+			if k := m.ID + "/" + it.ID; prog[k] == "complete" { // pending_review / in_progress contribute nothing
+				got += w * sc[k]
+			}
 		}
 		return total > 0 && got/total >= m.Threshold-1e-9
 	}
@@ -196,7 +200,10 @@ func percent(t *content.Training, prog progress, sc scores) int {
 	if total == 0 {
 		return 0
 	}
-	return int(done * 100 / total)
+	if done >= total-1e-9 { // float sums of fractional points must not floor a finished program to 99
+		return 100
+	}
+	return int(done*100/total + 1e-9)
 }
 
 func outline(t *content.Training, prog progress, sc scores) []ModuleView {
@@ -460,9 +467,19 @@ func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, 
 		return nil, apperr.Wrap(apperr.Conflict, "you have used every attempt for this quiz")
 	}
 	if next != nil {
-		wait := time.Until(*next).Truncate(time.Minute) + time.Minute // round up: "in 0s" helps nobody
-		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("the next attempt opens at %s (in %s)",
-			next.UTC().Format("15:04 UTC"), strings.TrimSuffix(wait.String(), "0s")))
+		var now time.Time // the DB clock, same as the gate's (tx start time)
+		if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
+			return nil, err
+		}
+		wait := (next.Sub(now).Truncate(time.Minute) + time.Minute) // round up: "in 0m" helps nobody
+		in := fmt.Sprintf("%dm", int(wait.Minutes())%60)
+		if h := int(wait.Hours()); h > 0 {
+			in = fmt.Sprintf("%dh", h)
+			if m := int(wait.Minutes()) % 60; m > 0 {
+				in += fmt.Sprintf("%dm", m)
+			}
+		}
+		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("the next attempt opens at %s (in %s)", next.UTC().Format("15:04 UTC"), in))
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO quiz_attempts (user_id, team, training, module, sha, answers, score, max_score, passed)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, u.ID, team, t.ID, module, sha, stored, res.Score, res.Max, res.Passed); err != nil {

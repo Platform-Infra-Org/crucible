@@ -18,6 +18,7 @@ export function Nav() {
       {me.is_mentor && <NavLink to="/mentor">Mentor</NavLink>}
       {me.can_view_spend && <NavLink to="/ledger">Ledger</NavLink>}
       {me.can_score && <NavLink to="/anvil">Anvil</NavLink>}
+      {me.can_edit_content && <NavLink to="/edits">Edits</NavLink>}
       {me.is_admin && <NavLink to="/admin">Forge Status</NavLink>}
       <NavLink to="/connect">Connect your laptop</NavLink>
       <NavLink to="/settings">Settings</NavLink>

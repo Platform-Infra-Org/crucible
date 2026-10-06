@@ -1,5 +1,5 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
@@ -107,4 +107,10 @@ export type Mentee = {
   email: string; name: string; team: string; rank: string; programs: JourneyRow[]
   pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
   failures: { training: string; module: string; task?: string; kind: 'lab_failed' | 'check_failed'; detail: string; at: string }[]
+}
+export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'
+export type ContentEdit = {
+  id: number; training: string; title: string; author: string; base_sha: string; head_sha?: string; branch: string; status: EditStatus
+  reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; files?: Record<string, string>; diff?: string
+  can_review: boolean; can_withdraw: boolean
 }

@@ -206,3 +206,12 @@ meter { width: 8rem; vertical-align: middle; }
 .flags { list-style: none; padding: 0; margin: 0; }
 .flags .warn { color: var(--text); }
 .legend { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; }
+
+.diff { background: var(--term-bg); color: var(--term-fg); padding: 0.75rem; border-radius: 8px; overflow: auto; font-size: 0.85rem; }
+.diff-add { color: var(--ok); }
+.diff-del { color: var(--danger); }
+.diff-hunk { color: var(--accent-2); }
+.diff-ctrl, .diff-ws { color: var(--accent-2); outline: 1px dotted currentColor; }
+.editor { display: grid; grid-template-columns: 220px 1fr 1fr; gap: 1rem; }
+.editor textarea { width: 100%; font-family: 'JetBrains Mono', monospace; }
+@media (max-width: 900px) { .editor { grid-template-columns: 1fr; } }

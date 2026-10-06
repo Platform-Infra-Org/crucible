@@ -24,6 +24,9 @@ import { ForgeStatusPage } from './pages/ForgeStatus'
 import { JourneyPage } from './pages/Journey'
 import { MentorPage } from './pages/Mentor'
 import { ProgramSettingsPage } from './pages/ProgramSettings'
+import { EditsPage } from './pages/Edits'
+import { EditFilesPage } from './pages/EditFiles'
+import { EditReviewPage } from './pages/EditReview'
 
 export { useMe }
 
@@ -77,6 +80,9 @@ export default function App() {
           <Route path="/ledger" element={<LedgerPage />} />
           <Route path="/anvil" element={<AnvilPage />} />
           <Route path="/anvil/:id" element={<AnvilDetailPage />} />
+          <Route path="/edits" element={<EditsPage />} />
+          <Route path="/edits/new" element={<EditFilesPage />} />
+          <Route path="/edits/:id" element={<EditReviewPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
 import type { AnvilDetail, LabEvidence, SignOff, Submission, SubmissionType, TaskEvidence } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
@@ -54,6 +54,11 @@ export function AnvilPage() {
   )
 }
 
+// The server accepts 0, so an empty box must never become Number('') = 0.
+const validPoints = (v: string, max: number) => v.trim() !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= max
+// Another scorer got there first: show the fresh state instead of a stale form.
+const lostRace = (e: unknown) => e instanceof ApiError && e.status === 409
+
 function SignOffRow({ o, onDone }: { o: SignOff; onDone: () => void }) {
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
@@ -65,6 +70,7 @@ function SignOffRow({ o, onDone }: { o: SignOff; onDone: () => void }) {
       onDone()
     } catch (e) {
       toast((e as Error).message)
+      if (lostRace(e)) onDone()
     } finally {
       setBusy(false)
     }
@@ -99,6 +105,7 @@ export function AnvilDetailPage() {
       nav('/anvil')
     } catch (e) {
       toast((e as Error).message)
+      if (lostRace(e)) reload()
     } finally {
       setBusy(false)
     }
@@ -144,7 +151,7 @@ export function AnvilDetailPage() {
           {hintCost > 0 && <p className="muted">Hints the trainee revealed cost {hintCost} points; they are taken off what you award.</p>}
           <label>Feedback <textarea rows={4} maxLength={5000} value={feedback} onChange={(e) => setFeedback(e.target.value)} /></label>
           <div className="row">
-            <button className="primary" disabled={busy || points === ''} onClick={() => decide('score')}>Score</button>
+            <button className="primary" disabled={busy || !validPoints(points, s.max_points)} onClick={() => decide('score')}>Score</button>
             <button className="ghost" disabled={busy || !feedback.trim()} onClick={() => decide('return')}>Return for rework</button>
           </div>
         </div>
@@ -181,7 +188,9 @@ function LabEvidenceView({ id, ev, onChange }: { id: number; ev: LabEvidence; on
 function TaskEvidenceView({ id, t, onChange }: { id: number; t: TaskEvidence; onChange: () => void }) {
   const [points, setPoints] = useState(String(t.awarded))
   const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
   const override = async () => {
+    setBusy(true)
     try {
       await api(`/api/anvil/${id}/override`, { method: 'POST', json: { task: t.id, points: Number(points), reason } })
       toast('Override saved and audited.')
@@ -189,6 +198,9 @@ function TaskEvidenceView({ id, t, onChange }: { id: number; t: TaskEvidence; on
       onChange()
     } catch (e) {
       toast((e as Error).message)
+      if (lostRace(e)) onChange()
+    } finally {
+      setBusy(false)
     }
   }
   return (
@@ -209,7 +221,7 @@ function TaskEvidenceView({ id, t, onChange }: { id: number; t: TaskEvidence; on
         <div className="row">
           <label>Override points <input type="number" min={0} max={t.points} step="0.5" value={points} onChange={(e) => setPoints(e.target.value)} /></label>
           <label>Reason <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>
-          <button className="ghost" disabled={!reason.trim()} onClick={override}>Override</button>
+          <button className="ghost" disabled={busy || !reason.trim() || !validPoints(points, t.points)} onClick={override}>Override</button>
         </div>
       )}
     </section>

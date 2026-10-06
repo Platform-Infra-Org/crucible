@@ -12,20 +12,21 @@ import (
 )
 
 const (
-	labImage     = "docker:28-dind" // dockerd + the compose plugin; bump deliberately (each new node pulls it once)
+	labImage     = "docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac" // dockerd + the compose plugin (multi-arch index); bump deliberately
 	labPod       = "lab"
 	labContainer = "dind"
 	labLabel     = "crucible.io/lab"
 	sysboxClass  = "sysbox-runc"
 )
 
-// ponytail: one size for every lab (about three concurrent labs at their limits on a t3a.xlarge); add a lab.yaml
+// ponytail: one size for every lab (requests 500m/1Gi/10Gi: about 6 labs fit a t3a.xlarge by request after the platform pods' share, but 4Gi limits make 3 the real memory-safe number); add a lab.yaml
 // resources block when a lab needs more.
 var (
 	labLimits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi"),
 		corev1.ResourceEphemeralStorage: resource.MustParse("21Gi")}
-	labRequests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("1Gi")}
-	dockerDisk  = resource.MustParse("20Gi")
+	labRequests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("1Gi"),
+		corev1.ResourceEphemeralStorage: resource.MustParse("10Gi")}
+	dockerDisk = resource.MustParse("20Gi")
 )
 
 // blockedEgress can never be reached from a lab: link-local (cloud metadata, IMDS at 169.254.169.254) and every

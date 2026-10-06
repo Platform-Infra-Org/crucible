@@ -84,7 +84,7 @@ func (c *ClusterRunner) Provision(ctx context.Context, inst *Instance, bundle []
 		return fmt.Errorf("unpacking the lab: %w: %s", err, tailOf(untar.Bytes()))
 	}
 	up := &ap.Capped{}
-	if err := c.run(ctx, ns, []string{"docker", "compose", "up", "-d", "--wait"}, nil, up); err != nil {
+	if err := c.run(ctx, ns, []string{"docker", "compose", "up", "-d", "--wait", "--quiet-pull"}, nil, up); err != nil {
 		return fmt.Errorf("docker compose up: %w: %s", err, tailOf(up.Bytes()))
 	}
 	return nil
@@ -204,5 +204,5 @@ func tailOf(b []byte) string {
 	if len(s) > 2000 {
 		s = "…" + s[len(s)-2000:]
 	}
-	return s
+	return cleanText(s) // a cut mid-rune or a NUL would make Postgres reject the row
 }

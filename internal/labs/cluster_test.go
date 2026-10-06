@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -155,7 +156,7 @@ func TestProvisionCreatesIsolatedLab(t *testing.T) {
 	if untar.ns != ns || untar.pod != "lab" || !slices.Equal(untar.cmd, []string{"tar", "xzf", "-", "-C", "/lab"}) || string(untar.stdin) != "tarball" {
 		t.Fatalf("untar: %+v", untar)
 	}
-	if !slices.Equal(up.cmd, []string{"docker", "compose", "up", "-d", "--wait"}) {
+	if !slices.Equal(up.cmd, []string{"docker", "compose", "up", "-d", "--wait", "--quiet-pull"}) {
 		t.Fatalf("compose up: %+v", up)
 	}
 	// a second attempt (sweep retry, double start) is harmless
@@ -334,5 +335,25 @@ func TestSweepSkipsClusterRowsWithoutRunner(t *testing.T) {
 		if err := f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, id).Scan(&st); err != nil || st != string(Destroyed) {
 			t.Fatalf("%s: %q %v", id, st, err)
 		}
+	}
+}
+
+func TestTailOfIsStorable(t *testing.T) {
+	in := strings.Repeat("é", 1500) + "\x00end" // 3000+ bytes: the cut can land inside a rune
+	for _, n := range []int{0, 1} {
+		got := tailOf([]byte(in[n:]))
+		if !utf8.ValidString(got) || strings.ContainsRune(got, 0) || !strings.HasSuffix(got, "end") {
+			t.Fatalf("tailOf not storable: %q", got)
+		}
+	}
+}
+
+func TestLabObjectsPinsAndReserves(t *testing.T) {
+	p := clusterObjects(testID, "compose.yaml", false).Pod.Spec.Containers[0]
+	if !strings.Contains(p.Image, "@sha256:") {
+		t.Fatalf("dind image must be pinned by digest: %s", p.Image)
+	}
+	if p.Resources.Requests.StorageEphemeral().IsZero() {
+		t.Fatal("the lab must request ephemeral storage so the scheduler counts disk")
 	}
 }

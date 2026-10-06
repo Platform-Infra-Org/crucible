@@ -8,7 +8,7 @@ export default defineConfig({
   projects: [
     { name: 'local', testIgnore: /cluster-lab\.spec\.ts/ },
     // Needs make cluster-check (kind). Runs after `local`, which completes modules 01–02 of the linear training.
-    { name: 'cluster', testMatch: /cluster-lab\.spec\.ts/, dependencies: ['local'] },
+    ...(process.env.CLUSTER === '1' ? [{ name: 'cluster', testMatch: /cluster-lab\.spec\.ts/, dependencies: ['local'] }] : []),
   ],
   use: { baseURL: 'http://localhost:8080', trace: 'retain-on-failure', viewport: { width: 1440, height: 900 } },
 })

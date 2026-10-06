@@ -641,8 +641,8 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		}
 		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
 			WHERE id = $1 AND state = 'provisioning'`,
-			inst.ID, s.runnerErr(err).Error(), s.Now())
-		s.event(dctx, inst.ID, "failed", err.Error())
+			inst.ID, cleanText(s.runnerErr(err).Error()), s.Now())
+		s.event(dctx, inst.ID, "failed", cleanText(err.Error()))
 		return
 	}
 	now := s.Now()
@@ -815,7 +815,12 @@ func hintText(lab *content.Lab, h *content.Hint) string {
 	return string(b)
 }
 
+const maxAnswer = 4 << 10
+
 func (s *Service) Check(ctx context.Context, u *auth.User, labID, taskID, answer string) (*CheckResult, error) {
+	if len(answer) > maxAnswer {
+		return nil, apperr.Wrap(apperr.Invalid, "the answer is too long (4 KiB at most)")
+	}
 	answer = cleanText(answer) // stored in TEXT and passed as an env var
 	inst, lab, quiz, task, statuses, err := s.readyTask(ctx, u, labID, taskID)
 	if err != nil {

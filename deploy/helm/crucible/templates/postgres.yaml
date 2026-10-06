@@ -23,6 +23,7 @@ spec:
             - { name: POSTGRES_DB, value: crucible }
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
+          resources: { requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: 500m, memory: 1Gi } } # Guaranteed QoS: untrusted labs share this node
           ports: [{ containerPort: 5432 }]
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "crucible"] }

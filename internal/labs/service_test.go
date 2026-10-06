@@ -471,3 +471,12 @@ func TestConcurrentOpenTaskRunsSetupOnce(t *testing.T) {
 		t.Fatalf("setup must run once for concurrent opens, ran %d times", runs)
 	}
 }
+
+func TestCheckCapsAnswer(t *testing.T) {
+	f := setup(t, true)
+	v := f.start(t)
+	_, err := f.s.Check(context.Background(), f.u, v.ID, "t2-find-port", strings.Repeat("a", maxAnswer+1))
+	if !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("want Invalid, got %v", err)
+	}
+}

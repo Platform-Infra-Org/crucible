@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"crucible/internal/apperr"
@@ -78,9 +80,12 @@ type QuizView struct {
 	PassThreshold float64          `json:"pass_threshold"`
 	Questions     []PublicQuestion `json:"questions"`
 	Status        string           `json:"status"`
+	AttemptsLeft  *int             `json:"attempts_left,omitempty"`   // only when the quiz sets max_attempts
+	NextAttemptAt *time.Time       `json:"next_attempt_at,omitempty"` // only inside a cooldown
 }
 
 type progress map[string]string // "module/item" → status
+type scores map[string]float64  // "module/item" → best score 0..1
 
 func (s *Service) state() (*gitsync.State, error) {
 	st := s.State()
@@ -106,36 +111,101 @@ func (s *Service) Program(u *auth.User, team, training string) (*gitsync.State, 
 	return st, t, sha, nil
 }
 
-func (s *Service) progress(ctx context.Context, userID int64, team, training string) (progress, error) {
-	rows, err := s.DB.Query(ctx, `SELECT module, item, status FROM item_progress
+func (s *Service) progress(ctx context.Context, userID int64, team, training string) (progress, scores, error) {
+	rows, err := s.DB.Query(ctx, `SELECT module, item, status, score FROM item_progress
 		WHERE user_id = $1 AND team = $2 AND training = $3`, userID, team, training)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	p := progress{}
+	p, sc := progress{}, scores{}
 	for rows.Next() {
 		var m, i, st string
-		if err := rows.Scan(&m, &i, &st); err != nil {
-			return nil, err
+		var v float64
+		if err := rows.Scan(&m, &i, &st, &v); err != nil {
+			return nil, nil, err
 		}
-		p[m+"/"+i] = st
+		p[m+"/"+i], sc[m+"/"+i] = st, v
 	}
-	return p, rows.Err()
+	return p, sc, rows.Err()
 }
 
-func outline(t *content.Training, prog progress) []ModuleView {
+// Weight is an item's share of its training (spec §7 "weighted by item points"): a reading counts 1, a quiz its
+// question points, a lab its task points.
+func Weight(m *content.Module, it content.Item) float64 {
+	w := 0.0
+	switch it.Kind {
+	case "quiz":
+		if m.Quiz != nil {
+			for _, q := range m.Quiz.Questions {
+				w += q.Points
+			}
+		}
+	case "lab":
+		if m.Lab != nil {
+			for _, t := range m.Lab.Tasks {
+				w += t.Points
+			}
+		}
+	}
+	if w <= 0 {
+		return 1
+	}
+	return w
+}
+
+// moduleComplete applies the module's completion rule (spec §7): every item complete, or the weighted score reaching
+// the threshold.
+func moduleComplete(m *content.Module, prog progress, sc scores) bool {
+	if m.Completion == "score" {
+		var got, total float64
+		for _, it := range m.Items {
+			w := Weight(m, it)
+			total += w
+			got += w * sc[m.ID+"/"+it.ID]
+		}
+		return total > 0 && got/total >= m.Threshold-1e-9
+	}
+	for _, it := range m.Items {
+		if prog[m.ID+"/"+it.ID] != "complete" {
+			return false
+		}
+	}
+	return true
+}
+
+// completion is the weighted share of t the user has finished. A forged module counts fully.
+func completion(t *content.Training, prog progress, sc scores) (done, total float64) {
+	for _, m := range t.Modules {
+		forged := moduleComplete(m, prog, sc)
+		for _, it := range m.Items {
+			w := Weight(m, it)
+			total += w
+			if forged || prog[m.ID+"/"+it.ID] == "complete" {
+				done += w
+			}
+		}
+	}
+	return done, total
+}
+
+func percent(t *content.Training, prog progress, sc scores) int {
+	done, total := completion(t, prog, sc)
+	if total == 0 {
+		return 0
+	}
+	return int(done * 100 / total)
+}
+
+func outline(t *content.Training, prog progress, sc scores) []ModuleView {
 	out := []ModuleView{}
 	allPrevComplete := true
 	for _, m := range t.Modules {
-		mv := ModuleView{ID: m.ID, Title: m.Title, Locked: t.Progression == "linear" && !allPrevComplete, Complete: true}
+		mv := ModuleView{ID: m.ID, Title: m.Title, Locked: t.Progression == "linear" && !allPrevComplete, Complete: moduleComplete(m, prog, sc)}
 		for _, it := range m.Items {
 			st := prog[m.ID+"/"+it.ID]
 			if st == "" {
 				st = "new"
-			}
-			if st != "complete" {
-				mv.Complete = false
 			}
 			mv.Items = append(mv.Items, ItemView{Item: it, Status: st})
 		}
@@ -145,20 +215,31 @@ func outline(t *content.Training, prog progress) []ModuleView {
 	return out
 }
 
-func percent(t *content.Training, prog progress) int {
-	total, done := 0, 0
-	for _, m := range t.Modules {
-		for _, it := range m.Items {
-			total++
-			if prog[m.ID+"/"+it.ID] == "complete" {
-				done++
-			}
-		}
+// Standing is one user's position in one program, for ranks and journey views.
+type Standing struct {
+	Training    *content.Training
+	Modules     []ModuleView
+	Percent     int
+	Done, Total float64           // weighted
+	Status      map[string]string // "module/item" → status
+}
+
+// Standing returns nil, nil when the program's content is unavailable (still syncing or invalid).
+func (s *Service) Standing(ctx context.Context, userID int64, team, training string) (*Standing, error) {
+	st := s.State()
+	if st == nil {
+		return nil, nil
 	}
-	if total == 0 {
-		return 0
+	t, _ := st.ProgramTraining(team, training)
+	if t == nil {
+		return nil, nil
 	}
-	return done * 100 / total
+	prog, sc, err := s.progress(ctx, userID, team, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	done, total := completion(t, prog, sc)
+	return &Standing{Training: t, Modules: outline(t, prog, sc), Percent: percent(t, prog, sc), Done: done, Total: total, Status: prog}, nil
 }
 
 func (s *Service) Programs(ctx context.Context, u *auth.User) ([]ProgramCard, error) {
@@ -170,11 +251,11 @@ func (s *Service) Programs(ctx context.Context, u *auth.User) ([]ProgramCard, er
 	for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(u.Email) {
 		c := ProgramCard{Team: e.Team.ID, TeamName: e.Team.Name, Training: e.Program.Training, Title: e.Program.Training}
 		if t, _ := st.ProgramTraining(e.Team.ID, e.Program.Training); t != nil {
-			prog, err := s.progress(ctx, u.ID, e.Team.ID, t.ID)
+			prog, sc, err := s.progress(ctx, u.ID, e.Team.ID, t.ID)
 			if err != nil {
 				return nil, err
 			}
-			c.Title, c.Description, c.Available, c.Percent = t.Title, t.Description, true, percent(t, prog)
+			c.Title, c.Description, c.Available, c.Percent = t.Title, t.Description, true, percent(t, prog, sc)
 		}
 		cards = append(cards, c)
 	}
@@ -186,12 +267,12 @@ func (s *Service) Outline(ctx context.Context, u *auth.User, team, training stri
 	if err != nil {
 		return nil, err
 	}
-	prog, err := s.progress(ctx, u.ID, team, t.ID)
+	prog, sc, err := s.progress(ctx, u.ID, team, t.ID)
 	if err != nil {
 		return nil, err
 	}
 	return &Outline{Team: team, Training: t.ID, Title: t.Title, Description: t.Description,
-		Progression: t.Progression, Percent: percent(t, prog), Modules: outline(t, prog)}, nil
+		Progression: t.Progression, Percent: percent(t, prog, sc), Modules: outline(t, prog, sc)}, nil
 }
 
 // EnsureUnlocked returns the module, or apperr.Locked if a linear training has unfinished earlier modules.
@@ -200,11 +281,11 @@ func (s *Service) EnsureUnlocked(ctx context.Context, u *auth.User, team string,
 	if m == nil {
 		return nil, apperr.Wrap(apperr.NotFound, "module not found")
 	}
-	prog, err := s.progress(ctx, u.ID, team, t.ID)
+	prog, sc, err := s.progress(ctx, u.ID, team, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	for _, mv := range outline(t, prog) {
+	for _, mv := range outline(t, prog, sc) {
 		if mv.ID == module && mv.Locked {
 			return nil, apperr.Wrap(apperr.Locked, "finish the earlier modules first")
 		}
@@ -286,7 +367,7 @@ func (s *Service) Quiz(ctx context.Context, u *auth.User, team, training, module
 	if err != nil {
 		return nil, err
 	}
-	prog, err := s.progress(ctx, u.ID, team, t.ID)
+	prog, _, err := s.progress(ctx, u.ID, team, t.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +388,38 @@ func (s *Service) Quiz(ctx context.Context, u *auth.User, team, training, module
 	for i := range qs {
 		qs[i].Submission = subs[qs[i].ID].Feedback() // nil-safe; Feedback never carries the rubric
 	}
-	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: qs, Status: status}, nil
+	left, next, err := attemptGate(ctx, s.DB, u.ID, team, t.ID, module, m.Quiz)
+	if err != nil {
+		return nil, err
+	}
+	return &QuizView{PassThreshold: m.Quiz.PassThreshold, Questions: qs, Status: status, AttemptsLeft: left, NextAttemptAt: next}, nil
+}
+
+// attemptGate reports how many instant attempts remain and when the cooldown ends (spec §7; defaults: unlimited, no
+// cooldown). Human answers (AnswerHuman) are not attempts.
+func attemptGate(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, userID int64, team, training, module string, q *content.Quiz) (left *int, next *time.Time, err error) {
+	if q.MaxAttempts == 0 && q.Cooldown == 0 {
+		return nil, nil, nil
+	}
+	var n int
+	var last *time.Time
+	var now time.Time
+	if err := db.QueryRow(ctx, `SELECT count(*), max(created_at), now() FROM quiz_attempts
+		WHERE user_id = $1 AND team = $2 AND training = $3 AND module = $4`, userID, team, training, module).Scan(&n, &last, &now); err != nil {
+		return nil, nil, err
+	}
+	if q.MaxAttempts > 0 {
+		l := max(q.MaxAttempts-n, 0)
+		left = &l
+	}
+	if q.Cooldown > 0 && last != nil {
+		if at := last.Add(q.Cooldown.D()); at.After(now) {
+			next = &at
+		}
+	}
+	return left, next, nil
 }
 
 func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, module string, answers map[string]json.RawMessage) (*Result, error) {
@@ -317,8 +429,33 @@ func (s *Service) SubmitQuiz(ctx context.Context, u *auth.User, team, training, 
 	}
 	res := Score(m.Quiz, s.seedFor(u.ID, team, training, module), answers)
 	stored, _ := json.Marshal(answers)
-	if _, err := s.DB.Exec(ctx, `INSERT INTO quiz_attempts (user_id, team, training, module, sha, answers, score, max_score, passed)
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	// Serialise this user's attempts on this quiz so two tabs cannot both take the last attempt.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("quiz-attempt/%d/%s/%s/%s", u.ID, team, t.ID, module)); err != nil {
+		return nil, err
+	}
+	left, next, err := attemptGate(ctx, tx, u.ID, team, t.ID, module, m.Quiz)
+	if err != nil {
+		return nil, err
+	}
+	if left != nil && *left == 0 {
+		return nil, apperr.Wrap(apperr.Conflict, "you have used every attempt for this quiz")
+	}
+	if next != nil {
+		wait := time.Until(*next).Truncate(time.Minute) + time.Minute // round up: "in 0s" helps nobody
+		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("the next attempt opens at %s (in %s)",
+			next.UTC().Format("15:04 UTC"), strings.TrimSuffix(wait.String(), "0s")))
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO quiz_attempts (user_id, team, training, module, sha, answers, score, max_score, passed)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, u.ID, team, t.ID, module, sha, stored, res.Score, res.Max, res.Passed); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	status, pct, err := s.refreshQuiz(ctx, u.ID, team, t, module)

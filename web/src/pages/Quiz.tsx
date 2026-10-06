@@ -151,6 +151,7 @@ export function QuizPage() {
   const [spark, setSpark] = useState(0)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string>()
+  const [gate, setGate] = useState<Pick<QuizView, 'attempts_left' | 'next_attempt_at'>>()
   useEffect(() => {
     if (!data) return
     const init: Answers = {}
@@ -173,8 +174,11 @@ export function QuizPage() {
       setErr((e as Error).message)
     } finally {
       setBusy(false)
+      api<QuizView>(base).then(setGate, () => {}) // refresh attempts left without resetting the answers
     }
   }
+  const { attempts_left, next_attempt_at } = gate ?? data
+  const waiting = !!next_attempt_at && new Date(next_attempt_at) > new Date()
   const instant = data.questions.filter((q) => !q.human)
   const ok = !!result && result.status === 'complete' && attemptPassed(result, data.pass_threshold)
   return (
@@ -182,13 +186,15 @@ export function QuizPage() {
       <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
       <h1>Prove your temper</h1>
       <p className="muted">Pass mark: {Math.round(data.pass_threshold * 100)}%</p>
+      {attempts_left !== undefined && <p className="muted" data-testid="attempts-left">Attempts left: {attempts_left}</p>}
+      {waiting && <p className="warn">Next attempt opens at {new Date(next_attempt_at!).toLocaleTimeString()}</p>}
       {data.status === 'pending_review' && <p className="banner">Waiting on the anvil: a scorer still has to read some of your answers.</p>}
       {instant.map((q, i) => (
         <Question key={q.id} q={q} n={i + 1} value={answers[q.id]} onChange={(v) => { setResult(undefined); setAnswers((a) => ({ ...a, [q.id]: v })) }} verdict={result?.correct[q.id]} />
       ))}
       {instant.length > 0 && (
         <div className="row">
-          <button className="primary" disabled={busy} onClick={submit}>Submit answers</button>
+          <button className="primary" disabled={busy || attempts_left === 0 || waiting} onClick={submit}>Submit answers</button>
           <SparkBurst trigger={spark} />
         </div>
       )}

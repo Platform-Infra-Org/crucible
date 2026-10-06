@@ -78,7 +78,10 @@ func TestSecurityHeaders(t *testing.T) {
 		r.ServeHTTP(w, httptest.NewRequest("GET", p, nil))
 		h := w.Header()
 		csp := h.Get("Content-Security-Policy")
-		for _, want := range []string{"default-src 'self'", "script-src 'self'", "frame-ancestors 'none'", "object-src 'none'", "connect-src 'self' ws://example.com wss://example.com"} {
+		if strings.Contains(csp, "https:") {
+			t.Errorf("%s: CSP %q allows a remote host (fonts are self-hosted)", p, csp)
+		}
+		for _, want := range []string{"default-src 'self'", "script-src 'self'", "font-src 'self';", "style-src 'self' 'unsafe-inline';", "frame-ancestors 'none'", "object-src 'none'", "connect-src 'self' ws://example.com wss://example.com"} {
 			if !strings.Contains(csp, want) {
 				t.Errorf("%s: CSP %q lacks %q", p, csp, want)
 			}

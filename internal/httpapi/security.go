@@ -11,10 +11,10 @@ import (
 )
 
 // csp is the SPA and API default. Handlers that serve user files set their own stricter `sandbox` policy first.
-// style-src needs 'unsafe-inline' (mermaid and xterm inject <style>) and Google Fonts (web/index.html);
+// style-src needs 'unsafe-inline' (mermaid and xterm inject <style>); fonts are self-hosted (web/src/theme/fonts.css);
 // img-src has no remote hosts, so edit previews cannot load external images.
-const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-	"font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' %WS%; " +
+const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"font-src 'self'; img-src 'self' data: blob:; connect-src 'self' %WS%; " +
 	"frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
 
 // securityHeaders sets the default headers; a handler's own Header().Set (the download sandbox) wins.

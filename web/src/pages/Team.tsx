@@ -37,7 +37,7 @@ export function TeamPage() {
   return (
     <section className="page">
       <h1>{data.name}</h1>
-      <p className="lede">Led by {data.leader}</p>
+      <p className="lede">Led by {data.leader} · <Link to={`/teams/${data.id}/journey`}>Journey</Link></p>
       <Roster key={`r-${data.platform_sha}`} team={data} onSaved={reload} />
       <Programs key={`p-${data.platform_sha}`} team={data} onConflict={reload} />
       <Budget key={`b-${data.platform_sha}`} team={data} onSaved={reload} />

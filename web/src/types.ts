@@ -1,5 +1,5 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
@@ -98,3 +98,12 @@ export type Ledger = {
 }
 
 export type Forge = { percent: number; level: number; rank: string; ladder: { name: string; at: number }[]; badges: { training: string; title: string; earned_at: string }[]; rank_up: boolean }
+export type Heat = 'cold' | 'glowing' | 'forged'
+export type JourneyCell = { module: string; title: string; heat: Heat }
+export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice'; module?: string; item?: string; detail: string; at?: string }
+export type JourneyRow = { email: string; name: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
+export type Mentee = {
+  email: string; name: string; team: string; rank: string; programs: JourneyRow[]
+  pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
+  failures: { training: string; module: string; task?: string; kind: 'lab_failed' | 'check_failed'; detail: string; at: string }[]
+}

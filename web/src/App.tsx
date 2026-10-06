@@ -21,6 +21,8 @@ import { ApprovalsPage } from './pages/Approvals'
 import { LedgerPage } from './pages/Ledger'
 import { AnvilDetailPage, AnvilPage } from './pages/Anvil'
 import { ForgeStatusPage } from './pages/ForgeStatus'
+import { JourneyPage } from './pages/Journey'
+import { MentorPage } from './pages/Mentor'
 import { ProgramSettingsPage } from './pages/ProgramSettings'
 
 export { useMe }
@@ -69,6 +71,8 @@ export default function App() {
           <Route path="/teams" element={<TeamsIndex />} />
           <Route path="/teams/:team" element={<TeamPage />} />
           <Route path="/teams/:team/programs/:training" element={<ProgramSettingsPage />} />
+          <Route path="/teams/:team/journey" element={<JourneyPage />} />
+          <Route path="/mentor" element={<MentorPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/ledger" element={<LedgerPage />} />
           <Route path="/anvil" element={<AnvilPage />} />

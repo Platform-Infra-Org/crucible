@@ -49,7 +49,7 @@ var (
 // changed=true, or the tip and changed=false when the edit changed nothing (no commit is made).
 func (w *Writer) Apply(ctx context.Context, ch Change) (sha string, changed bool, err error) {
 	if strings.HasPrefix(w.URL, "-") || strings.HasPrefix(w.Branch, "-") {
-		return "", false, fmt.Errorf("invalid platform repo %q or branch %q", w.URL, w.Branch)
+		return "", false, fmt.Errorf("invalid platform repo %q or branch %q", redact(w.URL), w.Branch)
 	}
 	if ch.Base != "" && !shaRE.MatchString(ch.Base) {
 		return "", false, apperr.Wrap(apperr.Invalid, "base_sha must be a 40-character commit id")
@@ -73,7 +73,7 @@ func (w *Writer) Apply(ctx context.Context, ch Change) (sha string, changed bool
 }
 
 func (w *Writer) try(ctx context.Context, ch Change) (string, bool, error) {
-	if err := w.reset(ctx); err != nil {
+	if err := syncClone(ctx, w.URL, w.Branch, w.Dir); err != nil {
 		return "", false, err
 	}
 	if ch.Base != "" {
@@ -112,7 +112,7 @@ func (w *Writer) try(ctx context.Context, ch Change) (string, bool, error) {
 		return "", false, err
 	}
 	if _, err := git(ctx, w.Dir, "push", "-q", "origin", "HEAD:refs/heads/"+w.Branch); err != nil {
-		if msg := err.Error(); strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "fetch first") || strings.Contains(msg, "[rejected]") {
+		if raced(err) {
 			return "", false, errRaced
 		}
 		return "", false, err
@@ -156,32 +156,41 @@ func repoBroken(msg string) error {
 	return apperr.Wrap(apperr.Invalid, "the platform repo currently has errors in "+name+" — fix it in git (see Forge Status) before saving")
 }
 
-// reset makes Dir a clean checkout of the remote branch tip. A broken working copy is removed and cloned again once.
-func (w *Writer) reset(ctx context.Context) error {
-	err := w.checkout(ctx)
+// syncClone makes dir a clean checkout of url's branch tip, cloning on first use and re-cloning a broken copy once.
+func syncClone(ctx context.Context, url, branch, dir string) error {
+	if strings.HasPrefix(url, "-") || strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("invalid repo %q or branch %q", redact(url), branch)
+	}
+	err := checkoutTip(ctx, url, branch, dir)
 	if err != nil && ctx.Err() == nil {
-		_ = os.RemoveAll(w.Dir)
-		err = w.checkout(ctx)
+		_ = os.RemoveAll(dir)
+		err = checkoutTip(ctx, url, branch, dir)
 	}
 	return err
 }
 
-func (w *Writer) checkout(ctx context.Context) error {
-	if _, err := os.Stat(filepath.Join(w.Dir, ".git")); err != nil {
-		_ = os.RemoveAll(w.Dir)
-		if err := os.MkdirAll(filepath.Dir(w.Dir), 0o755); err != nil {
+func checkoutTip(ctx context.Context, url, branch, dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		_ = os.RemoveAll(dir)
+		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return err
 		}
-		if _, err := git(ctx, "", "clone", "-q", "--branch", w.Branch, "--", w.URL, w.Dir); err != nil {
+		if _, err := git(ctx, "", "clone", "-q", "--branch", branch, "--", url, dir); err != nil {
 			return err
 		}
 	}
-	if _, err := git(ctx, w.Dir, "fetch", "-q", "origin", w.Branch); err != nil {
+	if _, err := git(ctx, dir, "fetch", "-q", "origin", branch); err != nil {
 		return err
 	}
-	if _, err := git(ctx, w.Dir, "reset", "-q", "--hard", "FETCH_HEAD"); err != nil {
+	if _, err := git(ctx, dir, "reset", "-q", "--hard", "FETCH_HEAD"); err != nil {
 		return err
 	}
-	_, err := git(ctx, w.Dir, "clean", "-qfdx")
+	_, err := git(ctx, dir, "clean", "-qfdx")
 	return err
+}
+
+// raced reports a push rejected because the remote branch moved.
+func raced(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "fetch first") || strings.Contains(msg, "[rejected]")
 }

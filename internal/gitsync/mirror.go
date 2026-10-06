@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -20,14 +21,19 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out))
+		return "", fmt.Errorf("git %s: %w: %s", redact(strings.Join(args, " ")), err, redact(string(bytes.TrimSpace(out))))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
+var userinfoRE = regexp.MustCompile(`://[^/@\s]+@`)
+
+// redact hides credentials in URLs (https://user:token@host) so git errors can be logged and returned.
+func redact(s string) string { return userinfoRE.ReplaceAllString(s, "://***@") }
+
 func (m Mirror) Fetch(ctx context.Context) error {
 	if strings.HasPrefix(m.URL, "-") {
-		return fmt.Errorf("invalid repo url %q", m.URL)
+		return fmt.Errorf("invalid repo url %q", redact(m.URL))
 	}
 	if _, err := os.Stat(filepath.Join(m.Dir, "HEAD")); err != nil {
 		if err := os.MkdirAll(filepath.Dir(m.Dir), 0o755); err != nil {

@@ -799,12 +799,12 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 		return
 	}
 	for _, p := range tfs {
-		l.tfFile(p, strings.HasSuffix(strings.ToLower(p), ".json"))
+		l.tfFile(root, p, strings.HasSuffix(strings.ToLower(p), ".json"))
 	}
 }
 
 // tfFile applies awsModule's rules to one terraform file (override files included: they are plain .tf to terraform).
-func (l *loader) tfFile(p string, isJSON bool) {
+func (l *loader) tfFile(root, p string, isJSON bool) {
 	b, err := os.ReadFile(p)
 	if err != nil {
 		l.add(p, "%v", err)
@@ -824,6 +824,11 @@ func (l *loader) tfFile(p string, isJSON bool) {
 	if diags.HasErrors() {
 		l.add(p, "%v", diags)
 		return
+	}
+	if isJSON {
+		l.tfJSONFileReads(root, p, b)
+	} else {
+		l.tfFileReads(root, p, f.Body.(*hclsyntax.Body))
 	}
 	top, _, diags := f.Body.PartialContent(tfTopSchema)
 	l.tfDiags(p, diags)
@@ -862,6 +867,155 @@ func (l *loader) tfFile(p string, isJSON bool) {
 				l.add(p, "module source %q must be a local path (./…) inside terraform/", src)
 			}
 		}
+	}
+}
+
+// tfFileFuncs are terraform's functions that read files. infracost evaluates the module inside crucible-api, so a
+// read of the pod's own files (service account token, mounted config) could steer the price shown to trainees.
+var tfFileFuncs = map[string]bool{"file": true, "filebase64": true, "filemd5": true, "filesha1": true,
+	"filesha256": true, "filesha512": true, "filebase64sha256": true, "filebase64sha512": true, "fileexists": true,
+	"fileset": true, "templatefile": true}
+
+const tfFileReadRule = "file reads (%s) must name a literal relative path inside the module, e.g. \"${path.module}/user_data.sh\""
+
+// tfSafePath is a relative path with no way out of the module copy: not absolute, no ~ (file() expands it), no ..
+func tfSafePath(s string) bool {
+	return s != "" && !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "~") && !strings.ContainsAny(s, "\\\x00") &&
+		!slices.Contains(strings.Split(s, "/"), "..")
+}
+
+// tfFileReads finds every call to a file-reading function, anywhere in the file (all blocks, nested expressions,
+// templates), and allows only literal paths: "a/b", "./a/b", "${path.module}/a/b", or path.module itself as fileset's
+// directory; fileset's pattern must be a literal relative path too.
+func (l *loader) tfFileReads(root, p string, body *hclsyntax.Body) {
+	_ = hclsyntax.VisitAll(body, func(n hclsyntax.Node) hcl.Diagnostics {
+		call, ok := n.(*hclsyntax.FunctionCallExpr)
+		if !ok {
+			return nil
+		}
+		name := call.Name
+		if i := strings.LastIndex(name, "::"); i >= 0 {
+			name = name[i+2:] // core::file is file
+		}
+		if !tfFileFuncs[name] {
+			return nil
+		}
+		if len(call.Args) == 0 || call.ExpandFinal {
+			l.add(p, tfFileReadRule, name)
+			return nil
+		}
+		rel, viaModule, ok := tfPathArg(call.Args[0], name == "fileset")
+		if ok && name == "fileset" {
+			pat, isLit := tfLiteral(call.Args[1%len(call.Args)], nil)
+			ok = len(call.Args) == 2 && isLit && tfSafePath(pat)
+		}
+		if !ok {
+			l.add(p, tfFileReadRule, name)
+		} else if name == "templatefile" {
+			l.tfTemplate(root, p, rel, viaModule)
+		}
+		return nil
+	})
+}
+
+// tfPathArg reads a path argument: a literal relative path, or "${path.module}/<literal relative path>" (viaModule).
+// dirOK also accepts path.module on its own.
+func tfPathArg(e hclsyntax.Expression, dirOK bool) (rel string, viaModule, ok bool) {
+	switch x := e.(type) {
+	case *hclsyntax.ScopeTraversalExpr:
+		return ".", true, dirOK && tfIsPathModule(x)
+	case *hclsyntax.TemplateExpr:
+		if s, lit := tfLiteral(x, nil); lit {
+			return s, false, tfSafePath(s)
+		}
+		if len(x.Parts) != 2 {
+			return "", false, false
+		}
+		mod, ok1 := x.Parts[0].(*hclsyntax.ScopeTraversalExpr)
+		lit, ok2 := x.Parts[1].(*hclsyntax.LiteralValueExpr)
+		if !ok1 || !ok2 || !tfIsPathModule(mod) || lit.Val.Type() != cty.String || lit.Val.IsNull() {
+			return "", false, false
+		}
+		s, found := strings.CutPrefix(lit.Val.AsString(), "/")
+		return s, true, found && tfSafePath(s)
+	}
+	return "", false, false
+}
+
+func tfIsPathModule(x *hclsyntax.ScopeTraversalExpr) bool {
+	if len(x.Traversal) != 2 || x.Traversal.RootName() != "path" {
+		return false
+	}
+	a, ok := x.Traversal[1].(hcl.TraverseAttr)
+	return ok && a.Name == "module"
+}
+
+var (
+	tfFileCallRe = regexp.MustCompile(`\b(file|filebase64|filemd5|filesha1|filesha256|filesha512|filebase64sha256|filebase64sha512|fileexists|fileset|templatefile)\s*\(`)
+	// the one form a .tf.json string may use: fn("<path>" or fn("${path.module}/<path>" then , or )
+	tfJSONPathArgRe = regexp.MustCompile(`^\s*"(\$\{path\.module\}/)?([^"\\$%{}]*)"\s*([,)])`)
+	tfJSONPatternRe = regexp.MustCompile(`^\s*"([^"\\$%{}]*)"\s*\)`)
+)
+
+// tfJSONFileReads is tfFileReads for .tf.json, where expressions hide in strings (keys included, escapes decoded):
+// any file-function call must be followed by a literal path argument. It errs toward rejecting.
+func (l *loader) tfJSONFileReads(root, p string, b []byte) {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil { // tfShape already required valid JSON
+		l.add(p, "%v", err)
+		return
+	}
+	var walk func(any)
+	check := func(s string) {
+		for _, m := range tfFileCallRe.FindAllStringSubmatchIndex(s, -1) {
+			name, rest := s[m[2]:m[3]], s[m[1]:]
+			a := tfJSONPathArgRe.FindStringSubmatch(rest)
+			ok := a != nil && tfSafePath(a[2])
+			if ok && name == "fileset" {
+				pat := tfJSONPatternRe.FindStringSubmatch(rest[len(a[0]):])
+				ok = a[3] == "," && pat != nil && tfSafePath(pat[1])
+			}
+			if !ok {
+				l.add(p, tfFileReadRule, name)
+			} else if name == "templatefile" {
+				l.tfTemplate(root, p, a[2], a[1] != "")
+			}
+		}
+	}
+	walk = func(v any) {
+		switch x := v.(type) {
+		case string:
+			check(x)
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		case map[string]any:
+			for k, e := range x {
+				check(k)
+				walk(e)
+			}
+		}
+	}
+	walk(v)
+}
+
+// tfTemplate checks a templatefile target: it is evaluated too, so it must be a small regular file in the module and
+// make no file reads of its own (function names cannot be escaped in a template, so a plain search is sound).
+// A literal path is relative to terraform's working directory (root); ${path.module} to the calling file's directory.
+func (l *loader) tfTemplate(root, p, rel string, viaModule bool) {
+	base := root
+	if viaModule {
+		base = filepath.Dir(p)
+	}
+	t := filepath.Join(base, filepath.FromSlash(rel))
+	info, err := os.Lstat(t)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxTFFileBytes {
+		l.add(p, "templatefile %q must be a regular file in terraform/ under %d KiB", rel, maxTFFileBytes>>10)
+		return
+	}
+	if b, err := os.ReadFile(t); err != nil || tfFileCallRe.Match(b) {
+		l.add(p, "templatefile %q must not read files itself", rel)
 	}
 }
 

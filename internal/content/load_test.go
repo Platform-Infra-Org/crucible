@@ -377,7 +377,24 @@ AWS`, "AWS", aws, 1)
 		"paren key":              {tf("v.tf", "terraform {\n  required_providers {\n    y = { (\"source\") = \"evil2/y\" }\n  }\n}\n"), "keys must be literal"},
 		"too many files":         {manyTF(201), "files"},
 		"big file":               {tf("big.tf", "# "+strings.Repeat("x", 200<<10)+"\n"), "keep each file under 128 KiB"},
-		"wrong terminal":         {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
+		// fix round 1 (task-5-review I3): infracost evaluates the module in the API pod, so file reads stay inside it
+		"file abs":            {tf("f.tf", "locals {\n  x = file(\"/var/run/secrets/x\")\n}\n"), "file reads"},
+		"file dotdot":         {tf("f.tf", "locals {\n  x = file(\"../x\")\n}\n"), "file reads"},
+		"file var":            {tf("f.tf", "locals {\n  x = file(var.p)\n}\n"), "file reads"},
+		"templatefile escape": {tf("f.tf", "locals {\n  x = templatefile(\"${path.module}/../x\", {})\n}\n"), "file reads"},
+		"fileset root":        {tf("f.tf", "locals {\n  x = fileset(\"/\", \"*\")\n}\n"), "file reads"},
+		"fileset pattern":     {tf("f.tf", "locals {\n  x = fileset(path.module, \"../**\")\n}\n"), "file reads"},
+		"path.root":           {tf("f.tf", "locals {\n  x = file(\"${path.root}/x\")\n}\n"), "file reads"},
+		"home":                {tf("f.tf", "locals {\n  x = file(\"~/.aws/credentials\")\n}\n"), "file reads"},
+		"nested in resource":  {tf("f.tf", "resource \"aws_instance\" \"x\" {\n  dynamic \"d\" {\n    content { u = upper(filebase64(\"/etc/passwd\")) }\n  }\n}\n"), "file reads"},
+		"in heredoc":          {tf("f.tf", "locals {\n  x = <<EOT\n${file(\"/etc/passwd\")}\nEOT\n}\n"), "file reads"},
+		"core namespace":      {tf("f.tf", "locals {\n  x = core::file(\"/etc/passwd\")\n}\n"), "file reads"},
+		"json file":           {tf("f.tf.json", `{"locals": {"x": "${file(\"/etc/passwd\")}"}}`), "file reads"},
+		"json escaped name":   {tf("f.tf.json", `{"locals": {"x": "${fil\u0065(\"/etc/passwd\")}"}}`), "file reads"},
+		"json key":            {tf("f.tf.json", `{"locals": {"${file(\"/x\")}": "x"}}`), "file reads"},
+		"template reads":      {map[string]string{"modules/m1/lab/terraform/t.tf": "locals {\n  x = templatefile(\"t.tpl\", {})\n}\n", "modules/m1/lab/terraform/t.tpl": "${file(\"/etc/passwd\")}"}, "must not read files"},
+		"json dotdot":         {tf("f.tf.json", `{"locals": {"x": "${file(\"${path.module}/../x\")}"}}`), "file reads"},
+		"wrong terminal":      {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(withAWS("aws: {region: eu-west-1, max_hourly_usd: 0.1}\n")["modules/m1/lab/lab.yaml"], "service: workspace}]", "service: box}]", 1)}, `service "box"`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -395,6 +412,10 @@ AWS`, "AWS", aws, 1)
 		"modules/m1/lab/terraform/versions.tf": "terraform {\n  required_providers {\n    aws = {\n      source = \"hashicorp/aws\"\n    }\n  }\n}\n",
 		"modules/m1/lab/terraform/mod.tf":      "module \"x\" {\n  source = \"./x\"\n}\n",
 		"modules/m1/lab/terraform/x/main.tf":   "# a local module\n",
+		"modules/m1/lab/terraform/files.tf": "locals {\n  a = file(\"${path.module}/user_data.sh\")\n  b = file(\"./scripts/a.sh\")\n" +
+			"  c = templatefile(\"${path.module}/t.tpl\", { x = 1 })\n  d = fileset(path.module, \"scripts/*.sh\")\n  e = profile(\"/x\")\n}\n",
+		"modules/m1/lab/terraform/t.tpl":         "#!/bin/sh\necho ${x}\n",
+		"modules/m1/lab/terraform/files.tf.json": `{"locals": {"f": "${file(\"${path.module}/user_data.sh\")}", "g": "${filebase64(\"x.sh\")}"}}`,
 		"modules/m1/lab/terraform/more.tf.json": `{"terraform": {"required_providers": {"random": {"source": "registry.terraform.io/hashicorp/random"}, "null": "~> 3.0"}},
 			"module": {"y": {"source": "./x"}}}`,
 	})

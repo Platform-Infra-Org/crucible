@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,9 +38,9 @@ type AWSRunner struct {
 	Now            func() time.Time
 
 	mu      sync.Mutex
-	expires map[string]time.Time           // lab id → when its mounted credentials expire (empty after a restart)
-	locks   map[string]chan struct{}       // one provision/destroy per lab at a time in this process
-	cancels map[string]*context.CancelFunc // lab id → stops its running ProvisionLab (Destroy calls it)
+	creds   map[string]awscloud.Credentials // lab id → its mounted credentials (empty after a restart)
+	locks   map[string]chan struct{}        // one provision/destroy per lab at a time in this process
+	cancels map[string]*context.CancelFunc  // lab id → stops its running ProvisionLab (Destroy calls it)
 }
 
 var _ Runner = (*AWSRunner)(nil)
@@ -90,7 +91,7 @@ func (a *AWSRunner) prune(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.locks, id)
-	delete(a.expires, id)
+	delete(a.creds, id)
 }
 
 // cloud is where STS calls go: the dry-run fake whenever it is set, so a wiring slip never reaches real AWS.
@@ -101,21 +102,34 @@ func (a *AWSRunner) cloud() awscloud.Cloud {
 	return a.Cloud
 }
 
-func (a *AWSRunner) remember(id string, exp time.Time) {
+func (a *AWSRunner) remember(id string, c awscloud.Credentials) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.expires == nil {
-		a.expires = map[string]time.Time{}
+	if a.creds == nil {
+		a.creds = map[string]awscloud.Credentials{}
 	}
-	a.expires[id] = exp
+	a.creds[id] = c
+}
+
+// masked hides the lab's mounted credential values in a log tail; tailOf masks anything credential-shaped.
+func (a *AWSRunner) masked(id, s string) string {
+	a.mu.Lock()
+	c := a.creds[id]
+	a.mu.Unlock()
+	for _, v := range []string{c.SessionToken, c.SecretAccessKey, c.AccessKeyID} {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, "***")
+		}
+	}
+	return s
 }
 
 // fresh reports whether the mounted credentials are known to last at least `need` longer.
 func (a *AWSRunner) fresh(id string, need time.Duration) bool {
 	a.mu.Lock()
-	exp, ok := a.expires[id]
+	c, ok := a.creds[id]
 	a.mu.Unlock()
-	return ok && a.now().Add(need).Before(exp)
+	return ok && a.now().Add(need).Before(c.Expires)
 }
 
 func (a *AWSRunner) Available(*Instance) error { return nil }
@@ -172,7 +186,7 @@ func (a *AWSRunner) putCreds(ctx context.Context, id string, c awscloud.Credenti
 	if err != nil {
 		return err
 	}
-	a.remember(id, c.Expires)
+	a.remember(id, c)
 	return nil
 }
 
@@ -279,7 +293,7 @@ func (a *AWSRunner) runTF(ctx context.Context, inst *Instance, name, action stri
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute) // grace period 120s
 		defer cancel()
 		_ = a.Cluster.deletePod(dctx, ns, name) // best effort: the next attempt deletes it otherwise
-		return fmt.Errorf("terraform %s failed: %s", action, tailOf([]byte(msg)))
+		return fmt.Errorf("terraform %s failed: %s", action, tailOf([]byte(a.masked(inst.ID, msg))))
 	}
 	return nil
 }

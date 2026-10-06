@@ -117,3 +117,33 @@ func TestLabNetworkPolicy(t *testing.T) {
 		t.Error("public registries must stay reachable")
 	}
 }
+
+// Every lab pod waits until IMDS is unreachable (the NetworkPolicy is in force) before dind starts: the same guard
+// as the terraform pods, in the image the node already has, small and unprivileged.
+func TestLabPodWaitsForTheIMDSBlock(t *testing.T) {
+	for _, privileged := range []bool{false, true} {
+		sp := clusterObjects(testID, "compose.yaml", privileged).Pod.Spec
+		if len(sp.InitContainers) != 1 {
+			t.Fatalf("one init container: %d", len(sp.InitContainers))
+		}
+		ic := sp.InitContainers[0]
+		if ic.Image != labImage || !slices.Equal(ic.Command, []string{"/bin/sh", "-c", imdsGuard}) {
+			t.Fatalf("imds guard: %s %v", ic.Image, ic.Command)
+		}
+		sc := ic.SecurityContext
+		if sc == nil || sc.Privileged != nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+			sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot ||
+			sc.Capabilities == nil || !slices.Equal(sc.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+			t.Fatalf("minimal security context: %+v", sc)
+		}
+		for _, r := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage} {
+			l, q := ic.Resources.Limits[r], ic.Resources.Requests[r]
+			if l.IsZero() || q.IsZero() {
+				t.Fatalf("%s: requests and limits (the quota counts them): %+v", r, ic.Resources)
+			}
+		}
+		if ic.Resources.Limits.Memory().Cmp(*sp.Containers[0].Resources.Limits.Memory()) >= 0 {
+			t.Fatal("the guard is smaller than dind, so the quota does not grow")
+		}
+	}
+}

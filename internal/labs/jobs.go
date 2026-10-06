@@ -41,7 +41,7 @@ func (w *BudgetWorker) Work(ctx context.Context, _ *river.Job[BudgetArgs]) error
 	return w.S.CheckBudgets(ctx)
 }
 
-// ReapArgs is the AWS reaper; CostArgs is Cost Explorer ingestion. Both run every 6 h and at start (the AWS node
+// ReapArgs is the AWS reaper (hourly); CostArgs is Cost Explorer ingestion (every 6 h). Both also run at start (the AWS node
 // sleeps at night, so "nightly" means "whenever it is up") and do nothing without aws labs.
 type ReapArgs struct{}
 

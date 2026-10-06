@@ -357,3 +357,13 @@ func TestLabObjectsPinsAndReserves(t *testing.T) {
 		t.Fatal("the lab must request ephemeral storage so the scheduler counts disk")
 	}
 }
+
+func TestLabPodStoppedByTheIMDSGuardSaysWhy(t *testing.T) {
+	cs := fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: labPod, Namespace: "lab-x"}, Status: corev1.PodStatus{
+		Phase: corev1.PodFailed, InitContainerStatuses: []corev1.ContainerStatus{{Name: "imds-guard", State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Message: "IMDS is reachable: the lab NetworkPolicy is not in force"}}}}}})
+	err := testRunner(cs, &fakeExec{}).waitReady(context.Background(), "lab-x")
+	if err == nil || !strings.Contains(err.Error(), "imds-guard: IMDS is reachable") {
+		t.Fatalf("%v", err)
+	}
+}

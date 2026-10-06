@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -112,7 +114,13 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 			return fmt.Errorf("reading the lab pod: %w", err)
 		}
 		if p.Status.Phase == corev1.PodFailed {
-			return fmt.Errorf("the lab pod stopped: %s %s", p.Status.Reason, p.Status.Message)
+			msg := p.Status.Reason + " " + p.Status.Message
+			for _, cs := range p.Status.InitContainerStatuses {
+				if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+					msg += " " + cs.Name + ": " + t.Message // the IMDS guard: the lab NetworkPolicy is not in force
+				}
+			}
+			return fmt.Errorf("the lab pod stopped: %s", tailOf([]byte(msg)))
 		}
 		if reason, msg := stuck(p); reason != "" {
 			return fmt.Errorf("the lab image could not be started (%s): %s", reason, msg)
@@ -140,7 +148,7 @@ func (c *ClusterRunner) waitReady(ctx context.Context, ns string) error {
 
 // stuck names a container state that will not heal on its own (bad image or config), or "".
 func stuck(p *corev1.Pod) (reason, msg string) {
-	for _, cs := range p.Status.ContainerStatuses {
+	for _, cs := range slices.Concat(p.Status.InitContainerStatuses, p.Status.ContainerStatuses) {
 		if w := cs.State.Waiting; w != nil {
 			switch w.Reason {
 			case "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName", "CreateContainerConfigError", "CreateContainerError":
@@ -321,9 +329,23 @@ func (c *ClusterRunner) realExec(ctx context.Context, ns, pod string, cmd []stri
 	return ex.StreamWithContext(ctx, o)
 }
 
+var (
+	credAssignRe = regexp.MustCompile(`(?i)(aws_(?:access_key_id|secret_access_key|session_token|security_token)["']?\s*[=:]\s*["']?)[^\s"']+`)
+	credKeyIDRe  = regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`)
+	credTokenRe  = regexp.MustCompile(`[A-Za-z0-9+/]{100,}={0,2}`) // STS session tokens are long base64
+)
+
+// maskCreds hides anything credential-shaped (spec: no error, event or log line carries a key, secret or token).
+// It runs before tailOf cuts, so a value is never separated from the name that marks it.
+func maskCreds(s string) string {
+	s = credAssignRe.ReplaceAllString(s, "${1}***")
+	s = credKeyIDRe.ReplaceAllString(s, "***")
+	return credTokenRe.ReplaceAllString(s, "***")
+}
+
 // tailOf keeps the end of a command's output for an error message the trainee sees.
 func tailOf(b []byte) string {
-	s := strings.TrimSpace(string(b))
+	s := maskCreds(strings.TrimSpace(string(b)))
 	if len(s) > 2000 {
 		s = "…" + s[len(s)-2000:]
 	}

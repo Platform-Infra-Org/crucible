@@ -457,3 +457,26 @@ func TestAWSTerraformPodThatNeverMountsIsStuck(t *testing.T) {
 		t.Fatalf("a terraform pod whose volumes never mount fails: %v", err)
 	}
 }
+
+func TestAWSTerraformLogTailNeverCarriesCredentials(t *testing.T) {
+	realish := "[default]\naws_access_key_id = ASIAQWERTYUIOPASDFGH\naws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
+		"aws_session_token = " + strings.Repeat("IQoJb3JpZ2luX2VjEJr//////////wEaCXVzLWVhc3QtMSJHMEUCIQ", 6) + "==\n" +
+		"export AWS_SECRET_ACCESS_KEY=\"abcdEFGHijklMNOPqrstUVWXyz0123456789+/ab\"\nkey AKIAIOSFODNN7EXAMPLE in a sentence\n"
+	cs := fake.NewClientset()
+	// local-exec { command = "cat $AWS_SHARED_CREDENTIALS_FILE; exit 1" }, with the lab's own credentials too
+	cloud := &awscloud.Fake{}
+	own, _ := cloud.AssumeLab(context.Background(), awscloud.Session{LabID: testID})
+	kubelet(cs, corev1.PodFailed, realish+"bare: "+own.SecretAccessKey+" "+own.SessionToken+" "+own.AccessKeyID+
+		"\nError: local-exec provisioner error")
+	a, _, _ := testAWS(cs)
+	err := a.ProvisionLab(context.Background(), &Instance{ID: testID}, cloudHeat(t))
+	if err == nil || !strings.Contains(err.Error(), "Error: local-exec provisioner error") {
+		t.Fatalf("the tail is still shown: %v", err)
+	}
+	for _, secret := range []string{"ASIAQWERTYUIOPASDFGH", "wJalrXUtnFEMI", "IQoJb3JpZ2lu", "abcdEFGHijkl", "AKIAIOSFODNN7EXAMPLE",
+		own.SecretAccessKey, own.SessionToken, own.AccessKeyID} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%q leaked: %v", secret, err)
+		}
+	}
+}

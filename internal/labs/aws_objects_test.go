@@ -30,6 +30,9 @@ func TestAWSWorkspaceObjects(t *testing.T) {
 			t.Fatalf("%s = %s, want %s", k, got.String(), want)
 		}
 	}
+	if ic := o.Pod.Spec.InitContainers; len(ic) != 1 || ic[0].Command[2] != imdsGuard || len(ic[0].VolumeMounts) != 0 {
+		t.Fatalf("the workspace pod waits for the IMDS block too, without the credentials: %+v", ic)
+	}
 	if base := clusterObjects(testID, "compose.yaml", false); base.Quota.Spec.Hard.Pods().Value() != 1 {
 		t.Fatal("cluster labs keep their one-pod quota")
 	}

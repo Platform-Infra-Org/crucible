@@ -41,6 +41,25 @@ func validLabID(id string) bool { return labIDRe.MatchString(id) }
 
 func labNamespace(id string) string { return "lab-" + id }
 
+var guardResources = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("32Mi"),
+	corev1.ResourceEphemeralStorage: resource.MustParse("16Mi")}
+
+// imdsGuardContainer holds dind back until IMDS is unreachable, i.e. the lab NetworkPolicy is in force (the same
+// guard as the terraform pods; it adds a few seconds to a lab start). It runs the dind image's busybox nc, which the
+// node already has, as a non-root user with nothing mounted.
+func imdsGuardContainer() corev1.Container {
+	return corev1.Container{
+		Name:                     "imds-guard",
+		Image:                    labImage,
+		Command:                  []string{"/bin/sh", "-c", imdsGuard},
+		Resources:                corev1.ResourceRequirements{Requests: guardResources, Limits: guardResources},
+		TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+		SecurityContext: &corev1.SecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)), RunAsGroup: ptr.To(int64(65532)),
+			AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true),
+			Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}},
+	}
+}
+
 type labObjects struct {
 	Namespace *corev1.Namespace
 	Quota     *corev1.ResourceQuota
@@ -64,6 +83,7 @@ func clusterObjects(id, compose string, privileged bool) labObjects {
 		RestartPolicy:                corev1.RestartPolicyNever,
 		AutomountServiceAccountToken: ptr.To(false),
 		EnableServiceLinks:           ptr.To(false),
+		InitContainers:               []corev1.Container{imdsGuardContainer()},
 		Containers: []corev1.Container{{
 			Name:  labContainer,
 			Image: labImage,

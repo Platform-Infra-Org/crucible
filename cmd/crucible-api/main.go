@@ -179,8 +179,7 @@ func run(ctx context.Context) error {
 	river.AddWorker(workers, &notify.EmailWorker{S: notifySvc})
 	river.AddWorker(workers, &notify.WebhookWorker{S: notifySvc})
 	riverLog := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	jobClient, err := jobs.New(pool, workers, []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}},
-		{Every: 6 * time.Hour, Args: labs.ReapArgs{}}, {Every: 6 * time.Hour, Args: labs.CostArgs{}}}, riverLog)
+	jobClient, err := jobs.New(pool, workers, periodicJobs(), riverLog)
 	if err != nil {
 		return err
 	}
@@ -270,3 +269,10 @@ var (
 	_ scoring.Labs     = (*labs.Service)(nil)
 	_ scoring.Progress = (*learn.Service)(nil)
 )
+
+// periodicJobs: the reaper runs hourly so leftovers of a leaked one-hour lab session live at most about 2 h after
+// End (tagging and CloudTrail lookups are free); Cost Explorer ingestion costs money per call, so it stays at 6 h.
+func periodicJobs() []jobs.Periodic {
+	return []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}},
+		{Every: time.Hour, Args: labs.ReapArgs{}}, {Every: 6 * time.Hour, Args: labs.CostArgs{}}}
+}

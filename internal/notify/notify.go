@@ -37,14 +37,16 @@ import (
 type Kind string
 
 const (
-	LabPending   Kind = "lab_request_pending"
-	LabEscalated Kind = "lab_request_escalated"
-	LabApproved  Kind = "lab_request_approved"
-	LabRejected  Kind = "lab_request_rejected" // also expired
-	BudgetAlert  Kind = "budget_alert"
-	SyncFailed   Kind = "content_sync_failed"
-	SetupFailed  Kind = "setup_failed"
-	// Submission and rank-up kinds arrive with scoring (M5) and ranks (M7).
+	LabPending        Kind = "lab_request_pending"
+	LabEscalated      Kind = "lab_request_escalated"
+	LabApproved       Kind = "lab_request_approved"
+	LabRejected       Kind = "lab_request_rejected" // also expired
+	BudgetAlert       Kind = "budget_alert"
+	SyncFailed        Kind = "content_sync_failed"
+	SetupFailed       Kind = "setup_failed"
+	SubmissionPending Kind = "submission_pending"
+	SubmissionScored  Kind = "submission_scored" // also returned for rework
+	// Rank-up kinds arrive with ranks (M7).
 )
 
 type KindInfo struct {
@@ -61,6 +63,8 @@ var Kinds = []KindInfo{
 	{BudgetAlert, "A budget reaches 80% or its hard cap"},
 	{SyncFailed, "Content I maintain failed to sync"},
 	{SetupFailed, "A lab scenario I maintain failed to prepare"},
+	{SubmissionPending, "A submission is waiting for my score"},
+	{SubmissionScored, "My submission was scored or returned"},
 }
 
 type Event struct {

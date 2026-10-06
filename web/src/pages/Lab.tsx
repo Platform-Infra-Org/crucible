@@ -160,6 +160,17 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
   const offset = useMemo(() => clockOffset(lab.server_now, Date.now()), [lab.server_now])
   const tabs = [...lab.terminals.map((t) => ({ key: t.name, name: t.name })), ...extra]
 
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const onTabKey = (e: React.KeyboardEvent, i: number) => {
+    const n = tabs.length
+    const next = e.key === 'ArrowRight' ? (i + 1) % n : e.key === 'ArrowLeft' ? (i - 1 + n) % n : e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : -1
+    if (next < 0) return
+    e.preventDefault()
+    setActive(tabs[next].key)
+    tabRefs.current[next]?.focus()
+  }
+  const leaveTerminal = () => tabRefs.current[tabs.findIndex((t) => t.key === active)]?.focus()
+
   const lastBeat = useRef(0)
   const beat = () => {
     if (Date.now() - lastBeat.current < 60_000) return
@@ -251,15 +262,19 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
         />
         <section className="terms">
           <div className="tabs" role="tablist" aria-label="Terminals">
-            {tabs.map((t) => (
-              <button key={t.key} role="tab" aria-selected={active === t.key} onClick={() => setActive(t.key)}>{t.key}</button>
+            {tabs.map((t, i) => (
+              <button
+                key={t.key} role="tab" id={`term-tab-${i}`} aria-controls={`term-panel-${i}`} aria-selected={active === t.key} tabIndex={active === t.key ? 0 : -1}
+                ref={(el) => { tabRefs.current[i] = el }} onKeyDown={(e) => onTabKey(e, i)} onClick={() => setActive(t.key)}
+              >{t.key}</button>
             ))}
             <span className="spacer" />
+            <span className="muted small" title="The terminal captures Tab">Ctrl+Alt+↑ leaves the terminal</span>
             <button className="ghost" aria-label="Smaller text" onClick={() => bump(-1)}>A−</button>
             <button className="ghost" aria-label="Larger text" onClick={() => bump(1)}>A+</button>
             <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>
           </div>
-          {tabs.map((t) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
+          {tabs.map((t, i) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} idx={i} onLeave={leaveTerminal} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
         </section>
       </div>
       <IdleModal lab={lab} offset={offset} onHere={async () => {
@@ -411,7 +426,10 @@ function TaskPanel({ lab, taskId, onLab, onAdvance }: { lab: LabView; taskId: st
       {task.kind === 'review' && task.status === 'open' && <ReviewForm base={base} onLab={onLab} onAdvance={onAdvance} />}
       {task.review && <FeedbackBox f={task.review} />}
       {task.status === 'passed' && <p className="pass">✦ Passed: {task.awarded} / {task.points} points</p>}
-      {output && <pre className={`check-output ${output.ok ? 'ok' : 'bad'}`} role="status">{output.text}</pre>}
+      {/* one persistent polite region: a node that mounts already filled is often not announced */}
+      <div role="status" aria-live="polite">
+        {output && <pre className={`check-output ${output.ok ? 'ok' : 'bad'}`}>{output.text}</pre>}
+      </div>
     </motion.div>
   )
 }

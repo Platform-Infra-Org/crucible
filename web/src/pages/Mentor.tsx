@@ -15,7 +15,7 @@ export function MentorPage() {
       {data.length > 0 && <Legend />}
       {data.map((m) => (
         <section key={m.email + m.team} data-testid={`mentee-${m.email}`} aria-label={m.name || m.email}>
-          <h2>{m.name || m.email} <small className="muted">{m.email}</small></h2>
+          <h2>{m.name || m.email} {m.name && <small className="muted">{m.email}</small>}</h2>
           <p>Rank: {m.rank}</p>
           <HeatMap rows={m.programs} level={3} />
           <h3>Waiting for a scorer</h3>

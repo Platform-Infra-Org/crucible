@@ -5,7 +5,7 @@
 }
 [data-theme='anvil'] {
   --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e;
-  --accent: #2f5d8a; --accent-2: #c26b1e; --danger: #c62828; --ok: #2e7d32; --border: #cbd3dc;
+  --accent: #2f5d8a; --accent-2: #a45612; --danger: #c62828; --ok: #2e7d32; --border: #cbd3dc;
   --glow: 0 0 18px rgba(47, 93, 138, 0.25); --term-bg: #1c232b; --term-fg: #eef1f4;
 }
 [data-theme='quench'] {

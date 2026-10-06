@@ -6,12 +6,14 @@ function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
-export function Terminal({ labId, name, tabKey, active, live, fontSize }: { labId: string; name: string; tabKey: string; active: boolean; live: boolean; fontSize: number }) {
+export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, fontSize }: { labId: string; name: string; tabKey: string; idx: number; onLeave: () => void; active: boolean; live: boolean; fontSize: number }) {
   const el = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const liveRef = useRef(live)
   liveRef.current = live
+  const leaveRef = useRef(onLeave)
+  leaveRef.current = onLeave
   useEffect(() => {
     if (!termRef.current) return
     termRef.current.options.fontSize = fontSize
@@ -29,6 +31,11 @@ export function Terminal({ labId, name, tabKey, active, live, fontSize }: { labI
     termRef.current = term
     fitRef.current = fit
     term.open(el.current!)
+    // xterm swallows Tab, so give keyboard users a way out (no focus trap).
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && e.ctrlKey && e.altKey && e.key === 'ArrowUp') { leaveRef.current(); return false }
+      return true
+    })
     try { fit.fit() } catch { /* hidden tab: fitted when shown */ }
     let ws: WebSocket | null = null
     let closed = false
@@ -72,5 +79,5 @@ export function Terminal({ labId, name, tabKey, active, live, fontSize }: { labI
       term.dispose()
     }
   }, [labId, name])
-  return <div ref={el} className="terminal" data-terminal={tabKey} style={{ display: active ? 'block' : 'none' }} />
+  return <div ref={el} role="tabpanel" id={`term-panel-${idx}`} aria-labelledby={`term-tab-${idx}`} className="terminal" data-terminal={tabKey} style={{ display: active ? 'block' : 'none' }} />
 }

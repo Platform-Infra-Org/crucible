@@ -4,7 +4,7 @@ export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
 export type ProgramConfig = {
-  training: string; title: string; enrolled: string[]; roles: Roles; schedule: string
+  training: string; title: string; enrolled: string[]; roles: Roles; schedule: string; inline_schedule?: string
   lab_defaults: LabDefaults; budget_usd_month: number; can_manage: boolean
 }
 export type TeamView = {
@@ -96,3 +96,5 @@ export type Ledger = {
   running: LedgerLab[]; labs: LedgerLab[]; top_spenders: { requester: string; team: string; usd: number }[]
   accuracy: Accuracy; findings?: Finding[]
 }
+
+export type Forge = { percent: number; level: number; rank: string; ladder: { name: string; at: number }[]; badges: { training: string; title: string; earned_at: string }[]; rank_up: boolean }

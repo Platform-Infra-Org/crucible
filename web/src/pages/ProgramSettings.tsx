@@ -83,6 +83,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
       </fieldset>
       <fieldset className="stack" disabled={off}>
         <legend>Labs</legend>
+        {prog.inline_schedule && <p>Inline schedule (edit in git): <code>{prog.inline_schedule}</code></p>}
         <label>Schedule
           <select value={schedule} onChange={(e) => setSchedule(e.target.value)}>
             <option value="">Any time</option>

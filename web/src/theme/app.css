@@ -177,3 +177,16 @@ meter { width: 8rem; vertical-align: middle; }
 .bar.est, .swatch.est { background: var(--accent); opacity: 0.55; }
 .bar.act, .swatch.act { background: var(--accent-2); }
 .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; vertical-align: middle; }
+
+/* rank card, badges, rank-up banner (never a modal) */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rank-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1rem 1.25rem; margin: 1rem 0; }
+.rank-name { font-family: Cinzel, serif; font-size: 1.4rem; margin: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: 0.5rem; list-style: none; padding: 0; }
+.badge-token { padding: 0.2rem 0.7rem; border-radius: 999px; border: 1px solid var(--accent-2); }
+.rank-up { position: relative; display: flex; gap: 0.75rem; align-items: center; padding: 0.75rem 1rem; border: 1px solid var(--accent); border-radius: 12px; background: var(--surface); box-shadow: var(--glow); overflow: hidden; }
+.hammer { display: inline-block; font-size: 1.6rem; transform-origin: 80% 80%; }
+.strike-glow { position: absolute; left: 1.2rem; top: 50%; width: 2rem; height: 2rem; margin-top: -1rem; border-radius: 50%; background: radial-gradient(var(--accent-2), transparent 70%); pointer-events: none; }
+/* heat shimmer on hovered cards; the calm rules above switch every animation off */
+@keyframes shimmer { 0%, 100% { filter: none; } 50% { filter: brightness(1.07) saturate(1.15); } }
+.card:hover, .card:focus-visible { animation: shimmer 1.6s ease-in-out infinite; }

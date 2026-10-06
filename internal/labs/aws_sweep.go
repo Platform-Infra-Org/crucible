@@ -14,7 +14,7 @@ import (
 // made by hand in the workspace, or what a failed destroy left. What it deletes, or cannot, is recorded; what AWS
 // refuses for now (ErrNotYet) is left to the reaper's next run.
 func (s *Service) sweepLab(ctx context.Context, labID string) {
-	if s.Cloud == nil {
+	if s.Cloud == nil || !validLabID(labID) { // an empty id would list every lab's resources
 		return
 	}
 	creds, err := s.Cloud.AssumeLab(ctx, awscloud.Session{LabID: labID})

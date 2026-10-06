@@ -23,7 +23,8 @@ func (w *SweepWorker) Work(ctx context.Context, _ *river.Job[SweepArgs]) error {
 	return nil
 }
 
-// Timeout allows a sweep to destroy several labs (each destroy is bounded at 2 minutes).
+// Timeout allows a sweep to destroy several labs: a local or cluster destroy is bounded at 2 minutes, and an aws
+// destroy runs in the background (terraform takes minutes), so the sweep never waits for one.
 func (w *SweepWorker) Timeout(*river.Job[SweepArgs]) time.Duration { return 15 * time.Minute }
 
 // BudgetArgs is the periodic budget check (80% / hard-cap alerts).

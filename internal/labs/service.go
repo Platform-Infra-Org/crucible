@@ -184,7 +184,21 @@ func newLabID() string {
 }
 
 func (s *Service) event(ctx context.Context, labID, kind, detail string) {
-	_, _ = s.DB.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail) VALUES ($1, $2, $3)`, labID, kind, detail)
+	if _, err := s.DB.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail) VALUES ($1, $2, $3)`, labID, kind, detail); err != nil {
+		s.Log.Warn("lab event not recorded", "lab", labID, "kind", kind, "err", err)
+	}
+}
+
+// finalCtx is for a lab's last state write: the ctx that ran terraform or a namespace delete may be used up.
+func finalCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+}
+
+// endRow writes a lab's final state; a failure is logged (the sweep retries a row left 'destroying').
+func (s *Service) endRow(ctx context.Context, labID, sql string, args ...any) {
+	if _, err := s.DB.Exec(ctx, sql, append([]any{labID}, args...)...); err != nil {
+		s.Log.Error("lab final state not written", "lab", labID, "err", err)
+	}
 }
 
 func (s *Service) runnerErr(err error) error {
@@ -555,7 +569,7 @@ func (s *Service) scheduleLimit(inst *Instance, now time.Time) Limit {
 func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, training, module string) (bool, error) {
 	var ok bool
 	err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_instances WHERE user_id = $1 AND team = $2 AND training = $3
-		AND module = $4 AND state = 'failed' AND decided_by <> '' AND decided_at > $5)`,
+		AND module = $4 AND (state = 'failed' OR (state = 'destroying' AND end_reason = 'failed')) AND decided_by <> '' AND decided_at > $5)`,
 		userID, team, training, module, s.Now().Add(-time.Hour)).Scan(&ok)
 	return ok, err
 }
@@ -702,31 +716,22 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	}
 	if err != nil {
 		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
-		// a fresh ctx: after a provisioning timeout ctx is already expired and would leak the namespace
-		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
-		defer dcancel()
-		_ = s.destroyRuntime(dctx, inst)
-		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
-			WHERE id = $1 AND state = 'provisioning'`,
-			inst.ID, cleanText(s.runnerErr(err).Error()), s.Now())
-		s.event(dctx, inst.ID, "failed", cleanText(err.Error()))
+		s.failProvision(ctx, inst, cleanText(s.runnerErr(err).Error()), cleanText(err.Error()))
 		return
 	}
 	now := s.Now()
 	bl, berr := s.budgetLimit(ctx, inst, now)
 	if berr != nil { // no budget headroom (or it can't be read): don't hand out a lab that would expire at once
-		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
-		defer dcancel()
-		_ = s.destroyRuntime(dctx, inst)
-		_, _ = s.DB.Exec(dctx, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
-			WHERE id = $1 AND state = 'provisioning'`, inst.ID, cleanText(berr.Error()), s.Now())
-		s.event(dctx, inst.ID, "failed", cleanText(berr.Error()))
+		s.failProvision(ctx, inst, cleanText(berr.Error()), cleanText(berr.Error()))
 		return
 	}
 	end := EffectiveEnd(Limit{At: now.Add(inst.TTL), Reason: "ttl"}, s.scheduleLimit(inst, now), bl)
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'ready', ready_at = $2, ends_at = $3, limit_reason = $4,
 		last_activity_at = $2 WHERE id = $1 AND state = 'provisioning'`, inst.ID, now, end.At, end.Reason)
 	if err == nil && tag.RowsAffected() == 0 {
+		if inst.Runtime == "aws" {
+			return // ended while provisioning: that destroy interrupts the apply and runs terraform destroy itself
+		}
 		// the lab was ended while provisioning: nobody else will clean these containers up
 		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 		defer dcancel()
@@ -734,6 +739,41 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		return
 	}
 	s.event(ctx, inst.ID, "ready", "")
+}
+
+// failProvision cleans up after a failed provisioning and ends the row 'failed'. An aws lab shows its error at once
+// as 'destroying' (terraform destroy can take most of an hour, and the hung-provisioning sweep must not take the
+// failure over), then ends 'failed'. An aws lab ended meanwhile is left to the destroy that ended it, which
+// interrupted the apply; a local or cluster runtime is cleaned up again, since it may have started after that destroy.
+func (s *Service) failProvision(ctx context.Context, inst *Instance, errText, detail string) {
+	from := Provisioning
+	if inst.Runtime == "aws" {
+		wctx, wcancel := finalCtx(ctx)
+		tag, err := s.DB.Exec(wctx, `UPDATE lab_instances SET state = 'destroying', error = $2, end_reason = 'failed',
+			destroyed_at = $3 WHERE id = $1 AND state = 'provisioning'`, inst.ID, errText, s.Now())
+		if err == nil && tag.RowsAffected() == 1 {
+			s.event(wctx, inst.ID, "failed", detail)
+		}
+		wcancel()
+		if err != nil {
+			s.Log.Error("lab failure not recorded", "lab", inst.ID, "err", err)
+		}
+		if err != nil || tag.RowsAffected() == 0 {
+			return
+		}
+		from = Destroying
+	}
+	// a fresh ctx: after a provisioning timeout ctx is already expired and would leak the namespace
+	dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
+	_ = s.destroyRuntime(dctx, inst)
+	dcancel()
+	wctx, wcancel := finalCtx(ctx)
+	defer wcancel()
+	s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'failed', error = $2, destroyed_at = $3
+		WHERE id = $1 AND state = $4`, errText, s.Now(), string(from))
+	if from == Provisioning {
+		s.event(wctx, inst.ID, "failed", detail)
+	}
 }
 
 func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.Lab, sc *content.Script, env map[string]string) (ScriptResult, error) {
@@ -1243,12 +1283,14 @@ func (s *Service) finishDestroy(ctx context.Context, inst *Instance, reason stri
 		}
 		s.Log.Warn("lab destroy incomplete", "lab", inst.ID, "err", err)
 	}
-	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3 WHERE id = $1`,
-		inst.ID, s.Now(), note)
+	wctx, wcancel := finalCtx(ctx)
+	defer wcancel()
+	s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3 WHERE id = $1`,
+		s.Now(), note)
 	s.setupMu.Lock()
 	delete(s.setupLocks, inst.ID)
 	s.setupMu.Unlock()
-	s.event(ctx, inst.ID, "destroyed", reason)
+	s.event(wctx, inst.ID, "destroyed", reason)
 }
 
 // Sweep destroys labs past their end time or idle deadline, and provisioning that hung.
@@ -1320,8 +1362,10 @@ func (s *Service) retryDestroy(ctx context.Context, inst *Instance) {
 	if errors.Is(err, apperr.Unavailable) {
 		note = "cleanup skipped: " + err.Error() + "; delete the lab namespace by hand"
 	}
-	_, _ = s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
-		WHERE id = $1 AND state = 'destroying'`, inst.ID, s.Now(), note)
+	wctx, wcancel := finalCtx(ctx)
+	defer wcancel()
+	s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2, error = $3
+		WHERE id = $1 AND state = 'destroying'`, s.Now(), note)
 }
 
 // reconcileCluster deletes lab namespaces whose lab is over or unknown: a destroy that failed, a lab ended while

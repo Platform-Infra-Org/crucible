@@ -140,30 +140,16 @@ func run(ctx context.Context) error {
 				awsRegions = append(awsRegions, r)
 			}
 		}
-		if mode == "dryrun" { // never constructs the real SDK client
-			fake := &awscloud.Fake{}
-			ar.Cloud, ar.DryRun = fake, fake
-			slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in). Development only")
-		} else {
-			if ar.StateBucket == "" || ar.StateRegion == "" {
-				return errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
-			}
-			if ar.Cloud, err = awscloud.New(ctx, awscloud.Config{LabRoleARN: os.Getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"),
-				OpsRoleARN: os.Getenv("CRUCIBLE_AWS_OPS_ROLE_ARN")}); err != nil {
-				return fmt.Errorf("aws labs: %w", err)
-			}
+		est, err := awsSetup(ctx, mode, ar, rates, os.Getenv, func(ctx context.Context, c awscloud.Config) (awscloud.Cloud, error) {
+			return awscloud.New(ctx, c)
+		})
+		if err != nil {
+			return err
+		}
+		if est != nil {
+			estimators["aws"] = est
 		}
 		runners["aws"], cloud = ar, ar.Cloud
-		_, cliErr := exec.LookPath("infracost")
-		switch {
-		case os.Getenv("CRUCIBLE_INFRACOST") == "off":
-			estimators["aws"] = rates
-			slog.Warn("CRUCIBLE_INFRACOST=off: aws labs are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR")
-		case cliErr != nil || os.Getenv("INFRACOST_API_KEY") == "":
-			slog.Warn("aws labs need the infracost CLI and INFRACOST_API_KEY for an estimate: until then they show no cost estimate and cannot be requested")
-		default:
-			estimators["aws"] = &labs.InfracostEstimator{Run: infracost.Exec}
-		}
 		slog.Info("aws labs enabled", "mode", mode, "regions", awsRegions)
 	default:
 		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
@@ -234,6 +220,41 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// awsSetup gives the aws runner its cloud and returns the aws lab estimator (nil: no estimate, so no requests).
+// Dryrun never calls newCloud, the real SDK client. CRUCIBLE_INFRACOST=off prices labs from
+// CRUCIBLE_DEV_LAB_USD_PER_HOUR, $0 when unset: no budget stop, no over-cap routing, so dryrun only.
+func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.Estimator, getenv func(string) string,
+	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error)) (labs.Estimator, error) {
+	off := getenv("CRUCIBLE_INFRACOST") == "off"
+	if off && mode != "dryrun" {
+		return nil, errors.New("CRUCIBLE_INFRACOST=off is only allowed with CRUCIBLE_AWS_LABS=dryrun: real aws labs need an infracost estimate")
+	}
+	if mode == "dryrun" {
+		fake := &awscloud.Fake{}
+		ar.Cloud, ar.DryRun = fake, fake
+		slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in). Development only")
+	} else {
+		if ar.StateBucket == "" || ar.StateRegion == "" {
+			return nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
+		}
+		c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN")})
+		if err != nil {
+			return nil, fmt.Errorf("aws labs: %w", err)
+		}
+		ar.Cloud = c
+	}
+	_, cliErr := exec.LookPath("infracost")
+	switch {
+	case off:
+		slog.Warn("CRUCIBLE_INFRACOST=off: aws labs are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR")
+		return rates, nil
+	case cliErr != nil || getenv("INFRACOST_API_KEY") == "":
+		slog.Warn("aws labs need the infracost CLI and INFRACOST_API_KEY for an estimate: until then they show no cost estimate and cannot be requested")
+		return nil, nil
+	}
+	return &labs.InfracostEstimator{Run: infracost.Exec}, nil
 }
 
 func must(k string) string {

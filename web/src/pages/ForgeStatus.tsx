@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { KillSwitch, PlatformView } from '../types'
@@ -33,6 +34,26 @@ export function ForgeStatusPage() {
         {k.enabled ? `Labs are paused (by ${k.changed_by}, ${new Date(k.changed_at ?? '').toLocaleString()}).` : 'Labs are running.'}
       </p>
       <button className={k.enabled ? 'primary' : 'danger'} onClick={toggle}>{k.enabled ? 'Resume labs' : 'Pause all labs'}</button>
+
+      <h2>Needs attention</h2>
+      {p.pending_edits > 0 && <p><Link to="/edits">{p.pending_edits} content edit{p.pending_edits === 1 ? '' : 's'} waiting for review</Link></p>}
+      {p.attention.length === 0 ? <p className="pass">No failed or stuck labs.</p> : (
+        <table className="grid">
+          <thead><tr><th>Lab</th><th>Trainee</th><th>Program</th><th>State</th><th>Since</th><th>Error</th></tr></thead>
+          <tbody>{p.attention.map((a) => (
+            <tr key={a.id}><td><code>{a.id}</code></td><td>{a.trainee}</td><td>{a.team}/{a.training} · {a.module}</td>
+              <td className={a.state === 'failed' ? 'error' : 'warn'}>{a.state}</td><td>{new Date(a.since).toLocaleString()}</td><td>{a.error}</td></tr>
+          ))}</tbody>
+        </table>
+      )}
+      <h2>Program versions</h2>
+      <table className="grid">
+        <thead><tr><th>Program</th><th>Runs</th><th>Branch head</th></tr></thead>
+        <tbody>{p.programs.map((g) => (
+          <tr key={g.team + g.training}><td>{g.team}/{g.training}</td><td><code>{g.running.slice(0, 7)}</code>{g.pinned_ref && <span className="badge"> pinned</span>}</td>
+            <td><code>{g.head.slice(0, 7)}</code>{g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
+        ))}</tbody>
+      </table>
 
       <h2>Sync</h2>
       <dl className="facts">

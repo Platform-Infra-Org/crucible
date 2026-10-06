@@ -426,3 +426,24 @@ func TestPinBump(t *testing.T) {
 		t.Fatalf("unpin / audit: %d", n)
 	}
 }
+
+func TestForgeStatusShowsAttention(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	var uid int64
+	if err := f.s.DB.QueryRow(ctx, `INSERT INTO users (sub, email) VALUES ('s9', 'trainee@crucible.local') RETURNING id`).Scan(&uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, error, created_at,
+		last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s) VALUES
+		('aaaaaaaaaaaa', $1, 'forge', 'forge-101', '02-first-lab', 'x', 'local', 'failed', 'compose up failed', now(), now(), 3600, 1800, 300, 0)`, uid); err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.s.Status(ctx, f.admin)
+	if err != nil || len(v.Attention) != 1 || v.Attention[0].Trainee != "trainee@crucible.local" || v.PendingEdits != 0 || len(v.Programs) == 0 {
+		t.Fatalf("status %+v %v", v, err)
+	}
+	if _, err := f.s.Status(ctx, f.leader); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("admins only: %v", err)
+	}
+}

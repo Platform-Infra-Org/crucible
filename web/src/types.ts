@@ -62,7 +62,10 @@ export type PlatformView = {
   platform_sha: string; platform_error?: string; synced_at: string
   cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
+  pending_edits: number; attention: AttentionLab[]; programs: ProgramPin[]
 }
+export type AttentionLab = { id: string; trainee: string; team: string; training: string; module: string; state: string; error?: string; since: string }
+export type ProgramPin = { team: string; training: string; running: string; head: string; pinned_ref?: string }
 
 export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review' | 'self_reported'
 export type SubmissionFile = { name: string; size: number }

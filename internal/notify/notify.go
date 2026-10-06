@@ -49,6 +49,7 @@ const (
 	ReaperReport      Kind = "reaper_report"
 	RankUp            Kind = "rank_up"
 	ContentEdit       Kind = "content_edit"
+	LabStuck          Kind = "lab_stuck"
 )
 
 type KindInfo struct {
@@ -70,6 +71,7 @@ var Kinds = []KindInfo{
 	{ReaperReport, "Leftover AWS lab resources need attention"},
 	{RankUp, "I or one of my mentees reached a new forge rank"},
 	{ContentEdit, "A content edit waits for my review, or mine was decided"},
+	{LabStuck, "A lab is stuck while being destroyed (admins)"},
 }
 
 type Event struct {

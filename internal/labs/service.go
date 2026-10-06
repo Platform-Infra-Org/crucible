@@ -1398,6 +1398,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			}
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
+			s.alertStuck(ctx, inst)
 			if inst.Runtime == "aws" {
 				s.once(inst.ID, func() { s.retryDestroy(context.WithoutCancel(ctx), inst) }) // never hold up the sweep
 			} else {
@@ -1416,6 +1417,23 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.reconcileCluster(ctx)
 	s.refreshAWS(ctx)
+}
+
+// alertStuck tells the admins, once per lab, that a destroy never finished (spec §8.1). The conditional UPDATE
+// claims the alert atomically, so concurrent sweeps (or API replicas) send it once. No resource ids beyond the lab id.
+func (s *Service) alertStuck(ctx context.Context, inst *Instance) {
+	var since time.Time
+	if err := s.DB.QueryRow(ctx, `UPDATE lab_instances SET stuck_alerted_at = $2 WHERE id = $1 AND stuck_alerted_at IS NULL
+		RETURNING coalesce(destroyed_at, created_at)`, inst.ID, s.Now()).Scan(&since); err != nil {
+		return // already alerted, or the row is gone
+	}
+	st := s.Learn.State()
+	if st == nil || st.Platform == nil {
+		return
+	}
+	s.notify(ctx, notify.Event{Kind: notify.LabStuck, To: st.Platform.Admins, Subject: "A lab is stuck while being destroyed",
+		Text: fmt.Sprintf("Lab %s (%s, %s/%s, %s) has been destroying since %s. Crucible keeps retrying; see Forge Status.",
+			inst.ID, inst.Runtime, inst.Team, inst.Training, inst.Module, since.UTC().Format(time.RFC3339)), Link: "/admin"})
 }
 
 // retryDestroy is the last attempt for a destroy that never finished; the row ends 'destroyed' either way.

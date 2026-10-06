@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"crucible/internal/apperr"
@@ -126,6 +127,25 @@ type TrainingStatus struct {
 	Problems []string `json:"problems"`
 }
 
+type AttentionLab struct {
+	ID       string    `json:"id"`
+	Trainee  string    `json:"trainee"`
+	Team     string    `json:"team"`
+	Training string    `json:"training"`
+	Module   string    `json:"module"`
+	State    string    `json:"state"`
+	Error    string    `json:"error,omitempty"`
+	Since    time.Time `json:"since"`
+}
+
+type ProgramPin struct {
+	Team     string `json:"team"`
+	Training string `json:"training"`
+	Running  string `json:"running"`
+	Head     string `json:"head"`
+	Pinned   string `json:"pinned_ref,omitempty"`
+}
+
 type PlatformView struct {
 	PlatformSHA     string            `json:"platform_sha"`
 	PlatformErr     string            `json:"platform_error,omitempty"`
@@ -136,6 +156,9 @@ type PlatformView struct {
 	Admins          []string          `json:"admins"`
 	Trainings       []TrainingStatus  `json:"trainings"`
 	Audit           []audit.Entry     `json:"audit"`
+	PendingEdits    int               `json:"pending_edits"`
+	Attention       []AttentionLab    `json:"attention"`
+	Programs        []ProgramPin      `json:"programs"`
 }
 
 func (s *Service) state() (*gitsync.State, error) {
@@ -488,6 +511,45 @@ func (s *Service) Platform(u *auth.User) (*PlatformView, error) {
 	return v, nil
 }
 
+// Status is the admin's Forge Status page: Platform plus audit, edits waiting, labs that need a look and the content
+// version each program runs.
+func (s *Service) Status(ctx context.Context, u *auth.User) (*PlatformView, error) {
+	v, err := s.Platform(u)
+	if err != nil {
+		return nil, err
+	}
+	if v.Audit, err = audit.Recent(ctx, s.DB, 25); err != nil {
+		return nil, err
+	}
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM content_edits WHERE status = 'pending'`).Scan(&v.PendingEdits); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.Query(ctx, `SELECT li.id, u.email, li.team, li.training, li.module, li.state, li.error,
+		coalesce(li.destroyed_at, li.created_at) AS since
+		FROM lab_instances li JOIN users u ON u.id = li.user_id
+		WHERE (li.state = 'failed' AND li.created_at > now() - interval '24 hours')
+		   OR (li.state = 'destroying' AND li.destroyed_at < now() - interval '10 minutes')
+		ORDER BY 8 DESC LIMIT 50`)
+	if err != nil {
+		return nil, err
+	}
+	if v.Attention, err = pgx.CollectRows(rows, pgx.RowToStructByPos[AttentionLab]); err != nil {
+		return nil, err
+	}
+	if v.Attention == nil {
+		v.Attention = []AttentionLab{}
+	}
+	st := s.State() // Platform succeeded, so state is loaded
+	v.Programs = []ProgramPin{}
+	for _, team := range slices.Sorted(maps.Keys(st.Platform.Teams)) {
+		for _, tr := range slices.Sorted(maps.Keys(st.Platform.Teams[team].Programs)) {
+			v.Programs = append(v.Programs, ProgramPin{Team: team, Training: tr, Running: st.ProgramSHAs[team+"/"+tr],
+				Head: st.Heads[tr], Pinned: st.Platform.Teams[team].Programs[tr].PinnedRef})
+		}
+	}
+	return v, nil
+}
+
 func (s *Service) Routes(r chi.Router) {
 	user := func(r *http.Request) *auth.User { return auth.UserFrom(r.Context()) }
 	reply := func(w http.ResponseWriter, v any, err error) {
@@ -544,10 +606,7 @@ func (s *Service) Routes(r chi.Router) {
 		sha(w, v, err)
 	})
 	r.Get("/api/admin/platform", func(w http.ResponseWriter, r *http.Request) {
-		v, err := s.Platform(user(r))
-		if err == nil {
-			v.Audit, err = audit.Recent(r.Context(), s.DB, 25)
-		}
+		v, err := s.Status(r.Context(), user(r))
 		reply(w, v, err)
 	})
 }

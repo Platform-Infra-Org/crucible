@@ -56,3 +56,45 @@ func TestPeriodicAndInsertedJobsRun(t *testing.T) {
 		}
 	}
 }
+
+// A restart (a new client, a new leader) must not re-run a periodic job that already ran this period.
+func TestPeriodicJobNotRepeatedByRestart(t *testing.T) {
+	pool := dbtest.New(t)
+	w := &pingWorker{got: make(chan int, 16)}
+	workers := river.NewWorkers()
+	river.AddWorker(workers, w)
+	run := func() {
+		c, err := New(pool, workers, []Periodic{{Every: time.Hour, Args: pingArgs{N: 7}}}, slog.Default())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		if err := c.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = c.Stop(context.Background()) }()
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+			var id string
+			if err := pool.QueryRow(ctx, `SELECT leader_id FROM river_leader`).Scan(&id); err == nil && id == c.ID() {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("never elected")
+			}
+		}
+		time.Sleep(4 * time.Second) // the start-up insert follows election, not instantly
+	}
+	count := func() (n int) {
+		_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM river_job WHERE kind = 'test_ping'`).Scan(&n)
+		return n
+	}
+	run()
+	if count() != 1 {
+		t.Fatalf("the first start inserts the job: %d", count())
+	}
+	run()
+	if n := count(); n != 1 {
+		t.Fatalf("a second start in the same period inserts nothing: %d", n)
+	}
+}

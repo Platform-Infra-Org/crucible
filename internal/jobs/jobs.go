@@ -24,7 +24,9 @@ func New(pool *pgxpool.Pool, workers *river.Workers, periodic []Periodic, log *s
 	for _, p := range periodic {
 		args := p.Args
 		pj = append(pj, river.NewPeriodicJob(river.PeriodicInterval(p.Every),
-			func() (river.JobArgs, *river.InsertOpts) { return args, nil },
+			func() (river.JobArgs, *river.InsertOpts) { // one job per period, so a restart or new leader does not re-run it
+				return args, &river.InsertOpts{UniqueOpts: river.UniqueOpts{ByPeriod: p.Every}}
+			},
 			&river.PeriodicJobOpts{RunOnStart: true}))
 	}
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{

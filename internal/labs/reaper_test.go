@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +84,7 @@ func TestReaperDeletesOnlyEndedKnownLabs(t *testing.T) {
 	if !cloud.Has(vol(ended)) {
 		t.Fatal("without the database the reaper must not guess")
 	}
+	deadMails := f.notes.count(notify.ReaperReport) // the malformed id it could report anyway
 
 	if err := f.s.Reap(ctx); err != nil {
 		t.Fatal(err)
@@ -100,11 +103,11 @@ func TestReaperDeletesOnlyEndedKnownLabs(t *testing.T) {
 	if ev == nil || !slices.Contains(ev.To, "admin@crucible.local") || ev.Link != "/ledger" || ev.Team != "" {
 		t.Fatalf("admins get one summary, never a team channel: %+v", ev)
 	}
-	if f.notes.count(notify.ReaperReport) != 1 {
+	if f.notes.count(notify.ReaperReport) != deadMails+1 {
 		t.Fatal("one summary per run")
 	}
 	_ = f.s.Reap(ctx)
-	if f.notes.count(notify.ReaperReport) != 1 {
+	if f.notes.count(notify.ReaperReport) != deadMails+1 {
 		t.Fatal("the same findings again are not news")
 	}
 	var okAt *time.Time
@@ -201,5 +204,124 @@ func TestIngestCostsUpsertsAndMarksFailures(t *testing.T) {
 	_ = f.s.DB.QueryRow(ctx, `SELECT ingest_ok_at, ingest_error FROM aws_ops`).Scan(&okAt, &msg)
 	if total() != 0.5 || !okAt.Equal(okBefore) || msg != "Cost Explorer is down" {
 		t.Fatalf("old rows kept, last success kept, error shown: %v %v %q", total(), okAt, msg)
+	}
+}
+
+// cancelCloud cancels the run's ctx once CloudTrail was read, as a timeout or shutdown mid-run would.
+type cancelCloud struct {
+	*awscloud.Fake
+	cancel func()
+}
+
+func (c cancelCloud) LabWrites(ctx context.Context, region string, since time.Time) ([]awscloud.TrailEvent, error) {
+	ev, err := c.Fake.LabWrites(ctx, region, since)
+	c.cancel()
+	return ev, err
+}
+
+// flakyNotifier fails while fail is set.
+type flakyNotifier struct {
+	*fakeNotifier
+	fail bool
+}
+
+func (n *flakyNotifier) Notify(ctx context.Context, ev notify.Event) error {
+	if n.fail {
+		return errors.New("queue down")
+	}
+	return n.fakeNotifier.Notify(ctx, ev)
+}
+
+func TestReaperOutcomeAndEmailSurviveSpentCtx(t *testing.T) {
+	f := setup(t, true)
+	f.withForge401(t)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	cloud.AddEvent(awscloud.TrailEvent{ID: "ev-1", At: f.clk.Now().Add(-time.Hour), LabID: "aaaaaaaaaaaa", Event: "CreateVolume", Resources: []string{"vol-9"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	f.s.Cloud = cancelCloud{cloud, cancel}
+	_ = f.s.Reap(ctx)
+	var okAt *time.Time
+	_ = f.s.DB.QueryRow(context.Background(), `SELECT reap_ok_at FROM aws_ops`).Scan(&okAt)
+	if okAt == nil || f.findings(t)["cloudtrail:ev-1"] == "" || f.notes.count(notify.ReaperReport) != 1 {
+		t.Fatalf("a spent ctx loses neither the finding, the outcome nor the email: %v %v", okAt, f.findings(t))
+	}
+}
+
+func TestReaperRetriesAFailedEmailAndCapsTheList(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withForge401(t)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	for i := range 60 {
+		cloud.AddEvent(awscloud.TrailEvent{ID: "ev-" + strconv.Itoa(i), At: f.clk.Now().Add(-time.Hour), LabID: "aaaaaaaaaaaa", Event: "CreateVolume"})
+	}
+	n := &flakyNotifier{fakeNotifier: f.notes, fail: true}
+	f.s.Notify = n
+	_ = f.s.Reap(ctx)
+	if f.notes.count(notify.ReaperReport) != 0 || len(f.findings(t)) != 60 {
+		t.Fatal("findings are kept when the email fails")
+	}
+	n.fail = false
+	_ = f.s.Reap(ctx)
+	ev := f.notes.last(notify.ReaperReport)
+	if ev == nil || strings.Count(ev.Text, "cloudtrail:") != 50 || !strings.Contains(ev.Text, "+10 more") || !strings.Contains(ev.Subject, "60") {
+		t.Fatalf("the next run resends, capped at 50: %+v", ev)
+	}
+	_ = f.s.Reap(ctx)
+	if f.notes.count(notify.ReaperReport) != 1 {
+		t.Fatal("once sent, not again")
+	}
+}
+
+func TestIngestCostsFailureRecordedOnSpentCtx(t *testing.T) {
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = f.s.IngestCosts(ctx)
+	var msg string
+	_ = f.s.DB.QueryRow(context.Background(), `SELECT ingest_error FROM aws_ops`).Scan(&msg)
+	if msg == "" {
+		t.Fatal("the error must reach the Ledger even when ctx is spent")
+	}
+}
+
+// First days of a month: the window starts on the 1st of the previous month. Costs from two regions' labs are fine.
+func TestIngestCostsWindowAtMonthStartAndInfinity(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	f.clk.Add(-3 * 24 * time.Hour) // 2026-10-02 09:00
+	for _, d := range []time.Time{time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)} {
+		cloud.AddCost(awscloud.DailyCost{Day: d, LabID: "aaaaaaaaaaaa", USD: 1})
+	}
+	cloud.AddCost(awscloud.DailyCost{Day: time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), LabID: "bbbbbbbbbbbb", USD: math.Inf(1)})
+	if err := f.s.IngestCosts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	var inf float64
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM cost_actuals`).Scan(&n)
+	_ = f.s.DB.QueryRow(ctx, `SELECT usd FROM cost_actuals WHERE lab_id = 'bbbbbbbbbbbb'`).Scan(&inf)
+	if n != 3 || inf != 0 { // Sep 1, Sep 2 (clamped), Oct 2; not Aug 31, not Oct 3
+		t.Fatalf("rows=%d inf=%v", n, inf)
+	}
+}
+
+func TestReaperScansEveryRegion(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withForge401(t)
+	f.s.AWSRegions = []string{"eu-west-1", "us-east-1"}
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	a, b := f.awsRow(t, Destroyed, 2*time.Hour), f.awsRow(t, Destroyed, 2*time.Hour)
+	cloud.Add("eu-west-1", awscloud.Resource{ARN: vol(a), LabID: a})
+	cloud.Add("us-east-1", awscloud.Resource{ARN: "arn:aws:ec2:us-east-1:000000000000:volume/vol-" + b, LabID: b})
+	_ = f.s.Reap(ctx)
+	if len(f.findings(t)) != 2 || cloud.Has(vol(a)) || cloud.Has("arn:aws:ec2:us-east-1:000000000000:volume/vol-"+b) {
+		t.Fatalf("both regions reaped: %v", f.findings(t))
 	}
 }

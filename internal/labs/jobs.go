@@ -64,6 +64,8 @@ type CostWorker struct {
 	S *Service
 }
 
+func (w *CostWorker) Timeout(*river.Job[CostArgs]) time.Duration { return 10 * time.Minute }
+
 func (w *CostWorker) Work(ctx context.Context, _ *river.Job[CostArgs]) error {
 	return w.S.IngestCosts(ctx)
 }

@@ -73,6 +73,8 @@ func (s *Service) deleteAll(ctx context.Context, region string, creds awscloud.C
 // finding records one result; the same (source, ARN) again updates its row. It reports whether the row is new.
 func (s *Service) finding(ctx context.Context, source, labID, arn, action, detail string) bool {
 	var inserted bool
+	ctx, cancel := finalCtx(ctx) // a finding must survive the run's ctx running out
+	defer cancel()
 	err := s.DB.QueryRow(ctx, `INSERT INTO reaper_findings (source, arn, lab_id, action, detail, first_at, last_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $6)
 		ON CONFLICT (source, arn) DO UPDATE SET lab_id = excluded.lab_id, action = excluded.action,

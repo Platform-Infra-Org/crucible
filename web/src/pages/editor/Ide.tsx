@@ -8,6 +8,7 @@ import { opsProblem } from '../../lib/editLimits'
 import { CodeEditor } from './CodeEditor'
 import { Explorer } from './Explorer'
 import { Preview } from './Preview'
+import { parseLab } from './previewModel'
 import { ProblemsPanel } from './ProblemsPanel'
 import { ChangesPanel } from './ChangesPanel'
 import { GoToFile } from './GoToFile'
@@ -88,6 +89,14 @@ export default function Ide() {
         .catch(() => setMsg(`Couldn't load the original of ${o}.`))
     }
   }, [panel, changes, baseText, id])
+  useEffect(() => { // a lab preview shows its task instructions: load them (existing files only; a failure just leaves the path shown)
+    if (!active.endsWith('/lab.yaml')) return
+    const labDir = active.slice(0, active.lastIndexOf('/') + 1)
+    for (const t of parseLab(textOf(active) ?? '').lab?.tasks ?? []) {
+      const p = labDir + t.instructions
+      if (paths.includes(p)) loadBase(origin(base, work, p)).catch(() => {})
+    }
+  }, [active, work, baseText]) // eslint-disable-line react-hooks/exhaustive-deps
   const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }

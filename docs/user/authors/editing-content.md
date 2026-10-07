@@ -41,6 +41,17 @@ undo history. A • on a tab means the file has changes. **×** closes a tab; yo
 
 Markdown files show a preview beside the editor, the way trainees will see them.
 
+## Preview
+
+The preview beside the editor follows the file you have open.
+
+- A reading renders the way trainees will see it. Images you have only added to the draft don't show yet.
+- A `quiz.yaml` becomes a playable quiz with the right answers marked. Only editors ever see those marks, and they
+  can read the files anyway. Questions scored by a person or in a lab are described, not graded.
+- A `lab.yaml` lists its tasks, terminals and what each hint costs.
+
+Nothing runs in the preview. To try a lab, use `crucible preview` (see [Lint and preview](/docs/authors/lint-and-preview)).
+
 ## Saving
 
 There is no save button. Crucible saves your draft on the server about 2 seconds after you stop typing, and the

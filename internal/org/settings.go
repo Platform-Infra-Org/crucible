@@ -70,7 +70,13 @@ func (s *Store) SetSettings(ctx context.Context, actor string, b SettingsBody) e
 	if err := r.Fill(); err != nil {
 		return apperr.Wrap(apperr.Invalid, "ranks: "+err.Error())
 	}
-	return s.inTx(ctx, actor, "settings.update", "settings", map[string]any{"version": b.Version}, func(tx pgx.Tx) error {
+	// The audit log is the only history of money changes: record what the settings became.
+	detail := map[string]any{"version": b.Version, "default_theme": b.DefaultTheme, "escalation_hours": b.EscalationHours,
+		"ranks": r, "cost_tiers_cleared": b.CostTiers == nil, "cluster_usd_per_hour": b.ClusterUSDPerHour} // nil rate = unset, 0 = free
+	if b.CostTiers != nil {
+		detail["cost_tiers"] = *b.CostTiers
+	}
+	return s.inTx(ctx, actor, "settings.update", "settings", detail, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE settings SET default_theme = $1, auto_approve_usd = $2, tier1_usd = $3, tier2_usd = $4,
 			cluster_usd_per_hour = $5, escalation_hours = $6, rank_ingot = $7, rank_tempered = $8, rank_blade = $9,
 			rank_sword = $10, rank_masterwork = $11, version = version + 1 WHERE id = 1 AND version = $12`,

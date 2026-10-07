@@ -2,11 +2,13 @@ package org
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"crucible/internal/apperr"
@@ -221,5 +223,72 @@ func TestForeignKeyViolationSurfacesAsConflict(t *testing.T) {
 	other := errors.New("boom")
 	if scheduleInUse(other, "days") != other {
 		t.Error("other errors must pass through")
+	}
+}
+
+func settingsAuditDetail(t *testing.T, s *Store, n int) map[string]any {
+	t.Helper()
+	var raw []byte
+	err := s.DB.QueryRow(context.Background(), `SELECT detail FROM audit_log WHERE action = 'settings.update' ORDER BY id OFFSET $1 LIMIT 1`, n).Scan(&raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestSettingsAuditRecordsNewValuesAndDistinguishesClearedFromZero(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	ctx := context.Background()
+	steps := []SettingsBody{
+		{Version: 1, DefaultTheme: "anvil", CostTiers: &config.CostTiers{AutoApproveUSD: 2, Tier1USD: 5, Tier2USD: 25}, ClusterUSDPerHour: ptr(0.0)},
+		{Version: 2, DefaultTheme: "anvil", CostTiers: &config.CostTiers{Tier1USD: 5, Tier2USD: 25}},
+		{Version: 3, DefaultTheme: "anvil"},
+	}
+	for _, b := range steps {
+		if err := s.SetSettings(ctx, "admin@x", b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d0 := settingsAuditDetail(t, s, 0)
+	tiers, _ := d0["cost_tiers"].(map[string]any)
+	if d0["default_theme"] != "anvil" || tiers["tier2_usd"] != 25.0 || tiers["auto_approve_usd"] != 2.0 || d0["cost_tiers_cleared"] != false {
+		t.Errorf("tier change detail = %v", d0)
+	}
+	if v, ok := d0["cluster_usd_per_hour"]; !ok || v != 0.0 {
+		t.Errorf("an explicit 0 rate must be recorded as 0, got %v", d0["cluster_usd_per_hour"])
+	}
+	if v, ok := settingsAuditDetail(t, s, 1)["cluster_usd_per_hour"]; !ok || v != nil {
+		t.Errorf("an unset rate must be recorded as null, got %v", v)
+	}
+	d1, d2 := settingsAuditDetail(t, s, 1), settingsAuditDetail(t, s, 2)
+	zero, _ := d1["cost_tiers"].(map[string]any)
+	if zero["auto_approve_usd"] != 0.0 || d1["cost_tiers_cleared"] != false {
+		t.Errorf("zero auto-approve detail = %v", d1)
+	}
+	if _, has := d2["cost_tiers"]; has || d2["cost_tiers_cleared"] != true {
+		t.Errorf("clearing tiers must be explicit and carry no tier values, got %v", d2)
+	}
+}
+
+func TestInTxRollsBackTheChangeWhenTheAuditWriteFails(t *testing.T) {
+	pool := dbtest.New(t)
+	s := &Store{DB: pool}
+	ctx := context.Background()
+	// A chan cannot be marshalled into the jsonb detail, so the audit insert fails after the change succeeded.
+	err := s.inTx(ctx, "admin@x", "quotes.update", "quotes", map[string]any{"bad": make(chan int)}, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO quotes (text) VALUES ('must not survive')`)
+		return err
+	})
+	if err == nil {
+		t.Fatal("want the audit failure to surface")
+	}
+	var n int
+	pool.QueryRow(ctx, `SELECT count(*) FROM quotes`).Scan(&n)
+	if n != 0 {
+		t.Errorf("the change survived a failed audit write: %d quotes", n)
 	}
 }

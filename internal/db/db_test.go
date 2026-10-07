@@ -18,6 +18,10 @@ func TestMigrationsCreateTablesAndAreIdempotent(t *testing.T) {
 			t.Fatalf("table %s: %v", table, err)
 		}
 	}
+	var n int
+	if err := pool.QueryRow(ctx, "SELECT count(ops) FROM content_edits").Scan(&n); err != nil {
+		t.Fatalf("content_edits.ops: %v", err)
+	}
 	if err := db.Migrate(pool); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}

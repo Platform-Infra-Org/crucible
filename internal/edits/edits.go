@@ -45,35 +45,104 @@ type Service struct {
 }
 
 type Edit struct {
-	ID          int64             `json:"id"`
-	Training    string            `json:"training"`
-	Title       string            `json:"title"`
-	Author      string            `json:"author"`
-	BaseSHA     string            `json:"base_sha"`
-	HeadSHA     string            `json:"head_sha"`
-	Branch      string            `json:"branch"`
-	Status      string            `json:"status"`
-	Reviewer    string            `json:"reviewer,omitempty"`
-	Note        string            `json:"note,omitempty"`
-	MergeSHA    string            `json:"merge_sha,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	DecidedAt   *time.Time        `json:"decided_at,omitempty"`
-	Files       map[string]string `json:"files,omitempty"` // detail only
-	Diff        string            `json:"diff,omitempty"`  // detail only: git's unified diff, as is
-	CanReview   bool              `json:"can_review"`
-	CanWithdraw bool              `json:"can_withdraw"`
+	ID          int64        `json:"id"`
+	Training    string       `json:"training"`
+	Title       string       `json:"title"`
+	Author      string       `json:"author"`
+	BaseSHA     string       `json:"base_sha"`
+	HeadSHA     string       `json:"head_sha"`
+	Branch      string       `json:"branch"`
+	Status      string       `json:"status"`
+	Reviewer    string       `json:"reviewer,omitempty"`
+	Note        string       `json:"note,omitempty"`
+	MergeSHA    string       `json:"merge_sha,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	DecidedAt   *time.Time   `json:"decided_at,omitempty"`
+	Ops         []gitsync.Op `json:"ops,omitempty"`  // detail only
+	Diff        string       `json:"diff,omitempty"` // detail only: git's unified diff, as is
+	CanReview   bool         `json:"can_review"`
+	CanWithdraw bool         `json:"can_withdraw"`
 }
 
 type NewEdit struct {
-	Training string            `json:"training"`
-	BaseSHA  string            `json:"base_sha"`
-	Title    string            `json:"title"`
-	Files    map[string]string `json:"files"`
+	Training string       `json:"training"`
+	BaseSHA  string       `json:"base_sha"`
+	Title    string       `json:"title"`
+	Ops      []gitsync.Op `json:"ops"`
+	// Files is the pre-ops shape ({path: new content}), accepted as puts for one release.
+	// ponytail: remove after the release that ships ops (roadmap "decisions to revisit").
+	Files map[string]string `json:"files,omitempty"`
+}
+
+func (in NewEdit) ops() ([]gitsync.Op, error) {
+	if len(in.Files) > 0 && len(in.Ops) > 0 {
+		return nil, apperr.Wrap(apperr.Invalid, "send ops or files, not both")
+	}
+	if len(in.Files) > 0 {
+		return gitsync.PutOps(in.Files), nil
+	}
+	return in.Ops, nil
 }
 
 type FileInfo struct {
-	Path string `json:"path"`
-	Size int64  `json:"size"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+	Editable bool   `json:"editable"`
+	Reason   string `json:"reason,omitempty"` // why it can't be edited here
+}
+
+// ListFiles lists every regular file of a training checkout (hidden folders skipped), marking what an edit may touch.
+func ListFiles(dir string) ([]FileInfo, error) {
+	out := []FileInfo{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && p != dir {
+			return filepath.SkipDir
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		rel = filepath.ToSlash(rel)
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		f := FileInfo{Path: rel, Size: fi.Size(), Editable: true}
+		if err := gitsync.CheckPath(rel); err != nil {
+			f.Editable, f.Reason = false, strings.TrimSuffix(err.Error(), ": invalid")
+		}
+		out = append(out, f)
+		return nil
+	})
+	return out, err
+}
+
+// putFiles is the legacy files column: the puts, kept for one release so a Down migration loses no content it had.
+func putFiles(ops []gitsync.Op) map[string]string {
+	out := map[string]string{}
+	for _, op := range ops {
+		if op.Op == "put" {
+			out[op.Path] = op.Content
+		}
+	}
+	return out
+}
+
+// touched lists every path ops name, for the audit row.
+func touched(ops []gitsync.Op) []string {
+	var out []string
+	for _, op := range ops {
+		for _, p := range []string{op.Path, op.From, op.To} {
+			if p != "" && !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 type TrainingRef struct {
@@ -86,7 +155,7 @@ const (
 	maxNote    = 2000
 	maxOpen    = 5  // pending edits per author
 	maxPerHour = 10 // edits proposed per author per hour
-	cols       = `id, training, title, author, base_sha, head_sha, branch, status, reviewer, note, merge_sha, created_at, decided_at, files, diff`
+	cols       = `id, training, title, author, base_sha, head_sha, branch, status, reviewer, note, merge_sha, created_at, decided_at, ops, diff`
 )
 
 // gitTimeout bounds every git section (fetch, merge, push) so a hanging git host fails the request instead of piling up.
@@ -142,9 +211,6 @@ func canReview(p *config.Platform, training string, t *content.Training, email, 
 	return email != author && !enrolled(p, training, email) && ((rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email))
 }
 
-// checkPath allows exactly what gitsync lets an edit touch (training.yaml and modules/<id>/…, text extensions).
-func checkPath(rel string) error { return gitsync.CheckEditFiles(map[string]string{rel: ""}) }
-
 func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Training, string, error) {
 	st, err := s.state()
 	if err != nil {
@@ -192,34 +258,19 @@ func (s *Service) CanUse(email string) bool {
 	return false
 }
 
-// Files lists the editable files of the training at its branch head, and that head (the base of a new edit).
+// Files lists every file of the training at its branch head, marking what an edit may touch, and that head (the base
+// of a new edit).
 func (s *Service) Files(u *auth.User, training string) (string, []FileInfo, error) {
 	_, t, sha, err := s.training(u, training)
 	if err != nil {
 		return "", nil, err
 	}
-	out := []FileInfo{}
-	err = filepath.WalkDir(t.Dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && p != t.Dir {
-			return filepath.SkipDir
-		}
-		rel, _ := filepath.Rel(t.Dir, p)
-		rel = filepath.ToSlash(rel)
-		if d.Type().IsRegular() && checkPath(rel) == nil {
-			if fi, err := d.Info(); err == nil {
-				out = append(out, FileInfo{Path: rel, Size: fi.Size()})
-			}
-		}
-		return nil
-	})
-	return sha, out, err
+	files, err := ListFiles(t.Dir)
+	return sha, files, err
 }
 
 func (s *Service) File(u *auth.User, training, rel string) (string, error) {
-	if err := checkPath(rel); err != nil {
+	if err := gitsync.CheckPath(rel); err != nil {
 		return "", err
 	}
 	_, t, _, err := s.training(u, training)
@@ -347,16 +398,16 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if err := limits(ctx, s.DB, me); err != nil { // before the copy validate makes
 		return nil, err
 	}
-	changedOps, probs, err := Check(t, gitsync.PutOps(in.Files))
+	ops, err := in.ops()
+	if err != nil {
+		return nil, err
+	}
+	changed, probs, err := Check(t, ops)
 	if err != nil {
 		return nil, err
 	}
 	if len(probs) > 0 {
 		return nil, broken(probs)
-	}
-	changed := map[string]string{} // ponytail: map until Task 7 stores ops
-	for _, op := range changedOps {
-		changed[op.Path] = op.Content
 	}
 	var id int64
 	if err := s.DB.QueryRow(ctx, `SELECT nextval(pg_get_serial_sequence('content_edits', 'id'))`).Scan(&id); err != nil {
@@ -391,11 +442,11 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if err := limits(ctx, tx, me); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO content_edits (id, training, title, author, base_sha, files, status, branch, head_sha, diff)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)`, id, in.Training, title, me, sha, changed, branch, headSHA, diff); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO content_edits (id, training, title, author, base_sha, files, ops, status, branch, head_sha, diff)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)`, id, in.Training, title, me, sha, putFiles(changed), changed, branch, headSHA, diff); err != nil {
 		return nil, err
 	}
-	if err := audit.Log(ctx, tx, me, "content_edit.propose", in.Training, map[string]any{"edit": id, "title": title, "files": slices.Sorted(maps.Keys(changed))}, headSHA); err != nil {
+	if err := audit.Log(ctx, tx, me, "content_edit.propose", in.Training, map[string]any{"edit": id, "title": title, "files": touched(changed)}, headSHA); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -426,7 +477,7 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 func scan(row pgx.Row) (*Edit, error) {
 	var e Edit
 	err := row.Scan(&e.ID, &e.Training, &e.Title, &e.Author, &e.BaseSHA, &e.HeadSHA, &e.Branch, &e.Status, &e.Reviewer, &e.Note,
-		&e.MergeSHA, &e.CreatedAt, &e.DecidedAt, &e.Files, &e.Diff)
+		&e.MergeSHA, &e.CreatedAt, &e.DecidedAt, &e.Ops, &e.Diff)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "edit not found")
 	}
@@ -464,7 +515,7 @@ func (s *Service) List(ctx context.Context, u *auth.User) ([]Edit, error) {
 			return nil, err
 		}
 		if visible(st, u, e) {
-			e.Files, e.Diff = nil, ""
+			e.Ops, e.Diff = nil, ""
 			out = append(out, *e)
 		}
 	}
@@ -627,10 +678,12 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 	return s.Get(gctx, u, e.ID)
 }
 
-// restore re-pushes the stored (reviewed) files to an edit branch someone changed outside Crucible. The new commit and
+// restore re-pushes the stored (reviewed) ops to an edit branch someone changed outside Crucible. The new commit and
 // diff replace the old ones, so nothing merges until a reviewer approves again. Returns ErrEditMoved when it worked.
 func (s *Service) restore(ctx context.Context, repo *gitsync.ContentRepo, e *Edit, me string) error {
-	headSHA, diff, err := repo.PushEdit(ctx, e.Branch, e.BaseSHA, e.Files, e.Author, "crucible: "+e.Title)
+	// A message of its own: the same tree, parent, author and message within the same second would recreate the
+	// reviewed commit byte for byte, so the branch would look restored while head_sha never changed.
+	headSHA, diff, err := repo.PushEdit(ctx, e.Branch, e.BaseSHA, e.Ops, e.Author, "crucible: "+e.Title+" (restored after the branch moved)")
 	if err != nil {
 		return err
 	}

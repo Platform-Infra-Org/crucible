@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -80,10 +79,6 @@ func (c *ContentRepo) lock(ctx context.Context) (func(), error) {
 	}
 }
 
-// CheckEditFiles enforces what a UI edit may touch: 1–20 text files (.md/.yaml/.yml/.sh, ≤256 KiB): training.yaml or
-// files inside modules/<id>/ (editPath). There are no deletes: every entry is the file's new content. (Task 7 removes this)
-func CheckEditFiles(files map[string]string) error { return CheckOps(PutOps(files)) }
-
 // maintainers reads training.yaml's maintainers: the people who review edits, so an edit must never change them.
 func maintainers(dir string) ([]string, error) {
 	var t struct {
@@ -119,7 +114,7 @@ func labDir(dir, rel string) string {
 
 // caseClash reports an edited path that differs only in case from an existing path (file or folder) at HEAD, or from
 // another edited path: those collide on macOS and Windows checkouts.
-func caseClash(ctx context.Context, dir string, files map[string]string) error {
+func caseClash(ctx context.Context, dir string, paths []string) error {
 	out, err := git(ctx, dir, "ls-tree", "-r", "-t", "--name-only", "HEAD")
 	if err != nil {
 		return err
@@ -128,7 +123,7 @@ func caseClash(ctx context.Context, dir string, files map[string]string) error {
 	for p := range strings.SplitSeq(out, "\n") {
 		have[strings.ToLower(p)] = p
 	}
-	for _, rel := range slices.Sorted(maps.Keys(files)) {
+	for _, rel := range slices.Sorted(slices.Values(paths)) {
 		parts := strings.Split(rel, "/")
 		for i := range parts {
 			p := strings.Join(parts[:i+1], "/")
@@ -141,22 +136,22 @@ func caseClash(ctx context.Context, dir string, files map[string]string) error {
 	return nil
 }
 
-// PushEdit commits files (repo-relative path → new content) on top of base as the user, pushes them as branch, and
-// returns the commit and its full unified diff against base; an edit whose diff is over 256 KiB is refused, so the
-// reviewer always sees everything. New *.sh files inside the module's lab are executable, other new files are not;
-// existing files keep their mode. base must be on the tracked branch, so the diff shows everything a merge would bring in.
-func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files map[string]string, author, msg string) (string, string, error) {
+// PushEdit commits ops on top of base as the user, pushes them as branch, and returns the commit and its full,
+// rename-aware unified diff against base (deleted files in full). An edit whose diff is over 256 KiB is refused, so the
+// reviewer always sees everything. A new or renamed *.sh inside the module's lab (named by module.yaml, maybe in this
+// edit) is executable; any other new or renamed file is not; files changed in place keep their mode. base must be on
+// the tracked branch, so the diff shows everything a merge would bring in.
+func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, ops []Op, author, msg string) (sha, diff string, err error) {
 	if !editBranchRE.MatchString(branch) || !shaRE.MatchString(base) {
 		return "", "", fmt.Errorf("invalid edit branch %q or base %q", branch, base)
 	}
-	author, err := cleanEmail(author)
-	if err != nil {
+	if author, err = cleanEmail(author); err != nil {
 		return "", "", err
 	}
 	if msg, err = cleanMsg(msg); err != nil {
 		return "", "", err
 	}
-	if err := CheckEditFiles(files); err != nil {
+	if err := CheckOps(ops); err != nil {
 		return "", "", err
 	}
 	unlock, err := c.lock(ctx)
@@ -167,6 +162,12 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files m
 	if err := syncClone(ctx, c.URL, c.Branch, c.Dir); err != nil {
 		return "", "", err
 	}
+	defer func() { // ApplyOps can stop halfway: never leave a half-applied edit in the clone
+		if err != nil {
+			_, _ = git(context.WithoutCancel(ctx), c.Dir, "reset", "-q", "--hard")
+			_, _ = git(context.WithoutCancel(ctx), c.Dir, "clean", "-qfdx")
+		}
+	}()
 	stale := apperr.Wrap(apperr.Conflict, "the content changed since you opened it; reload and redo your change")
 	if _, err := git(ctx, c.Dir, "merge-base", "--is-ancestor", "--end-of-options", base, "HEAD"); err != nil {
 		return "", "", stale
@@ -175,43 +176,24 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files m
 	if _, err := git(ctx, c.Dir, "checkout", "-q", "--detach", base); err != nil {
 		return "", "", stale
 	}
-	if err := caseClash(ctx, c.Dir, files); err != nil {
+	if err := caseClash(ctx, c.Dir, Targets(ops)); err != nil {
 		return "", "", err
 	}
 	before, beforeErr := maintainers(c.Dir)
-	var scripts []string
-	for _, rel := range slices.Sorted(maps.Keys(files)) {
-		if err := NoSymlinks(c.Dir, rel); err != nil {
-			return "", "", apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
-		p := filepath.Join(c.Dir, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return "", "", apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
+	created, err := ApplyOps(c.Dir, ops)
+	if err != nil {
+		return "", "", err
+	}
+	for _, rel := range created {
 		mode := os.FileMode(0o644)
-		if fi, err := os.Lstat(p); err == nil {
-			if !fi.Mode().IsRegular() {
-				return "", "", apperr.Wrap(apperr.Invalid, rel+" can't be edited: not a regular file")
-			}
-			mode = fi.Mode().Perm()
-		} else if strings.HasSuffix(rel, ".sh") {
-			scripts = append(scripts, rel) // made executable below if module.yaml (maybe in this edit) puts it in the lab
+		if lab := labDir(c.Dir, rel); lab != "" && strings.HasSuffix(rel, ".sh") && strings.HasPrefix(rel, lab) {
+			mode = 0o755
 		}
-		if err := os.WriteFile(p, []byte(files[rel]), mode); err != nil {
-			return "", "", err
-		}
-		if err := os.Chmod(p, mode); err != nil {
+		if err := os.Chmod(filepath.Join(c.Dir, filepath.FromSlash(rel)), mode); err != nil {
 			return "", "", err
 		}
 	}
-	for _, rel := range scripts {
-		if lab := labDir(c.Dir, rel); lab != "" && strings.HasPrefix(rel, lab) {
-			if err := os.Chmod(filepath.Join(c.Dir, filepath.FromSlash(rel)), 0o755); err != nil {
-				return "", "", err
-			}
-		}
-	}
-	if _, ok := files["training.yaml"]; ok {
+	if slices.Contains(Targets(ops), "training.yaml") {
 		after, err := maintainers(c.Dir)
 		if beforeErr != nil || err != nil || !slices.Equal(before, after) {
 			return "", "", apperr.Wrap(apperr.Invalid, "training.yaml: maintainers can only be changed in git")
@@ -224,12 +206,10 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, files m
 		"--author", author+" <"+author+">", "-m", msg, "-m", "Crucible-Actor: "+author); err != nil {
 		return "", "", err
 	}
-	sha, err := git(ctx, c.Dir, "rev-parse", "HEAD")
-	if err != nil {
+	if sha, err = git(ctx, c.Dir, "rev-parse", "HEAD"); err != nil {
 		return "", "", err
 	}
-	diff, err := git(ctx, c.Dir, "diff", "--no-color", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base, sha)
-	if err != nil {
+	if diff, err = git(ctx, c.Dir, "diff", "--no-color", "-M", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base, sha); err != nil {
 		return "", "", err
 	}
 	if len(diff) > maxDiff {

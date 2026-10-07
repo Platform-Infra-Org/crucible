@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { api } from '../api'
-import type { ContentEdit } from '../types'
+import type { ContentEdit, FileEntry } from '../types'
 import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
 import { DiffView } from '../components/DiffView'
 import { editProblem } from '../lib/editLimits'
 import { byteLen, changedFiles, headVersions } from '../lib/editDraft'
 
-type FileList = { head_sha: string; files: { path: string; size: number }[] }
+type FileList = { head_sha: string; files: FileEntry[] }
 
 export function EditFilesPage() {
   const nav = useNavigate()
@@ -34,7 +34,7 @@ export function EditFilesPage() {
     // Redo starts from the CURRENT head text of the same paths: the old text would undo whatever made the edit stale.
     api<ContentEdit>(`/api/edits/${encodeURIComponent(from)}`)
       .then(async (e) => {
-        const head = await headVersions(Object.keys(e.files ?? {}), loadFile)
+        const head = await headVersions((e.ops ?? []).flatMap((op) => (op.op === 'put' ? [op.path] : [])), loadFile)
         setOld(e); setTitle(e.title); setOrig(head); setFiles(head); setOpen(Object.keys(head)[0] ?? '')
       })
       .catch((e: Error) => setErr(e.message))
@@ -81,7 +81,7 @@ export function EditFilesPage() {
       <div className="editor">
         <div>
           <ul>
-            {(list?.files ?? []).map((f) => (
+            {(list?.files ?? []).filter((f) => f.editable).map((f) => (
               <li key={f.path}>
                 <button className={open === f.path ? '' : 'ghost'} aria-current={open === f.path ? 'true' : undefined} onClick={() => openFile(f.path)}>{f.path}</button>
                 {f.path in changed && <span aria-hidden="true"> *<span className="sr-only"> (changed)</span></span>}

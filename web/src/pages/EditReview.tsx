@@ -47,12 +47,15 @@ export function EditReviewPage() {
       <h2>Changes</h2>
       <DiffView diff={e.diff ?? ''} />
       <h2>Files</h2>
-      {Object.entries(e.files ?? {}).map(([p, t]) => (
-        <details key={p}>
-          <summary>{p}</summary>
-          {p.endsWith('.md') ? <Markdown text={t} /> : <pre>{t}</pre>}
-        </details>
-      ))}
+      {(e.ops ?? []).map((op, i) =>
+        op.op === 'put' ? (
+          <details key={i}>
+            <summary>{op.path}</summary>
+            {op.path.endsWith('.md') ? <Markdown text={op.content} /> : <pre>{op.content}</pre>}
+          </details>
+        ) : op.op === 'rename' ? <p key={i}>Renamed <code>{op.from}</code> to <code>{op.to}</code></p>
+          : <p key={i}>Deleted <code>{op.path}</code> (its full text is in the changes above)</p>,
+      )}
       {(e.can_review || e.can_withdraw) && (
         <p>
           {e.can_review && <><label>Review note <textarea value={note} onChange={(x) => byteLen(x.target.value) <= 2000 && setNote(x.target.value)} /></label>{' '}</>}

@@ -47,6 +47,7 @@ func TestRoutes(t *testing.T) {
 		{"GET", "/api/edits", trainee, "", 200},
 		{"POST", "/api/edits", trainee, `{"training":"t1","base_sha":"` + f.head() + `","title":"x","files":{"modules/m1/reading/intro.md":"# Hi\n"}}`, 403},
 		{"POST", "/api/edits", leader, `{"bogus":1}`, 400},
+		{"POST", "/api/edits", leader, `{"training":"t1","base_sha":"` + f.head() + `","title":"x","ops":[{"op":"rename","from":"training.yaml","to":"modules/m1/t.yaml"}]}`, 400},
 	} {
 		if got, body := call(c.method, c.path, c.user, c.body); got != c.want {
 			t.Errorf("%s %s as %s: %d %v, want %d", c.method, c.path, c.user, got, body, c.want)

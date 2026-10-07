@@ -14,6 +14,17 @@ Every edit is reviewed before trainees see it.
 status: *pending*, *merged*, *rejected*, *withdrawn* or *stale*. Open one to see the change
 as a diff, and each changed file in full.
 
+## What reviewers see
+
+An edit can change files, and it can also rename and delete them. The diff shows all of it:
+
+- A renamed file shows as *rename from* and *rename to*, with any changes made to it on the way.
+- A deleted file shows in full, every line marked as removed, so you see exactly what goes.
+- A changed file's new text is listed under **Files** as well.
+
+Scripts (`.sh`) inside the module's lab folder become executable; anywhere else they don't. `training.yaml` can be
+changed but never renamed or deleted.
+
 ## Reviewing
 
 A maintainer of the training, or an admin, reviews the edit. You never review your own, and nobody enrolled in the

@@ -120,10 +120,10 @@ func TestEditPermissions(t *testing.T) {
 	if _, _, err := f.s.Files(f.trainee, "t1"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("an enrolled trainee must not read the answer keys: %v", err)
 	}
-	if _, err := f.s.File(f.trainee, "t1", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
+	if _, err := f.s.File(context.Background(), f.trainee, "t1", "", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("file: %v", err)
 	}
-	if body, err := f.s.File(f.leader, "t1", "modules/m1/quiz.yaml"); err != nil || !strings.Contains(body, "answer: 1") {
+	if body, err := f.s.File(context.Background(), f.leader, "t1", "", "modules/m1/quiz.yaml"); err != nil || !strings.Contains(body, "answer: 1") {
 		t.Fatalf("a leader reads the file: %q %v", body, err)
 	}
 	if _, err := f.propose(t, f.trainee, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Forbidden) {
@@ -207,7 +207,7 @@ func TestEditPathRules(t *testing.T) {
 		if _, err := f.propose(t, f.leader, map[string]string{p: "x"}); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%q: %v", p, err)
 		}
-		if _, err := f.s.File(f.leader, "t1", p); !errors.Is(err, apperr.Invalid) {
+		if _, err := f.s.File(context.Background(), f.leader, "t1", "", p); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("file %q: %v", p, err)
 		}
 	}
@@ -371,7 +371,7 @@ func TestProposeIsTeamScoped(t *testing.T) {
 	if _, _, err := f.s.Files(other, "t1"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("files: %v", err)
 	}
-	if _, err := f.s.File(other, "t1", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
+	if _, err := f.s.File(context.Background(), other, "t1", "", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("file: %v", err)
 	}
 	if _, err := f.propose(t, other, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Forbidden) {
@@ -513,3 +513,110 @@ func TestAdminOverrideAndStaleNote(t *testing.T) {
 func writeFile(p, body string) error { return os.WriteFile(p, []byte(body), 0o644) }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestEditOpsRenameAndDelete(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	e, err := f.s.Create(ctx, f.leader, NewEdit{Training: "t1", BaseSHA: f.head(), Title: "Move intro", Ops: []gitsync.Op{
+		{Op: "rename", From: "modules/m1/reading/intro.md", To: "modules/m1/reading/start.md"},
+		{Op: "put", Path: "modules/m1/module.yaml", Content: "title: M1\nitems:\n  - reading: reading/start.md\n  - quiz: quiz.yaml\n"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.Diff, "rename from modules/m1/reading/intro.md") || len(e.Ops) != 2 {
+		t.Fatalf("rename-aware diff and stored ops: %s %+v", e.Diff, e.Ops)
+	}
+	if _, err := f.s.Approve(ctx, f.senior, e.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if out := git(t, f.remote, "ls-tree", "-r", "--name-only", "main"); strings.Contains(out, "intro.md") || !strings.Contains(out, "start.md") {
+		t.Fatalf("merged tree: %s", out)
+	}
+}
+
+func TestEditOpsAreValidated(t *testing.T) {
+	f := setup(t)
+	for name, ops := range map[string][]gitsync.Op{
+		"orphaned item":   {{Op: "delete", Path: "modules/m1/reading/intro.md"}}, // module.yaml still lists it: lint refuses
+		"delete training": {{Op: "delete", Path: "training.yaml"}},
+		"rename training": {{Op: "rename", From: "training.yaml", To: "modules/m1/x.yaml"}},
+	} {
+		if _, err := f.s.Create(context.Background(), f.leader, NewEdit{Training: "t1", BaseSHA: f.head(), Title: "x", Ops: ops}); !errors.Is(err, apperr.Invalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	e, err := f.s.Create(context.Background(), f.leader, NewEdit{Training: "t1", BaseSHA: f.head(), Title: "Drop intro", Ops: []gitsync.Op{
+		{Op: "delete", Path: "modules/m1/reading/intro.md"},
+		{Op: "put", Path: "modules/m1/module.yaml", Content: "title: M1\nitems:\n  - quiz: quiz.yaml\n"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(e.Diff, "deleted file mode") || !strings.Contains(e.Diff, "-Hello.") {
+		t.Fatalf("a deleted file shows in full: %s", e.Diff)
+	}
+}
+
+// The pre-ops request shape keeps working for one release (ponytail: drop Files after it ships; roadmap).
+func TestFilesMapIsTranslatedToPuts(t *testing.T) {
+	f := setup(t)
+	e, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Ops) != 1 || e.Ops[0] != (gitsync.Op{Op: "put", Path: "modules/m1/reading/intro.md", Content: "# Intro\n\nHi.\n"}) {
+		t.Fatalf("stored ops: %+v", e.Ops)
+	}
+	_, err = f.s.Create(context.Background(), f.leader, NewEdit{Training: "t1", BaseSHA: f.head(), Title: "x",
+		Files: map[string]string{"modules/m1/reading/intro.md": "a"}, Ops: []gitsync.Op{{Op: "delete", Path: "modules/m1/quiz.yaml"}}})
+	if !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("both shapes at once: %v", err)
+	}
+}
+
+func TestFilesListsEverythingWithWhatIsEditable(t *testing.T) {
+	f := setup(t)
+	if err := os.WriteFile(filepath.Join(f.s.State().Training("t1", f.head()).Dir, "modules", "m1", "notes.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, files, err := f.s.Files(f.leader, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var txt *FileInfo
+	for i := range files {
+		if files[i].Path == "modules/m1/notes.txt" {
+			txt = &files[i]
+		}
+	}
+	if txt == nil || txt.Editable || !strings.Contains(txt.Reason, "only .md, .yaml, .yml and .sh") {
+		t.Fatalf("non-editable files are listed, greyed with the reason: %+v", files)
+	}
+}
+
+// A put equal to the base text is a no-op only when no rename in the edit moves that path: rename a→b plus a new a with
+// the old text (a copy) keeps both files.
+func TestWorkspaceKeepsAPutOnARenamedPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "m"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules", "m", "a.md"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ops := []gitsync.Op{{Op: "rename", From: "modules/m/a.md", To: "modules/m/b.md"}, {Op: "put", Path: "modules/m/a.md", Content: "old"}}
+	tmp, changed, cleanup, err := Workspace(&content.Training{Dir: dir}, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(changed) != 2 {
+		t.Fatalf("changed = %+v, want both ops", changed)
+	}
+	for _, p := range []string{"a.md", "b.md"} {
+		if b, err := os.ReadFile(filepath.Join(tmp, "modules", "m", p)); err != nil || string(b) != "old" {
+			t.Errorf("%s = %q, %v; want old", p, b, err)
+		}
+	}
+}

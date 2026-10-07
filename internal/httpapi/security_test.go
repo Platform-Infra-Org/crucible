@@ -210,3 +210,21 @@ func mustRead(t *testing.T, p string) string {
 	}
 	return string(b)
 }
+
+// Monaco must not loosen the CSP: its workers are same-origin files (docs-and-editor spec §5, §9).
+func TestCSPStaysStrict(t *testing.T) {
+	dirs := map[string]string{}
+	for _, d := range strings.Split(csp, ";") {
+		name, val, _ := strings.Cut(strings.TrimSpace(d), " ")
+		dirs[name] = val
+	}
+	if dirs["script-src"] != "'self'" || dirs["default-src"] != "'self'" {
+		t.Fatalf("script-src %q, default-src %q: never widen these for the editor", dirs["script-src"], dirs["default-src"])
+	}
+	if _, ok := dirs["worker-src"]; ok {
+		t.Fatal("worker-src stays unset: it falls back to script-src 'self', which is what same-origin workers need")
+	}
+	if strings.Contains(csp, "unsafe-eval") || strings.Contains(dirs["connect-src"], "http") {
+		t.Fatalf("csp: %s", csp)
+	}
+}

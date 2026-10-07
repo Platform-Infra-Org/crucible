@@ -23,11 +23,13 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/authoring"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
+	"crucible/internal/docs"
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
@@ -247,7 +249,7 @@ func run(ctx context.Context) error {
 	// value on the same dir would race it. A training moved to another repo gets a new value and a new dir.
 	var repoMu sync.Mutex
 	repos := map[string]*gitsync.ContentRepo{}
-	editsSvc := &edits.Service{DB: pool, State: syncer.Current, Notify: notifySvc, Resync: syncer.SyncOnce, Log: slog.Default(),
+	editsSvc := &edits.Service{DB: pool, State: syncer.Current, Notify: notifySvc, Resync: syncer.SyncOnce, Version: syncer.Version, Log: slog.Default(),
 		Repo: func(id string) *gitsync.ContentRepo {
 			st := syncer.Current()
 			if st == nil || st.Platform == nil {
@@ -267,11 +269,18 @@ func run(ctx context.Context) error {
 			}
 			return repos[key]
 		}}
+	authoringSvc := &authoring.Service{DB: pool, Edits: editsSvc, Log: slog.Default()}
+
+	docPages, err := docs.All()
+	if err != nil { // a broken page is a build bug: the coverage test catches it first
+		slog.Error("docs", "err", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
-			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc,
+			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc, Authoring: authoringSvc, Docs: docs.New(docPages),
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

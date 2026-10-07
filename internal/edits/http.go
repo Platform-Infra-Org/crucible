@@ -34,7 +34,7 @@ func (s *Service) Routes(r chi.Router) {
 	})
 	r.Get("/api/content/{training}/file", func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Query().Get("path")
-		body, err := s.File(user(r), chi.URLParam(r, "training"), p)
+		body, err := s.File(r.Context(), user(r), chi.URLParam(r, "training"), "", p)
 		reply(w, map[string]string{"path": p, "content": body}, err)
 	})
 	r.Get("/api/edits", func(w http.ResponseWriter, r *http.Request) { v, err := s.List(r.Context(), user(r)); reply(w, v, err) })

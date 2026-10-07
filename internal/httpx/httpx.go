@@ -2,6 +2,7 @@
 package httpx
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,9 +19,19 @@ func JSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// Read decodes a JSON body (max 1 MiB) and rejects unknown fields.
+const maxBody = 1 << 20
+
+// Read decodes a JSON body of at most 1 MiB and rejects unknown fields. A larger body is refused as such, never
+// truncated into a confusing parse error.
 func Read(r *http.Request, v any) error {
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	b, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	if err != nil {
+		return apperr.Wrap(apperr.Invalid, err.Error())
+	}
+	if len(b) > maxBody {
+		return apperr.Wrap(apperr.Invalid, "the request is over 1 MiB; make it smaller")
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return apperr.Wrap(apperr.Invalid, err.Error())

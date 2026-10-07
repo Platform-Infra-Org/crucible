@@ -17,8 +17,10 @@ import (
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/authoring"
 	"crucible/internal/config"
 	"crucible/internal/configapi"
+	"crucible/internal/docs"
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpx"
@@ -41,6 +43,8 @@ type Deps struct {
 	Config     *configapi.Service
 	Journey    *journey.Service
 	Edits      *edits.Service
+	Authoring  *authoring.Service
+	Docs       *docs.Service
 	Hub        *agenthub.Hub
 	IsAdmin    func(email string) bool // tests; nil means "listed in admins.yaml"
 	PublicURL  string
@@ -194,6 +198,12 @@ func NewRouter(d Deps) chi.Router {
 		}
 		if d.Edits != nil {
 			d.Edits.Routes(r)
+		}
+		if d.Authoring != nil {
+			d.Authoring.Routes(r)
+		}
+		if d.Docs != nil {
+			d.Docs.Routes(r)
 		}
 	})
 

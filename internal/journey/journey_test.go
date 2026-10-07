@@ -36,6 +36,7 @@ func setup(t *testing.T) *fx {
 	if err != nil {
 		t.Fatal(err)
 	}
+	delete(plat.Teams["forge"].Programs, "forge-103") // the editor e2e's training; these tests follow forge-101 only
 	tr, probs := content.Load("../../examples/forge-101")
 	if len(probs) > 0 {
 		t.Fatal(probs)

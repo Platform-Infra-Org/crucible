@@ -114,12 +114,21 @@ export type Mentee = {
   pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
   failures: { training: string; module: string; task?: string; kind: 'lab_failed' | 'check_failed'; detail: string; at: string }[]
 }
+export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
+export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
 export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'
 export type ContentEdit = {
   id: number; training: string; title: string; author: string; base_sha: string; head_sha?: string; branch: string; status: EditStatus
-  reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; files?: Record<string, string>; diff?: string
+  reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; ops?: EditOp[]; diff?: string
   can_review: boolean; can_withdraw: boolean
 }
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
+
+export type DraftState = 'editing' | 'in_review' | 'returned' | 'merged'
+export type DraftInfo = { id: number; training: string; title: string; base_sha: string; head_sha: string; ops: EditOp[]; updated_at: string; edit_id?: number; state: DraftState }
+export type Conflict = { path: string; base: string; head: string; head_missing: boolean; mine: string; op: EditOp }
+export type Problem = { file: string; line: number; msg: string }
+export type BlockField = { name: string; type: string; required?: boolean; enum?: string[]; default?: string; description: string; min?: number; max?: number }
+export type BlockInfo = { id: string; group: string; title: string; summary: string; doc?: string; file_kind: string; fields: BlockField[]; example: string; git_only?: boolean }

@@ -166,6 +166,8 @@ Every one of these was ruled on in a milestone ledger (`.superpowers/sdd/*/progr
   that names a missing file; anything else points at line 1. Give `content.Problem` real positions if authors find
   them wrong.
 - A rename that only changes case is refused: the case-collision check sees the old name still at HEAD.
+- The AWS settings block (spec §1.3 and §3; plan Ruling 6) was dropped from the catalog (progress ruling P7):
+  authors write those keys by hand. Only `template.lab.aws` and "new training" are git-only.
 - The AWS lab template and "new training" are git-only blocks. The server's insert refusal for them
   (`gitOnlyWhy` in `internal/content/blocks/catalog.go`) still gives the file-types reason, which is wrong for a new
   training (that is a new repo).

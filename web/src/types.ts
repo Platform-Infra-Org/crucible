@@ -125,3 +125,7 @@ export type ContentEdit = {
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
+
+export type DraftState = 'editing' | 'in_review' | 'returned' | 'merged'
+export type DraftInfo = { id: number; training: string; title: string; base_sha: string; head_sha: string; ops: EditOp[]; updated_at: string; edit_id?: number; state: DraftState }
+export type Problem = { file: string; line: number; msg: string }

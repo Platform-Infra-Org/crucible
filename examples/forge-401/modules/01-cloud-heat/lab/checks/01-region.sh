@@ -2,11 +2,11 @@
 # Offline on purpose: the dry-run e2e has no AWS behind it.
 got=$(tr -d '[:space:]' < "$HOME/region.txt" 2>/dev/null)
 if [ -z "$got" ]; then
-  echo "No ~/region.txt yet."
+  echo "No region.txt in your home directory yet."
   exit 1
 fi
 if [ "$got" != "$AWS_REGION" ]; then
-  echo "~/region.txt says $got, but your lab runs somewhere else."
+  echo "region.txt says $got, but your lab runs somewhere else."
   exit 1
 fi
 if [ ! -s "$AWS_SHARED_CREDENTIALS_FILE" ]; then

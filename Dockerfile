@@ -11,7 +11,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -o /out/crucible-api ./cmd/crucible-api && CGO_ENABLED=0 go build -o /out/crucible ./cmd/crucible
+COPY docs/user/ docs/user/
+ARG CRUCIBLE_VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags "-X crucible/internal/docs.Version=${CRUCIBLE_VERSION}" -o /out/crucible-api ./cmd/crucible-api && CGO_ENABLED=0 go build -o /out/crucible ./cmd/crucible
 
 FROM alpine:3.22 AS infracost
 ARG TARGETARCH=amd64

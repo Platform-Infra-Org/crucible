@@ -21,7 +21,6 @@ import (
 	"github.com/riverqueue/river"
 	"k8s.io/client-go/tools/clientcmd"
 
-	userdocs "crucible/docs/user"
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
 	"crucible/internal/authoring"
@@ -272,8 +271,8 @@ func run(ctx context.Context) error {
 		}}
 	authoringSvc := &authoring.Service{DB: pool, Edits: editsSvc, Log: slog.Default()}
 
-	docPages, err := docs.Load(userdocs.FS)
-	if err != nil {
+	docPages, err := docs.All()
+	if err != nil { // a broken page is a build bug: the coverage test catches it first
 		slog.Error("docs", "err", err)
 		os.Exit(1)
 	}

@@ -13,7 +13,10 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 
 	"crucible/internal/apperr"
 	"crucible/internal/content"
@@ -141,7 +144,7 @@ var Catalog = []Block{
 		Sample:  map[string]string{"id": "03-extra", "title": "Extra heat"},
 		Insert: Insert{Open: "modules/{{.id}}/module.yaml",
 			Files:   map[string]string{"modules/{{.id}}/module.yaml": "title: {{q .title}}\nitems:\n  - reading: reading/intro.md\n", "modules/{{.id}}/reading/intro.md": "# {{.title}}\n\nWrite the reading here.\n"},
-			Appends: []Append{{File: "training.yaml", Path: []string{"modules"}, Item: "{{.id}}"}}}},
+			Appends: []Append{{File: "training.yaml", Path: []string{"modules"}, Item: "{{q .id}}"}}}},
 	{ID: "template.module-quiz", Group: "Module", Title: "Module with a reading and a quiz", FileKind: "module",
 		Summary: "A new module with a reading and a one-question quiz, added to training.yaml.",
 		Fields:  []Field{in("id", "id", "Folder name under modules/, e.g. 02-heat."), doc("Module.title", "title", "string", true)},
@@ -150,7 +153,7 @@ var Catalog = []Block{
 			"modules/{{.id}}/module.yaml":      "title: {{q .title}}\nitems:\n  - reading: reading/intro.md\n  - quiz: quiz.yaml\n",
 			"modules/{{.id}}/reading/intro.md": "# {{.title}}\n\nWrite the reading here.\n",
 			"modules/{{.id}}/quiz.yaml":        "pass_threshold: 0.8\nquestions:\n  - id: q1\n    type: single\n    prompt: \"Which iron do you strike?\"\n    options: [\"Cold iron\", \"Hot iron\"]\n    answer: 1\n",
-		}, Appends: []Append{{File: "training.yaml", Path: []string{"modules"}, Item: "{{.id}}"}}}},
+		}, Appends: []Append{{File: "training.yaml", Path: []string{"modules"}, Item: "{{q .id}}"}}}},
 
 	{ID: "reading", Group: "Reading", Title: "Reading", FileKind: "reading",
 		Summary: "A Markdown page in a module, added to its items.",
@@ -322,14 +325,22 @@ func invalidf(format string, a ...any) error {
 	return apperr.Wrap(apperr.Invalid, fmt.Sprintf(format, a...))
 }
 
+// quote is s as a JSON string, which is a YAML double-quoted scalar. HTML escaping is off, so <, > and & read as typed.
+func quote(s string) string {
+	var b bytes.Buffer
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	_ = e.Encode(s)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 var funcs = template.FuncMap{
-	"q": func(s string) string { b, _ := json.Marshal(s); return string(b) }, // a JSON string is a YAML double-quoted scalar
+	"q": quote,
 	"list": func(s string) string {
 		var out []string
 		for _, l := range strings.Split(s, "\n") {
 			if l = strings.TrimSpace(l); l != "" {
-				b, _ := json.Marshal(l)
-				out = append(out, string(b))
+				out = append(out, quote(l))
 			}
 		}
 		return "[" + strings.Join(out, ", ") + "]"
@@ -341,9 +352,7 @@ var funcs = template.FuncMap{
 		var out []string
 		for _, l := range strings.Split(s, "\n") {
 			if left, right, ok := strings.Cut(l, "="); ok {
-				a, _ := json.Marshal(strings.TrimSpace(left))
-				b, _ := json.Marshal(strings.TrimSpace(right))
-				out = append(out, "["+string(a)+", "+string(b)+"]")
+				out = append(out, "["+quote(strings.TrimSpace(left))+", "+quote(strings.TrimSpace(right))+"]")
 			}
 		}
 		return "[" + strings.Join(out, ", ") + "]"
@@ -388,8 +397,8 @@ func checkValues(b Block, values map[string]string) (map[string]string, error) {
 			}
 			continue
 		}
-		if len(v) > 4096 || strings.ContainsRune(v, 0) || !utf8.ValidString(v) {
-			return nil, invalidf("%s: text of at most 4 KiB", f.Name)
+		if len(v) > 4096 || !utf8.ValidString(v) || strings.ContainsFunc(v, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) {
+			return nil, invalidf("%s: text of at most 4 KiB, without control characters", f.Name)
 		}
 		bad := false
 		switch f.Type {
@@ -399,18 +408,23 @@ func checkValues(b Block, values map[string]string) (map[string]string, error) {
 			bad = !pathRE.MatchString(v) || strings.Contains(v, "..")
 		case "string", "enum":
 			bad = strings.ContainsAny(v, "\r\n") || len(v) > 200 || (f.Type == "enum" && !slices.Contains(f.Enum, v))
+		// numbers are written as their parsed value: YAML would read the raw text 010 as octal 8
 		case "number":
 			n, err := strconv.ParseFloat(v, 64)
 			bad = err != nil || math.IsNaN(n) || math.IsInf(n, 0) || (f.Min != nil && n < *f.Min) || (f.Max != nil && n > *f.Max) || strings.ContainsAny(v, "xXpP_")
+			out[f.Name] = strconv.FormatFloat(n, 'f', -1, 64)
 		case "integer":
 			n, err := strconv.Atoi(v)
 			bad = err != nil || n < 0
+			out[f.Name] = strconv.Itoa(n)
 		case "ints":
+			var ns []string
 			for _, s := range strings.Fields(strings.ReplaceAll(v, ",", " ")) {
-				if n, err := strconv.Atoi(s); err != nil || n < 0 {
-					bad = true
-				}
+				n, err := strconv.Atoi(s)
+				bad = bad || err != nil || n < 0
+				ns = append(ns, strconv.Itoa(n))
 			}
+			out[f.Name] = strings.Join(ns, ", ")
 		case "bool":
 			bad = v != "true" && v != "false"
 		case "duration":
@@ -457,6 +471,13 @@ func Plan(dir string, b Block, values map[string]string) (map[string]string, str
 		}
 	}
 	if b.Insert.NeedsLab && vals["labdir"] == "" {
+		f := "modules/" + vals["module"] + "/module.yaml"
+		var n yaml.Node
+		if raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f))); err == nil {
+			if err := yaml.Unmarshal(raw, &n); err != nil { // LabFolder can't tell broken YAML from no lab
+				return nil, "", 0, 0, invalidf("%s: the YAML doesn't parse (%v); fix it first", f, err)
+			}
+		}
 		return nil, "", 0, 0, invalidf("module %s has no lab yet: add a lab first", vals["module"])
 	}
 	for _, k := range []string{"labdir", "service"} {

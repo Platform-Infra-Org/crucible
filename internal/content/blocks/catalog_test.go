@@ -106,13 +106,16 @@ func TestCatalogCoversTheContentModel(t *testing.T) {
 func TestInsertValuesAreLiteral(t *testing.T) {
 	dir := t.TempDir()
 	writeAll(t, dir, fixture)
-	nasty := "He said: \"hot\" # not a comment\n- maintainers: [evil@x]\n{{.module}} ' ` \\"
+	nasty := "He said: \"hot\" # not a comment\n- maintainers: [evil@x]\n{{.module}} ' ` R&D <tongs> \\"
 	res, err := Apply(dir, "quiz.question.single", map[string]string{"module": "01-welcome", "id": "q-nasty", "prompt": nasty, "options": "a: b\n#x\n- y", "answer": "2"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := gitsync.ApplyOps(dir, res.Ops); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(res.Ops[0].Content, "R&D <tongs>") {
+		t.Fatalf("values are written as typed, not HTML-escaped: %s", res.Ops[0].Content)
 	}
 	tr, probs := content.Load(dir)
 	if len(probs) > 0 {
@@ -136,6 +139,9 @@ func TestInsertValuesAreLiteral(t *testing.T) {
 	if _, err := Apply(dir, "template.lab.aws", map[string]string{"module": "02-plain"}); !errors.Is(err, apperr.Invalid) {
 		t.Errorf("git-only blocks are refused: %v", err)
 	}
+	if _, err := Apply(dir, "quiz", map[string]string{"module": "02-plain", "prompt": "a\x7fb", "options": "x\ny", "answer": "1"}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "prompt:") {
+		t.Errorf("control characters are refused: %v", err)
+	}
 	if _, err := Apply(dir, "nope", nil); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("unknown block: %v", err)
 	}
@@ -144,5 +150,55 @@ func TestInsertValuesAreLiteral(t *testing.T) {
 	}
 	if _, err := Apply(dir, "reading", map[string]string{"module": "01-welcome", "name": "intro", "title": "Again"}); !errors.Is(err, apperr.Invalid) {
 		t.Errorf("a file that exists is never overwritten: %v", err)
+	}
+}
+
+// Values that mean something else to YAML are written as what the author typed: a module named null stays in the
+// training, and points 010 are ten, not octal eight.
+func TestInsertWritesWhatWasTyped(t *testing.T) {
+	dir := t.TempDir()
+	writeAll(t, dir, fixture)
+	for _, step := range []struct {
+		block  string
+		values map[string]string
+	}{
+		{"module", map[string]string{"id": "null", "title": "Null"}},
+		{"template.module-quiz", map[string]string{"id": "true", "title": "True"}},
+		{"quiz.question.text", map[string]string{"module": "01-welcome", "id": "q-ten", "prompt": "P", "rubric": "R", "points": "010"}},
+		{"quiz.question.multi", map[string]string{"module": "01-welcome", "id": "q-multi", "prompt": "P", "options": "a\nb\nc", "answer": "00, 02"}},
+	} {
+		res, err := Apply(dir, step.block, step.values)
+		if err != nil {
+			t.Fatalf("%s: %v", step.block, err)
+		}
+		if _, err := gitsync.ApplyOps(dir, res.Ops); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr, probs := content.Load(dir)
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	if !slices.Equal(tr.ModuleIDs, []string{"01-welcome", "02-plain", "null", "true"}) {
+		t.Fatalf("modules: %q", tr.ModuleIDs)
+	}
+	quiz := tr.Module("01-welcome").Quiz
+	if p := quiz.Question("q-ten").Points; p != 10 {
+		t.Fatalf("points 010 loaded as %v", p)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "modules/01-welcome/quiz.yaml"))
+	if !strings.Contains(string(raw), "answer: [0, 2]") {
+		t.Fatalf("ints are written as numbers: %s", raw)
+	}
+}
+
+// Review Focus 4: a lab block in a module whose module.yaml doesn't parse says so, not "no lab yet".
+func TestLabBlockInBrokenModule(t *testing.T) {
+	dir := t.TempDir()
+	writeAll(t, dir, fixture)
+	writeAll(t, dir, map[string]string{"modules/01-welcome/module.yaml": "title: Welcome\nitems: [ - lab: [\n"})
+	_, err := Apply(dir, "lab.hint", map[string]string{"module": "01-welcome", "task": "t1", "text": "T"})
+	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "modules/01-welcome/module.yaml: the YAML doesn't parse") || !strings.Contains(err.Error(), "fix it first") {
+		t.Fatalf("broken module.yaml: %v", err)
 	}
 }

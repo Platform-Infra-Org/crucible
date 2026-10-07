@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"crucible/internal/apperr"
 	"crucible/internal/audit"
@@ -115,13 +116,23 @@ func (s *Store) DeleteSchedule(ctx context.Context, actor, name string) error {
 		}
 		tag, err := tx.Exec(ctx, `DELETE FROM schedules WHERE name = $1`, name)
 		if err != nil {
-			return err
+			return scheduleInUse(err, name)
 		}
 		if tag.RowsAffected() == 0 {
 			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no schedule named %q", name))
 		}
 		return nil
 	})
+}
+
+// scheduleInUse maps the programs.schedule_name foreign key firing (a program claimed the schedule after our
+// check) to the same Conflict the check gives. Other errors pass through.
+func scheduleInUse(err error, name string) error {
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23503" {
+		return apperr.Wrap(apperr.Conflict, fmt.Sprintf("schedule %q is used by a program; move it to another schedule first", name))
+	}
+	return err
 }
 
 // SetQuotes replaces the stored list; the built-in quotes are added at serve time.

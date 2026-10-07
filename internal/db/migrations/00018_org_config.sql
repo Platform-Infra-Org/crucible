@@ -73,7 +73,7 @@ CREATE TABLE programs (
   team                 text NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   training             text NOT NULL REFERENCES trainings(id),
   pinned_ref           text,             -- NULL: track the tracked branch head
-  schedule_name        text,
+  schedule_name        text REFERENCES schedules(name),
   inline_schedule      jsonb,
   ttl                  text,
   idle_timeout         text,

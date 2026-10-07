@@ -3,8 +3,11 @@ package org
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"crucible/internal/apperr"
 	"crucible/internal/config"
@@ -186,5 +189,37 @@ func TestSetQuotesReplacesTheList(t *testing.T) {
 	pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'quotes.update'`).Scan(&n)
 	if n != 2 {
 		t.Errorf("quotes.update audit rows = %d, want 2", n)
+	}
+}
+
+func TestScheduleForeignKeyIsTheRealGuard(t *testing.T) {
+	pool := dbtest.New(t)
+	s := &Store{DB: pool}
+	ctx := context.Background()
+	sc := config.Schedule{Timezone: "UTC", Windows: []config.Window{{Days: []string{"mon"}, Start: "08:00", End: "19:00"}}}
+	if err := s.SetSchedule(ctx, "admin@x", "days", sc); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
+	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('forge-101','https://git/x.git')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training, schedule_name) VALUES ('forge','forge-101','days')`)
+	_, err := pool.Exec(ctx, `DELETE FROM schedules WHERE name = 'days'`)
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != "23503" {
+		t.Fatalf("a direct delete of a used schedule must fail with a foreign key violation, got %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO programs (team, training, schedule_name) VALUES ('forge','x','nope')`); err == nil {
+		t.Error("a program naming a missing schedule must be refused")
+	}
+}
+
+func TestForeignKeyViolationSurfacesAsConflict(t *testing.T) {
+	err := scheduleInUse(fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: "23503"}), "days")
+	if !errors.Is(err, apperr.Conflict) {
+		t.Errorf("23503 = %v, want Conflict", err)
+	}
+	other := errors.New("boom")
+	if scheduleInUse(other, "days") != other {
+		t.Error("other errors must pass through")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -152,9 +153,9 @@ func Insert(src []byte, path []string, item string, set bool) (out []byte, line 
 			out, line, err = nil, 0, fmt.Errorf("can't insert here (%v); edit the file by hand", r)
 		}
 		if err == nil {
-			var chk yaml.Node
-			if yaml.Unmarshal(out, &chk) != nil {
-				out, line, err = nil, 0, errors.New("the entry doesn't fit there; edit the file by hand")
+			err = onlyTargetChanged(src, out, path, item, set)
+			if err != nil {
+				out, line = nil, 0
 			}
 		}
 	}()
@@ -208,6 +209,9 @@ func Insert(src []byte, path []string, item string, set bool) (out []byte, line 
 			return nil, 0, fmt.Errorf("%s: not a mapping", seg)
 		}
 		k, v := lookup(cur, seg)
+		if v == nil && mergedHas(cur, seg) {
+			return nil, 0, fmt.Errorf("%s comes from a << merge; edit the file by hand", seg)
+		}
 		if v == nil || (v.Kind == yaml.ScalarNode && v.ShortTag() == "!!null") {
 			if !last {
 				return nil, 0, fmt.Errorf("%s is missing", seg)
@@ -233,7 +237,7 @@ func Insert(src []byte, path []string, item string, set bool) (out []byte, line 
 		return flowAppend(lines, cur, item, nl)
 	}
 	first := lines[cur.Content[0].Line-1]
-	at := end(cur)
+	at := tail(lines, &doc, cur)
 	return splice(lines, at, entry(len(first)-len(strings.TrimLeft(first, " ")), item, false), nl), at + 1, nil
 }
 
@@ -325,4 +329,114 @@ func flowAppend(lines []string, seq *yaml.Node, item, nl string) ([]byte, int, e
 		}
 	}
 	return nil, 0, errors.New("a [flow] list spread over several lines: edit it by hand")
+}
+
+// tail is the last line (1-based) of n including multi-line quoted, plain and folded scalars, whose continuation
+// lines yaml.v3 gives no node for: everything up to the next node after n, minus trailing blank and comment lines.
+func tail(lines []string, doc, n *yaml.Node) int {
+	e := end(n)
+	next := len(lines) + 1
+	var walk func(*yaml.Node)
+	walk = func(m *yaml.Node) {
+		if m.Line > e && m.Line < next {
+			next = m.Line
+		}
+		for _, c := range m.Content {
+			walk(c)
+		}
+	}
+	walk(doc)
+	for l := next - 1; l > e; l-- {
+		if t := strings.TrimSpace(lines[l-1]); t != "" && !strings.HasPrefix(t, "#") {
+			return l
+		}
+	}
+	return e
+}
+
+// mergedHas reports whether key is inherited through a "<<" merge of m.
+func mergedHas(m *yaml.Node, key string) bool {
+	for i := 0; i+1 < len(m.Content) && m.Kind == yaml.MappingNode; i += 2 {
+		if m.Content[i].Value != "<<" {
+			continue
+		}
+		srcs := []*yaml.Node{m.Content[i+1]}
+		if srcs[0].Kind == yaml.SequenceNode {
+			srcs = srcs[0].Content
+		}
+		for _, s := range srcs {
+			if s.Kind == yaml.AliasNode {
+				s = s.Alias
+			}
+			if _, v := lookup(s, key); v != nil || mergedHas(s, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// onlyTargetChanged decodes src and out, applies the intended change to decoded src and refuses unless the two agree:
+// a splice that landed inside a scalar, or touched an anchored list's aliases, never gets written.
+func onlyTargetChanged(src, out []byte, path []string, item string, set bool) error {
+	bad := errors.New("the entry doesn't fit there without changing something else; edit the file by hand")
+	var before, after, add any
+	if yaml.Unmarshal(src, &before) != nil || yaml.Unmarshal(out, &after) != nil || yaml.Unmarshal([]byte(item), &add) != nil {
+		return bad
+	}
+	want, ok := apply(before, path, add, set)
+	if !ok || !reflect.DeepEqual(want, after) {
+		return bad
+	}
+	return nil
+}
+
+func apply(n any, path []string, add any, set bool) (any, bool) {
+	if len(path) == 0 {
+		if set {
+			return nil, false
+		}
+		l, ok := n.([]any)
+		return append(slices.Clone(l), add), ok
+	}
+	if k, v, ok := strings.Cut(path[0], "="); ok {
+		l, isList := n.([]any)
+		if !isList {
+			return nil, false
+		}
+		l = slices.Clone(l)
+		for i, e := range l {
+			if m, isMap := e.(map[string]any); isMap && fmt.Sprint(m[k]) == v {
+				r, ok := apply(e, path[1:], add, set)
+				l[i] = r
+				return l, ok
+			}
+		}
+		return nil, false
+	}
+	if n == nil && len(path) == 1 {
+		n = map[string]any{}
+	}
+	m, isMap := n.(map[string]any)
+	if !isMap {
+		return nil, false
+	}
+	m = maps.Clone(m)
+	cur, has := m[path[0]]
+	switch {
+	case len(path) == 1 && set:
+		m[path[0]] = add
+	case len(path) == 1 && cur == nil:
+		m[path[0]] = []any{add}
+	default:
+		if !has {
+			return nil, false
+		}
+		r, ok := apply(cur, path[1:], add, set)
+		m[path[0]] = r
+		if !ok {
+			return nil, false
+		}
+	}
+	return m, true
 }

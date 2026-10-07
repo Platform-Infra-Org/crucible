@@ -199,3 +199,36 @@ func FuzzInsert(f *testing.F) {
 		}
 	})
 }
+
+// Fix round 1: inserts that would change anything but the target are refused or placed correctly.
+func TestInsertMultiLineScalarsAreNotSplit(t *testing.T) {
+	for name, prompt := range map[string]string{
+		"double-quoted": "\"line one\n      line two\"",
+		"plain":         "line one\n      line two",
+		"folded":        ">\n      line one\n      line two",
+		"single-quoted": "'line one\n      line two'",
+	} {
+		src := "questions:\n  - id: q1\n    prompt: " + prompt + "\n\n# end\n"
+		out, _, err := Insert([]byte(src), []string{"questions"}, "id: q2", false)
+		want := strings.Replace(src, "\n\n# end", "\n  - id: q2\n\n# end", 1)
+		if err != nil || string(out) != want {
+			t.Errorf("%s: %v\n%s", name, err, out)
+		}
+	}
+}
+
+func TestInsertRefusesToChangeAnythingElse(t *testing.T) {
+	for name, c := range map[string]struct {
+		src  string
+		path []string
+		set  bool
+	}{
+		"aliased list": {"modules: &m\n  - a\nmaintainers: *m\n", []string{"modules"}, false},
+		"merge append": {"b: &b\n  hints: [x]\nt:\n  <<: *b\n", []string{"t", "hints"}, false},
+		"merge set":    {"b: &b\n  hints: [x]\nt:\n  <<: *b\n", []string{"t", "hints"}, true},
+	} {
+		if out, _, err := Insert([]byte(c.src), c.path, "y", c.set); err == nil {
+			t.Errorf("%s: written:\n%s", name, out)
+		}
+	}
+}

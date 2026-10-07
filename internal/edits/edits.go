@@ -236,56 +236,74 @@ func (s *Service) File(u *auth.User, training, rel string) (string, error) {
 	return string(b), nil
 }
 
-// validate applies the edit to a copy of the head content and loads it, so an edit that would break the training is
-// refused before anything is pushed. It returns the files that actually change.
-func validate(t *content.Training, files map[string]string) (map[string]string, error) {
-	if err := gitsync.CheckEditFiles(files); err != nil {
-		return nil, err
-	}
-	changed := map[string]string{}
-	for rel, body := range files {
-		if old, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(rel))); err != nil || string(old) != body {
-			changed[rel] = body
+// Authorize returns the training's head version and sha when u may propose edits to it: never someone enrolled in it.
+func (s *Service) Authorize(u *auth.User, training string) (*content.Training, string, error) {
+	_, t, sha, err := s.training(u, training)
+	return t, sha, err
+}
+
+// Workspace copies t into a temp dir and applies the ops that change something (a put equal to the current file is
+// dropped). Ops must have passed gitsync.CheckOps. The caller loads the copy, then calls cleanup. New .sh files are
+// made executable there because lint wants lab scripts executable; ContentRepo.PushEdit sets the modes git records.
+func Workspace(t *content.Training, ops []gitsync.Op) (string, []gitsync.Op, func(), error) {
+	var changed []gitsync.Op
+	for _, op := range ops {
+		if op.Op == "put" {
+			if old, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(op.Path))); err == nil && string(old) == op.Content {
+				continue
+			}
 		}
-	}
-	if len(changed) == 0 {
-		return nil, apperr.Wrap(apperr.Invalid, "nothing changed")
+		changed = append(changed, op)
 	}
 	tmp, err := os.MkdirTemp("", "crucible-edit-*")
 	if err != nil {
-		return nil, err
+		return "", nil, nil, err
 	}
-	defer os.RemoveAll(tmp)
+	cleanup := func() { _ = os.RemoveAll(tmp) }
 	if err := os.CopyFS(tmp, os.DirFS(t.Dir)); err != nil {
-		return nil, fmt.Errorf("copying the training to check the edit: %w", err)
+		cleanup()
+		return "", nil, nil, fmt.Errorf("copying the training to check the edit: %w", err)
 	}
-	for rel, body := range changed {
-		p := filepath.Join(tmp, filepath.FromSlash(rel))
-		if err := gitsync.NoSymlinks(tmp, rel); err != nil {
-			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
-		if err := os.WriteFile(p, []byte(body), 0o755); err != nil { // lint wants lab scripts executable; gitsync sets real modes
-			return nil, err
+	created, err := gitsync.ApplyOps(tmp, changed)
+	if err != nil {
+		cleanup()
+		return "", nil, nil, err
+	}
+	for _, rel := range created {
+		if strings.HasSuffix(rel, ".sh") {
+			_ = os.Chmod(filepath.Join(tmp, filepath.FromSlash(rel)), 0o755)
 		}
 	}
-	nt, probs := content.Load(tmp)
+	return tmp, changed, cleanup, nil
+}
+
+// Check applies ops to a copy of t and loads it: the ops that change something, and the problems the training would
+// then have. err is for ops that are refused or can't apply, and for an edit that changes nothing.
+func Check(t *content.Training, ops []gitsync.Op) ([]gitsync.Op, []content.Problem, error) {
+	if err := gitsync.CheckOps(ops); err != nil {
+		return nil, nil, err
+	}
+	dir, changed, cleanup, err := Workspace(t, ops)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanup()
+	if len(changed) == 0 {
+		return nil, nil, apperr.Wrap(apperr.Invalid, "nothing changed")
+	}
+	nt, probs := content.Load(dir)
 	if len(probs) == 0 && nt.ID != t.ID {
 		probs = []content.Problem{{File: "training.yaml", Msg: "the training id must stay " + t.ID}}
 	}
-	if len(probs) > 0 {
-		msgs := []string{}
-		for _, p := range probs[:min(len(probs), 10)] {
-			if rel, err := filepath.Rel(tmp, p.File); err == nil && filepath.IsLocal(rel) {
-				p.File = filepath.ToSlash(rel)
-			}
-			msgs = append(msgs, p.String())
-		}
-		return nil, apperr.Wrap(apperr.Invalid, "this edit would break the training: "+strings.Join(msgs, "; "))
+	return changed, probs, nil
+}
+
+func broken(probs []content.Problem) error {
+	msgs := []string{}
+	for _, p := range probs[:min(len(probs), 10)] {
+		msgs = append(msgs, p.String())
 	}
-	return changed, nil
+	return apperr.Wrap(apperr.Invalid, "this edit would break the training: "+strings.Join(msgs, "; "))
 }
 
 // limits are the per-author volume limits. Create checks them cheaply first, then again, authoritatively, in the
@@ -329,9 +347,16 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if err := limits(ctx, s.DB, me); err != nil { // before the copy validate makes
 		return nil, err
 	}
-	changed, err := validate(t, in.Files)
+	changedOps, probs, err := Check(t, gitsync.PutOps(in.Files))
 	if err != nil {
 		return nil, err
+	}
+	if len(probs) > 0 {
+		return nil, broken(probs)
+	}
+	changed := map[string]string{} // ponytail: map until Task 7 stores ops
+	for _, op := range changedOps {
+		changed[op.Path] = op.Content
 	}
 	var id int64
 	if err := s.DB.QueryRow(ctx, `SELECT nextval(pg_get_serial_sequence('content_edits', 'id'))`).Scan(&id); err != nil {

@@ -23,6 +23,7 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
+	"crucible/internal/authoring"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
 	"crucible/internal/configapi"
@@ -267,11 +268,12 @@ func run(ctx context.Context) error {
 			}
 			return repos[key]
 		}}
+	authoringSvc := &authoring.Service{DB: pool, Edits: editsSvc, Log: slog.Default()}
 
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
-			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc,
+			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc, Authoring: authoringSvc,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

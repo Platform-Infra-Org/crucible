@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { pathProblem } from '../../lib/editLimits'
-import { ancestors, buildTree, dirOf, iconOf, menuFor, rows as rowsOf, treeKey, type Row } from './tree'
+import { ancestors, buildTree, dirOf, focusAfterDelete, iconOf, menuFor, rows as rowsOf, treeKey, type Row } from './tree'
 import { Icon } from './icons'
 
 type Props = {
@@ -47,10 +47,10 @@ export function Explorer({ paths, greyed, changed, active, readOnly, onOpen, onN
     setEditing({ kind: 'new', under }); setValue(dir || 'modules/')
   }
   const remove = (p: string) => {
-    const i = visible.findIndex((r) => r.node.path === p)
-    if (!window.confirm(`Delete ${p}?`)) return
-    refocus.current = (visible[i + 1] ?? visible[i - 1])?.node.path
-    onDelete(p)
+    const yes = window.confirm(`Delete ${p}?`)
+    refocus.current = focusAfterDelete(visible, p, yes) // confirmed or not, focus never drops to the page
+    setFocus(refocus.current ?? '')
+    if (yes) onDelete(p)
   }
   const act = (a: Action, r: Row) => {
     const p = r.node.path
@@ -169,8 +169,8 @@ function ContextMenu({ x, y, items, onPick, onClose }: { x: number; y: number; i
     el.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
   }, [x, y])
   useEffect(() => {
-    const away = (e: Event) => { if (!ref.current?.contains(e.target as Node)) close.current(false) }
-    const gone = () => close.current(false)
+    const away = (e: Event) => { if (!ref.current?.contains(e.target as Node)) close.current(false) } // focus goes where the click went
+    const gone = () => close.current(true) // scrolled, resized or the window lost focus: back to the row
     document.addEventListener('pointerdown', away, true)
     window.addEventListener('scroll', gone, true)
     window.addEventListener('resize', gone)

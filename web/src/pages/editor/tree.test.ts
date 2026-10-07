@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { ancestors, buildTree, dirOf, iconOf, menuFor, rows, treeKey } from './tree'
+import { ancestors, buildTree, dirOf, focusAfterDelete, iconOf, menuFor, rows, treeKey } from './tree'
 
 const tree = buildTree(
   ['training.yaml', 'modules/02-b/module.yaml', 'modules/01-a/reading/b.md', 'modules/01-a/reading/a.md', 'modules/01-a/module.yaml', 'modules/10-c/lab/setup.sh'],
@@ -59,4 +59,11 @@ test('arrow keys walk the visible rows, open and close folders, and Enter opens 
   expect(treeKey(r, 'modules/01-a', 'Home', c)).toEqual({ focus: 'modules' })
   expect(treeKey(r, 'modules/01-a', 'End', c)).toEqual({ focus: 'training.yaml' })
   expect(treeKey(r, 'modules/01-a', 'x', c)).toBeUndefined()
+})
+
+test('after Delete, focus stays on the row when cancelled, else moves to the next row (or the previous at the end)', () => {
+  const r = rows(tree, new Set(['modules']))
+  expect(focusAfterDelete(r, 'training.yaml', false)).toBe('training.yaml')
+  expect(focusAfterDelete(r, 'modules', true)).toBe('training.yaml')
+  expect(focusAfterDelete(r, 'training.yaml', true)).toBe('modules')
 })

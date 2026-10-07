@@ -46,6 +46,14 @@ export function menuFor(node: TreeNode, readOnly: boolean): ('new' | 'rename' | 
   return ['new', 'rename', 'delete']
 }
 
+// focusAfterDelete is the row focus returns to once a Delete is answered: the row itself when cancelled, else its
+// neighbour (the next row, or the previous one at the end).
+export function focusAfterDelete(rs: Row[], path: string, deleted: boolean): string | undefined {
+  if (!deleted) return path
+  const i = rs.findIndex((r) => r.node.path === path)
+  return (rs[i + 1] ?? rs[i - 1])?.node.path
+}
+
 // treeKey maps a key on the focused row to what the tree does (the WAI-ARIA tree pattern); undefined: not a tree key.
 export function treeKey(rs: Row[], at: string, key: string, collapsed: Set<string>): { focus?: string; expand?: string; collapse?: string; open?: string } | undefined {
   const i = rs.findIndex((r) => r.node.path === at)

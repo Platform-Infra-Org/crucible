@@ -6,7 +6,9 @@ host: crucible.example.com
 publicURL: https://crucible.example.com
 platformBranch: main
 syncInterval: 60s
-bootstrapAdmin: ""            # first start only: seeds admins.yaml when it names no admin (spec §5.1)
+# The platform repo URL is the CRUCIBLE_PLATFORM_REPO key of the secret named by secretName. It is optional: an empty
+# value means configuration lives in Postgres; a URL means the git platform repo is used (branch: platformBranch).
+bootstrapAdmin: ""            # first start only: seeds the first admin (git mode: admins.yaml when it names none; Postgres mode: the admins table). The only thing a fresh Postgres-mode install needs (spec §5.1)
 gitBot:                       # author of config commits the UI pushes; use an address your git host accepts
   name: Crucible Bot
   email: crucible-bot@example.com

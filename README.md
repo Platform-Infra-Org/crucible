@@ -23,6 +23,19 @@ browser cannot infer answers from them. Set it to a random value in every real d
 restarts (changing it only reshuffles quizzes that are open at that moment). If it is unset the API logs a warning and
 uses a fixed development value; the local compose stack sets a dev value.
 
+## Where configuration lives
+
+Training content is always in git. Configuration and org data (settings, trainings registry, teams, programs, budgets)
+come from one of two places, chosen at startup:
+
+- `CRUCIBLE_PLATFORM_REPO` set: a git platform repo, as in `examples/platform`. The local stack and its end-to-end
+  tests run this way.
+- unset: Postgres. A fresh instance needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (the first admin's
+  email); that admin then configures everything under **Administrator** in the app. `CRUCIBLE_BOOTSTRAP_ADMIN` is
+  ignored in git mode.
+
+Export/import between the two is not built yet (planned as M8b).
+
 ## Local labs and your laptop
 
 `runtime: local` labs run in Docker on the trainee's laptop. Their compose file is checked against an allowlist (no privileged mode, host namespaces, published ports, writable binds, secrets), but the containers can still reach the internet and `host.docker.internal`. Use `runtime: cluster` labs when you need stricter isolation.

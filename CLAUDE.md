@@ -45,7 +45,7 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
 - `internal/` — one package per domain: `labs` (runners: local/cluster/aws, approvals, budgets, sweep, reaper,
   ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
-  write-back, content edit branches), `configapi`, `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
+  write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
   (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
 - `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`
@@ -70,8 +70,13 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 - Anyone enrolled in a training never sees its answer keys: rubrics (`json:"-"`, only via `ScorerView`), raw files,
   edit diffs, Anvil data, peers' uploads. Enrolled users never score their own training (admins included).
-- Git is the source of truth. UI saves go through the bot Writer with `base_sha`, a permission re-check at the tip,
-  validation before push, and an audit row. Content edits use per-edit branches merged by the bot after review,
+- Git is the source of truth for **training content**. Configuration and org data (settings, tiers, schedules, quotes,
+  admins, the training registry, teams, membership, mentors, webhooks, budgets, programs, roles, enrollments, pins)
+  live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes. Two modes, chosen
+  at startup: `CRUCIBLE_PLATFORM_REPO` set → git platform repo (UI saves go through the bot Writer with `base_sha`, a
+  permission re-check at the tip, validation before push, and an audit row; this is what the e2e fixtures still use);
+  unset → Postgres, which needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (ignored in git mode). Both coexist
+  until M8b. Content edits use per-edit branches merged by the bot after review,
   limited to `training.yaml` and `modules/<id>/…`. All git calls go through `gitsync.git` (isolated config,
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.

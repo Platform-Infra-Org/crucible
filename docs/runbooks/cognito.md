@@ -13,7 +13,7 @@ Crucible signs people in through any standard OIDC provider. On AWS we use an **
 | Resource | Setting | Why |
 |---|---|---|
 | User pool `crucible` | Essentials tier | Modern "managed login" pages. Free ≤ 10,000 monthly active users, then $0.01/user. |
-| | Email is the username | Matches the emails in the platform repo's `team.yaml` files |
+| | Email is the username | Matches the emails in the teams (the platform repo's `team.yaml` files in git mode; the team pages in Postgres mode) |
 | | Self sign-up **off** (admin invites only) | Only people you invite can get in |
 | | MFA optional (authenticator app) | Users can turn it on; you can make it mandatory later (§5) |
 | | Password ≥ 12 chars, upper + lower + number; temporary password valid 7 days | |
@@ -66,7 +66,7 @@ Then continue with `crucible aws up` as described in `docs/runbooks/aws.md`.
 
 A person needs **two things** to use Crucible:
 1. A **Cognito account**, which lets them sign in.
-2. Their **email in a team** in the platform repo (`teams/<team>/team.yaml`, and `programs/*.yaml` for trainees). This decides what they can see and do.
+2. Their **email in a team** in the platform repo in git mode, or on the team page in Postgres mode (`teams/<team>/team.yaml`, and `programs/*.yaml` for trainees). This decides what they can see and do.
 
 The email must be the same in both places. Crucible compares emails in lowercase.
 

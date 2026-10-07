@@ -302,3 +302,25 @@ reviewer can confirm it changes no behaviour.
 None blocking. Two worth revisiting after it ships: whether team webhooks belong in the export at
 all (they are secrets, and an import carries them to a new environment), and whether a second
 instance importing the same file should be detectable, so two live instances cannot quietly diverge.
+
+---
+
+## 12. As built (M8a)
+
+M8a shipped sections 3–6 and the admin UI; export/import, moving the e2e fixtures off the git platform repo and
+deleting the git config write-back are M8b. Where the build deliberately differs from the text above:
+
+- **Bridge, not cutover.** Both sources coexist until M8b. `CRUCIBLE_PLATFORM_REPO` set → the git loader and write-back
+  exactly as before (the e2e fixtures still need it); unset → `org.Store.Platform`, needing only `DATABASE_URL` and
+  `CRUCIBLE_BOOTSTRAP_ADMIN`. `config.Load` is intact. `gitsync.Syncer` takes a `Config` function rather than an
+  `org.Store`, because `internal/org` already imports `internal/gitsync`.
+- **Role defaults resolve at read time.** Enrollment stores only explicit roles; defaults come from the program's
+  settings when the snapshot is built, so changing a default applies to everyone not overridden.
+- **Orphan programs are skipped, not fatal.** `config.Load` fails the whole load when a program names an unknown
+  training. The SQL path is FK-protected, so an orphan means corruption; the snapshot drops that program with a
+  `slog.Warn` rather than take the instance's configuration down.
+- **Repoints are allowed.** Changing a registered training's repository is not refused when programs use it (moving
+  hosts preserves history). The audit detail records `programs_affected`; a pinned SHA that no longer resolves keeps
+  the last good version, as `TestBadPinKeepsLastGood` does.
+- **Credentials are masked.** In the admin trainings list and in audit detail a repo URL's userinfo shows as
+  `***@` (`https://***@host/…`, `***@host:path`); stored credentials never leave the server (`TestRedactRepo`).

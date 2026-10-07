@@ -129,12 +129,12 @@ func TestTrainingWritesAreAudited(t *testing.T) {
 	}
 	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "dev"))
 	d := detailOf()
-	if d["repo"] != "https://git/b.git" || d["branch"] != "dev" || d["previous_repo"] != "https://git/a.git" || d["previous_branch"] != "main" || d["programs_pinned"] != float64(1) {
+	if d["repo"] != "https://git/b.git" || d["branch"] != "dev" || d["previous_repo"] != "https://git/a.git" || d["previous_branch"] != "main" || d["programs_affected"] != float64(1) {
 		t.Errorf("repoint detail = %v", d)
 	}
 	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "stable"))
 	d = detailOf()
-	if _, has := d["programs_pinned"]; has || d["branch"] != "stable" || d["previous_branch"] != "dev" || d["previous_repo"] != "https://git/b.git" {
+	if _, has := d["programs_affected"]; has || d["branch"] != "stable" || d["previous_branch"] != "dev" || d["previous_repo"] != "https://git/b.git" {
 		t.Errorf("branch-only detail = %v", d)
 	}
 	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "dev"))

@@ -57,7 +57,7 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 				return err
 			}
 			if n > 0 {
-				detail["programs_pinned"] = n
+				detail["programs_affected"] = n
 			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE trainings SET repo = $2, branch = $3 WHERE id = $1`, id, repo, branch)

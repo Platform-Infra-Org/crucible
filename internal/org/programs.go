@@ -196,8 +196,9 @@ func fkError(err error, team, training string, schedule *string) error {
 	}
 }
 
-// Enroll creates the program. Empty role lists take the spec defaults here and only here: the leader manages and
-// approves, the seniors score. A later SetProgram stores exactly what it is given, so an admin can remove a role.
+// Enroll creates the program. Only roles named in the body are stored. An empty list means the spec default (the
+// leader manages and approves, the seniors score), resolved at read time against the team as it is then, as in
+// config.Load, so a new leader or a promoted senior is followed without touching the program.
 func (s *Store) Enroll(ctx context.Context, actor, team, training string, b ProgramBody) error {
 	p, err := b.validate()
 	if err != nil {
@@ -208,26 +209,6 @@ func (s *Store) Enroll(ctx context.Context, actor, team, training string, b Prog
 		roster, err := teamRoster(ctx, tx, team)
 		if err != nil {
 			return err
-		}
-		var leader string
-		var seniors []string
-		for e, r := range roster {
-			switch r {
-			case "leader":
-				leader = e
-			case "senior":
-				seniors = append(seniors, e)
-			}
-		}
-		slices.Sort(seniors)
-		if len(p.roles["manager"]) == 0 {
-			p.roles["manager"] = []string{leader}
-		}
-		if len(p.roles["approver"]) == 0 {
-			p.roles["approver"] = []string{leader}
-		}
-		if len(p.roles["scorer"]) == 0 {
-			p.roles["scorer"] = seniors
 		}
 		if err := p.checkMembers(roster); err != nil {
 			return err

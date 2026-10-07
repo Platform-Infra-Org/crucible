@@ -58,8 +58,19 @@ func TestEnrollAppliesRoleDefaults(t *testing.T) {
 	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "senior@x" {
 		t.Errorf("scorers = %v", prog.Roles.Scorers)
 	}
-	if n := count(t, s, `SELECT count(*) FROM program_roles`); n != 3 {
-		t.Errorf("stored roles = %d, want the defaults stored as rows", n)
+	if n := count(t, s, `SELECT count(*) FROM program_roles`); n != 0 {
+		t.Errorf("stored roles = %d: defaults are resolved at read time, never stored", n)
+	}
+	// the default follows the team: a new leader becomes manager and approver with no program edit
+	mustExec(t, s.DB, `UPDATE team_members SET role = 'senior' WHERE team = 'platform' AND email = 'lead@x'`)
+	mustExec(t, s.DB, `UPDATE team_members SET role = 'leader' WHERE team = 'platform' AND email = 'senior@x'`)
+	p, _ = s.Platform(ctx)
+	prog = p.Teams["platform"].Programs["forge-101"]
+	if len(prog.Roles.Manager) != 1 || prog.Roles.Manager[0] != "senior@x" || len(prog.Roles.Approvers) != 1 || prog.Roles.Approvers[0] != "senior@x" {
+		t.Errorf("after a leader change manager = %v approvers = %v, want senior@x", prog.Roles.Manager, prog.Roles.Approvers)
+	}
+	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "lead@x" {
+		t.Errorf("scorers = %v, want the new senior", prog.Roles.Scorers)
 	}
 	if audits(t, s, "program.enroll") != 1 {
 		t.Error("enroll must be audited once")
@@ -72,12 +83,12 @@ func TestEnrollAppliesRoleDefaults(t *testing.T) {
 	}
 }
 
-func TestSetProgramDoesNotReapplyDefaults(t *testing.T) {
+func TestSetProgramStoresExplicitRoles(t *testing.T) {
 	s, ctx := orgFixture(t)
 	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{}); err != nil {
 		t.Fatal(err)
 	}
-	// an admin removes the senior as scorer by naming only the leader; the senior must not come back as a stored role
+	// an admin overrides the scorers with the leader; an empty list would restore the default instead
 	b := ProgramBody{Version: 1, Roles: config.Roles{Manager: []string{"Lead@x"}, Scorers: []string{"lead@x"}, Approvers: []string{"lead@x"}}, Enrolled: []string{" New@x "}}
 	if err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", b); err != nil {
 		t.Fatal(err)
@@ -201,6 +212,9 @@ func TestSetPinRecordsTheSHAAndIsAudited(t *testing.T) {
 	}
 	if err := s.SetPin(ctx, "admin@x", "platform", "forge-101", ""); err != nil {
 		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action='program.pin' AND detail->>'sha'='' AND detail->>'previous_sha'='`+sha2+`'`); n != 1 {
+		t.Error("clearing the pin must be audited with the previous sha")
 	}
 	p, _ = s.Platform(ctx)
 	if p.Teams["platform"].Programs["forge-101"].PinnedRef != "" {

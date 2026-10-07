@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -274,7 +275,8 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 			rows.Close()
 			return err
 		}
-		if _, ok := p.Trainings[pr.Training]; !ok { // a restored snapshot can leave a program whose training is gone
+		if _, ok := p.Trainings[pr.Training]; !ok { // the foreign key forbids this; only corruption leaves it. Drop one program, not the whole config.
+			slog.Warn("org: skipping program whose training row is missing", "team", team, "training", pr.Training)
 			continue
 		}
 		fail := func(err error) error {

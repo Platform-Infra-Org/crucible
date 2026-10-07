@@ -20,10 +20,19 @@ import (
 // remoteURL is the allowlist of network remotes; anything else (file:, bare paths, ext::, C:\, a leading "-") is local.
 var remoteURL = regexp.MustCompile(`(?i)^((https?|ssh|git)://[^\s-]\S*|[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:\S*)$`)
 
-var userinfo = regexp.MustCompile(`(://[^/:@?#\s]*):[^/@?#\s]*@`)
+var userinfo = regexp.MustCompile(`(://)([^/?#\s]*)@`)
 
-// redactRepo drops the password from (user:secret@host becomes user@host; git@host is untouched) a repo URL for display and the audit log; the stored value keeps them so cloning works.
-func redactRepo(repo string) string { return userinfo.ReplaceAllString(repo, "$1@") }
+// redactRepo masks userinfo in a repo URL for display and the audit log: "git@" is kept (the ssh username, no
+// secret), anything else becomes "***@" so a reader sees credentials were present. A username can be the token
+// (https://ghp_...@host). The stored value keeps them so cloning works.
+func redactRepo(repo string) string {
+	return userinfo.ReplaceAllStringFunc(repo, func(m string) string {
+		if strings.HasSuffix(m, "://git@") {
+			return m
+		}
+		return userinfo.ReplaceAllString(m, "$1***@")
+	})
+}
 
 var errNoChange = errors.New("no change")
 

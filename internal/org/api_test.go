@@ -417,13 +417,16 @@ func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"`+repo+`"}`); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
+	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"tok-101","repo":"https://ghp_t0kenonly@git.example.com/o/t.git"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
 	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"ssh-101","repo":"ssh://git@git.example.com/o/s.git"}`); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
 	if got := f.snap.Trainings["cred-101"].Repo; got != repo {
 		t.Errorf("stored repo = %q, cloning needs the credentials", got)
 	}
-	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || !strings.Contains(w.Body.String(), "https://deploy@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
+	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || strings.Contains(w.Body.String(), "t0kenonly") || !strings.Contains(w.Body.String(), "https://***@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
 		t.Errorf("list = %s", w.Body)
 	}
 	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
@@ -432,11 +435,11 @@ func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	if w := f.do("admin@x", "DELETE", "/api/admin/trainings/cred-101", ""); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%'`); n != 0 {
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%' OR detail::text LIKE '%t0kenonly%'`); n != 0 {
 		t.Errorf("%d audit rows hold the repo credentials", n)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 4 {
-		t.Errorf("audit rows with the redacted repo = %d, want 4 (two adds, repoint, remove)", n)
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 5 {
+		t.Errorf("audit rows with the redacted repo = %d, want 5 (three adds, repoint, remove)", n)
 	}
 }
 

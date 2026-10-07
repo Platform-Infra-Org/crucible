@@ -43,8 +43,15 @@ instead, and the edit needs a fresh approval.
 
 If the training changed underneath an edit and the two no longer fit, the merge stops and the edit turns *stale*.
 Nothing is lost: as the author, choose **Reopen in the editor**. The link is also on your rejected and withdrawn edits.
-Crucible opens a new draft holding all of the edit's changes, renames and deletes included, on the version of the
-training they were made against. The editor tells you when newer content is on the branch.
+Crucible opens the draft you submitted it from, or, if you no longer have it, a new draft holding all of the edit's
+changes, renames and deletes included, on the version of the training they were made against. **Newer content: rebase
+draft** then brings it up to date (see [The editor](/docs/authors/editing-content)).
+
+## Returned edits
+
+A rejected, withdrawn or stale edit reopens in the editor from its page, with your draft as you left it. A merged
+draft disappears from your list. Once you change the reopened draft, it is no longer tied to the old edit: submitting
+it makes a new one.
 
 ## Limits
 

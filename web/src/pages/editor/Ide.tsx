@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { api, type ApiError } from '../../api'
-import type { ContentEdit, DraftInfo, FileEntry, Problem } from '../../types'
+import type { Conflict, ContentEdit, DraftInfo, FileEntry, Problem } from '../../types'
 import { ErrorBox } from '../../components/ErrorBox'
 import { Loader } from '../../components/Loader'
 import { opsProblem } from '../../lib/editLimits'
@@ -12,6 +12,8 @@ import { parseLab } from './previewModel'
 import { ProblemsPanel } from './ProblemsPanel'
 import { ChangesPanel } from './ChangesPanel'
 import { GoToFile } from './GoToFile'
+import { RebasePanel } from './RebasePanel'
+import { resolveOps, withBase, type BaseTexts, type Choice } from './rebase'
 import { unifiedDiff } from './diff'
 import { setupYaml } from './monaco'
 import { afterSave, canAutosave, saveLabel, serialSaves, type SaveState } from './autosave'
@@ -26,7 +28,9 @@ export default function Ide() {
   const [draft, setDraft] = useState<DraftInfo>()
   const [files, setFiles] = useState<FileEntry[]>([])
   const [work, setWork] = useState<DraftOps>(emptyOps)
-  const [baseText, setBaseText] = useState<Record<string, string>>({})
+  const [bt, setBt] = useState<BaseTexts>({ sha: '', text: {} }) // tagged with their base: a fetch for an older base is dropped
+  const baseText = bt.text
+  const [conflicts, setConflicts] = useState<Conflict[]>()
   const [tabs, setTabs] = useState<string[]>([])
   const [active, setActive] = useState('')
   const [title, setTitle] = useState('')
@@ -50,7 +54,7 @@ export default function Ide() {
     setupYaml(await api<Record<string, object>>(`/api/authoring/schema?training=${encodeURIComponent(d.training)}`))
     const kept = currentPaths(f.filter((x) => x.editable).map((x) => x.path), fromOps(d.ops))
     saver.set(d)
-    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBaseText({}); asked.current.clear() // open tabs refetch their base text
+    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBt({ sha: d.base_sha, text: {} }); asked.current.clear() // open tabs refetch their base text
     setTabs((t) => t.filter((p) => kept.includes(p))); setActive((a) => (kept.includes(a) ? a : ''))
     setSave({ kind: 'saved', at: Date.now() })
   }, [id, saver])
@@ -68,27 +72,30 @@ export default function Ide() {
 
   const loadBase = async (p: string | undefined) => {
     if (!p || p in baseText) return
+    const sha = bt.sha
     const { content } = await api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(p)}`)
-    setBaseText((b) => ({ ...b, [p]: content }))
+    setBt((b) => withBase(b, sha, p, content))
   }
   useEffect(() => { // the open file's base text, e.g. after a reload cleared them
     const o = active ? origin(base, work, active) : undefined
-    if (o === undefined || o in baseText) return
+    if (o === undefined || o in bt.text) return
+    const sha = bt.sha
     api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(o)}`)
-      .then(({ content }) => setBaseText((b) => ({ ...b, [o]: content })))
+      .then(({ content }) => setBt((b) => withBase(b, sha, o, content)))
       .catch((e: Error) => setMsg(e.message))
-  }, [active, base, work, baseText, id])
+  }, [active, base, work, bt, id])
   useEffect(() => { // originals of changed files, for their diffs: each fetched once, a failure reported not retried
     if (panel !== 'changes') return
     for (const c of changes) {
       const o = c.kind === 'added' ? undefined : (c.from ?? c.path)
-      if (o === undefined || o in baseText || asked.current.has(o)) continue
+      if (o === undefined || o in bt.text || asked.current.has(o)) continue
       asked.current.add(o)
+      const sha = bt.sha
       api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(o)}`)
-        .then(({ content }) => setBaseText((b) => ({ ...b, [o]: content })))
+        .then(({ content }) => setBt((b) => withBase(b, sha, o, content)))
         .catch(() => setMsg(`Couldn't load the original of ${o}.`))
     }
-  }, [panel, changes, baseText, id])
+  }, [panel, changes, bt, id])
   useEffect(() => { // a lab preview shows its task instructions: load them (existing files only; a failure just leaves the path shown)
     if (!active.endsWith('/lab.yaml')) return
     const labDir = active.slice(0, active.lastIndexOf('/') + 1)
@@ -96,7 +103,7 @@ export default function Ide() {
       const p = labDir + t.instructions
       if (paths.includes(p)) loadBase(origin(base, work, p)).catch(() => {})
     }
-  }, [active, work, baseText]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [active, work, bt]) // eslint-disable-line react-hooks/exhaustive-deps
   const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
@@ -201,6 +208,40 @@ export default function Ide() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
+  // rebase moves the draft onto the newest content. Like every save it runs in the serialSaves queue, after any save in
+  // flight. With no conflicts the server moves base_sha itself; otherwise the author resolves each one first.
+  const rebase = async () => {
+    setMsg('')
+    if (save.kind !== 'saved' && !(await saveNow())) return
+    try {
+      let found: Conflict[] = []
+      await saver.run(async () => {
+        const r = await api<{ draft: DraftInfo; conflicts: Conflict[] }>(`/api/authoring/drafts/${id}/rebase`, { method: 'POST', json: {} })
+        found = r.conflicts
+        return r.draft
+      })
+      if (found.length === 0) { await load(); setMsg('Rebased onto the newest content.') } else setConflicts(found)
+    } catch (e) { setMsg((e as Error).message) }
+  }
+  // resolved saves the author's choices with base_sha at the head the conflicts were found against: if the training
+  // moved again since, the server refuses it and the author rebases once more.
+  const resolved = async (choices: Choice[]) => {
+    if (!conflicts) return
+    try {
+      await saver.run((cur) => api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', json: { title, base_sha: cur.head_sha, ops: resolveOps(cur.ops, conflicts, choices), updated_at: cur.updated_at } }))
+      setConflicts(undefined)
+      await load() // new base: new file list, base texts reloaded on demand
+      setMsg('Rebased onto the newest content.')
+    } catch (e) { setConflicts(undefined); setMsg((e as Error).message) }
+  }
+  const discard = async () => {
+    if (!window.confirm('Discard this draft? Your changes in it are lost.')) return
+    try {
+      await saver.run(async (d) => { await api(`/api/authoring/drafts/${id}`, { method: 'DELETE' }); return d }) // after any save in flight
+      nav('/edits')
+    } catch (e) { setMsg((e as Error).message) }
+  }
+
   if (fatal) return <ErrorBox error={fatal} />
   if (!draft) return <Loader label="Heating the editor…" />
   const readOnly = draft.state === 'in_review' || save.kind === 'conflict'
@@ -210,7 +251,7 @@ export default function Ide() {
         <Link to="/edits">All edits</Link>
         <strong>{draft.training}</strong>
         <label>Title <input value={title} maxLength={200} disabled={readOnly} onChange={(e) => { setTitle(e.target.value); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }} /></label>
-        {draft.base_sha !== draft.head_sha && <span role="note">Newer content is on the branch.</span>}
+        {draft.base_sha !== draft.head_sha && draft.state !== 'in_review' && <button disabled={!!conflicts || save.kind === 'conflict'} onClick={rebase}>Newer content: rebase draft</button>}
       </header>
       {draft.state === 'in_review' && <p role="note">This draft is in review. <Link to={`/edits/${draft.edit_id}`}>Open the edit</Link> and withdraw it to keep working here.</p>}
       {save.kind === 'conflict' && <p role="alert" className="error">{save.reason} <button onClick={() => load().catch(setFatal)}>Reload</button></p>}
@@ -218,6 +259,7 @@ export default function Ide() {
       <div role="tablist" aria-label="Editor views" className="ide-views">
         {(['files', 'editor', 'preview'] as const).map((v) => <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
       </div>
+      {conflicts ? <RebasePanel conflicts={conflicts} onDone={resolved} onCancel={() => setConflicts(undefined)} /> : (
       <div className="ide-main" data-view={view}>
         <div ref={explorerRef} className="ide-side">
           <div role="toolbar" aria-label="Panels" className="ide-activity">
@@ -247,12 +289,13 @@ export default function Ide() {
             : !active && <p className="muted">Open a file from the explorer.</p>}
         </div>
         {active && <div className="ide-preview" data-testid="edit-preview"><Preview path={active} text={textOf(active) ?? ''} read={textOf} /></div>}
-      </div>
+      </div>)}
       <footer className="ide-status" role="status" aria-live="polite">
         <span>{saveLabel(save, now)}</span>
         <span>{problems.length} problems</span>
         <span>base {draft.base_sha.slice(0, 7)}</span>
-        <button disabled={readOnly} onClick={submit}>Submit for review</button>
+        <button disabled={readOnly || !!conflicts} onClick={submit}>Submit for review</button>
+        <button className="ghost" onClick={discard}>Discard draft</button>
       </footer>
       {goto && <GoToFile paths={paths} onPick={(p) => { setGoto(false); open(p); setView('editor') }} onClose={() => setGoto(false)} />}
     </section>

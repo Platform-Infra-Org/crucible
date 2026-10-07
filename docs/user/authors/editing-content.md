@@ -98,6 +98,19 @@ pushes anything. If the change would break the training, it says what is wrong a
 
 A draft in review is read-only. To keep working on it, open its edit and withdraw it.
 
+## Newer content
+
+When the training moved on while you worked, the editor offers **Newer content: rebase draft**. Files you didn't touch
+update silently. For a file changed on both sides, you see the newest version on the left and yours on the right. Edit
+the right side and use it, or drop your change. A rename or delete of a file that changed upstream can be kept or
+dropped; if the file is gone upstream, or a rename's new name now exists, you can only drop it. **Cancel** leaves the
+draft as it was. You need to rebase before you can submit.
+
+## Discarding a draft
+
+**Discard draft**, in the status bar or beside the draft under **My drafts**, deletes the draft after asking. It frees
+one of your 5 drafts. An edit already submitted from it stays as it is.
+
 ## Two tabs on one draft
 
 If you open the same draft in a second browser tab and save there, the first tab stops saving and asks you to reload.

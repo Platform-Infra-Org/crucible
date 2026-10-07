@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router'
 import { api, ApiError } from '../api'
 import { useMe } from '../me'
 import { useFetch } from '../useFetch'
-import type { ContentEdit } from '../types'
+import type { ContentEdit, DraftInfo } from '../types'
 import { DiffView } from '../components/DiffView'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
@@ -15,11 +15,13 @@ export function EditReviewPage() {
   const { id } = useParams()
   const { me } = useMe()
   const { data: e, error, reload } = useFetch<ContentEdit>(`/api/edits/${id}`)
+  const drafts = useFetch<DraftInfo[]>(me.can_edit_content ? '/api/authoring/drafts' : null)
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   if (error) return <ErrorBox error={error} />
   if (!e) return <Loader label="Reading the edit…" />
+  const draft = drafts.data?.find((d) => d.edit_id === e.id) // the draft it came from, still as the author left it
 
   const act = async (action: 'approve' | 'reject' | 'withdraw') => {
     setBusy(true)
@@ -65,7 +67,7 @@ export function EditReviewPage() {
         </p>
       )}
       {['stale', 'rejected', 'withdrawn'].includes(e.status) && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
-        <Link to={`/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
+        <Link to={draft ? `/edits/drafts/${draft.id}` : `/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
       )}
     </section>
   )

@@ -128,4 +128,5 @@ export type MyLab = { id: string; team: string; training: string; module: string
 
 export type DraftState = 'editing' | 'in_review' | 'returned' | 'merged'
 export type DraftInfo = { id: number; training: string; title: string; base_sha: string; head_sha: string; ops: EditOp[]; updated_at: string; edit_id?: number; state: DraftState }
+export type Conflict = { path: string; base: string; head: string; head_missing: boolean; mine: string; op: EditOp }
 export type Problem = { file: string; line: number; msg: string }

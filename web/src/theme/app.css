@@ -244,6 +244,7 @@ meter { width: 8rem; vertical-align: middle; }
 .ide-main > * { min-height: 0; overflow: auto; }
 .ide-editor { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
 .code-editor { min-height: 60vh; height: 100%; }
+.rebase .code-editor { min-height: 0; height: 55vh; } /* leaves room for its buttons and the status bar */
 .ide-tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
 .ide-status { display: flex; gap: 1rem; align-items: center; padding: .5rem 0; border-top: 1px solid var(--surface-2); }
 .explorer ul { list-style: none; padding: 0; margin: 0; }

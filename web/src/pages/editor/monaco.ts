@@ -6,6 +6,7 @@ import * as monaco from 'monaco-editor/editor/editor.api'
 import 'monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css' // via the vite.config.ts alias
 import 'monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon-modifiers.css'
 import 'monaco-editor/editor/browser/coreCommands'
+import 'monaco-editor/editor/browser/widget/diffEditor/diffEditor.contribution' // F7 / Shift+F7 step through the rebase diff
 import 'monaco-editor/editor/common/standaloneStrings'
 import 'monaco-editor/features/find/register'
 import 'monaco-editor/editor/standalone/browser/quickAccess/standaloneCommandsQuickAccess'

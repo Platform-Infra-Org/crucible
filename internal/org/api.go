@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -181,7 +182,11 @@ func (a *api) postAdmin(w http.ResponseWriter, r *http.Request, actor string, _ 
 }
 
 func (a *api) deleteAdmin(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
-	if err := a.s.RemoveAdmin(r.Context(), actor, chi.URLParam(r, "email")); err != nil {
+	email, err := url.PathUnescape(chi.URLParam(r, "email")) // chi routes on RawPath: the param can still be percent-encoded
+	if err != nil {
+		return apperr.Wrap(apperr.Invalid, "that email address is not valid")
+	}
+	if err := a.s.RemoveAdmin(r.Context(), actor, email); err != nil {
 		return err
 	}
 	return a.done(w, r, 0)

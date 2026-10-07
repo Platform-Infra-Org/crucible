@@ -449,3 +449,33 @@ func TestTeamNeverMarshalsItsWebhooks(t *testing.T) {
 		t.Errorf("marshalled team holds the webhook: %s", b)
 	}
 }
+
+func TestAdminWithAnEncodedAddressCanBeRemoved(t *testing.T) {
+	f := newAPI(t)
+	if w := f.do("admin@x", "POST", "/api/admin/admins", `{"email":"a+b@x"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if w := f.do("admin@x", "DELETE", "/api/admin/admins/a%2Bb%40x", ""); w.Code != 200 {
+		t.Fatalf("encoded delete = %d %s", w.Code, w.Body)
+	}
+	if n := count(t, f.s, `SELECT count(*) FROM admins WHERE email = 'a+b@x'`); n != 0 {
+		t.Error("the admin is still there: an admin that cannot be removed is a permanent privilege")
+	}
+}
+
+func TestRedactRepo(t *testing.T) {
+	for in, want := range map[string]string{
+		"git@host.com:o/r.git":            "git@host.com:o/r.git",
+		"deploy@host.com:o/r.git":         "***@host.com:o/r.git",
+		"ghp_t0ken@host.com:o/r.git":      "***@host.com:o/r.git",
+		"ssh://git@host.com/o/r.git":      "ssh://git@host.com/o/r.git",
+		"https://u:p@host.com/o/r.git":    "https://***@host.com/o/r.git",
+		"https://host.com/o/r.git":        "https://host.com/o/r.git",
+		"https://host.com/o/a@b.git":      "https://host.com/o/a@b.git",
+		"https://gitlab@host.com/o/r.git": "https://***@host.com/o/r.git",
+	} {
+		if got := redactRepo(in); got != want {
+			t.Errorf("redactRepo(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -32,3 +32,11 @@ test('a base text fetched for an older base is ignored once the draft moved to a
   expect(withBase(now, 'old', 'm/b.md', 'old b')).toBe(now) // a stale fetch that was in flight during a rebase
   expect(withBase(now, 'new', 'm/b.md', 'new b')).toEqual({ sha: 'new', text: { 'm/a.md': 'new a', 'm/b.md': 'new b' } })
 })
+
+test('dropping a rename also drops the edit of its new name, so it never turns into a copy', () => {
+  const edit = { op: 'put' as const, path: 'm/d.md', content: 'mine' }
+  const conflicts = [c(ren, 'm/c.md'), { ...c(edit, 'm/d.md'), head: 'theirs' }]
+  expect(resolveOps([ren, edit], conflicts, ['drop', { put: 'merged' }])).toEqual([])
+  expect(resolveOps([ren, edit], conflicts, ['keep', { put: 'merged' }])).toEqual([ren, { ...edit, content: 'merged' }])
+  expect(resolveOps([ren, edit], conflicts, ['keep', 'drop'])).toEqual([ren]) // the renamed file takes upstream's text
+})

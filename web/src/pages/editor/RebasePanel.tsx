@@ -19,12 +19,15 @@ export function RebasePanel({ conflicts, onDone, onCancel }: { conflicts: Confli
     return () => { const m = d.getModel(); diff.current = null; d.dispose(); m?.original.dispose(); m?.modified.dispose() }
   }, [c])
   const choose = (ch: Choice) => {
+    if (choices.every((x) => x !== undefined)) return // already done: a double click saves once
     const next = choices.map((x, n) => (n === i ? ch : x))
     setChoices(next)
     if (next.every((x) => x !== undefined)) onDone(next as Choice[])
     else setI(next.findIndex((x) => x === undefined))
   }
-  const what = c.op.op === 'put' ? (c.head_missing ? 'You changed it; it was deleted or moved upstream.' : 'Changed both here and upstream.')
+  const moved = conflicts.find((x) => x.op.op === 'rename' && x.op.to === c.path && x.path === x.op.from)?.path
+  const what = c.op.op === 'put' && moved ? `You renamed ${moved} to it and changed it; ${moved} changed upstream (left).`
+    : c.op.op === 'put' ? (c.head_missing ? 'You changed it; it was deleted or moved upstream.' : 'Changed both here and upstream.')
     : c.op.op === 'delete' ? 'You deleted it; it changed upstream.' : c.path === c.op.to ? `You renamed ${c.op.from} to it; it now exists upstream.` : `You renamed it to ${c.op.to}; it changed upstream.`
   return (
     <section className="rebase" aria-label="Resolve newer content">

@@ -292,3 +292,27 @@ func TestSubmitCompareAndSet(t *testing.T) {
 		t.Fatalf("double submit: %d succeeded, %d pending", ok, pending(t, f))
 	}
 }
+
+// A renamed file that was also edited (rename c→d + put d) whose source changed upstream: the put on d becomes a
+// conflict against upstream's new c, so the author merges it instead of Keep silently overwriting upstream's change.
+func TestRebaseConflictWhenRenamedAndEditedSourceChanged(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	d, _ := f.s.Create(ctx, f.leader, NewDraft{Training: "t1", Title: "Move"})
+	from, to, mine := "modules/m1/reading/intro.md", "modules/m1/reading/start.md", "# Start\n\nMine.\n"
+	d, err := f.s.Save(ctx, f.leader, d.ID, SaveDraft{Title: "Move", BaseSHA: d.BaseSHA, UpdatedAt: d.UpdatedAt, Ops: []gitsync.Op{
+		{Op: "rename", From: from, To: to}, {Op: "put", Path: to, Content: mine}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs := "# Intro\n\nTheirs.\n"
+	f.advance(t, map[string]string{from: theirs})
+	r, err := f.s.Rebase(ctx, f.leader, d.ID)
+	if err != nil || len(r.Conflicts) != 2 {
+		t.Fatalf("rebase: %+v %v", r, err)
+	}
+	c := r.Conflicts[1]
+	if c.Path != to || c.Op.Op != "put" || c.Head != theirs || c.Mine != mine || c.Base != seed[from] || c.HeadMissing {
+		t.Fatalf("put conflict: %+v", c)
+	}
+}

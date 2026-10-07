@@ -30,7 +30,8 @@ export default function Ide() {
   const [work, setWork] = useState<DraftOps>(emptyOps)
   const [bt, setBt] = useState<BaseTexts>({ sha: '', text: {} }) // tagged with their base: a fetch for an older base is dropped
   const baseText = bt.text
-  const [conflicts, setConflicts] = useState<Conflict[]>()
+  const [conflicts, setConflicts] = useState<{ list: Conflict[]; head: string }>() // head: what the conflicts were found against
+  const resolving = useRef(false) // set while conflicts are open: nothing autosaves the pre-resolution ops
   const [tabs, setTabs] = useState<string[]>([])
   const [active, setActive] = useState('')
   const [title, setTitle] = useState('')
@@ -104,7 +105,7 @@ export default function Ide() {
       if (paths.includes(p)) loadBase(origin(base, work, p)).catch(() => {})
     }
   }, [active, work, bt]) // eslint-disable-line react-hooks/exhaustive-deps
-  const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }
+  const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
     setTabs((t) => (t.includes(p) ? t : [...t, p]))
@@ -133,7 +134,7 @@ export default function Ide() {
   // saveNow saves the draft and returns it as saved. Saves queue behind the one in flight (serialSaves), each with the
   // updated_at the last one returned. base_sha only moves on a rebase, never here.
   const saveNow = useCallback(async (): Promise<DraftInfo | undefined> => {
-    if (!saver.get()) return undefined
+    if (!saver.get() || resolving.current) return undefined
     if (problem) { setSave({ kind: 'blocked', reason: problem }); return undefined }
     setSave({ kind: 'saving' })
     pending.current++
@@ -151,10 +152,10 @@ export default function Ide() {
     }
   }, [saver, id, title, ops, problem])
   useEffect(() => { // autosave about 2 s after the last change; never once another tab owns the draft
-    if (save.kind !== 'dirty') return
+    if (save.kind !== 'dirty' || conflicts) return // opening the conflict panel cancels a pending autosave
     const t = setTimeout(saveNow, AUTOSAVE_MS)
     return () => clearTimeout(t)
-  }, [save, saveNow])
+  }, [save, saveNow, conflicts])
 
   useEffect(() => { // closing the tab with work the server doesn't have yet asks first
     if (save.kind === 'saved' || save.kind === 'conflict') return
@@ -215,24 +216,29 @@ export default function Ide() {
     if (save.kind !== 'saved' && !(await saveNow())) return
     try {
       let found: Conflict[] = []
-      await saver.run(async () => {
+      const d = await saver.run(async () => {
         const r = await api<{ draft: DraftInfo; conflicts: Conflict[] }>(`/api/authoring/drafts/${id}/rebase`, { method: 'POST', json: {} })
         found = r.conflicts
         return r.draft
       })
-      if (found.length === 0) { await load(); setMsg('Rebased onto the newest content.') } else setConflicts(found)
+      if (found.length === 0) { await load(); setMsg('Rebased onto the newest content.') } else { resolving.current = true; setConflicts({ list: found, head: d.head_sha }) }
     } catch (e) { setMsg((e as Error).message) }
   }
-  // resolved saves the author's choices with base_sha at the head the conflicts were found against: if the training
-  // moved again since, the server refuses it and the author rebases once more.
+  // resolved saves the author's choices with base_sha at the head the conflicts were found against (never a newer one:
+  // its changes were not checked); if the training moved again since, the server refuses it and the author rebases again.
   const resolved = async (choices: Choice[]) => {
     if (!conflicts) return
+    const done = () => { resolving.current = false; setConflicts(undefined) }
     try {
-      await saver.run((cur) => api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', json: { title, base_sha: cur.head_sha, ops: resolveOps(cur.ops, conflicts, choices), updated_at: cur.updated_at } }))
-      setConflicts(undefined)
-      await load() // new base: new file list, base texts reloaded on demand
+      await saver.run((cur) => api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', json: { title, base_sha: conflicts.head, ops: resolveOps(cur.ops, conflicts.list, choices), updated_at: cur.updated_at } }))
+    } catch (e) { done(); return setMsg((e as Error).message) }
+    try {
+      await load() // new base: new file list, base texts reloaded on demand; the panel stays up (and autosave off) until then
       setMsg('Rebased onto the newest content.')
-    } catch (e) { setConflicts(undefined); setMsg((e as Error).message) }
+    } catch {
+      setSave({ kind: 'conflict', reason: "Rebased, but the editor couldn't load the result. Reload before you go on." }) // stops autosave
+    }
+    done()
   }
   const discard = async () => {
     if (!window.confirm('Discard this draft? Your changes in it are lost.')) return
@@ -250,7 +256,7 @@ export default function Ide() {
       <header className="ide-bar">
         <Link to="/edits">All edits</Link>
         <strong>{draft.training}</strong>
-        <label>Title <input value={title} maxLength={200} disabled={readOnly} onChange={(e) => { setTitle(e.target.value); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }} /></label>
+        <label>Title <input value={title} maxLength={200} disabled={readOnly || !!conflicts} onChange={(e) => { setTitle(e.target.value); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }} /></label>
         {draft.base_sha !== draft.head_sha && draft.state !== 'in_review' && <button disabled={!!conflicts || save.kind === 'conflict'} onClick={rebase}>Newer content: rebase draft</button>}
       </header>
       {draft.state === 'in_review' && <p role="note">This draft is in review. <Link to={`/edits/${draft.edit_id}`}>Open the edit</Link> and withdraw it to keep working here.</p>}
@@ -259,7 +265,7 @@ export default function Ide() {
       <div role="tablist" aria-label="Editor views" className="ide-views">
         {(['files', 'editor', 'preview'] as const).map((v) => <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
       </div>
-      {conflicts ? <RebasePanel conflicts={conflicts} onDone={resolved} onCancel={() => setConflicts(undefined)} /> : (
+      {conflicts ? <RebasePanel conflicts={conflicts.list} onDone={resolved} onCancel={() => { resolving.current = false; setConflicts(undefined) }} /> : (
       <div className="ide-main" data-view={view}>
         <div ref={explorerRef} className="ide-side">
           <div role="toolbar" aria-label="Panels" className="ide-activity">

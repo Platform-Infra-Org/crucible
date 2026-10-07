@@ -15,7 +15,8 @@ export function afterSave(err: ApiError | undefined, now: number): SaveState {
   return { kind: 'offline', reason: err.message }
 }
 
-export const canAutosave = (s: SaveState) => s.kind !== 'conflict'
+// resolving: newer content is being resolved; the editor's ops predate the resolution and must not be written.
+export const canAutosave = (s: SaveState, resolving = false) => s.kind !== 'conflict' && !resolving
 
 export function saveLabel(s: SaveState, now: number): string {
   switch (s.kind) {

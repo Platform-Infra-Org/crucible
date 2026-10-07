@@ -14,13 +14,16 @@ export function canKeep(c: Conflict): boolean {
 
 // resolveOps applies the author's choice for each conflict to the draft's ops; ops without a conflict stay as they are.
 // One op can have two conflicts (a rename whose source changed and whose target appeared): dropping either drops it.
+// Dropping a rename also drops the edit of its new name (rename c→d + put d), which would otherwise leave a copy at d.
 export function resolveOps(ops: EditOp[], conflicts: Conflict[], choices: Choice[]): EditOp[] {
-  return ops.flatMap((op) => {
+  const kept = ops.flatMap((op) => {
     const mine = choices.filter((_, i) => same(conflicts[i].op, op))
     if (mine.includes('drop')) return []
     const put = mine.findLast((ch): ch is { put: string } => typeof ch === 'object')
     return op.op === 'put' && put ? [{ ...op, content: put.put }] : [op]
   })
+  const gone = ops.filter((op) => op.op === 'rename' && !kept.includes(op)).map((op) => (op.op === 'rename' ? op.to : ''))
+  return kept.filter((op) => !(op.op === 'put' && gone.includes(op.path)))
 }
 
 // BaseTexts are the draft's original file texts, all from one base commit.

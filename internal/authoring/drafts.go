@@ -353,6 +353,13 @@ func (s *Service) Rebase(ctx context.Context, u *auth.User, id int64) (*RebaseRe
 			c.Mine = op.Content
 		}
 		conflicts = append(conflicts, c)
+		if op.Op == "rename" { // an edit of the renamed file is based on the old source: merge it with upstream's
+			for _, put := range d.Ops {
+				if put.Op == "put" && put.Path == op.To {
+					conflicts = append(conflicts, Conflict{Path: op.To, Base: was, Head: is, HeadMissing: !has, Mine: put.Content, Op: put})
+				}
+			}
+		}
 	}
 	if len(conflicts) > 0 {
 		return &RebaseResult{Draft: d, Conflicts: conflicts}, nil

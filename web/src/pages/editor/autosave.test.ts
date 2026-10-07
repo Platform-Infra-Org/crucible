@@ -44,3 +44,10 @@ test('a failed save does not jam the queue', async () => {
   await expect(s.run(async () => { throw new Error('offline') })).rejects.toThrow('offline')
   expect((await s.run(async (d) => ({ updated_at: d.updated_at + '!' }))).updated_at).toBe('t0!')
 })
+
+// Fix round 1 (Task 13): while newer content is being resolved, or after a resolution whose reload failed, nothing may
+// autosave: the editor's ops are from before the resolution and would be written at the new base.
+test('no autosave while resolving a rebase', () => {
+  expect(canAutosave({ kind: 'saved', at: 0 }, true)).toBe(false)
+  expect(canAutosave({ kind: 'saved', at: 0 }, false)).toBe(true)
+})

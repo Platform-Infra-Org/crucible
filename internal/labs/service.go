@@ -539,7 +539,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("no cost estimate is available for %s labs", lab.Runtime))
 	}
 	if p.Settings.CostTiers == nil { // config.Load requires them; guards hand-built states
-		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured")
+		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured; an admin must set them before paid labs can be requested")
 	}
 	hourly, err := est.HourlyUSD(ctx, lab)
 	if errors.Is(err, apperr.Unavailable) {

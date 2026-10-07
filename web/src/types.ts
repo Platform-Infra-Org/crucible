@@ -123,3 +123,10 @@ export type ContentEdit = {
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
+export type AdminSettings = {
+  version: number; default_theme: string; cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
+  cluster_usd_per_hour: number | null; escalation_hours: number
+  ranks: { ingot: number; tempered: number; blade: number; sword: number; masterwork: number }
+}
+export type Schedule = { timezone: string; windows: { days: string[]; start: string; end: string }[] }
+export type RegisteredTraining = { id: string; repo: string; branch: string }

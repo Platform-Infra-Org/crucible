@@ -8,10 +8,10 @@ export function reportSaveError(err: unknown): boolean {
   return stale
 }
 
-export function Conflict({ onReload }: { onReload: () => void }) {
+export function Conflict({ onReload, message = 'Someone changed this in git, reload to see the latest.' }: { onReload: () => void; message?: string }) {
   return (
     <div role="alert" className="conflict">
-      <span>Someone changed this in git, reload to see the latest.</span>
+      <span>{message}</span>
       <button type="button" onClick={onReload}>Reload</button>
     </div>
   )

@@ -26,6 +26,7 @@ import (
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/org"
 	"crucible/internal/rbac"
 	"crucible/internal/scoring"
 )
@@ -41,6 +42,8 @@ type Deps struct {
 	Config     *configapi.Service
 	Journey    *journey.Service
 	Edits      *edits.Service
+	Org        *org.Store // nil in tests that do not need the /api/admin config routes
+	OrgAPI     org.APIDeps
 	Hub        *agenthub.Hub
 	IsAdmin    func(email string) bool // tests; nil means "listed in admins.yaml"
 	PublicURL  string
@@ -188,6 +191,9 @@ func NewRouter(d Deps) chi.Router {
 		}
 		if d.Config != nil {
 			d.Config.Routes(r)
+		}
+		if d.Org != nil {
+			d.Org.Routes(r, d.OrgAPI)
 		}
 		if d.Journey != nil {
 			d.Journey.Routes(r)

@@ -17,6 +17,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
+	"crucible/internal/org"
 )
 
 // TestMain allows the file transport: these tests use local bare repos as git remotes.
@@ -209,4 +210,34 @@ func mustRead(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The org routes sit behind the same guard as every other state-changing route: a browser request from elsewhere, or
+// with a non-JSON body, never reaches them (it would otherwise answer 401 for a signed-out caller).
+func TestOrgRoutesNeedSameOrigin(t *testing.T) {
+	r := NewRouter(Deps{Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), Org: &org.Store{},
+		PublicURL: "https://crucible.example.com"})
+	for _, c := range []struct {
+		name, method, path string
+		headers            map[string]string
+		want               int
+	}{
+		{"cross-origin PUT", "PUT", "/api/admin/settings", map[string]string{"Origin": "https://evil.example.com"}, 403},
+		{"Origin null", "POST", "/api/admin/admins", map[string]string{"Origin": "null"}, 403},
+		{"no Origin, cross-site fetch", "DELETE", "/api/admin/teams/x", map[string]string{"Sec-Fetch-Site": "cross-site"}, 403},
+		{"leader route, cross-origin", "PUT", "/api/org/teams/x/roster", map[string]string{"Origin": "https://evil.example.com"}, 403},
+		{"pin route, cross-origin", "PUT", "/api/org/teams/x/programs/y/pin", map[string]string{"Origin": "https://evil.example.com"}, 403},
+		{"form body", "PUT", "/api/admin/quotes", map[string]string{"Origin": "https://crucible.example.com", "Content-Type": "text/plain"}, 415},
+		{"same origin, signed out: route exists, login required", "PUT", "/api/admin/settings", map[string]string{"Origin": "https://crucible.example.com", "Content-Type": "application/json"}, 401},
+	} {
+		req := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+		for k, v := range c.headers {
+			req.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, w.Code, c.want)
+		}
+	}
 }

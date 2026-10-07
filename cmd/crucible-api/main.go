@@ -25,6 +25,7 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
+	"crucible/internal/config"
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
@@ -37,6 +38,7 @@ import (
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/org"
 	"crucible/internal/scoring"
 )
 
@@ -135,6 +137,15 @@ func run(ctx context.Context) error {
 	}
 	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce,
 		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
+	// Task 9 moves config reads onto the store; until then the snapshot is still git's, so org writes are stored but
+	// not yet read back by the rest of the app.
+	orgStore := &org.Store{DB: pool}
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
+		if st := syncer.Current(); st != nil {
+			return st.Platform
+		}
+		return nil
+	}}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
@@ -272,6 +283,7 @@ func run(ctx context.Context) error {
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
 			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc,
+			Org: orgStore, OrgAPI: orgAPI,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

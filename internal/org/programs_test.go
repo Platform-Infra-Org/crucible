@@ -3,6 +3,7 @@ package org
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -299,5 +300,21 @@ func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 	}
 	if p.Teams["platform"] == nil || len(p.Teams["platform"].Programs) != 0 {
 		t.Errorf("teams = %+v, want the team without the orphaned program", p.Teams["platform"])
+	}
+}
+
+func TestEnrollStoresExplicitRoles(t *testing.T) {
+	s, ctx := orgFixture(t)
+	b := ProgramBody{Roles: config.Roles{Manager: []string{"senior@x"}, Scorers: []string{"Lead@x"}, Approvers: []string{"senior@x"}}}
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", b); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM program_roles WHERE team='platform' AND training='forge-101'`); n != 3 {
+		t.Errorf("stored roles = %d, want the 3 named", n)
+	}
+	p, _ := s.Platform(ctx)
+	r := p.Teams["platform"].Programs["forge-101"].Roles
+	if !slices.Equal(r.Manager, []string{"senior@x"}) || !slices.Equal(r.Scorers, []string{"lead@x"}) || !slices.Equal(r.Approvers, []string{"senior@x"}) {
+		t.Errorf("roles = %+v: explicit roles must replace the defaults", r)
 	}
 }

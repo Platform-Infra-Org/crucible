@@ -28,6 +28,8 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 		"bare rel":    {"x", "repos/x.git", "main"},
 		"bare name":   {"x", "x", "main"},
 		"ext":         {"x", "ext::sh -c id", "main"},
+		"newline":     {"x", "https://h/x\nfoo", "main"},
+		"tab":         {"x", "https://h/x\ty", "main"},
 		"windows":     {"x", `C:\x`, "main"},
 	} {
 		if err := s.AddTraining(ctx, "admin@x", args[0], args[1], args[2]); !errors.Is(err, apperr.Invalid) {
@@ -55,6 +57,11 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 		}
 	}
 	t.Setenv("CRUCIBLE_GIT_ALLOW_FILE", "1")
+	for _, bad := range []string{"--upload-pack=evil", "-oProxyCommand=evil", "-x\nfoo"} {
+		if err := s.AddTraining(ctx, "admin@x", "dash", bad, "main"); !errors.Is(err, apperr.Invalid) {
+			t.Errorf("%q with the env var set: want Invalid, got %v", bad, err)
+		}
+	}
 	for _, local := range []string{"./x", "FILE:///x", "repos/x.git", `C:\x`} {
 		if err := s.AddTraining(ctx, "admin@x", "loc", local, "main"); err != nil {
 			t.Errorf("%s with the env var set: %v", local, err)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,7 +18,7 @@ import (
 )
 
 // remoteURL is the allowlist of network remotes; anything else (file:, bare paths, ext::, C:\, a leading "-") is local.
-var remoteURL = regexp.MustCompile(`(?i)^((https?|ssh|git)://[^\s-]|[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:\S)`)
+var remoteURL = regexp.MustCompile(`(?i)^((https?|ssh|git)://[^\s-]\S*|[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:\S*)$`)
 
 var errNoChange = errors.New("no change")
 
@@ -33,6 +34,12 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 	}
 	if branch == "" {
 		branch = "main"
+	}
+	if strings.IndexFunc(repo, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return apperr.Wrap(apperr.Invalid, "repo URL cannot contain whitespace or control characters")
+	}
+	if strings.HasPrefix(repo, "-") { // before the env bypass: no setting lets an option through as a path
+		return apperr.Wrap(apperr.Invalid, "repo URL cannot start with '-'")
 	}
 	if !remoteURL.MatchString(repo) && !gitsync.AllowFileFromEnv(os.Getenv) {
 		return apperr.Wrap(apperr.Invalid, "repo must be an https://, http://, ssh://, git:// or user@host:path URL; local paths are not allowed on this instance")

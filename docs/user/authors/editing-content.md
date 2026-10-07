@@ -44,10 +44,13 @@ and their tasks, hints and terminals. Choose one to fill in its form.
 - Where a block goes into a module, you pick the module from a list; a hint asks for the task too, picked from the
   module's lab.
 - **Add to the draft** writes the files. The file it changes opens with the new lines selected, and the training is
-  checked for problems at once. If something is wrong, such as a module without a lab, the form says so.
+  checked for problems at once. If that file was already open in a tab, **Ctrl/Cmd+Z** there takes the new lines out
+  again. If something is wrong, such as a module without a lab, the form says so.
+- If you change one of the block's files while it is being added, nothing is added and the form asks you to add it
+  again, so your typing is never overwritten.
 - You can still type the same YAML by hand; a block only saves you the typing.
-- A new training repo and an AWS lab can't be added here: they need files the browser editor doesn't write. Their
-  blocks show an example to copy into the repo in git.
+- A new training repo and an AWS lab can't be added here: a new training is a new repo, and an AWS lab needs Terraform
+  files, which the browser editor doesn't write. Their blocks show an example to copy into git.
 
 Every block's fields and an example of what it writes are in the reference:
 [Training](/docs/authors/blocks/training), [Module](/docs/authors/blocks/module),

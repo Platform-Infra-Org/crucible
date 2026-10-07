@@ -48,7 +48,11 @@ export function CodeEditor({ draftId, path, text, readOnly, markers, reveal, onC
   useEffect(() => {
     const uri = uriOf(draftId, path)
     const m = monaco.editor.getModel(uri) ?? monaco.editor.createModel(text, languageOf(path), uri)
-    if (m.getValue() !== text) m.setValue(text) // changed outside the editor (an insert, a rebase)
+    if (m.getValue() !== text) { // changed outside the editor (an insert): one edit, so Ctrl+Z undoes it
+      m.pushStackElement()
+      m.pushEditOperations([], [{ range: m.getFullModelRange(), text }], () => null)
+      m.pushStackElement()
+    }
     if (ed.current?.getModel() !== m) ed.current?.setModel(m)
   }, [draftId, path, text])
   useEffect(() => { ed.current?.updateOptions({ readOnly }) }, [readOnly])

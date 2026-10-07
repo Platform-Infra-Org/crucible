@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { changeList, fileText, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, origin, putText, renamePath, toOps } from './model'
+import { applyInsert, changeList, fileText, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, origin, putText, renamePath, toOps } from './model'
 
 const base = ['training.yaml', 'modules/m1/module.yaml', 'modules/m1/reading/a.md', 'modules/m1/reading/b.md']
 
@@ -93,4 +93,17 @@ test('a file whose base text is not loaded has no text yet, never ""', () => {
   expect(fileText(base, d, { 'modules/m1/reading/a.md': 'A' }, 'modules/m1/reading/a.md')).toBe('A')
   expect(fileText(base, d, {}, 'modules/m1/reading/n.md')).toBe('') // a new, empty file
   expect(fileText(base, deletePath(base, d, 'modules/m1/reading/b.md'), {}, 'modules/m1/reading/b.md')).toBeUndefined()
+})
+
+test('an insert applies to the draft as it is now, unless a file it writes changed since the request went out', () => {
+  const sent = putText(emptyOps(), 'modules/m1/quiz.yaml', 'Q1', undefined)
+  const puts = [{ path: 'modules/m1/quiz.yaml', content: 'Q1+q2' }, { path: 'modules/m1/module.yaml', content: 'M+quiz' }]
+  const elsewhere = putText(sent, 'modules/m1/reading/a.md', 'A2', 'A') // typing in a file the block doesn't write is kept
+  expect(applyInsert(base, sent, elsewhere, puts, { 'modules/m1/module.yaml': 'M' })).toEqual({
+    next: { ...elsewhere, puts: { ...elsewhere.puts, 'modules/m1/quiz.yaml': 'Q1+q2', 'modules/m1/module.yaml': 'M+quiz' } },
+  })
+  // typed in, deleted or renamed meanwhile: refused, so the author's work stays as it is
+  expect(applyInsert(base, sent, putText(sent, 'modules/m1/quiz.yaml', 'Q1 typed', undefined), puts, {})).toEqual({ changed: 'modules/m1/quiz.yaml' })
+  expect(applyInsert(base, sent, deletePath(base, sent, 'modules/m1/module.yaml'), puts, {})).toEqual({ changed: 'modules/m1/module.yaml' })
+  expect(applyInsert(base, sent, renamePath(base, sent, 'modules/m1/module.yaml', 'modules/m1/mod.yaml'), puts, {})).toEqual({ changed: 'modules/m1/module.yaml' })
 })

@@ -72,7 +72,7 @@ func Generated() []Page {
 				fmt.Fprintf(&b, "\n%s\n", bl.Doc)
 			}
 			if bl.GitOnly {
-				b.WriteString("\n> [!NOTE]\n> Add this in git: the browser editor writes only .md, .yaml, .yml and .sh files.\n")
+				b.WriteString("\n> [!NOTE]\n> Add this in git: this block can't be added in the browser.\n")
 			}
 			b.WriteString("\n| Field | Required | What it is |\n|---|---|---|\n")
 			for _, f := range bl.Fields {

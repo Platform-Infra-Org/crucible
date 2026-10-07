@@ -18,7 +18,7 @@ import { resolveOps, withBase, type BaseTexts, type Choice } from './rebase'
 import { unifiedDiff } from './diff'
 import { setupYaml } from './monaco'
 import { afterSave, canAutosave, saveLabel, serialSaves, type SaveState } from './autosave'
-import { changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type Change, type DraftOps } from './model'
+import { applyInsert, changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type Change, type DraftOps } from './model'
 
 const AUTOSAVE_MS = 2000
 const VALIDATE_MS = 1000
@@ -52,6 +52,8 @@ export default function Ide() {
   const asked = useRef(new Set<string>()) // originals requested for the Changes panel (once each; a failure is not retried)
   const vseq = useRef(0) // latest validate request
   const validateNow = useRef(false) // the next change is checked at once, not after the pause (an insert)
+  const latest = useRef<DraftOps>(emptyOps()) // the draft as last set, ahead of the render: an insert is checked against it
+  const frozen = useRef(false) // read-only as of the last render: an insert that lands then is dropped
   const pending = useRef(0) // saves queued or in flight
 
   const load = useCallback(async () => {
@@ -61,7 +63,8 @@ export default function Ide() {
     setupYaml(schema); setCatalog(cat)
     const kept = currentPaths(f.filter((x) => x.editable).map((x) => x.path), fromOps(d.ops))
     saver.set(d)
-    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBt({ sha: d.base_sha, text: {} }); asked.current.clear() // open tabs refetch their base text
+    latest.current = fromOps(d.ops)
+    setDraft(d); setFiles(f); setWork(latest.current); setTitle(d.title); setBt({ sha: d.base_sha, text: {} }); asked.current.clear() // open tabs refetch their base text
     setTabs((t) => t.filter((p) => kept.includes(p))); setActive((a) => (kept.includes(a) ? a : ''))
     setSave({ kind: 'saved', at: Date.now() })
   }, [id, saver])
@@ -116,7 +119,7 @@ export default function Ide() {
       if (paths.includes(p)) loadBase(origin(base, work, p)).catch(() => {})
     }
   }, [active, work, bt]) // eslint-disable-line react-hooks/exhaustive-deps
-  const change = (next: DraftOps | ((w: DraftOps) => DraftOps)) => { setWork(next); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }
+  const change = (next: DraftOps) => { latest.current = next; setWork(next); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
     setTabs((t) => (t.includes(p) ? t : [...t, p]))
@@ -139,20 +142,25 @@ export default function Ide() {
     change(deletePath(base, work, p)); setTabs((t) => t.filter((x) => x !== p))
     if (active === p) setActive('')
   }
-  // insert has the server render a block against the draft and applies the files it returns to the draft as it is now
-  // (not as it was when the request went out). Nothing is saved here: the change autosaves through the queue like typing.
+  // insert has the server render a block against the draft and applies the files it returns. They replace whole files,
+  // so it is refused when one of them changed while the request ran (applyInsert), or the draft moved or became read-only.
+  // Nothing is saved here: the change autosaves through the queue like typing.
   const insert = async (block: BlockInfo, values: Record<string, string>) => {
-    const sent = draft!.base_sha
+    const sent = latest.current
+    const sentBase = draft!.base_sha
     const r = await api<{ ops: EditOp[]; open: string; line: number; lines: number }>('/api/authoring/insert',
-      { method: 'POST', json: { training: draft!.training, base_sha: sent, ops, block: block.id, values } })
+      { method: 'POST', json: { training: draft!.training, base_sha: sentBase, ops: toOps(sent), block: block.id, values } })
     const puts = r.ops.flatMap((o) => (o.op === 'put' ? [o] : []))
     const originals: Record<string, string | undefined> = {} // by base path: a file edited back to its original leaves the draft
     for (const o of puts) {
-      const b = origin(base, work, o.path)
+      const b = origin(base, sent, o.path)
       if (b !== undefined) originals[b] = await loadBase(b).catch(() => undefined)
     }
-    if (resolving.current || saver.get()?.base_sha !== sent) throw new Error('The draft moved to newer content meanwhile: add the block again.')
-    change((w) => puts.reduce((n, o) => { const b = origin(base, n, o.path); return putText(n, o.path, o.content, b === undefined ? undefined : originals[b]) }, w))
+    if (frozen.current) throw new Error('The draft became read-only while the block was being added; nothing was added.')
+    if (resolving.current || saver.get()?.base_sha !== sentBase) throw new Error('The draft moved to newer content meanwhile: add the block again.')
+    const res = applyInsert(base, sent, latest.current, puts, originals)
+    if ('changed' in res) throw new Error(`${res.changed} changed while the block was being added; add it again.`)
+    change(res.next)
     validateNow.current = true // problems at once, not after the pause
     await open(r.open)
     setView('editor')
@@ -197,6 +205,8 @@ export default function Ide() {
   }, [save.kind])
 
   useEffect(() => { // problems about a second after typing stops; a 409 means a check is still running, and the next change re-runs it
+    const delay = validateNow.current ? 0 : VALIDATE_MS
+    validateNow.current = false
     if (!draft || problem) return
     const seq = ++vseq.current
     const run = (retry: boolean) => api<{ problems: Problem[] }>('/api/authoring/validate', { method: 'POST', json: { training: draft.training, base_sha: draft.base_sha, ops } })
@@ -207,8 +217,7 @@ export default function Ide() {
         else if (e.status !== 409) setMsg(e.message)
       })
     let retries: ReturnType<typeof setTimeout> | undefined
-    const t = setTimeout(() => run(true), validateNow.current ? 0 : VALIDATE_MS)
-    validateNow.current = false
+    const t = setTimeout(() => run(true), delay)
     return () => { clearTimeout(t); clearTimeout(retries) }
   }, [draft?.training, draft?.base_sha, ops, problem]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -281,9 +290,11 @@ export default function Ide() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
+  const readOnly = draft?.state === 'in_review' || save.kind === 'conflict'
+  useEffect(() => { frozen.current = readOnly }, [readOnly])
+
   if (fatal) return <ErrorBox error={fatal} />
   if (!draft) return <Loader label="Heating the editor…" />
-  const readOnly = draft.state === 'in_review' || save.kind === 'conflict'
   return (
     <section className="ide" aria-label={`Editing ${draft.training}`}>
       <header className="ide-bar">

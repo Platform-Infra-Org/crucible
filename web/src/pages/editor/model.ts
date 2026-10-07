@@ -87,6 +87,16 @@ export function deletePath(base: string[], d: DraftOps, path: string): DraftOps 
   return { renames, puts, deletes: o === undefined ? d.deletes : [...d.deletes, o] }
 }
 
+// applyInsert applies an insert's puts, which the server computed from the draft `sent`, to the draft as it is `now`.
+// If a file the insert writes was typed in, deleted or renamed since, applying would undo that work: it returns the
+// file instead and changes nothing. originals are base texts by base path (a put equal to its original leaves the draft).
+export function applyInsert(base: string[], sent: DraftOps, now: DraftOps, puts: { path: string; content: string }[],
+  originals: Record<string, string | undefined>): { next: DraftOps } | { changed: string } {
+  const moved = puts.find((o) => origin(base, sent, o.path) !== origin(base, now, o.path) || sent.puts[o.path] !== now.puts[o.path])
+  if (moved) return { changed: moved.path }
+  return { next: puts.reduce((d, o) => { const b = origin(base, d, o.path); return putText(d, o.path, o.content, b === undefined ? undefined : originals[b]) }, now) }
+}
+
 export function changeList(base: string[], d: DraftOps): Change[] {
   const out: Change[] = []
   for (const [to, from] of Object.entries(d.renames)) out.push({ kind: 'renamed', path: to, from })

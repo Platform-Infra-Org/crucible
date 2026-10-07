@@ -53,7 +53,7 @@ export function BlocksPanel({ groups, blocks, paths, read, need, preselect, read
       {block.doc && <p className="muted">{block.doc}</p>}
       <p><a href={`/docs/authors/blocks/${block.group.toLowerCase()}`} target="_blank" rel="noreferrer">{`Reference: ${block.group} blocks`}</a></p>
       <pre aria-label="Example">{block.example}</pre>
-      {block.git_only ? <p role="note">Add this in git: the browser editor writes only .md, .yaml, .yml and .sh files.</p> : (
+      {block.git_only ? <p role="note">Add this in git: this block can't be added in the browser.</p> : (
         <form onSubmit={submit}>
           {block.fields.map((f) => {
             const common = { id: `bf-${f.name}`, value: values[f.name] ?? '', 'aria-required': f.required ? true : undefined, 'aria-describedby': `bf-${f.name}-help`,

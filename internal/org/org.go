@@ -274,6 +274,9 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 			rows.Close()
 			return err
 		}
+		if _, ok := p.Trainings[pr.Training]; !ok { // a restored snapshot can leave a program whose training is gone
+			continue
+		}
 		fail := func(err error) error {
 			rows.Close()
 			return fmt.Errorf("program %s/%s: %w", team, pr.Training, err)
@@ -322,7 +325,11 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 			rows.Close()
 			return err
 		}
-		r := &p.Teams[team].Programs[training].Roles
+		pr := p.Teams[team].Programs[training]
+		if pr == nil {
+			continue
+		}
+		r := &pr.Roles
 		switch role {
 		case "manager":
 			r.Manager = append(r.Manager, em(email))
@@ -347,6 +354,9 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 			return err
 		}
 		pr := p.Teams[team].Programs[training]
+		if pr == nil {
+			continue
+		}
 		pr.Enrolled = append(pr.Enrolled, em(email))
 	}
 	rows.Close()

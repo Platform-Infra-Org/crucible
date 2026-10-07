@@ -194,6 +194,14 @@ func TestTeamWebhooks(t *testing.T) {
 	if err := s.SetTeamWebhook(ctx, "a@x", "ghost", "slack", "https://hooks/x"); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("unknown team = %v, want NotFound", err)
 	}
+	for _, c := range []struct{ team, url string }{{"p", "http://hooks/x"}, {"ghost", "https://hooks/x"}} {
+		if err := s.SetTeamWebhook(ctx, "a@x", c.team, "slack", c.url); err == nil || strings.Contains(err.Error(), "hooks/x") {
+			t.Errorf("%+v: error %v must exist and must not echo the URL", c, err)
+		}
+	}
+	if err := s.SetTeamWebhook(ctx, "a@x", "p", "teams", ""); !errors.Is(err, apperr.NotFound) {
+		t.Errorf("clearing a never-set webhook = %v, want NotFound", err)
+	}
 	if err := s.SetTeamWebhook(ctx, "a@x", "p", "slack", "https://hooks/x"); err != nil {
 		t.Fatal(err)
 	}
@@ -210,5 +218,10 @@ func TestTeamWebhooks(t *testing.T) {
 	}
 	if p, _ := s.Platform(ctx); p.Teams["p"].Notifications.SlackWebhook != "" {
 		t.Error("empty url must clear the webhook")
+	}
+	var rows int
+	s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'team.webhook'`).Scan(&rows)
+	if rows != 2 { // the set and the real clear; the failed clear and the refused writes leave none
+		t.Errorf("team.webhook audit rows = %d, want 2", rows)
 	}
 }

@@ -85,7 +85,7 @@ func TestConcurrentRemovalsLeaveOneAdmin(t *testing.T) {
 	// Release only once both removals are blocked on the lock, so the overlap is certain rather than timed.
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
 		var waiting int
-		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting >= 2 {

@@ -201,7 +201,10 @@ func (s *Store) SetTeamWebhook(ctx context.Context, actor, team, kind, url strin
 	}
 	return s.inTx(ctx, actor, "team.webhook", team, map[string]any{"kind": kind, "set": url != ""}, func(tx pgx.Tx) error {
 		if url == "" {
-			_, err := tx.Exec(ctx, `DELETE FROM team_webhooks WHERE team = $1 AND kind = $2`, team, kind)
+			tag, err := tx.Exec(ctx, `DELETE FROM team_webhooks WHERE team = $1 AND kind = $2`, team, kind)
+			if err == nil && tag.RowsAffected() == 0 {
+				return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %q has no %s webhook", team, kind)) // nothing changed: no audit row
+			}
 			return err
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO team_webhooks (team, kind, url) VALUES ($1, $2, $3)

@@ -594,3 +594,29 @@ func TestFilesListsEverythingWithWhatIsEditable(t *testing.T) {
 		t.Fatalf("non-editable files are listed, greyed with the reason: %+v", files)
 	}
 }
+
+// A put equal to the base text is a no-op only when no rename in the edit moves that path: rename a→b plus a new a with
+// the old text (a copy) keeps both files.
+func TestWorkspaceKeepsAPutOnARenamedPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "m"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules", "m", "a.md"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ops := []gitsync.Op{{Op: "rename", From: "modules/m/a.md", To: "modules/m/b.md"}, {Op: "put", Path: "modules/m/a.md", Content: "old"}}
+	tmp, changed, cleanup, err := Workspace(&content.Training{Dir: dir}, ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if len(changed) != 2 {
+		t.Fatalf("changed = %+v, want both ops", changed)
+	}
+	for _, p := range []string{"a.md", "b.md"} {
+		if b, err := os.ReadFile(filepath.Join(tmp, "modules", "m", p)); err != nil || string(b) != "old" {
+			t.Errorf("%s = %q, %v; want old", p, b, err)
+		}
+	}
+}

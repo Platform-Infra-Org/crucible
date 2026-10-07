@@ -314,12 +314,18 @@ func (s *Service) Authorize(u *auth.User, training string) (*content.Training, s
 }
 
 // Workspace copies t into a temp dir and applies the ops that change something (a put equal to the current file is
-// dropped). Ops must have passed gitsync.CheckOps. The caller loads the copy, then calls cleanup. New .sh files are
+// dropped, unless a rename in the same ops moves that path: then the base file isn't there any more). Ops must have passed gitsync.CheckOps. The caller loads the copy, then calls cleanup. New .sh files are
 // made executable there because lint wants lab scripts executable; ContentRepo.PushEdit sets the modes git records.
 func Workspace(t *content.Training, ops []gitsync.Op) (string, []gitsync.Op, func(), error) {
+	moved := map[string]bool{}
+	for _, op := range ops {
+		if op.Op == "rename" {
+			moved[op.From], moved[op.To] = true, true
+		}
+	}
 	var changed []gitsync.Op
 	for _, op := range ops {
-		if op.Op == "put" {
+		if op.Op == "put" && !moved[op.Path] {
 			if old, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(op.Path))); err == nil && string(old) == op.Content {
 				continue
 			}

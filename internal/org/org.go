@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -44,6 +45,9 @@ func (s *Store) Platform(ctx context.Context) (*config.Platform, error) {
 	return p, nil
 }
 
+// em normalises an email the way config.Load does.
+func em(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
 func (s *Store) strings(ctx context.Context, q string, args ...any) ([]string, error) {
 	rows, err := s.DB.Query(ctx, q, args...)
 	if err != nil {
@@ -52,6 +56,9 @@ func (s *Store) strings(ctx context.Context, q string, args ...any) ([]string, e
 	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return nil, err
+	}
+	if out == nil {
+		out = []string{}
 	}
 	return out, nil
 }
@@ -158,18 +165,24 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 		t := p.Teams[team]
 		switch role {
 		case "leader":
-			t.Leader = email
+			t.Leader = em(email)
 		case "senior":
-			t.Seniors = append(t.Seniors, email)
+			t.Seniors = append(t.Seniors, em(email))
 		case "member":
-			t.Members = append(t.Members, email)
+			t.Members = append(t.Members, em(email))
 		case "trainee":
-			t.Trainees = append(t.Trainees, email)
+			t.Trainees = append(t.Trainees, em(email))
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	for _, t := range p.Teams {
+		if t.Leader == "" {
+			return fmt.Errorf("teams/%s: team has no leader", t.ID)
+		}
+		t.Seniors, t.Members, t.Trainees = nonNil(t.Seniors), nonNil(t.Members), nonNil(t.Trainees)
 	}
 
 	if rows, err = s.DB.Query(ctx, `SELECT team, trainee, mentor FROM mentors`); err != nil {
@@ -181,7 +194,7 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 			rows.Close()
 			return err
 		}
-		p.Teams[team].Mentors[trainee] = mentor
+		p.Teams[team].Mentors[em(trainee)] = em(mentor)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -196,6 +209,10 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 		if err := rows.Scan(&team, &kind, &url); err != nil {
 			rows.Close()
 			return err
+		}
+		if !strings.HasPrefix(url, "https://") {
+			rows.Close()
+			return fmt.Errorf("teams/%s: notifications: webhook URLs must start with https://", team)
 		}
 		if kind == "slack" {
 			p.Teams[team].Notifications.SlackWebhook = url
@@ -224,6 +241,13 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 		p.Teams[team].Budget = b
 	}
 	return rows.Err()
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func optDuration(s *string) (yamlx.Duration, error) {
@@ -281,8 +305,8 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 				return fail(err)
 			}
 		}
-		t := p.Teams[team]
-		t.Programs[pr.Training] = pr
+		pr.Enrolled, pr.Roles.Manager, pr.Roles.Scorers, pr.Roles.Approvers = []string{}, []string{}, []string{}, []string{}
+		p.Teams[team].Programs[pr.Training] = pr
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -301,11 +325,11 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 		r := &p.Teams[team].Programs[training].Roles
 		switch role {
 		case "manager":
-			r.Manager = append(r.Manager, email)
+			r.Manager = append(r.Manager, em(email))
 		case "scorer":
-			r.Scorers = append(r.Scorers, email)
+			r.Scorers = append(r.Scorers, em(email))
 		case "approver":
-			r.Approvers = append(r.Approvers, email)
+			r.Approvers = append(r.Approvers, em(email))
 		}
 	}
 	rows.Close()
@@ -323,7 +347,7 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 			return err
 		}
 		pr := p.Teams[team].Programs[training]
-		pr.Enrolled = append(pr.Enrolled, email)
+		pr.Enrolled = append(pr.Enrolled, em(email))
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {

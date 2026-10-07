@@ -13,15 +13,15 @@ var weekdays = []string{"sun", "mon", "tue", "wed", "thu", "fri", "sat"} // inde
 // Schedule is a named set of weekly windows in one time zone (spec §9.2), e.g. Mon–Fri 08:00–19:00 Europe/Bucharest.
 // A nil *Schedule means "any time": every method treats it as always open.
 type Schedule struct {
-	Timezone string   `yaml:"timezone"`
-	Windows  []Window `yaml:"windows"`
+	Timezone string   `yaml:"timezone" json:"timezone"`
+	Windows  []Window `yaml:"windows" json:"windows"`
 	loc      *time.Location
 }
 
 type Window struct {
-	Days  []string `yaml:"days"`  // mon … sun
-	Start string   `yaml:"start"` // "08:00"
-	End   string   `yaml:"end"`   // "19:00"; "24:00" is midnight; after Start (a window cannot cross midnight)
+	Days  []string `yaml:"days" json:"days"`   // mon … sun
+	Start string   `yaml:"start" json:"start"` // "08:00"
+	End   string   `yaml:"end" json:"end"`     // "19:00"; "24:00" is midnight; after Start (a window cannot cross midnight)
 	days  [7]bool
 	start int // minutes after midnight
 	end   int

@@ -2,10 +2,17 @@ package org
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"crucible/internal/config"
 	"crucible/internal/db/dbtest"
 )
 
@@ -91,3 +98,213 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 		t.Error("named schedule did not resolve")
 	}
 }
+
+func platform(t *testing.T, pool *pgxpool.Pool) (*config.Platform, error) {
+	t.Helper()
+	return (&Store{DB: pool}).Platform(context.Background())
+}
+
+func TestSettingsTiersAndFreeClusterRate(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `UPDATE settings SET auto_approve_usd=1, tier1_usd=5, tier2_usd=25, cluster_usd_per_hour=0`)
+	p, err := platform(t, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := p.Settings.CostTiers; c == nil || c.AutoApproveUSD != 1 || c.Tier1USD != 5 || c.Tier2USD != 25 {
+		t.Errorf("tiers = %+v", c)
+	}
+	if r := p.Settings.ClusterUSDPerHour; r == nil || *r != 0 {
+		t.Errorf("a rate of 0 must stay a non-nil 0 (free on the node), got %v", r)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE settings SET tier1_usd=NULL`); err == nil {
+		t.Error("partly-set tiers must be rejected")
+	}
+}
+
+func TestInlineScheduleRoundTripsThroughJSONB(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','l@x','leader')`)
+	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training, inline_schedule) VALUES ('t','tr',
+		'{"timezone":"Europe/Bucharest","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`)
+	p, err := platform(t, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := p.Teams["t"].Programs["tr"].Inline
+	if in == nil || in.Timezone != "Europe/Bucharest" || len(in.Windows) != 1 ||
+		!slices.Equal(in.Windows[0].Days, []string{"sat"}) || in.Windows[0].Start != "09:00" || in.Windows[0].End != "12:00" {
+		t.Fatalf("inline = %+v", in)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO schedules VALUES ('n','UTC','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE programs SET schedule_name='n'`); err == nil {
+		t.Error("a program with both a named and an inline schedule must be rejected")
+	}
+}
+
+func TestMembersAreSortedAndNeverNil(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s3@x','senior'),('t','s1@x','senior'),
+		('t','s2@x','senior'),('t','b@x','trainee'),('t','a@x','trainee')`)
+	p, err := platform(t, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := p.Teams["t"]
+	if !slices.Equal(tm.Seniors, []string{"s1@x", "s2@x", "s3@x"}) || !slices.Equal(tm.Trainees, []string{"a@x", "b@x"}) {
+		t.Errorf("seniors=%v trainees=%v", tm.Seniors, tm.Trainees)
+	}
+	if tm.Members == nil {
+		t.Error("Members must be an empty slice, not nil (JSON null breaks the SPA)")
+	}
+}
+
+func TestLeaderRules(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	if _, err := platform(t, pool); err == nil || !strings.Contains(err.Error(), "teams/t: team has no leader") {
+		t.Errorf("leaderless team: err = %v", err)
+	}
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','a@x','leader')`)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO team_members VALUES ('t','b@x','leader')`); err == nil {
+		t.Error("a second leader must be rejected")
+	}
+}
+
+func TestMixedCaseEmailsAreRejected(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	for _, q := range []string{
+		`INSERT INTO admins VALUES ('A@x')`,
+		`INSERT INTO team_members VALUES ('t','A@x','member')`,
+		`INSERT INTO team_members VALUES ('t',' a@x','member')`,
+		`INSERT INTO mentors VALUES ('t','a@x','B@x')`,
+	} {
+		if _, err := pool.Exec(context.Background(), q); err == nil {
+			t.Errorf("accepted: %s", q)
+		}
+	}
+}
+
+func TestWebhooksMustBeHTTPS(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','l@x','leader')`)
+	mustExec(t, pool, `INSERT INTO team_webhooks VALUES ('t','slack','http://hooks')`)
+	if _, err := platform(t, pool); err == nil || !strings.Contains(err.Error(), "https://") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestProgramNeedsARegisteredTraining(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO programs (team, training) VALUES ('t','nope')`); err == nil {
+		t.Error("program for an unregistered training must be rejected")
+	}
+}
+
+// The same small org as YAML and as rows must give the same *config.Platform, so the two paths cannot drift.
+func TestPlatformMatchesConfigLoad(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		f := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("platform.yaml", `default_theme: anvil
+cost_tiers: { auto_approve_usd: 1, tier1_usd: 5, tier2_usd: 25 }
+cluster_usd_per_hour: 0
+escalation_hours: 6
+schedules:
+  bh:
+    timezone: Europe/Bucharest
+    windows:
+      - { days: [mon, tue], start: "08:00", end: "19:00" }
+`)
+	write("admins.yaml", "admins: [boss@x]\n")
+	write("quotes.yaml", "quotes: [one, two]\n")
+	write("trainings.yaml", "trainings:\n  a: {repo: https://git/a.git, branch: dev}\n  b: {repo: https://git/b.git}\n")
+	write("teams/t/team.yaml", `name: T
+leader: l@x
+seniors: [s1@x, s2@x]
+members: [m@x]
+trainees: [tr@x]
+mentors: { tr@x: s1@x }
+notifications: { slack_webhook: "https://hooks/s" }
+`)
+	write("teams/t/budget.yaml", "monthly_usd: 200\n")
+	write("teams/t/programs/a.yaml", `training: a
+pinned_ref: abc123
+roles: { manager: [m@x], scorers: [s2@x], approvers: [s1@x] }
+enrolled: [tr@x]
+lab_defaults: { ttl: 2h, idle_timeout: 30m, max_extension: 45m }
+schedule: bh
+budget_usd_month: 50
+review_self_reported: true
+`)
+	write("teams/t/programs/b.yaml", `schedule: { timezone: UTC, windows: [ { days: [sat], start: "09:00", end: "12:00" } ] }
+`)
+	want, err := config.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pool := dbtest.New(t)
+	for _, q := range []string{
+		`UPDATE settings SET default_theme='anvil', auto_approve_usd=1, tier1_usd=5, tier2_usd=25, cluster_usd_per_hour=0, escalation_hours=6`,
+		`INSERT INTO schedules VALUES ('bh','Europe/Bucharest','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`,
+		`INSERT INTO admins VALUES ('boss@x')`,
+		`INSERT INTO quotes (text) VALUES ('one'),('two')`,
+		`INSERT INTO trainings VALUES ('a','https://git/a.git','dev'),('b','https://git/b.git','main')`,
+		`INSERT INTO teams (id, name) VALUES ('t','T')`,
+		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','member'),('t','tr@x','trainee')`,
+		`INSERT INTO mentors VALUES ('t','tr@x','s1@x')`,
+		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s')`,
+		`INSERT INTO team_budgets (team, monthly_usd) VALUES ('t',200)`,
+		`INSERT INTO programs (team, training, pinned_ref, schedule_name, ttl, idle_timeout, max_extension, budget_usd_month, review_self_reported)
+			VALUES ('t','a','abc123','bh','2h','30m','45m',50,true)`,
+		`INSERT INTO programs (team, training, inline_schedule) VALUES ('t','b','{"timezone":"UTC","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`,
+		`INSERT INTO program_roles VALUES ('t','a','m@x','manager'),('t','a','s2@x','scorer'),('t','a','s1@x','approver')`,
+		`INSERT INTO enrollments VALUES ('t','a','tr@x')`,
+	} {
+		mustExec(t, pool, q)
+	}
+	got, err := platform(t, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tm := range got.Teams {
+		tm.Version, tm.Budget.Version = 0, 0
+		for _, pr := range tm.Programs {
+			pr.Version = 0
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("SQL path and config.Load differ\n got: %s\nwant: %s", dump(got), dump(want))
+	}
+}
+
+func dump(p *config.Platform) string {
+	var b strings.Builder
+	b.WriteString(reflectString(p.Settings) + reflectString(p.Admins) + reflectString(p.Trainings))
+	for id, tm := range p.Teams {
+		b.WriteString(id + reflectString(*tm))
+		for k, pr := range tm.Programs {
+			b.WriteString(k + reflectString(*pr))
+		}
+	}
+	return b.String()
+}
+
+func reflectString(v any) string { return fmt.Sprintf("\n%+v", v) }

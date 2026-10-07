@@ -13,7 +13,8 @@ CREATE TABLE settings (
   rank_blade           numeric NOT NULL DEFAULT 75,
   rank_sword           numeric NOT NULL DEFAULT 90,
   rank_masterwork      numeric NOT NULL DEFAULT 100,
-  version              bigint  NOT NULL DEFAULT 1
+  version              bigint  NOT NULL DEFAULT 1,
+  CHECK ((auto_approve_usd IS NULL) = (tier1_usd IS NULL) AND (tier1_usd IS NULL) = (tier2_usd IS NULL))
 );
 INSERT INTO settings (id) VALUES (1);
 
@@ -25,7 +26,7 @@ CREATE TABLE schedules (
 
 CREATE TABLE quotes (id bigserial PRIMARY KEY, text text NOT NULL);
 
-CREATE TABLE admins (email text PRIMARY KEY);
+CREATE TABLE admins (email text PRIMARY KEY CHECK (email = lower(btrim(email))));
 
 CREATE TABLE trainings (
   id     text PRIMARY KEY,
@@ -41,15 +42,16 @@ CREATE TABLE teams (
 
 CREATE TABLE team_members (
   team  text NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  email text NOT NULL,
+  email text NOT NULL CHECK (email = lower(btrim(email))),
   role  text NOT NULL CHECK (role IN ('leader', 'senior', 'member', 'trainee')),
   PRIMARY KEY (team, email)              -- one role per person per team (spec 5.2)
 );
+CREATE UNIQUE INDEX team_one_leader ON team_members(team) WHERE role = 'leader';
 
 CREATE TABLE mentors (
   team    text NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  trainee text NOT NULL,
-  mentor  text NOT NULL,
+  trainee text NOT NULL CHECK (trainee = lower(btrim(trainee))),
+  mentor  text NOT NULL CHECK (mentor = lower(btrim(mentor))),
   PRIMARY KEY (team, trainee)
 );
 
@@ -69,7 +71,7 @@ CREATE TABLE team_budgets (
 
 CREATE TABLE programs (
   team                 text NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  training             text NOT NULL,
+  training             text NOT NULL REFERENCES trainings(id),
   pinned_ref           text,             -- NULL: track the tracked branch head
   schedule_name        text,
   inline_schedule      jsonb,
@@ -79,13 +81,14 @@ CREATE TABLE programs (
   budget_usd_month     numeric NOT NULL DEFAULT 0,
   review_self_reported boolean NOT NULL DEFAULT false,
   version              bigint  NOT NULL DEFAULT 1,
-  PRIMARY KEY (team, training)
+  PRIMARY KEY (team, training),
+  CHECK (NOT (schedule_name IS NOT NULL AND inline_schedule IS NOT NULL))
 );
 
 CREATE TABLE program_roles (
   team     text NOT NULL,
   training text NOT NULL,
-  email    text NOT NULL,
+  email    text NOT NULL CHECK (email = lower(btrim(email))),
   role     text NOT NULL CHECK (role IN ('manager', 'scorer', 'approver')),
   PRIMARY KEY (team, training, email, role),
   FOREIGN KEY (team, training) REFERENCES programs(team, training) ON DELETE CASCADE
@@ -94,7 +97,7 @@ CREATE TABLE program_roles (
 CREATE TABLE enrollments (
   team     text NOT NULL,
   training text NOT NULL,
-  email    text NOT NULL,
+  email    text NOT NULL CHECK (email = lower(btrim(email))),
   PRIMARY KEY (team, training, email),
   FOREIGN KEY (team, training) REFERENCES programs(team, training) ON DELETE CASCADE
 );

@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -180,12 +179,7 @@ func emails(in []string) []string {
 	return out
 }
 
-func checkEmail(field, e string) error {
-	if !strings.Contains(e, "@") || strings.ContainsFunc(e, unicode.IsSpace) {
-		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s: %q is not an email address", field, e))
-	}
-	return nil
-}
+func checkEmail(field, e string) error { return config.CheckEmail(field, e) }
 
 // validEmails is emails for user input: every entry must look like an email address.
 func validEmails(field string, in []string) ([]string, error) {

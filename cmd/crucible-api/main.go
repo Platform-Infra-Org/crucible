@@ -21,6 +21,7 @@ import (
 	"github.com/riverqueue/river"
 	"k8s.io/client-go/tools/clientcmd"
 
+	userdocs "crucible/docs/user"
 	"crucible/internal/agenthub"
 	"crucible/internal/auth"
 	"crucible/internal/authoring"
@@ -29,6 +30,7 @@ import (
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
+	"crucible/internal/docs"
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
@@ -270,10 +272,16 @@ func run(ctx context.Context) error {
 		}}
 	authoringSvc := &authoring.Service{DB: pool, Edits: editsSvc, Log: slog.Default()}
 
+	docPages, err := docs.Load(userdocs.FS)
+	if err != nil {
+		slog.Error("docs", "err", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
-			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc, Authoring: authoringSvc,
+			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc, Authoring: authoringSvc, Docs: docs.New(docPages),
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

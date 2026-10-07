@@ -29,10 +29,30 @@ editor. Your drafts are listed under **My drafts** on the same page, so you can 
 The left side lists the training's files. Choose one to open it.
 
 - **New file** asks for the path of the new file, such as `modules/01-sparks/reading/intro.md`.
+- **New module** opens the Module block under **Blocks**.
 - **Rename** and **Delete** sit beside each file. `training.yaml` stays put: you can change it, but not rename or
   delete it.
 - Files you can't edit here are greyed, and say why (for example, a Terraform file).
 - A • marks the files you have changed.
+
+## Blocks
+
+**Blocks**, beside Explorer, lists every building block by group: modules, readings, quizzes and their questions, labs
+and their tasks, hints and terminals. Choose one to fill in its form.
+
+- Required fields are marked with `*`, and each field has a line of help under it.
+- Where a block goes into a module, you pick the module from a list; a hint asks for the task too, picked from the
+  module's lab.
+- **Add to the draft** writes the files. The file it changes opens with the new lines selected, and the training is
+  checked for problems at once. If something is wrong, such as a module without a lab, the form says so.
+- You can still type the same YAML by hand; a block only saves you the typing.
+- A new training repo and an AWS lab can't be added here: they need files the browser editor doesn't write. Their
+  blocks show an example to copy into the repo in git.
+
+Every block's fields and an example of what it writes are in the reference:
+[Training](/docs/authors/blocks/training), [Module](/docs/authors/blocks/module),
+[Reading](/docs/authors/blocks/reading), [Quiz](/docs/authors/blocks/quiz), [Lab](/docs/authors/blocks/lab) and
+[AWS](/docs/authors/blocks/aws).
 
 ## Tabs
 

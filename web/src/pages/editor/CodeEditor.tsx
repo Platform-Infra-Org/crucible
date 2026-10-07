@@ -5,7 +5,7 @@ import { languageOf, monacoTheme } from './model'
 
 type Props = {
   draftId: number; path: string; text: string; readOnly: boolean
-  markers: { line: number; message: string }[]; reveal?: { line: number; n: number }
+  markers: { line: number; message: string }[]; reveal?: { line: number; lines?: number; n: number }
   onChange: (path: string, text: string) => void; onLeave: () => void; onGoToFile: () => void
 }
 
@@ -62,6 +62,11 @@ export function CodeEditor({ draftId, path, text, readOnly, markers, reveal, onC
     if (!reveal || !ed.current) return
     ed.current.revealLineInCenter(reveal.line)
     ed.current.setPosition({ lineNumber: reveal.line, column: 1 })
+    if (reveal.lines && reveal.lines > 1) { // an insert: select its lines
+      const m = ed.current.getModel()
+      const endLine = Math.min(reveal.line + reveal.lines - 1, m?.getLineCount() ?? reveal.line)
+      ed.current.setSelection(new monaco.Range(reveal.line, 1, endLine, m?.getLineMaxColumn(endLine) ?? 1))
+    }
     ed.current.focus()
   }, [reveal])
   return <div ref={host} className="code-editor" data-testid="code-editor" />

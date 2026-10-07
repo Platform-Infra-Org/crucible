@@ -130,3 +130,5 @@ export type DraftState = 'editing' | 'in_review' | 'returned' | 'merged'
 export type DraftInfo = { id: number; training: string; title: string; base_sha: string; head_sha: string; ops: EditOp[]; updated_at: string; edit_id?: number; state: DraftState }
 export type Conflict = { path: string; base: string; head: string; head_missing: boolean; mine: string; op: EditOp }
 export type Problem = { file: string; line: number; msg: string }
+export type BlockField = { name: string; type: string; required?: boolean; enum?: string[]; default?: string; description: string; min?: number; max?: number }
+export type BlockInfo = { id: string; group: string; title: string; summary: string; doc?: string; file_kind: string; fields: BlockField[]; example: string; git_only?: boolean }

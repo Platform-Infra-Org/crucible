@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { api, type ApiError } from '../../api'
-import type { Conflict, ContentEdit, DraftInfo, FileEntry, Problem } from '../../types'
+import type { BlockInfo, Conflict, ContentEdit, DraftInfo, EditOp, FileEntry, Problem } from '../../types'
 import { ErrorBox } from '../../components/ErrorBox'
 import { Loader } from '../../components/Loader'
 import { opsProblem } from '../../lib/editLimits'
 import { CodeEditor } from './CodeEditor'
 import { Explorer } from './Explorer'
+import { BlocksPanel } from './BlocksPanel'
 import { Preview } from './Preview'
 import { parseLab } from './previewModel'
 import { ProblemsPanel } from './ProblemsPanel'
@@ -40,19 +41,24 @@ export default function Ide() {
   const [fatal, setFatal] = useState<ApiError>()
   const [now, setNow] = useState(() => Date.now())
   const [problems, setProblems] = useState<Problem[]>([])
-  const [panel, setPanel] = useState<'explorer' | 'problems' | 'changes'>('explorer')
-  const [reveal, setReveal] = useState<{ line: number; n: number }>()
+  const [panel, setPanel] = useState<'explorer' | 'problems' | 'changes' | 'blocks'>('explorer')
+  const [reveal, setReveal] = useState<{ line: number; lines?: number; n: number }>()
+  const [catalog, setCatalog] = useState<{ groups: string[]; blocks: BlockInfo[] }>()
+  const [preselect, setPreselect] = useState<string>() // the block Blocks opens on, e.g. New module
   const [goto, setGoto] = useState(false)
   const [view, setView] = useState<'files' | 'editor' | 'preview'>('editor') // below tablet width only
   const explorerRef = useRef<HTMLDivElement>(null)
   const saver = useMemo(() => serialSaves<DraftInfo>(), [])
   const asked = useRef(new Set<string>()) // originals requested for the Changes panel (once each; a failure is not retried)
   const vseq = useRef(0) // latest validate request
+  const validateNow = useRef(false) // the next change is checked at once, not after the pause (an insert)
   const pending = useRef(0) // saves queued or in flight
 
   const load = useCallback(async () => {
     const [d, f] = await Promise.all([api<DraftInfo>(`/api/authoring/drafts/${id}`), api<FileEntry[]>(`/api/authoring/drafts/${id}/files`)])
-    setupYaml(await api<Record<string, object>>(`/api/authoring/schema?training=${encodeURIComponent(d.training)}`))
+    const q = `?training=${encodeURIComponent(d.training)}`
+    const [schema, cat] = await Promise.all([api<Record<string, object>>(`/api/authoring/schema${q}`), api<{ groups: string[]; blocks: BlockInfo[] }>(`/api/authoring/blocks${q}`)])
+    setupYaml(schema); setCatalog(cat)
     const kept = currentPaths(f.filter((x) => x.editable).map((x) => x.path), fromOps(d.ops))
     saver.set(d)
     setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBt({ sha: d.base_sha, text: {} }); asked.current.clear() // open tabs refetch their base text
@@ -71,12 +77,17 @@ export default function Ide() {
   const originalOf = (p: string) => { const o = origin(base, work, p); return o === undefined ? undefined : baseText[o] }
   const textOf = (p: string) => fileText(base, work, baseText, p) // undefined until its base text is loaded
 
-  const loadBase = async (p: string | undefined) => {
-    if (!p || p in baseText) return
+  // loadBase loads p's base text and returns it, so a caller past an await doesn't read baseText from a stale render.
+  const loadBase = async (p: string | undefined): Promise<string | undefined> => {
+    if (!p) return undefined
+    if (p in baseText) return baseText[p]
     const sha = bt.sha
     const { content } = await api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(p)}`)
     setBt((b) => withBase(b, sha, p, content))
+    return content
   }
+  // need loads a file the Blocks panel reads (a module's lab.yaml, for its task picker)
+  const need = useCallback((p: string) => { loadBase(origin(base, work, p)).catch(() => {}) }, [base, work, bt, id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { // the open file's base text, e.g. after a reload cleared them
     const o = active ? origin(base, work, active) : undefined
     if (o === undefined || o in bt.text) return
@@ -105,7 +116,7 @@ export default function Ide() {
       if (paths.includes(p)) loadBase(origin(base, work, p)).catch(() => {})
     }
   }, [active, work, bt]) // eslint-disable-line react-hooks/exhaustive-deps
-  const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }
+  const change = (next: DraftOps | ((w: DraftOps) => DraftOps)) => { setWork(next); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
     setTabs((t) => (t.includes(p) ? t : [...t, p]))
@@ -127,6 +138,27 @@ export default function Ide() {
   const remove = (p: string) => {
     change(deletePath(base, work, p)); setTabs((t) => t.filter((x) => x !== p))
     if (active === p) setActive('')
+  }
+  // insert has the server render a block against the draft and applies the files it returns to the draft as it is now
+  // (not as it was when the request went out). Nothing is saved here: the change autosaves through the queue like typing.
+  const insert = async (block: BlockInfo, values: Record<string, string>) => {
+    const sent = draft!.base_sha
+    const r = await api<{ ops: EditOp[]; open: string; line: number; lines: number }>('/api/authoring/insert',
+      { method: 'POST', json: { training: draft!.training, base_sha: sent, ops, block: block.id, values } })
+    const puts = r.ops.flatMap((o) => (o.op === 'put' ? [o] : []))
+    const originals: Record<string, string | undefined> = {} // by base path: a file edited back to its original leaves the draft
+    for (const o of puts) {
+      const b = origin(base, work, o.path)
+      if (b !== undefined) originals[b] = await loadBase(b).catch(() => undefined)
+    }
+    if (resolving.current || saver.get()?.base_sha !== sent) throw new Error('The draft moved to newer content meanwhile: add the block again.')
+    change((w) => puts.reduce((n, o) => { const b = origin(base, n, o.path); return putText(n, o.path, o.content, b === undefined ? undefined : originals[b]) }, w))
+    validateNow.current = true // problems at once, not after the pause
+    await open(r.open)
+    setView('editor')
+    setReveal({ line: r.line, lines: r.lines, n: Date.now() })
+    setPreselect(undefined)
+    setPanel('explorer') // the new files are in view; Blocks reopens on its list
   }
   const close = (p: string) => { setTabs((t) => t.filter((x) => x !== p)); if (active === p) setActive(tabs.find((x) => x !== p) ?? '') }
   const leave = () => explorerRef.current?.querySelector<HTMLButtonElement>('button[aria-current="true"], button')?.focus()
@@ -175,7 +207,8 @@ export default function Ide() {
         else if (e.status !== 409) setMsg(e.message)
       })
     let retries: ReturnType<typeof setTimeout> | undefined
-    const t = setTimeout(() => run(true), VALIDATE_MS)
+    const t = setTimeout(() => run(true), validateNow.current ? 0 : VALIDATE_MS)
+    validateNow.current = false
     return () => { clearTimeout(t); clearTimeout(retries) }
   }, [draft?.training, draft?.base_sha, ops, problem]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -272,10 +305,13 @@ export default function Ide() {
             <button aria-pressed={panel === 'explorer'} onClick={() => setPanel('explorer')}>Explorer</button>
             <button aria-pressed={panel === 'problems'} onClick={() => setPanel('problems')}>Problems ({problems.length})</button>
             <button aria-pressed={panel === 'changes'} onClick={() => setPanel('changes')}>Changes ({changes.length})</button>
+            <button aria-pressed={panel === 'blocks'} onClick={() => { setPanel('blocks'); setPreselect(undefined) }}>Blocks</button>
           </div>
           {panel === 'explorer' && <Explorer paths={paths} greyed={greyed} changed={new Set(changes.map((c) => c.path))} active={active} readOnly={readOnly}
-            onOpen={(p) => { open(p); setView('editor') }} onNew={create} onRename={rename} onDelete={remove} />}
+            onOpen={(p) => { open(p); setView('editor') }} onNew={create} onRename={rename} onDelete={remove} onNewModule={() => { setPanel('blocks'); setPreselect('module') }} />}
           {panel === 'problems' && <ProblemsPanel problems={problems} known={(f) => paths.includes(f)} onJump={jump} />}
+          {panel === 'blocks' && catalog && <BlocksPanel groups={catalog.groups} blocks={catalog.blocks} paths={paths} read={textOf} need={need}
+            preselect={preselect} readOnly={readOnly} onInsert={insert} />}
           {panel === 'changes' && <ChangesPanel changes={changes} diffOf={diffOf} onOpen={(p) => { open(p); setView('editor') }} />}
         </div>
         <div className="ide-editor">

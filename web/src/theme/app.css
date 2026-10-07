@@ -247,7 +247,9 @@ meter { width: 8rem; vertical-align: middle; }
 .rebase .code-editor { min-height: 0; height: 55vh; } /* leaves room for its buttons and the status bar */
 .ide-tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
 .ide-status { display: flex; gap: 1rem; align-items: center; padding: .5rem 0; border-top: 1px solid var(--surface-2); }
-.explorer ul { list-style: none; padding: 0; margin: 0; }
+.explorer ul, .blocks ul { list-style: none; padding: 0; margin: 0; }
+.blocks li { margin-bottom: .4rem; }
+.blocks pre { white-space: pre-wrap; }
 .explorer button.small, .ide-tabs button.small { padding: 0 .3rem; font-size: .8rem; }
 
 .ide-views { display: none; }

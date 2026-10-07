@@ -33,7 +33,8 @@ modules/
 - `module.yaml` lists its items in order. Each item is one of `reading: <file>`, `quiz: quiz.yaml` or
   `lab: <folder>`. A module has at most one quiz and one lab.
 - The lab folder can have any name; `lab` is the habit. An AWS lab keeps its Terraform in `terraform/` inside it.
-- Readings link to images as `assets/...`, or to full URLs. Other relative links won't resolve in Crucible.
+- Readings link to `assets/...` or to full URLs. Other relative links won't resolve in Crucible. Images must come
+  from `assets/`: Crucible doesn't load images from other sites.
 - Scripts and files are referenced relative to the lab folder.
 
 ## Every key

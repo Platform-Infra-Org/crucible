@@ -62,15 +62,15 @@ Every block's fields and an example of what it writes are in the reference:
 Every file you open gets a tab above the editor, so you can switch between them without losing your place or your
 undo history. A • on a tab means the file has changes. **×** closes a tab; your changes stay in the draft.
 
-Markdown files show a preview beside the editor, the way trainees will see them.
-
 ## Preview
 
 The preview beside the editor follows the file you have open.
 
-- A reading renders the way trainees will see it. Images you have only added to the draft don't show yet.
+- A reading renders the way trainees will see it, except for images, which don't show in the preview.
 - A `quiz.yaml` becomes a playable quiz with the right answers marked. Only editors ever see those marks, and they
-  can read the files anyway. Questions scored by a person or in a lab are described, not graded.
+  can read the files anyway. **Try it** checks your answer to a question. Questions scored by a person or in a lab
+  are described, not graded. A pattern answer is checked by your browser here; Crucible's own check can differ on an
+  unusual pattern, so try those in `crucible preview`.
 - A `lab.yaml` lists its tasks, terminals and what each hint costs.
 
 Nothing runs in the preview. To try a lab, use `crucible preview` (see [Lint and preview](/docs/authors/lint-and-preview)).
@@ -81,8 +81,8 @@ There is no save button. Crucible saves your draft on the server about 2 seconds
 status bar at the bottom says when it last saved. You can have 5 open drafts at a time; submit or discard one to start
 another.
 
-If a draft can't be saved as it is (too big, or a path that isn't allowed), the status bar says why. Fix it and saving
-resumes.
+If a draft can't be saved as it is (over 1 MiB, or a path that isn't allowed), the status bar says why. Fix it and
+saving resumes. If you close or reload the page before your latest change is saved, the browser asks first.
 
 ## YAML help
 
@@ -146,6 +146,7 @@ Reload it to pick up the latest version.
 - `training.yaml` and files under `modules/<id>/`, nothing else.
 - Only `.md`, `.yaml`, `.yml` and `.sh` files.
 - Up to 20 files per edit, each at most 256 KiB of text.
+- A rename that only changes the case of letters, such as `Intro.md` to `intro.md`, is refused.
 
 An edit can't change a training's `id` or its maintainers; change those in git.
 

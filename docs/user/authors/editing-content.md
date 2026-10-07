@@ -82,7 +82,9 @@ status bar at the bottom says when it last saved. You can have 5 open drafts at 
 another.
 
 If a draft can't be saved as it is (over 1 MiB, or a path that isn't allowed), the status bar says why. Fix it and
-saving resumes. If you close or reload the page before your latest change is saved, the browser asks first.
+saving resumes. If you close or reload the page before your latest change is saved, the browser asks first. If you
+leave the editor through a link in Crucible, your latest change is saved on the way out; when it can't be saved (the
+status bar says why), Crucible asks before it leaves.
 
 ## YAML help
 
@@ -124,8 +126,8 @@ A draft in review is read-only. To keep working on it, open its edit and withdra
 
 ## Newer content
 
-When the training moved on while you worked, the editor offers **Newer content: rebase draft**. Files you didn't touch
-update silently. For a file changed on both sides, you see the newest version on the left and yours on the right. Edit
+When the training moved on while you worked, the editor offers **Newer content: rebase draft**. The editor is read-only while
+it checks. Files you didn't touch update silently. For a file changed on both sides, you see the newest version on the left and yours on the right. Edit
 the right side and choose **Use the right side**, or choose **Drop my change (take theirs)**. A rename or delete of a file that changed upstream can be kept or
 dropped; if the file is gone upstream, or a rename's new name now exists, you can only drop it. If you renamed a file and
 changed it, and the original changed upstream, you merge upstream's version into yours the same way; if you drop the

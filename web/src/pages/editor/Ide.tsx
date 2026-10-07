@@ -17,7 +17,7 @@ import { RebasePanel } from './RebasePanel'
 import { resolveOps, withBase, type BaseTexts, type Choice } from './rebase'
 import { unifiedDiff } from './diff'
 import { setupYaml } from './monaco'
-import { afterSave, canAutosave, saveLabel, serialSaves, type SaveState } from './autosave'
+import { afterSave, canAutosave, onLeave, saveLabel, serialSaves, type SaveState } from './autosave'
 import { applyInsert, changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type Change, type DraftOps } from './model'
 
 const AUTOSAVE_MS = 2000
@@ -55,6 +55,8 @@ export default function Ide() {
   const latest = useRef<DraftOps>(emptyOps()) // the draft as last set, ahead of the render: an insert is checked against it
   const frozen = useRef(false) // read-only as of the last render: an insert that lands then is dropped
   const pending = useRef(0) // saves queued or in flight
+  const [rebasing, setRebasing] = useState(false) // a rebase request is running: read-only, nothing autosaves
+  const flush = useRef(() => {}) // saves work the server doesn't have yet when the editor unmounts
 
   const load = useCallback(async () => {
     const [d, f] = await Promise.all([api<DraftInfo>(`/api/authoring/drafts/${id}`), api<FileEntry[]>(`/api/authoring/drafts/${id}/files`)])
@@ -253,18 +255,22 @@ export default function Ide() {
 
   // rebase moves the draft onto the newest content. Like every save it runs in the serialSaves queue, after any save in
   // flight. With no conflicts the server moves base_sha itself; otherwise the author resolves each one first.
+  // The editor is read-only from the start, and nothing autosaves while the request runs: typing then would be replaced
+  // by the rebased draft, or would change a put so the author's conflict choice no longer applies to it.
   const rebase = async () => {
     setMsg('')
-    if (save.kind !== 'saved' && !(await saveNow())) return
+    setRebasing(true)
     try {
+      if (save.kind !== 'saved' && !(await saveNow())) return
+      resolving.current = true
       let found: Conflict[] = []
       const d = await saver.run(async () => {
         const r = await api<{ draft: DraftInfo; conflicts: Conflict[] }>(`/api/authoring/drafts/${id}/rebase`, { method: 'POST', json: {} })
         found = r.conflicts
         return r.draft
       })
-      if (found.length === 0) { await load(); setMsg('Rebased onto the newest content.') } else { resolving.current = true; setConflicts({ list: found, head: d.head_sha }) }
-    } catch (e) { setMsg((e as Error).message) }
+      if (found.length === 0) { await load(); resolving.current = false; setMsg('Rebased onto the newest content.') } else setConflicts({ list: found, head: d.head_sha })
+    } catch (e) { resolving.current = false; setMsg((e as Error).message) } finally { setRebasing(false) }
   }
   // resolved saves the author's choices with base_sha at the head the conflicts were found against (never a newer one:
   // its changes were not checked); if the training moved again since, the server refuses it and the author rebases again.
@@ -290,8 +296,35 @@ export default function Ide() {
     } catch (e) { setMsg((e as Error).message) }
   }
 
-  const readOnly = draft?.state === 'in_review' || save.kind === 'conflict'
+  const readOnly = draft?.state === 'in_review' || save.kind === 'conflict' || rebasing
   useEffect(() => { frozen.current = readOnly }, [readOnly])
+
+  // Leaving through an in-app link unmounts the editor (beforeunload only covers closing or reloading the page). Pending
+  // work is saved through the queue as it unmounts; keepalive lets a small one finish even if the page closes next (the
+  // browser caps keepalive bodies at 64 KiB). When that save can't succeed, a link asks first.
+  const leaving = onLeave(save, readOnly || !!conflicts, !!problem)
+  useEffect(() => {
+    flush.current = () => {
+      if (!leaving.flush) return
+      saver.run((cur) => {
+        const body = JSON.stringify({ title, base_sha: cur.base_sha, ops, updated_at: cur.updated_at })
+        return api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', body, headers: { 'Content-Type': 'application/json' }, keepalive: body.length < 60_000 })
+      }).catch(() => {}) // ponytail: the editor is gone, so a failure here has nowhere to show; offline already asked first
+    }
+  })
+  useEffect(() => { const f = flush; return () => f.current() }, [])
+  const why = leaving.ask ? saveLabel(save, now) : ''
+  useEffect(() => {
+    if (!why) return
+    const guard = (e: MouseEvent) => {
+      const a = e.target instanceof Element ? e.target.closest('a[href]') : null
+      if (!(a instanceof HTMLAnchorElement) || a.target === '_blank' || a.origin !== window.location.origin) return
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return // opens elsewhere: the editor stays
+      if (!window.confirm(`${why}. Leave the editor anyway? Changes that aren't saved are lost.`)) { e.preventDefault(); e.stopPropagation() }
+    }
+    document.addEventListener('click', guard, true) // capture: before the router follows the link
+    return () => document.removeEventListener('click', guard, true)
+  }, [why])
 
   if (fatal) return <ErrorBox error={fatal} />
   if (!draft) return <Loader label="Heating the editor…" />

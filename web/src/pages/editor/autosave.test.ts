@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { ApiError } from '../../api'
-import { afterSave, canAutosave, saveLabel, serialSaves } from './autosave'
+import { afterSave, canAutosave, onLeave, saveLabel, serialSaves } from './autosave'
 
 // Review Focus 2: when another tab saved, this tab stops autosaving and says why. No silent overwrite, no retry loop.
 test('409 stops autosave; 400 blocks until fixed; other failures retry on the next change', () => {
@@ -50,4 +50,19 @@ test('a failed save does not jam the queue', async () => {
 test('no autosave while resolving a rebase', () => {
   expect(canAutosave({ kind: 'saved', at: 0 }, true)).toBe(false)
   expect(canAutosave({ kind: 'saved', at: 0 }, false)).toBe(true)
+})
+
+// Review I-1: leaving through an in-app link never silently drops work the server doesn't have.
+test('leaving the editor saves pending work, and asks first when that save cannot succeed', () => {
+  const dirty = { kind: 'dirty' } as const
+  const offline = { kind: 'offline', reason: 'unavailable' } as const
+  const blocked = { kind: 'blocked', reason: 'too big' } as const
+  expect(onLeave(dirty, false, false)).toEqual({ flush: true, ask: false }) // typed within the autosave pause
+  expect(onLeave(offline, false, false)).toEqual({ flush: true, ask: true }) // try once more, but say it may be lost
+  expect(onLeave(blocked, false, false)).toEqual({ flush: false, ask: true })
+  expect(onLeave(dirty, false, true)).toEqual({ flush: false, ask: true }) // over a limit before the autosave said so
+  expect(onLeave({ kind: 'saved', at: 0 }, false, false)).toEqual({ flush: false, ask: false })
+  expect(onLeave({ kind: 'saving' }, false, false)).toEqual({ flush: false, ask: false }) // the save in flight finishes
+  expect(onLeave({ kind: 'conflict', reason: 'another tab' }, false, false)).toEqual({ flush: false, ask: false })
+  expect(onLeave(dirty, true, false)).toEqual({ flush: false, ask: false }) // read-only or resolving: never written
 })

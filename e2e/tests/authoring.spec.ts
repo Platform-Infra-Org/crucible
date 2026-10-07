@@ -207,3 +207,20 @@ test('newer content: a file changed on both sides is resolved, and the draft end
   await expect(leader).toHaveURL(/\/edits$/)
   expect((await leader.request.get(`/api/authoring/drafts/${id}`)).status()).toBe(404)
 })
+
+// Review I-1: leaving through a link inside the app, within the autosave pause, still saves the latest change.
+test('leaving the editor through a link saves the latest change first', async ({ browser }) => {
+  const leader = await login(browser, 'leader')
+  const id = await startEdit(leader, 'forge-103')
+  await leader.getByRole('button', { name: 'training.yaml', exact: true }).click()
+  const original: string = (await (await leader.request.get('/api/content/forge-103/file?path=training.yaml')).json()).content
+  await setEditorText(leader, original.replace(/^description: .*$/m, `description: Left ${run}`))
+  await expect(leader.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()
+  await leader.getByRole('link', { name: 'All edits' }).click() // well inside the 2 s autosave pause
+  await expect(leader).toHaveURL(/\/edits$/)
+  await expect.poll(() => savedOps(leader, id), { timeout: 10_000 }).toContain(`Left ${run}`)
+
+  await leader.goto(`/edits/drafts/${id}`)
+  await leader.getByRole('button', { name: 'Discard draft' }).click() // confirm accepted by login()
+  await expect(leader).toHaveURL(/\/edits$/)
+})

@@ -51,3 +51,13 @@ export function serialSaves<T>() {
     },
   }
 }
+
+// onLeave decides what leaving the editor inside the app does with work the server doesn't have yet. flush: send the
+// latest draft as it unmounts (a pending autosave, or a retry after a network failure). ask: confirm before following a
+// link, because that save can't succeed or may fail again. frozen: read-only, or newer content being resolved: the
+// editor's ops must not be written. unsaveable: the draft breaks a limit (the server would refuse it).
+export function onLeave(s: SaveState, frozen: boolean, unsaveable: boolean): { flush: boolean; ask: boolean } {
+  if (frozen || s.kind === 'conflict' || s.kind === 'saved' || s.kind === 'saving') return { flush: false, ask: false }
+  if (s.kind === 'blocked' || unsaveable) return { flush: false, ask: true }
+  return { flush: true, ask: s.kind === 'offline' }
+}

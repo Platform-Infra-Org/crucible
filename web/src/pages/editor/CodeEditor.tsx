@@ -22,6 +22,7 @@ export function CodeEditor({ draftId, path, text, readOnly, markers, reveal, onC
   useEffect(() => {
     const e = monaco.editor.create(host.current!, {
       automaticLayout: true, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on',
+      fixedOverflowWidgets: true, // hovers and suggestions escape the pane's clipping
       fontFamily: "'JetBrains Mono', monospace", theme: monacoTheme(document.documentElement.dataset.theme),
       renderControlCharacters: true, unicodeHighlight: { invisibleCharacters: true, ambiguousCharacters: true },
       ariaLabel: 'File editor. Press Control+Shift+F6 to leave.',

@@ -26,8 +26,13 @@ export function DocsPage() {
   return (
     <section className="page docs">
       <nav className="docs-nav" aria-label="Docs">
-        <label>Search the docs <input type="search" value={q} onChange={(e) => setQ(e.target.value)} /></label>
-        <label><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> All</label>
+        <h2 id="docs-search" className="docs-search-title">Search the docs</h2>
+        <input type="search" aria-labelledby="docs-search" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="switch">
+          <input type="checkbox" role="switch" checked={all} onChange={(e) => setAll(e.target.checked)} />
+          <span className="switch-track" aria-hidden="true" />
+          <span className="switch-label">Show all sections</span>
+        </label>
         {docSections(pages, roles, all || q !== '').map((s) => {
           const list = s.pages.filter((p) => found.has(p.slug))
           return list.length > 0 && (

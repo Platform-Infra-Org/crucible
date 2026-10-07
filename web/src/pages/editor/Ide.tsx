@@ -17,10 +17,14 @@ import { RebasePanel } from './RebasePanel'
 import { resolveOps, withBase, type BaseTexts, type Choice } from './rebase'
 import { unifiedDiff } from './diff'
 import { setupYaml } from './monaco'
+import { Icon, type IconName } from './icons'
+import { bounds, DEFAULT_LAYOUT, fit, LAYOUT_KEY, parseLayout, resize, type Layout } from './layout'
 import { afterSave, canAutosave, onLeave, saveLabel, serialSaves, type SaveState } from './autosave'
 import { applyInsert, changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type Change, type DraftOps } from './model'
 
 const AUTOSAVE_MS = 2000
+const ACTIVITY = 44 // px: the activity bar, left of the side panel
+const SPLIT = 1 // px: a splitter's column (its grab area is wider)
 const VALIDATE_MS = 1000
 
 export default function Ide() {
@@ -57,6 +61,16 @@ export default function Ide() {
   const pending = useRef(0) // saves queued or in flight
   const [rebasing, setRebasing] = useState(false) // a rebase request is running: read-only, nothing autosaves
   const flush = useRef(() => {}) // saves work the server doesn't have yet when the editor unmounts
+  const [layout, setLayout] = useState<Layout>(() => { try { return parseLayout(localStorage.getItem(LAYOUT_KEY)) } catch { return DEFAULT_LAYOUT } })
+  useEffect(() => { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)) } catch { /* storage blocked: sizes last this visit */ } }, [layout])
+  const [width, setWidth] = useState(() => window.innerWidth) // of .ide-main, measured once it renders
+  const measure = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return
+    setWidth(el.clientWidth)
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const load = useCallback(async () => {
     const [d, f] = await Promise.all([api<DraftInfo>(`/api/authoring/drafts/${id}`), api<FileEntry[]>(`/api/authoring/drafts/${id}/files`)])
@@ -171,7 +185,7 @@ export default function Ide() {
     setPanel('explorer') // the new files are in view; Blocks reopens on its list
   }
   const close = (p: string) => { setTabs((t) => t.filter((x) => x !== p)); if (active === p) setActive(tabs.find((x) => x !== p) ?? '') }
-  const leave = () => explorerRef.current?.querySelector<HTMLButtonElement>('button[aria-current="true"], button')?.focus()
+  const leave = () => (explorerRef.current?.querySelector<HTMLElement>('[aria-current="true"]') ?? explorerRef.current?.querySelector<HTMLElement>('button'))?.focus()
 
   // saveNow saves the draft and returns it as saved. Saves queue behind the one in flight (serialSaves), each with the
   // updated_at the last one returned. base_sha only moves on a rebase, never here.
@@ -326,6 +340,15 @@ export default function Ide() {
     return () => document.removeEventListener('click', guard, true)
   }, [why])
 
+  const shown = !!active && layout.previewOpen
+  const room = width - ACTIVITY - SPLIT * (shown ? 2 : 1)
+  const sized = fit(layout, room, shown)
+  const cols = `${ACTIVITY + sized.side}px ${SPLIT}px minmax(0, 1fr)${shown ? ` ${SPLIT}px ${sized.preview}px` : ''}`
+  const activity: ['explorer' | 'problems' | 'changes' | 'blocks', string, IconName, number | undefined][] = [
+    ['explorer', 'Explorer', 'files', undefined], ['problems', 'Problems', 'problems', problems.length],
+    ['changes', 'Changes', 'changes', changes.length], ['blocks', 'Blocks', 'blocks', undefined],
+  ]
+
   if (fatal) return <ErrorBox error={fatal} />
   if (!draft) return <Loader label="Heating the editor…" />
   return (
@@ -343,38 +366,56 @@ export default function Ide() {
         {(['files', 'editor', 'preview'] as const).map((v) => <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
       </div>
       {conflicts ? <RebasePanel conflicts={conflicts.list} onDone={resolved} onCancel={() => { resolving.current = false; setConflicts(undefined) }} /> : (
-      <div className="ide-main" data-view={view}>
+      <div className="ide-main" data-view={view} ref={measure} style={{ '--cols': cols } as React.CSSProperties}>
         <div ref={explorerRef} className="ide-side">
-          <div role="toolbar" aria-label="Panels" className="ide-activity">
-            <button aria-pressed={panel === 'explorer'} onClick={() => setPanel('explorer')}>Explorer</button>
-            <button aria-pressed={panel === 'problems'} onClick={() => setPanel('problems')}>Problems ({problems.length})</button>
-            <button aria-pressed={panel === 'changes'} onClick={() => setPanel('changes')}>Changes ({changes.length})</button>
-            <button aria-pressed={panel === 'blocks'} onClick={() => { setPanel('blocks'); setPreselect(undefined) }}>Blocks</button>
+          <div role="toolbar" aria-label="Panels" aria-orientation="vertical" className="ide-activity">
+            {activity.map(([key, label, icon, count]) => (
+              <button key={key} aria-pressed={panel === key} aria-label={count === undefined ? label : `${label} (${count})`} title={label}
+                onClick={() => { setPanel(key); if (key === 'blocks') setPreselect(undefined) }}>
+                <Icon name={icon} />{!!count && <span className={`act-badge${key === 'problems' ? ' bad' : ''}`} aria-hidden="true">{count}</span>}
+              </button>
+            ))}
           </div>
-          {panel === 'explorer' && <Explorer paths={paths} greyed={greyed} changed={new Set(changes.map((c) => c.path))} active={active} readOnly={readOnly}
-            onOpen={(p) => { open(p); setView('editor') }} onNew={create} onRename={rename} onDelete={remove} onNewModule={() => { setPanel('blocks'); setPreselect('module') }} />}
-          {panel === 'problems' && <ProblemsPanel problems={problems} known={(f) => paths.includes(f)} onJump={jump} />}
-          {panel === 'blocks' && catalog && <BlocksPanel groups={catalog.groups} blocks={catalog.blocks} paths={paths} read={textOf} need={need}
-            preselect={preselect} readOnly={readOnly} onInsert={insert} />}
-          {panel === 'changes' && <ChangesPanel changes={changes} diffOf={diffOf} onOpen={(p) => { open(p); setView('editor') }} />}
+          <div className="ide-panel">
+            {panel === 'explorer' && <Explorer paths={paths} greyed={greyed} changed={new Set(changes.map((c) => c.path))} active={active} readOnly={readOnly}
+              onOpen={(p) => { open(p); setView('editor') }} onNew={create} onRename={rename} onDelete={remove} onNewModule={() => { setPanel('blocks'); setPreselect('module') }} />}
+            {panel === 'problems' && <Pane title="Problems"><ProblemsPanel problems={problems} known={(f) => paths.includes(f)} onJump={jump} /></Pane>}
+            {panel === 'blocks' && catalog && <Pane title="Blocks"><BlocksPanel groups={catalog.groups} blocks={catalog.blocks} paths={paths} read={textOf} need={need}
+              preselect={preselect} readOnly={readOnly} onInsert={insert} /></Pane>}
+            {panel === 'changes' && <Pane title="Changes"><ChangesPanel changes={changes} diffOf={diffOf} onOpen={(p) => { open(p); setView('editor') }} /></Pane>}
+          </div>
         </div>
+        <Splitter label="Resize the side panel" value={sized.side} {...bounds(layout, room, shown, 'side')} dir={1}
+          onSize={(px) => setLayout((l) => resize(l, room, shown, 'side', px))} onReset={() => setLayout((l) => ({ ...l, side: DEFAULT_LAYOUT.side }))} />
         <div className="ide-editor">
           <div className="ide-tabs" role="toolbar" aria-label="Open files">
             {tabs.map((t) => (
-              <span key={t}>
-                <button className={t === active ? '' : 'ghost'} aria-current={t === active ? 'true' : undefined} onClick={() => setActive(t)} title={t}>
+              <span key={t} className={`ide-tab${t === active ? ' active' : ''}`}>
+                <button aria-current={t === active ? 'true' : undefined} onClick={() => setActive(t)} title={t}>
                   {t.slice(t.lastIndexOf('/') + 1)}{t in work.puts && <span aria-label=" (changed)"> •</span>}
                 </button>
-                <button className="ghost small" aria-label={`Close ${t}`} onClick={() => close(t)}>×</button>
+                <button className="tab-close" aria-label={`Close ${t}`} title="Close" onClick={() => close(t)}><Icon name="close" /></button>
               </span>
             ))}
+            <span className="spacer" />
+            {active && !layout.previewOpen && <button className="icon-btn show-preview" aria-label="Show preview" title="Show preview" onClick={() => setLayout((l) => ({ ...l, previewOpen: true }))}><Icon name="preview" /></button>}
           </div>
           {active && textOf(active) === undefined && <Loader label="Opening the file…" />}
           {active && textOf(active) !== undefined
             ? <CodeEditor draftId={id} path={active} text={textOf(active)!} readOnly={readOnly} markers={problems.filter((p) => p.file === active).map((p) => ({ line: p.line, message: p.msg }))} reveal={reveal} onChange={edit} onLeave={leave} onGoToFile={() => setGoto(true)} />
-            : !active && <p className="muted">Open a file from the explorer.</p>}
+            : !active && <p className="muted ide-empty">Open a file from the explorer.</p>}
         </div>
-        {active && <div className="ide-preview" data-testid="edit-preview"><Preview path={active} text={textOf(active) ?? ''} read={textOf} /></div>}
+        {shown && <Splitter label="Resize the preview" value={sized.preview} {...bounds(layout, room, shown, 'preview')} dir={-1}
+          onSize={(px) => setLayout((l) => resize(l, room, shown, 'preview', px))} onReset={() => setLayout((l) => ({ ...l, preview: DEFAULT_LAYOUT.preview }))} />}
+        {active && (
+          <div className={`ide-preview${layout.previewOpen ? '' : ' closed'}`} data-testid="edit-preview">
+            <div className="pane-head">
+              <h2>Preview</h2>
+              <button className="icon-btn hide-preview" aria-label="Hide preview" title="Hide preview" onClick={() => setLayout((l) => ({ ...l, previewOpen: false }))}><Icon name="close" /></button>
+            </div>
+            <div className="pane-body preview-body"><Preview path={active} text={textOf(active) ?? ''} read={textOf} /></div>
+          </div>
+        )}
       </div>)}
       <footer className="ide-status" role="status" aria-live="polite">
         <span>{saveLabel(save, now)}</span>
@@ -385,5 +426,36 @@ export default function Ide() {
       </footer>
       {goto && <GoToFile paths={paths} onPick={(p) => { setGoto(false); open(p); setView('editor') }} onClose={() => setGoto(false)} />}
     </section>
+  )
+}
+
+function Pane({ title, children }: { title: string; children: React.ReactNode }) {
+  return <div className="pane"><div className="pane-head"><h2>{title}</h2></div><div className="pane-body">{children}</div></div>
+}
+
+// Splitter resizes the pane on one side of it: drag it, or focus it and use the arrow keys (16 px), Home and End;
+// a double-click puts the default width back. dir -1: the pane is on its right, so dragging left widens it.
+function Splitter({ label, value, min, max, dir, onSize, onReset }: {
+  label: string; value: number; min: number; max: number; dir: 1 | -1; onSize: (px: number) => void; onReset: () => void
+}) {
+  const drag = useRef<{ x: number; v: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const end = () => { drag.current = null; setDragging(false) }
+  return (
+    <div className={`ide-split${dragging ? ' dragging' : ''}`} role="separator" aria-orientation="vertical" aria-label={label} tabIndex={0}
+      aria-valuenow={value} aria-valuemin={min} aria-valuemax={max}
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.currentTarget.setPointerCapture(e.pointerId)
+        drag.current = { x: e.clientX, v: value }
+        setDragging(true)
+      }}
+      onPointerMove={(e) => { if (drag.current) onSize(drag.current.v + dir * (e.clientX - drag.current.x)) }}
+      onPointerUp={end} onPointerCancel={end} onLostPointerCapture={end} onDoubleClick={onReset}
+      onKeyDown={(e) => {
+        const to = ({ ArrowLeft: value - 16 * dir, ArrowRight: value + 16 * dir, Home: min, End: max } as Record<string, number>)[e.key]
+        if (to !== undefined) { e.preventDefault(); onSize(to) }
+      }} />
   )
 }

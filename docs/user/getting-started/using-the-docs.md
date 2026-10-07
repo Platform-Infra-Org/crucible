@@ -11,12 +11,12 @@ or answers.
 
 ## Your section first
 
-Open **Docs** in the top bar. It opens on the section for your role: trainees, authors, scorers, leaders and approvers, or admins. Choose
-**All** to see every section, including the ones for roles you don't have.
+Open **Docs** in the top bar. It opens on the section for your role: trainees, authors, scorers, leaders and approvers, or admins. Turn on
+**Show all sections**, under the search box, to see every section, including the ones for roles you don't have.
 
 ## Searching
 
-The search box in the docs filters pages as you type. It matches page titles and the headings inside pages. Type a word you'd expect on a screen, such as *budget*,
+The **Search the docs** box filters pages as you type. It matches page titles and the headings inside pages. Type a word you'd expect on a screen, such as *budget*,
 *hint* or *pairing*.
 
 ## Help from any screen

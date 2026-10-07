@@ -24,20 +24,38 @@ Never if you are enrolled in it, whatever your role: editing means seeing the an
 Open **Edits**, choose the training and choose **Start an edit**. Crucible lays out a fresh draft and opens the
 editor. Your drafts are listed under **My drafts** on the same page, so you can come back to one later.
 
+## The layout
+
+The editor is laid out like VS Code. Down the far left, the activity bar switches the side panel between
+**Explorer**, **Problems**, **Changes** and **Blocks**; Problems and Changes show their count on the icon. The editor
+sits in the middle with a tab for each open file, and the preview on the right.
+
+Drag the line between two panes to resize them: the side panel, the editor and the preview each keep a minimum width.
+You can also focus a line with Tab and use the arrow keys, or **Home** and **End** for the narrowest and widest.
+Double-click a line to put its default width back. The **×** in the preview's header hides it; the button at the right
+of the tabs shows it again. Crucible remembers your sizes in this browser.
+
 ## The explorer
 
-The left side lists the training's files. Choose one to open it.
+The explorer shows the training's files as a folder tree. Choose a folder to open or close it, and a file to open it.
+The folders of the file you have open always open to show it; **Collapse all** in the explorer's header closes them all.
 
-- **New file** asks for the path of the new file, such as `modules/01-sparks/reading/intro.md`.
+- **New file** in the header asks for the path of the new file, such as `modules/01-sparks/reading/intro.md`. You type
+  it in place in the tree: **Enter** creates it, **Esc** cancels, and a path that isn't allowed says why under it.
 - **New module** opens the Module block under **Blocks**.
-- **Rename** and **Delete** sit beside each file. `training.yaml` stays put: you can change it, but not rename or
-  delete it.
-- Files you can't edit here are greyed, and say why (for example, a Terraform file).
+- Right-click a file for **New file** (in its folder), **Rename** and **Delete**; right-click a folder for **New file**
+  in it. Rename edits the path in place, like New file. `training.yaml` stays put: you can change it, but not rename
+  or delete it.
+- Files you can't edit here are greyed, and say why when you point at them (for example, a Terraform file).
 - A • marks the files you have changed.
+
+From the keyboard, the arrow keys move through the tree (**→** opens a folder, **←** closes it or goes to its folder),
+**Enter** opens a file, **F2** renames it, **Delete** deletes it (after asking), and the menu key or **Shift+F10** opens
+the same menu as a right-click.
 
 ## Blocks
 
-**Blocks**, beside Explorer, lists every building block by group: modules, readings, quizzes and their questions, labs
+**Blocks**, in the activity bar, lists every building block by group: modules, readings, quizzes and their questions, labs
 and their tasks, hints and terminals. Choose one to fill in its form.
 
 - Required fields are marked with `*`, and each field has a line of help under it.
@@ -104,6 +122,7 @@ show as squiggles in the file and are listed under **Problems**; click one to ju
 ## Keyboard
 
 - **Ctrl/Cmd+P** goes to a file.
+- In the explorer: **F2** renames, **Delete** deletes, **Shift+F10** opens the file's menu.
 - **Ctrl/Cmd+Shift+P** opens the command palette.
 - **Ctrl/Cmd+F** and **Ctrl/Cmd+H** find and replace.
 - **Ctrl+Shift+F6** or **Ctrl+Alt+↑** leaves the editor.
@@ -111,7 +130,7 @@ show as squiggles in the file and are listed under **Problems**; click one to ju
 
 ## Small screens
 
-On a narrow screen, Files, Editor and Preview become tabs.
+On a narrow screen, Files, Editor and Preview become tabs, and the panes don't resize.
 
 ## Leaving the editor
 

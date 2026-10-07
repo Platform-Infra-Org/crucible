@@ -59,7 +59,7 @@ test('a leader shapes Forge 103 in the editor, a maintainer merges it, the train
   await leader.getByLabel(/^id/).fill(mod)
   await leader.getByLabel(/^title/).fill(`Embers ${run}`)
   await leader.getByRole('button', { name: 'Add to the draft' }).click()
-  await expect(leader.getByRole('button', { name: `modules/${mod}/module.yaml`, exact: true })).toBeVisible()
+  await expect(leader.getByRole('treeitem', { name: `modules/${mod}/module.yaml`, exact: true })).toBeVisible()
   await leader.getByRole('button', { name: 'Blocks', exact: true }).click()
   await leader.getByRole('button', { name: 'Quiz file', exact: true }).click()
   await leader.getByLabel(/^module/).selectOption(mod)
@@ -73,9 +73,10 @@ test('a leader shapes Forge 103 in the editor, a maintainer merges it, the train
   // Rename the reading: module.yaml now names a missing file. Jumping to the problem opens module.yaml (its text
   // arrives late on purpose) on the problem's line, squiggled; the leader fixes the item.
   await leader.getByRole('button', { name: 'Explorer', exact: true }).click()
-  await leader.getByRole('button', { name: `Rename ${scroll}` }).click()
+  await leader.getByRole('treeitem', { name: scroll, exact: true }).click({ button: 'right' }) // the explorer's context menu
+  await leader.getByRole('menuitem', { name: 'Rename' }).click()
   await leader.getByLabel(`New path for ${scroll}`).fill(renamed)
-  await leader.getByRole('button', { name: 'Rename', exact: true }).click()
+  await leader.getByLabel(`New path for ${scroll}`).press('Enter')
   await leader.route(/\/file\?path=modules%2F01-anvil%2Fmodule\.yaml$/, async (r) => { await new Promise((ok) => setTimeout(ok, 1500)); await r.continue() })
   await leader.getByRole('button', { name: /^Problems \([1-9]/ }).click()
   await leader.getByRole('button', { name: /modules\/01-anvil\/module\.yaml:3/ }).click()
@@ -95,11 +96,15 @@ test('a leader shapes Forge 103 in the editor, a maintainer merges it, the train
 
   // Delete the spare hint and leave a fresh one for the next run.
   await leader.getByRole('button', { name: 'Explorer', exact: true }).click()
-  await leader.getByRole('button', { name: `Delete ${hint}` }).click() // the confirm dialog is accepted by login()
-  await leader.getByRole('button', { name: 'New file' }).click()
+  await leader.getByRole('treeitem', { name: hint, exact: true }).click({ button: 'right' })
+  await leader.getByRole('menuitem', { name: 'New file' }).click()
+  await expect(leader.getByLabel('Path of the new file')).toHaveValue('modules/01-anvil/hints/') // in the file's folder
   await leader.getByLabel('Path of the new file').fill(`modules/01-anvil/hints/h-${run}.md`)
-  await leader.getByRole('button', { name: 'Create' }).click()
+  await leader.getByLabel('Path of the new file').press('Enter')
   await setEditorText(leader, `Spare hint from run ${run}.\n`) // not the old text, or git shows a rename, not a delete
+  await leader.getByRole('treeitem', { name: hint, exact: true }).focus()
+  await leader.keyboard.press('Delete') // the confirm dialog is accepted by login()
+  await expect(leader.getByRole('treeitem', { name: hint, exact: true })).toHaveCount(0)
 
   await leader.getByRole('button', { name: /^Changes \(/ }).click()
   await expect(leader.getByRole('list', { name: 'Changes' })).toContainText('Renamed')
@@ -176,7 +181,7 @@ test('newer content: a file changed on both sides is resolved, and the draft end
   const id = await startEdit(leader, 'forge-103')
   const described = (who: string) => (text: string) => text.replace(/^description: .*$/m, `description: ${who} ${run}`)
 
-  await leader.getByRole('button', { name: 'training.yaml', exact: true }).click()
+  await leader.getByRole('treeitem', { name: 'training.yaml', exact: true }).click()
   const original: string = (await (await leader.request.get('/api/content/forge-103/file?path=training.yaml')).json()).content
   await setEditorText(leader, described('Mine')(original))
   await expect.poll(() => savedOps(leader, id), { timeout: 20_000 }).toContain(`Mine ${run}`)
@@ -212,7 +217,7 @@ test('newer content: a file changed on both sides is resolved, and the draft end
 test('leaving the editor through a link saves the latest change first', async ({ browser }) => {
   const leader = await login(browser, 'leader')
   const id = await startEdit(leader, 'forge-103')
-  await leader.getByRole('button', { name: 'training.yaml', exact: true }).click()
+  await leader.getByRole('treeitem', { name: 'training.yaml', exact: true }).click()
   const original: string = (await (await leader.request.get('/api/content/forge-103/file?path=training.yaml')).json()).content
   await setEditorText(leader, original.replace(/^description: .*$/m, `description: Left ${run}`))
   await expect(leader.getByRole('status').filter({ hasText: 'Unsaved changes' })).toBeVisible()

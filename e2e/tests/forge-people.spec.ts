@@ -35,7 +35,7 @@ test('a content edit is reviewed and merged; the trainee earns a badge; mentor a
   await leader.getByRole('link', { name: 'Edits', exact: true }).click()
   await leader.getByLabel('Training').selectOption('forge-102')
   await leader.getByRole('button', { name: 'Start an edit' }).click()
-  await leader.getByRole('button', { name: 'modules/01-sparks/reading/sparks.md', exact: true }).click()
+  await leader.getByRole('treeitem', { name: 'modules/01-sparks/reading/sparks.md', exact: true }).click()
   const sparks = await (await leader.request.get('/api/content/forge-102/file?path=modules/01-sparks/reading/sparks.md')).json()
   expect(sparks.content).toMatch(/Every blade starts as a spark/)
   await setEditorText(leader, sparks.content + `\nThe anvil remembers ${run}.\n`)

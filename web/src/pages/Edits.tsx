@@ -14,6 +14,7 @@ export function EditsPage() {
   const training = pick || trainings.data?.[0]?.id || ''
   if (trainings.error) return <ErrorBox error={trainings.error} />
   if (edits.error) return <ErrorBox error={edits.error} />
+  if (drafts.error) return <ErrorBox error={drafts.error} />
   if (!trainings.data || !edits.data) return <Loader label="Reading the edits…" />
   return (
     <section className="page">

@@ -36,6 +36,14 @@ export function origin(base: string[], d: DraftOps, path: string): string | unde
   return base.includes(path) && !movedAway(d, path) && !d.deletes.includes(path) ? path : undefined
 }
 
+// fileText is path's text in the draft: its put, else its base text. undefined while that base text isn't loaded (or the
+// path isn't in the draft): never "", which the next keystroke would save as the whole file.
+export function fileText(base: string[], d: DraftOps, baseText: Record<string, string>, path: string): string | undefined {
+  if (path in d.puts) return d.puts[path]
+  const o = origin(base, d, path)
+  return o === undefined ? undefined : baseText[o]
+}
+
 export function currentPaths(base: string[], d: DraftOps): string[] {
   const out = new Set(base.filter((p) => !movedAway(d, p) && !d.deletes.includes(p)))
   for (const p of Object.keys(d.renames)) out.add(p)

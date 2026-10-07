@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { changeList, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, origin, putText, renamePath, toOps } from './model'
+import { changeList, fileText, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, origin, putText, renamePath, toOps } from './model'
 
 const base = ['training.yaml', 'modules/m1/module.yaml', 'modules/m1/reading/a.md', 'modules/m1/reading/b.md']
 
@@ -85,4 +85,12 @@ test('reopening an edit keeps its renames and deletes', () => {
     { op: 'delete' as const, path: 'modules/m1/reading/b.md' },
   ]
   expect(toOps(fromOps(ops))).toEqual(ops)
+})
+
+test('a file whose base text is not loaded has no text yet, never ""', () => {
+  const d = putText(emptyOps(), 'modules/m1/reading/n.md', '', undefined)
+  expect(fileText(base, d, {}, 'modules/m1/reading/a.md')).toBeUndefined() // after a reload cleared the base texts
+  expect(fileText(base, d, { 'modules/m1/reading/a.md': 'A' }, 'modules/m1/reading/a.md')).toBe('A')
+  expect(fileText(base, d, {}, 'modules/m1/reading/n.md')).toBe('') // a new, empty file
+  expect(fileText(base, deletePath(base, d, 'modules/m1/reading/b.md'), {}, 'modules/m1/reading/b.md')).toBeUndefined()
 })

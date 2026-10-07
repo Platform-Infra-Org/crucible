@@ -9,8 +9,8 @@ import { CodeEditor } from './CodeEditor'
 import { Explorer } from './Explorer'
 import { Preview } from './Preview'
 import { setupYaml } from './monaco'
-import { afterSave, canAutosave, saveLabel, type SaveState } from './autosave'
-import { changeList, currentPaths, deletePath, emptyOps, fromOps, origin, putText, renamePath, toOps, type DraftOps } from './model'
+import { afterSave, canAutosave, saveLabel, serialSaves, type SaveState } from './autosave'
+import { changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type DraftOps } from './model'
 
 const AUTOSAVE_MS = 2000
 
@@ -29,13 +29,18 @@ export default function Ide() {
   const [fatal, setFatal] = useState<ApiError>()
   const [now, setNow] = useState(() => Date.now())
   const explorerRef = useRef<HTMLDivElement>(null)
+  const saver = useMemo(() => serialSaves<DraftInfo>(), [])
+  const pending = useRef(0) // saves queued or in flight
 
   const load = useCallback(async () => {
     const [d, f] = await Promise.all([api<DraftInfo>(`/api/authoring/drafts/${id}`), api<FileEntry[]>(`/api/authoring/drafts/${id}/files`)])
     setupYaml(await api<Record<string, object>>(`/api/authoring/schema?training=${encodeURIComponent(d.training)}`))
-    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBaseText({})
+    const kept = currentPaths(f.filter((x) => x.editable).map((x) => x.path), fromOps(d.ops))
+    saver.set(d)
+    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBaseText({}) // open tabs refetch their base text
+    setTabs((t) => t.filter((p) => kept.includes(p))); setActive((a) => (kept.includes(a) ? a : ''))
     setSave({ kind: 'saved', at: Date.now() })
-  }, [id])
+  }, [id, saver])
   useEffect(() => { load().catch(setFatal) }, [load])
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(t) }, [])
 
@@ -46,20 +51,30 @@ export default function Ide() {
   const ops = useMemo(() => toOps(work), [work])
   const problem = opsProblem(ops)
   const originalOf = (p: string) => { const o = origin(base, work, p); return o === undefined ? undefined : baseText[o] }
-  const textOf = (p: string) => work.puts[p] ?? originalOf(p) ?? ''
+  const textOf = (p: string) => fileText(base, work, baseText, p) // undefined until its base text is loaded
 
   const loadBase = async (p: string | undefined) => {
     if (!p || p in baseText) return
     const { content } = await api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(p)}`)
     setBaseText((b) => ({ ...b, [p]: content }))
   }
+  useEffect(() => { // the open file's base text, e.g. after a reload cleared them
+    const o = active ? origin(base, work, active) : undefined
+    if (o === undefined || o in baseText) return
+    api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(o)}`)
+      .then(({ content }) => setBaseText((b) => ({ ...b, [o]: content })))
+      .catch((e: Error) => setMsg(e.message))
+  }, [active, base, work, baseText, id])
   const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
     setTabs((t) => (t.includes(p) ? t : [...t, p]))
     setActive(p)
   }
-  const edit = (p: string, text: string) => { if (text !== textOf(p)) change(putText(work, p, text, originalOf(p))) }
+  const edit = (p: string, text: string) => {
+    const cur = textOf(p)
+    if (cur !== undefined && text !== cur) change(putText(work, p, text, originalOf(p)))
+  }
   const create = (p: string) => {
     if (paths.includes(p)) return setMsg(`${p} already exists.`)
     change(putText(work, p, '', undefined)); setTabs((t) => [...t, p]); setActive(p)
@@ -76,35 +91,50 @@ export default function Ide() {
   const close = (p: string) => { setTabs((t) => t.filter((x) => x !== p)); if (active === p) setActive(tabs.find((x) => x !== p) ?? '') }
   const leave = () => explorerRef.current?.querySelector<HTMLButtonElement>('button[aria-current="true"], button')?.focus()
 
-  // saveNow saves the draft and returns it as saved. base_sha only moves on a rebase, never here.
+  // saveNow saves the draft and returns it as saved. Saves queue behind the one in flight (serialSaves), each with the
+  // updated_at the last one returned. base_sha only moves on a rebase, never here.
   const saveNow = useCallback(async (): Promise<DraftInfo | undefined> => {
-    if (!draft) return undefined
+    if (!saver.get()) return undefined
     if (problem) { setSave({ kind: 'blocked', reason: problem }); return undefined }
     setSave({ kind: 'saving' })
+    pending.current++
     try {
-      const d = await api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', json: { title, base_sha: draft.base_sha, ops, updated_at: draft.updated_at } })
+      const d = await saver.run((cur) => api<DraftInfo>(`/api/authoring/drafts/${id}`, { method: 'PUT', json: { title, base_sha: cur.base_sha, ops, updated_at: cur.updated_at } }))
       setDraft(d)
-      setSave((s) => (s.kind === 'dirty' ? s : afterSave(undefined, Date.now()))) // typed while saving: still dirty
+      const last = pending.current === 1
+      setSave((s) => (s.kind === 'dirty' || !last ? s : afterSave(undefined, Date.now()))) // typed or queued another: not saved yet
       return d
     } catch (e) {
       setSave(afterSave(e as ApiError, Date.now()))
       return undefined
+    } finally {
+      pending.current--
     }
-  }, [draft, id, title, ops, problem])
+  }, [saver, id, title, ops, problem])
   useEffect(() => { // autosave about 2 s after the last change; never once another tab owns the draft
     if (save.kind !== 'dirty') return
     const t = setTimeout(saveNow, AUTOSAVE_MS)
     return () => clearTimeout(t)
   }, [save, saveNow])
 
+  useEffect(() => { // closing the tab with work the server doesn't have yet asks first
+    if (save.kind === 'saved' || save.kind === 'conflict') return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [save.kind])
+
   const submit = async () => {
     setMsg('')
     if (!title.trim()) return setMsg("Give the draft a title first: it becomes the edit's title.")
-    const d = save.kind === 'saved' ? draft : await saveNow()
-    if (!d) return
+    if (save.kind !== 'saved' && !(await saveNow())) return
     try {
-      const e = await api<ContentEdit>(`/api/authoring/drafts/${id}/submit`, { method: 'POST', json: { updated_at: d.updated_at } })
-      nav(`/edits/${e.id}`)
+      let edit: ContentEdit | undefined
+      await saver.run(async (d) => { // after any save still in flight, with its updated_at
+        edit = await api<ContentEdit>(`/api/authoring/drafts/${id}/submit`, { method: 'POST', json: { updated_at: d.updated_at } })
+        return d
+      })
+      nav(`/edits/${edit!.id}`)
     } catch (e) { setMsg((e as Error).message) }
   }
 
@@ -132,17 +162,18 @@ export default function Ide() {
             {tabs.map((t) => (
               <span key={t}>
                 <button className={t === active ? '' : 'ghost'} aria-current={t === active ? 'true' : undefined} onClick={() => setActive(t)} title={t}>
-                  {t.slice(t.lastIndexOf('/') + 1)}{t in work.puts && <span aria-label=" (unsaved changes)"> •</span>}
+                  {t.slice(t.lastIndexOf('/') + 1)}{t in work.puts && <span aria-label=" (changed)"> •</span>}
                 </button>
                 <button className="ghost small" aria-label={`Close ${t}`} onClick={() => close(t)}>×</button>
               </span>
             ))}
           </div>
-          {active
-            ? <CodeEditor draftId={id} path={active} text={textOf(active)} readOnly={readOnly} markers={[]} onChange={edit} onLeave={leave} onGoToFile={() => {}} />
-            : <p className="muted">Open a file from the explorer.</p>}
+          {active && textOf(active) === undefined && <Loader label="Opening the file…" />}
+          {active && textOf(active) !== undefined
+            ? <CodeEditor draftId={id} path={active} text={textOf(active)!} readOnly={readOnly} markers={[]} onChange={edit} onLeave={leave} onGoToFile={() => {}} />
+            : !active && <p className="muted">Open a file from the explorer.</p>}
         </div>
-        {active && <div className="ide-preview" data-testid="edit-preview"><Preview path={active} text={textOf(active)} read={(p) => (paths.includes(p) ? textOf(p) : undefined)} /></div>}
+        {active && <div className="ide-preview" data-testid="edit-preview"><Preview path={active} text={textOf(active) ?? ''} read={textOf} /></div>}
       </div>
       <footer className="ide-status" role="status" aria-live="polite">
         <span>{saveLabel(save, now)}</span>

@@ -41,6 +41,10 @@ modules/
 [Building blocks: every key](/docs/authors/building-blocks) lists every key Crucible reads from these files, with its
 type, whether it is required and what it does.
 
+Every block, with its form and an example: [Training](/docs/authors/blocks/training), [Module](/docs/authors/blocks/module),
+[Reading](/docs/authors/blocks/reading), [Quiz](/docs/authors/blocks/quiz), [Lab](/docs/authors/blocks/lab),
+[AWS](/docs/authors/blocks/aws).
+
 ## Checking your work
 
 Run `crucible lint` on the repo before you push, and `crucible preview` to try it as a trainee. See

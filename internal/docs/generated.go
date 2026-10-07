@@ -2,6 +2,7 @@ package docs
 
 import (
 	"fmt"
+	"path"
 	"reflect"
 	"strings"
 
@@ -55,8 +56,43 @@ func Generated() []Page {
 		}
 	}
 	body := b.String()
-	return []Page{{Slug: "authors/building-blocks", Section: "authors", Title: "Building blocks: every key", Roles: []string{"author"},
+	pages := []Page{{Slug: "authors/building-blocks", Section: "authors", Title: "Building blocks: every key", Roles: []string{"author"},
 		Covers: []string{"feature:blocks.reference"}, Order: 90, Headings: headings(body), Body: body}}
+	for i, g := range blocks.Groups {
+		var b strings.Builder
+		var covers []string
+		fmt.Fprintf(&b, "The %s blocks of the editor's Blocks panel. Each one is a form; what it writes is shown below.\n", strings.ToLower(g))
+		for _, bl := range blocks.Catalog {
+			if bl.Group != g {
+				continue
+			}
+			covers = append(covers, "block:"+bl.ID)
+			fmt.Fprintf(&b, "\n## %s\n\n%s\n", bl.Title, bl.Summary)
+			if bl.Doc != "" {
+				fmt.Fprintf(&b, "\n%s\n", bl.Doc)
+			}
+			if bl.GitOnly {
+				b.WriteString("\n> [!NOTE]\n> Add this in git: the browser editor writes only .md, .yaml, .yml and .sh files.\n")
+			}
+			b.WriteString("\n| Field | Required | What it is |\n|---|---|---|\n")
+			for _, f := range bl.Fields {
+				req := ""
+				if f.Required {
+					req = "yes"
+				}
+				fmt.Fprintf(&b, "| `%s` | %s | %s |\n", f.Name, req, strings.ReplaceAll(f.Description, "|", `\|`))
+			}
+			lang := map[string]string{".md": "markdown", ".sh": "sh"}[path.Ext(bl.Insert.Open)] // the example is the file it opens
+			if lang == "" {
+				lang = "yaml"
+			}
+			fmt.Fprintf(&b, "\nExample:\n\n```%s\n%s\n```\n", lang, strings.TrimRight(bl.Example, "\n"))
+		}
+		body := b.String()
+		pages = append(pages, Page{Slug: "authors/blocks/" + strings.ToLower(g), Section: "authors", Title: "Building blocks: " + g,
+			Roles: []string{"author"}, Covers: covers, Order: 100 + i, Headings: headings(body), Body: body})
+	}
+	return pages
 }
 
 func kindName(t reflect.Type) string {

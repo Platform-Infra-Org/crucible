@@ -53,6 +53,15 @@ let yamlReady = false
 export function setupYaml(schemas: Record<string, object>) {
   if (yamlReady) return
   yamlReady = true
+  // Hovers end with a link to the Docs (/docs/…, which Monaco parses as a file: URI). Open it in a new tab so the draft
+  // stays open.
+  monaco.editor.registerLinkOpener({
+    open(uri) {
+      if (uri.scheme !== 'file' || !uri.path.startsWith('/docs/')) return false
+      window.open(uri.path, '_blank', 'noopener')
+      return true
+    },
+  })
   // monaco-yaml 5.5 calls editor.createWebWorker({ label, createData }), the pre-0.55 API; Monaco 0.57 wants the Worker
   // itself, and would otherwise hand YAML requests to the plain editor worker. This is monaco-editor's own
   // internal/common/workers.js shim: an 'ignore' message, then createData, then the worker server.

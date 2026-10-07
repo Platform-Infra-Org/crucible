@@ -95,17 +95,26 @@ func labDir(dir, rel string) string {
 	if len(parts) < 3 {
 		return ""
 	}
+	if lab := LabFolder(dir, parts[1]); lab != "" {
+		return path.Join("modules", parts[1], lab) + "/"
+	}
+	return ""
+}
+
+// LabFolder is the lab folder module.yaml of modules/<module> names, relative to the module (e.g. "lab"), or "" when it
+// has no lab item.
+func LabFolder(dir, module string) string {
 	var m struct {
 		Items []map[string]string `yaml:"items"`
 	}
-	if yamlx.ReadLoose(filepath.Join(dir, "modules", parts[1], "module.yaml"), &m) != nil {
+	if yamlx.ReadLoose(filepath.Join(dir, "modules", module, "module.yaml"), &m) != nil {
 		return ""
 	}
 	for _, it := range m.Items {
 		// a lab is a real subdirectory: "." or "lab/.." would make every script in the module executable
 		if lab, ok := it["lab"]; ok {
 			if c := path.Clean(lab); c != "." && filepath.IsLocal(c) {
-				return path.Join("modules", parts[1], c) + "/"
+				return c
 			}
 		}
 	}

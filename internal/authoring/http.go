@@ -9,6 +9,7 @@ import (
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
+	"crucible/internal/content/blocks"
 	"crucible/internal/httpx"
 )
 
@@ -33,6 +34,19 @@ func (s *Service) Routes(r chi.Router) {
 		}
 		probs, err := s.Validate(r.Context(), user(r), in)
 		reply(w, map[string]any{"problems": probs}, err)
+	})
+	r.Get("/api/authoring/blocks", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Blocks(user(r), r.URL.Query().Get("training"))
+		reply(w, map[string]any{"groups": blocks.Groups, "blocks": v}, err)
+	})
+	r.Post("/api/authoring/insert", func(w http.ResponseWriter, r *http.Request) {
+		var in InsertReq
+		if err := httpx.Read(r, &in); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.Insert(r.Context(), user(r), in)
+		reply(w, v, err)
 	})
 	withID := func(fn func(w http.ResponseWriter, r *http.Request, n int64)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {

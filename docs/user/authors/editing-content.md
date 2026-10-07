@@ -64,7 +64,8 @@ resumes.
 ## YAML help
 
 In `training.yaml`, `module.yaml`, `quiz.yaml` and `lab.yaml`, the editor suggests the keys that fit where you are,
-offers the allowed values, and shows what a key means when you hover over it.
+offers the allowed values, and shows what a key means when you hover over it. The hover ends with a link to
+[Building blocks: every key](/docs/authors/building-blocks), which opens in a new tab.
 
 ## Problems
 

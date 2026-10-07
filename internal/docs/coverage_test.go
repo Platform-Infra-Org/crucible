@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"crucible/internal/content/blocks"
 )
 
 // TestDocsCoverEveryRouteAndRole keeps the Docs tab current (CLAUDE.md: a capability change updates docs/user in the
@@ -28,7 +30,7 @@ func TestDocsCoverEveryRouteAndRole(t *testing.T) {
 	if len(routes) < 20 {
 		t.Fatalf("found only %d routes in App.tsx: did the route syntax change?", len(routes))
 	}
-	roles := map[string]bool{}
+	roles, blocksCovered := map[string]bool{}, map[string]bool{}
 	for _, p := range pages {
 		if strings.TrimSpace(p.Body) == "" {
 			t.Errorf("%s is empty", p.Slug)
@@ -44,6 +46,11 @@ func TestDocsCoverEveryRouteAndRole(t *testing.T) {
 					t.Errorf("%s covers route %s, which web/src/App.tsx no longer has", p.Slug, v)
 				}
 				routes[v] = true
+			case "block":
+				if _, ok := blocks.Find(v); !ok {
+					t.Errorf("%s covers block %s, which the catalog doesn't have", p.Slug, v)
+				}
+				blocksCovered[v] = true
 			case "feature":
 			default:
 				t.Errorf("%s: unknown cover %q (use route:, block: or feature:)", p.Slug, c)
@@ -53,6 +60,11 @@ func TestDocsCoverEveryRouteAndRole(t *testing.T) {
 	for r, covered := range routes {
 		if !covered {
 			t.Errorf("no page in docs/user covers route %s: add `route:%s` to the covers of the page that explains it", r, r)
+		}
+	}
+	for _, b := range blocks.Catalog {
+		if !blocksCovered[b.ID] {
+			t.Errorf("no page covers block %s: add `block:%s` to the covers of the page that explains it", b.ID, b.ID)
 		}
 	}
 	for _, r := range Roles {

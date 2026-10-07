@@ -23,6 +23,12 @@ var itemSchema = map[string]any{"type": "object", "minProperties": 1, "maxProper
 		"lab":     map[string]any{"type": "string", "description": "The lab's folder in the module, e.g. lab."},
 	}}
 
+// docsLink ends every hover (spec §4: editor hovers link to the building-blocks reference). Monaco renders
+// markdownDescription as Markdown, so the plain description is escaped first.
+const docsLink = "[Building blocks: every key](/docs/authors/building-blocks)"
+
+var mdEscape = strings.NewReplacer(`\`, `\\`, "*", `\*`, "_", `\_`, "<", `\<`, ">", `\>`, "[", `\[`, "]", `\]`, "`", "\\`")
+
 // Schema is the JSON Schema (draft-07 subset) of one file kind, generated from the content types and Fields.
 func Schema(kind string) map[string]any {
 	s := schemaOf(reflect.TypeOf(Kinds[kind]))
@@ -63,6 +69,7 @@ func schemaOf(t reflect.Type) map[string]any {
 			}
 			d := Fields[key]
 			p["description"] = d.Description
+			p["markdownDescription"] = mdEscape.Replace(d.Description) + "\n\n" + docsLink
 			if len(d.Enum) > 0 {
 				p["enum"] = d.Enum
 			}

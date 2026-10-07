@@ -71,8 +71,8 @@ func (s *Service) bounded(ctx context.Context, email string, fn func()) error {
 	}
 	done := make(chan struct{})
 	go func() {
+		defer close(done) // runs last: the slot is free before the caller is released
 		defer s.busy.Delete(key)
-		defer close(done)
 		fn()
 	}()
 	select {

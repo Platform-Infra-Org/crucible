@@ -184,3 +184,13 @@ func TestOneCheckAtATimePerUser(t *testing.T) {
 		t.Fatalf("the slot is held until the slow check really ends: %v", err)
 	}
 }
+
+func TestBackToBackValidateSameUser(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	for i := range 5 {
+		if _, err := f.s.Validate(ctx, f.leader, ValidateReq{Training: "t1", BaseSHA: f.head()}); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+}

@@ -179,11 +179,16 @@ func TestLeaderRules(t *testing.T) {
 func TestMixedCaseEmailsAreRejected(t *testing.T) {
 	pool := dbtest.New(t)
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('t','tr')`)
 	for _, q := range []string{
 		`INSERT INTO admins VALUES ('A@x')`,
 		`INSERT INTO team_members VALUES ('t','A@x','member')`,
 		`INSERT INTO team_members VALUES ('t',' a@x','member')`,
 		`INSERT INTO mentors VALUES ('t','a@x','B@x')`,
+		`INSERT INTO mentors VALUES ('t','A@x','b@x')`,
+		`INSERT INTO program_roles VALUES ('t','tr','A@x','scorer')`,
+		`INSERT INTO enrollments VALUES ('t','tr','A@x')`,
 	} {
 		if _, err := pool.Exec(context.Background(), q); err == nil {
 			t.Errorf("accepted: %s", q)
@@ -241,9 +246,9 @@ seniors: [s1@x, s2@x]
 members: [m@x]
 trainees: [tr@x]
 mentors: { tr@x: s1@x }
-notifications: { slack_webhook: "https://hooks/s" }
+notifications: { slack_webhook: "https://hooks/s", teams_webhook: "https://hooks/t" }
 `)
-	write("teams/t/budget.yaml", "monthly_usd: 200\n")
+	write("teams/t/budget.yaml", "monthly_usd: 200\nhard_cap_usd: 250\n")
 	write("teams/t/programs/a.yaml", `training: a
 pinned_ref: abc123
 roles: { manager: [m@x], scorers: [s2@x], approvers: [s1@x] }
@@ -270,8 +275,8 @@ review_self_reported: true
 		`INSERT INTO teams (id, name) VALUES ('t','T')`,
 		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','member'),('t','tr@x','trainee')`,
 		`INSERT INTO mentors VALUES ('t','tr@x','s1@x')`,
-		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s')`,
-		`INSERT INTO team_budgets (team, monthly_usd) VALUES ('t',200)`,
+		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s'),('t','teams','https://hooks/t')`,
+		`INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('t',200,250)`,
 		`INSERT INTO programs (team, training, pinned_ref, schedule_name, ttl, idle_timeout, max_extension, budget_usd_month, review_self_reported)
 			VALUES ('t','a','abc123','bh','2h','30m','45m',50,true)`,
 		`INSERT INTO programs (team, training, inline_schedule) VALUES ('t','b','{"timezone":"UTC","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`,
@@ -289,6 +294,9 @@ review_self_reported: true
 		for _, pr := range tm.Programs {
 			pr.Version = 0
 		}
+	}
+	if pr := got.Teams["t"].Programs["b"]; !slices.Equal(pr.Roles.Manager, []string{"l@x"}) || !slices.Equal(pr.Roles.Scorers, []string{"s1@x", "s2@x"}) {
+		t.Errorf("unset roles must default to the leader and seniors: %+v", pr.Roles)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SQL path and config.Load differ\n got: %s\nwant: %s", dump(got), dump(want))
@@ -308,3 +316,29 @@ func dump(p *config.Platform) string {
 }
 
 func reflectString(v any) string { return fmt.Sprintf("\n%+v", v) }
+
+// An empty URL is a bad row, not "no webhook": Load skips empty values only because the YAML key is absent.
+func TestEmptyWebhookURLIsRejected(t *testing.T) {
+	pool := dbtest.New(t)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','l@x','leader')`)
+	mustExec(t, pool, `INSERT INTO team_webhooks VALUES ('t','slack','')`)
+	if _, err := platform(t, pool); err == nil {
+		t.Error("an empty webhook url must be an error")
+	}
+}
+
+// The jsonb column's keys are a storage contract; the tags must name them on purpose.
+func TestScheduleJSONTagsAreTheDocumentedKeys(t *testing.T) {
+	for typ, want := range map[reflect.Type]map[string]string{
+		reflect.TypeOf(config.Window{}):   {"Days": "days", "Start": "start", "End": "end"},
+		reflect.TypeOf(config.Schedule{}): {"Timezone": "timezone", "Windows": "windows"},
+	} {
+		for field, tag := range want {
+			f, ok := typ.FieldByName(field)
+			if !ok || f.Tag.Get("json") != tag {
+				t.Errorf("%s.%s json tag = %q, want %q", typ.Name(), field, f.Tag.Get("json"), tag)
+			}
+		}
+	}
+}

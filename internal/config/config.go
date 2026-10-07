@@ -198,9 +198,9 @@ func (p *Platform) ProgramSchedule(team, training string) *Schedule {
 }
 
 type Roles struct {
-	Manager   []string `yaml:"manager"`
-	Scorers   []string `yaml:"scorers"`
-	Approvers []string `yaml:"approvers"`
+	Manager   []string `yaml:"manager" json:"manager"`
+	Scorers   []string `yaml:"scorers" json:"scorers"`
+	Approvers []string `yaml:"approvers" json:"approvers"`
 }
 
 type LabDefaults struct {

@@ -9,7 +9,7 @@ import { useMe } from '../me'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { toast } from '../lib/alerts'
 import { formatMentors } from '../lib/lists'
-import { budgetRequest, rosterRequest } from '../lib/teamRequests'
+import { budgetRequest, enrollRequest, rosterRequest, teamPath } from '../lib/teamRequests'
 
 const usd = (n: number) => `$${n.toFixed(2)}`
 const STALE = 'Someone changed this team, reload to see the latest.'
@@ -19,7 +19,7 @@ export function TeamsIndex() {
   const { me } = useMe()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Gathering the smiths…" />
-  if (data.length === 1 && !me.is_admin) return <Navigate to={`/teams/${data[0].id}`} replace />
+  if (data.length === 1 && !(me.is_admin && me.config_in_db)) return <Navigate to={`/teams/${data[0].id}`} replace />
   return (
     <section className="page">
       <h1>Teams</h1>
@@ -29,7 +29,7 @@ export function TeamsIndex() {
           <li key={t.id}><Link to={`/teams/${t.id}`}>{t.name}</Link> <span className="muted">{t.role}</span></li>
         ))}
       </ul>
-      {me.is_admin && <CreateTeam />}
+      {me.is_admin && me.config_in_db && <CreateTeam />}
     </section>
   )
 }
@@ -70,22 +70,24 @@ export function CreateTeam() {
 
 export function TeamPage() {
   const { team } = useParams()
-  const { data, error, reload } = useFetch<TeamView>(`/api/org/teams/${team}`)
+  const { me } = useMe()
+  const inDB = me.config_in_db
+  const { data, error, reload } = useFetch<TeamView>(teamPath(inDB, team ?? ''))
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Gathering the smiths…" />
   return (
     <section className="page">
       <h1>{data.name}</h1>
       <p className="lede">Led by {data.leader} · <Link to={`/teams/${data.id}/journey`}>Journey</Link></p>
-      <Roster key={`r-${data.version}`} team={data} onSaved={reload} />
-      <Programs key={`p-${data.id}-${data.programs.map((p) => p.version).join('.')}-${data.available_trainings.length}`} team={data} onConflict={reload} />
+      <Roster inDB={inDB} key={`r-${data.version ?? data.platform_sha}`} team={data} onSaved={reload} />
+      <Programs inDB={inDB} key={`p-${data.version ?? data.platform_sha}-${data.programs.map((p) => p.version).join('.')}-${data.available_trainings.length}`} team={data} onConflict={reload} />
       {data.is_admin && <RevokeAgents people={[data.leader, ...data.seniors, ...data.members, ...data.trainees]} />}
-      <Budget key={`b-${data.budget?.version}`} team={data} onSaved={reload} />
+      <Budget inDB={inDB} key={`b-${data.budget?.version ?? data.platform_sha}`} team={data} onSaved={reload} />
     </section>
   )
 }
 
-function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
+function Roster({ inDB, team, onSaved }: { inDB: boolean; team: TeamView; onSaved: () => void }) {
   const [seniors, setSeniors] = useState(team.seniors.join('\n'))
   const [members, setMembers] = useState(team.members.join('\n'))
   const [trainees, setTrainees] = useState(team.trainees.join('\n'))
@@ -109,9 +111,9 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
     e.preventDefault()
     setBusy(true)
     try {
-      const r = rosterRequest(team, { seniors, members, trainees, mentors })
+      const r = rosterRequest(inDB, team, { seniors, members, trainees, mentors })
       await api(r.path, { method: 'PUT', json: r.json })
-      toast('Roster saved')
+      toast(inDB ? 'Roster saved' : 'Saved to git')
       onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))
@@ -159,7 +161,7 @@ function RevokeAgents({ people }: { people: string[] }) {
   )
 }
 
-function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void }) {
+function Programs({ inDB, team, onConflict }: { inDB: boolean; team: TeamView; onConflict: () => void }) {
   const navigate = useNavigate()
   const [picked, setPick] = useState('')
   // Derive from the current list so a stale choice can never overwrite an existing program.
@@ -169,9 +171,8 @@ function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void
   const enroll = async () => {
     setBusy(true)
     try {
-      await api(`/api/org/teams/${team.id}/programs/${pick}`, { method: 'POST', json: {
-        enrolled: [], roles: { manager: [], scorers: [], approvers: [] }, schedule: '',
-        lab_defaults: { ttl: '', idle_timeout: '', max_extension: '' }, budget_usd_month: 0 } })
+      const r = enrollRequest(inDB, team, pick)
+      await api(r.path, { method: r.method, json: r.json })
       navigate(`/teams/${team.id}/programs/${pick}`)
     } catch (e) {
       setConflict(reportSaveError(e))
@@ -212,7 +213,7 @@ function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void
   )
 }
 
-function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
+function Budget({ inDB, team, onSaved }: { inDB: boolean; team: TeamView; onSaved: () => void }) {
   const [monthly, setMonthly] = useState(String(team.budget?.monthly_usd ?? 0))
   const [cap, setCap] = useState(String(team.budget?.hard_cap_usd ?? 0))
   const [conflict, setConflict] = useState(false)
@@ -228,9 +229,9 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
     if (busy) return
     setBusy(true)
     try {
-      const r = budgetRequest(team, monthly, cap)
+      const r = budgetRequest(inDB, team, monthly, cap)
       await api(r.path, { method: 'PUT', json: r.json })
-      toast('Budget saved')
+      toast(inDB ? 'Budget saved' : 'Saved to git')
       onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))

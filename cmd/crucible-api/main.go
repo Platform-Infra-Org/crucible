@@ -160,7 +160,7 @@ func run(ctx context.Context) error {
 		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
 	// Task 9 moves config reads onto the store; until then the snapshot is still git's, so org writes are stored but
 	// not yet read back by the rest of the app.
-	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
+	orgAPI := org.APIDeps{ConfigInDB: useStore(platformRepo), Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
 		if st := syncer.Current(); st != nil {
 			return st.Platform
 		}

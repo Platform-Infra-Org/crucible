@@ -26,6 +26,9 @@ type APIDeps struct {
 	Platform func() *config.Platform
 	Refresh  func(context.Context) error
 	CheckPin func(ctx context.Context, training, sha string) error
+	// ConfigInDB: configuration is read from Postgres. Only then are the team, program and budget write routes
+	// mounted; in git mode they would store rows nothing reads back.
+	ConfigInDB bool
 	// Content names a training and the commits it runs and tracks, for the team page. Nil: the id, no commits.
 	Content func(team, training string) (title, running, head string)
 }
@@ -52,6 +55,9 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Get("/api/admin/trainings", a.admin(a.getTrainings))
 	r.Post("/api/admin/trainings", a.admin(a.postTraining))
 	r.Delete("/api/admin/trainings/{id}", a.admin(a.deleteTraining))
+	if !d.ConfigInDB {
+		return
+	}
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))

@@ -6,14 +6,16 @@ import type { Changes, ProgramConfig, TeamView } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { Conflict, reportSaveError } from '../components/Conflict'
-import { programRequest } from '../lib/teamRequests'
+import { useMe } from '../me'
+import { pinRequest, programRequest, teamPath } from '../lib/teamRequests'
 
 const STALE = 'Someone changed this program, reload to see the latest.'
 
 export function ProgramSettingsPage() {
   const { team, training } = useParams()
-  const { data, error, reload } = useFetch<TeamView>(`/api/org/teams/${team}`)
-  const [saved, setSaved] = useState(false)
+  const inDB = useMe().me.config_in_db
+  const { data, error, reload } = useFetch<TeamView>(teamPath(inDB, team ?? ''))
+  const [saved, setSaved] = useState<string>()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Unrolling the blueprint…" />
   const prog = data.programs.find((p) => p.training === training)
@@ -22,14 +24,17 @@ export function ProgramSettingsPage() {
     <section className="page">
       <Link to={`/teams/${data.id}`}>← {data.name}</Link>
       <h1>Program settings: {prog.title}</h1>
-      <p role="status" className="pass">{saved ? 'Program saved.' : ''}</p>
-      {prog.can_manage && <ContentVersion key={prog.running_sha + prog.head_sha + prog.pinned_ref + prog.version} team={data} prog={prog} onDone={reload} />}
-      <ProgramForm key={prog.version} team={data} prog={prog} onReload={reload} onStart={() => setSaved(false)} onSaved={() => { setSaved(true); reload() }} />
+      <p role="status" className="pass">{saved ?? ''}</p>
+      {prog.can_manage && <ContentVersion key={prog.running_sha + prog.head_sha + prog.pinned_ref + prog.version} inDB={inDB} team={data} prog={prog} onDone={reload} />}
+      <ProgramForm key={`${data.version ?? data.platform_sha}-${prog.version}`} inDB={inDB} team={data} prog={prog} onReload={reload} onStart={() => setSaved(undefined)} onSaved={(msg) => { setSaved(msg); reload() }} />
     </section>
   )
 }
 
-function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () => void; team: TeamView; prog: ProgramConfig; onSaved: () => void; onReload: () => void }) {
+// While a role list is empty the platform fills it from the team; show who that is without saving it.
+const defaultsTo = (who?: string[]) => (who?.length ? `Defaults to ${who.join(', ')}` : '')
+
+function ProgramForm({ inDB, team, prog, onSaved, onReload, onStart }: { inDB: boolean; onStart: () => void; team: TeamView; prog: ProgramConfig; onSaved: (msg: string) => void; onReload: () => void }) {
   // Enrolled people who left the roster stay listed so they can be removed.
   const people = [...new Set([team.leader, ...team.seniors, ...team.members, ...team.trainees, ...prog.enrolled].map((p) => p.toLowerCase()))]
   const [enrolled, setEnrolled] = useState(() => new Set(prog.enrolled.map((p) => p.toLowerCase())))
@@ -57,9 +62,9 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
     setConflict(false)
     onStart()
     try {
-      const r = programRequest(team.id, prog, { enrolled, managers, scorers, approvers, schedule, ttl, idle, ext, budget, reviewSelf })
-      await api(r.path, { method: 'PUT', json: r.json })
-      onSaved()
+      const r = programRequest(inDB, team, prog, { enrolled, managers, scorers, approvers, schedule, ttl, idle, ext, budget, reviewSelf })
+      const res = await api<{ sha?: string }>(r.path, { method: 'PUT', json: r.json })
+      onSaved(inDB ? 'Program saved.' : `Saved to git (${(res.sha ?? '').slice(0, 7)})`)
     } catch (err) {
       setConflict(reportSaveError(err))
     } finally {
@@ -79,9 +84,9 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
       </fieldset>
       <fieldset className="stack" disabled={off}>
         <legend>Roles (one email per line; empty = the defaults: leader manages and approves, seniors score)</legend>
-        <label>Managers <textarea rows={2} value={managers} onChange={(e) => setManagers(e.target.value)} /></label>
-        <label>Scorers <textarea rows={2} value={scorers} onChange={(e) => setScorers(e.target.value)} /></label>
-        <label>Approvers <textarea rows={2} value={approvers} onChange={(e) => setApprovers(e.target.value)} /></label>
+        <label>Managers <textarea rows={2} placeholder={defaultsTo(prog.effective_roles?.manager)} value={managers} onChange={(e) => setManagers(e.target.value)} /></label>
+        <label>Scorers <textarea rows={2} placeholder={defaultsTo(prog.effective_roles?.scorers)} value={scorers} onChange={(e) => setScorers(e.target.value)} /></label>
+        <label>Approvers <textarea rows={2} placeholder={defaultsTo(prog.effective_roles?.approvers)} value={approvers} onChange={(e) => setApprovers(e.target.value)} /></label>
       </fieldset>
       <fieldset className="stack" disabled={off}>
         <legend>Labs</legend>
@@ -103,13 +108,12 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
   )
 }
 
-function ContentVersion({ team, prog, onDone }: { team: TeamView; prog: ProgramConfig; onDone: () => void }) {
+function ContentVersion({ inDB, team, prog, onDone }: { inDB: boolean; team: TeamView; prog: ProgramConfig; onDone: () => void }) {
   const [changes, setChanges] = useState<Changes>()
   const [err, setErr] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const base = `/api/teams/${team.id}/programs/${prog.training}`
-  const orgBase = `/api/org/teams/${team.id}/programs/${prog.training}`
   const act = async (fn: () => Promise<void>) => {
     if (busy) return
     setBusy(true)
@@ -121,7 +125,8 @@ function ContentVersion({ team, prog, onDone }: { team: TeamView; prog: ProgramC
     } finally { setBusy(false) }
   }
   const pin = (ref: string) => act(async () => {
-    await api(`${orgBase}/pin`, { method: 'PUT', json: { sha: ref } })
+    const r = pinRequest(inDB, team, prog.training, ref)
+    await api(r.path, { method: 'PUT', json: r.json })
     onDone()
   })
   return (

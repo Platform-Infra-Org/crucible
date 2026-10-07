@@ -1,6 +1,13 @@
 package org
 
 import (
+	"net/http"
+	"net/http/httptest"
+
+	"github.com/go-chi/chi/v5"
+
+	"crucible/internal/auth"
+	"crucible/internal/config"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -153,5 +160,57 @@ func TestNewRoutesRefuseUnknownFields(t *testing.T) {
 		if w := f.do("admin@x", c.method, c.path, c.body); w.Code != 400 || !strings.Contains(w.Body.String(), "unknown field") {
 			t.Errorf("%s %s = %d %s, want 400 naming the unknown field", c.method, c.path, w.Code, w.Body)
 		}
+	}
+}
+
+func TestGetThenPutBackStoresNoRoles(t *testing.T) {
+	f := newAPI(t)
+	m, _, body := f.teamJSON("lead@x", "platform")
+	p := m["programs"].([]any)[0].(map[string]any)
+	roles := p["roles"].(map[string]any)
+	for k, v := range roles {
+		if len(v.([]any)) != 0 {
+			t.Fatalf("roles.%s = %v, want empty (defaulted) as stored: %s", k, v, body)
+		}
+	}
+	if eff := p["effective_roles"].(map[string]any)["manager"].([]any); len(eff) != 1 || eff[0] != "lead@x" {
+		t.Errorf("effective manager = %v, want the leader", eff)
+	}
+	put := map[string]any{"version": p["version"], "enrolled": p["enrolled"], "roles": p["roles"], "schedule": p["schedule"],
+		"ttl": p["lab_defaults"].(map[string]any)["ttl"], "budget_usd_month": p["budget_usd_month"], "review_self_reported": p["review_self_reported"]}
+	b, _ := json.Marshal(put)
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", string(b)); w.Code != 200 {
+		t.Fatalf("PUT = %d %s", w.Code, w.Body)
+	}
+	if n := count(t, f.s, `SELECT count(*) FROM program_roles`); n != 0 {
+		t.Errorf("%d program_roles rows after a round trip; defaults must stay dynamic", n)
+	}
+}
+
+func TestOrgWriteRoutesAreAbsentInGitMode(t *testing.T) {
+	f := newAPI(t)
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			next.ServeHTTP(w, q.WithContext(auth.WithUser(q.Context(), &auth.User{Email: "admin@x"})))
+		})
+	})
+	f.s.Routes(r, APIDeps{Platform: func() *config.Platform { return f.snap }})
+	for _, c := range []struct{ method, path string }{
+		{"GET", "/api/org/teams/platform"}, {"PUT", "/api/org/teams/platform/roster"}, {"PUT", "/api/org/teams/platform/budget"},
+		{"PUT", "/api/org/teams/platform/programs/forge-101"}, {"POST", "/api/org/teams/platform/programs/forge-101"},
+		{"DELETE", "/api/org/teams/platform/programs/forge-101"}, {"PUT", "/api/org/teams/platform/programs/forge-101/pin"},
+		{"POST", "/api/admin/teams/x"}, {"DELETE", "/api/admin/teams/platform"},
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
+		if w.Code != 404 && w.Code != 405 {
+			t.Errorf("%s %s = %d in git mode, want it unmounted", c.method, c.path, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/admin/admins", nil))
+	if w.Code != 200 {
+		t.Errorf("registry/admin routes should stay: %d", w.Code)
 	}
 }

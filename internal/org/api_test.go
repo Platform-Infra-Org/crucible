@@ -54,9 +54,10 @@ func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 		})
 	})
 	deps := APIDeps{
-		Platform: func() *config.Platform { f.mu.Lock(); defer f.mu.Unlock(); return f.snap },
-		Refresh:  func(context.Context) error { f.mu.Lock(); f.refreshes++; f.mu.Unlock(); f.reload(); return nil },
-		CheckPin: func(_ context.Context, _, sha string) error { f.pinCalls = append(f.pinCalls, sha); return f.pinErr },
+		ConfigInDB: true,
+		Platform:   func() *config.Platform { f.mu.Lock(); defer f.mu.Unlock(); return f.snap },
+		Refresh:    func(context.Context) error { f.mu.Lock(); f.refreshes++; f.mu.Unlock(); f.reload(); return nil },
+		CheckPin:   func(_ context.Context, _, sha string) error { f.pinCalls = append(f.pinCalls, sha); return f.pinErr },
 	}
 	if !withPinCheck {
 		deps.CheckPin = nil

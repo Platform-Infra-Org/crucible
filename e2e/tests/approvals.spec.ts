@@ -54,7 +54,8 @@ test('a leader enrolls a trainee via git, approves a paid lab, and an admin paus
 
   // An admin pulls the kill switch: the lab dies and new requests are blocked.
   const admin = await login(browser, 'admin')
-  await admin.getByRole('link', { name: 'Forge Status' }).click()
+  await admin.getByRole('button', { name: /Administrator/ }).click()
+  await admin.getByRole('menuitem', { name: 'Forge Status' }).click()
   await admin.getByRole('button', { name: 'Pause all labs' }).click()
   await expect(admin.getByTestId('kill-switch-status')).toContainText('Labs are paused')
   await expect(trainee.getByText('An admin paused all labs.')).toBeVisible({ timeout: 60_000 })

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { ApiError } from '../api'
 import { Conflict, reportSaveError } from '../components/Conflict'
-import { budgetRequest, programRequest, rosterRequest } from '../lib/teamRequests'
+import { budgetRequest, enrollRequest, pinRequest, programRequest, rosterRequest, teamPath } from '../lib/teamRequests'
 import type { ProgramConfig, TeamView } from '../types'
 import { CreateTeam, TeamPage } from './Team'
 import { ProgramSettingsPage } from './ProgramSettings'
@@ -19,25 +19,48 @@ const team: TeamView = {
   can_edit_team: true, is_admin: true,
 }
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ team: 'platform', training: 'forge-101' }) }))
-vi.mock('../useFetch', () => ({ useFetch: () => ({ data: team, error: undefined, reload: () => {} }) }))
+const fetched: string[] = []
+const meFlag = { inDB: true }
+vi.mock('../useFetch', () => ({ useFetch: (path: string) => { fetched.push(path); return { data: team, error: undefined, reload: () => {} } } }))
+vi.mock('../me', () => ({ useMe: () => ({ me: { config_in_db: meFlag.inDB, is_admin: true } }) }))
 
-describe('saves echo the version the page read', () => {
-  test('roster, budget and program', () => {
-    const r = rosterRequest(team, { seniors: '', members: '', trainees: 'a@x', mentors: '' })
+const f = { enrolled: ['a@x'], managers: '', scorers: '', approvers: '', schedule: '', ttl: '', idle: '', ext: '', budget: '', reviewSelf: false }
+describe('the endpoint follows config_in_db', () => {
+  test('in the database: /api/org, version echoed, no base_sha', () => {
+    const r = rosterRequest(true, team, { seniors: '', members: '', trainees: 'a@x', mentors: '' })
     expect(r.path).toBe('/api/org/teams/platform/roster')
     expect(r.json).toMatchObject({ version: 3, name: 'Platform', leader: 'l@x', trainees: ['a@x'] })
-    expect(budgetRequest(team, '10', '').json).toEqual({ version: 5, monthly_usd: 10, hard_cap_usd: 0 })
-    expect(budgetRequest({ ...team, budget: undefined }, '4', '').json.version).toBe(0) // no budget row yet
-    const p = programRequest('platform', prog, { enrolled: new Set(['a@x']), managers: '', scorers: '', approvers: '', schedule: '', ttl: '', idle: '', ext: '', budget: '', reviewSelf: false })
+    expect(budgetRequest(true, team, '10', '').json).toEqual({ version: 5, monthly_usd: 10, hard_cap_usd: 0 })
+    expect(budgetRequest(true, { ...team, budget: undefined }, '4', '').json).toMatchObject({ version: 0 }) // no budget row yet
+    const p = programRequest(true, team, prog, f)
     expect(p.path).toBe('/api/org/teams/platform/programs/forge-101')
-    expect(p.json).toMatchObject({ version: 7, enrolled: ['a@x'] })
+    expect(p.json).toMatchObject({ version: 7, enrolled: ['a@x'], ttl: '' })
     expect(JSON.stringify(p.json)).not.toContain('base_sha')
+    expect(enrollRequest(true, team, 'net-101')).toMatchObject({ method: 'POST', path: '/api/org/teams/platform/programs/net-101' })
+    expect(pinRequest(true, team, 'forge-101', 'abc')).toEqual({ path: '/api/org/teams/platform/programs/forge-101/pin', json: { sha: 'abc' } })
+  })
+  test('in git: the git-backed routes with base_sha', () => {
+    const g = { ...team, platform_sha: 'deadbeef' }
+    expect(rosterRequest(false, g, { seniors: '', members: '', trainees: '', mentors: '' })).toMatchObject({ path: '/api/teams/platform/roster', json: { base_sha: 'deadbeef' } })
+    expect(budgetRequest(false, g, '1', '').path).toBe('/api/teams/platform/budget')
+    expect(programRequest(false, g, prog, f)).toMatchObject({ path: '/api/teams/platform/programs/forge-101', json: { base_sha: 'deadbeef' } })
+    expect(enrollRequest(false, g, 'net-101')).toMatchObject({ method: 'PUT', path: '/api/teams/platform/programs/net-101' })
+    expect(pinRequest(false, g, 'forge-101', '')).toMatchObject({ path: '/api/teams/platform/programs/forge-101/pin', json: { ref: '' } })
+    expect(teamPath(false, 'platform')).toBe('/api/teams/platform')
+  })
+  test('the pages read from the endpoint the flag picks', () => {
+    for (const inDB of [true, false]) {
+      fetched.length = 0
+      meFlag.inDB = inDB
+      renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
+      renderToStaticMarkup(<MemoryRouter><ProgramSettingsPage /></MemoryRouter>)
+      expect(fetched).toEqual(Array(2).fill(inDB ? '/api/org/teams/platform' : '/api/teams/platform'))
+    }
   })
   test('inline windows are kept unless a named schedule replaces them', () => {
     const inl = { ...prog, inline_schedule: { timezone: 'UTC' } }
-    const f = { enrolled: [], managers: '', scorers: '', approvers: '', ttl: '', idle: '', ext: '', budget: '', reviewSelf: false }
-    expect(programRequest('t', inl, { ...f, schedule: '' }).json).toHaveProperty('inline_schedule')
-    expect(programRequest('t', inl, { ...f, schedule: 'nights' }).json).not.toHaveProperty('inline_schedule')
+    expect(programRequest(true, team, inl, { ...f, schedule: '' }).json).toHaveProperty('inline_schedule')
+    expect(programRequest(true, team, inl, { ...f, schedule: 'nights' }).json).not.toHaveProperty('inline_schedule')
   })
 })
 

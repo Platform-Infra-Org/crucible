@@ -28,7 +28,8 @@ type ProgramView struct {
 	Title              string            `json:"title"`
 	Version            int64             `json:"version"`
 	Enrolled           []string          `json:"enrolled"`
-	Roles              config.Roles      `json:"roles"`
+	Roles              config.Roles      `json:"roles"`           // as stored: empty means "use the defaults"
+	EffectiveRoles     config.Roles      `json:"effective_roles"` // who holds each role now; read-only, never sent back
 	Schedule           string            `json:"schedule"`
 	InlineSchedule     *config.Schedule  `json:"inline_schedule,omitempty"`
 	LabDefaults        map[string]string `json:"lab_defaults"`
@@ -106,6 +107,10 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 		v.Mentors = map[string]string{}
 	}
 	spend := c.Can(actor, rbac.ViewSpend, id, "", "")
+	stored, err := a.storedRoles(r, id)
+	if err != nil {
+		return err
+	}
 	for _, tr := range slices.Sorted(maps.Keys(c.P.Trainings)) {
 		title, running, head := tr, "", ""
 		if a.d.Content != nil {
@@ -118,8 +123,9 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 		}
 		spend = spend || c.Can(actor, rbac.ViewSpend, id, tr, "")
 		v.Programs = append(v.Programs, ProgramView{Training: tr, Title: title, Version: p.Version, Enrolled: nonNil(p.Enrolled),
-			Roles:    config.Roles{Manager: nonNil(p.Roles.Manager), Scorers: nonNil(p.Roles.Scorers), Approvers: nonNil(p.Roles.Approvers)},
-			Schedule: p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
+			Roles:          config.Roles{Manager: nonNil(stored[tr].Manager), Scorers: nonNil(stored[tr].Scorers), Approvers: nonNil(stored[tr].Approvers)},
+			EffectiveRoles: config.Roles{Manager: nonNil(p.Roles.Manager), Scorers: nonNil(p.Roles.Scorers), Approvers: nonNil(p.Roles.Approvers)},
+			Schedule:       p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
 			PinnedRef: p.PinnedRef, RunningSHA: running, HeadSHA: head, CanManage: c.Can(actor, rbac.ManageProgram, id, tr, ""),
 			LabDefaults: map[string]string{"ttl": dur(p.LabDefaults.TTL), "idle_timeout": dur(p.LabDefaults.IdleTimeout),
 				"max_extension": dur(p.LabDefaults.MaxExtension)}})
@@ -180,4 +186,38 @@ func (a *api) putBudget(w http.ResponseWriter, r *http.Request, actor string, _ 
 		return err
 	}
 	return a.done(w, r, b.Version+1)
+}
+
+// storedRoles reads the explicit role rows. The snapshot holds the defaults already filled in, and a save that
+// echoed those would freeze them against today's leader and seniors.
+func (a *api) storedRoles(r *http.Request, team string) (map[string]config.Roles, error) {
+	rows, err := a.s.DB.Query(r.Context(), `SELECT training, role, email FROM program_roles WHERE team = $1 ORDER BY email`, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]config.Roles{}
+	for rows.Next() {
+		var tr, role, email string
+		if err := rows.Scan(&tr, &role, &email); err != nil {
+			return nil, err
+		}
+		x := out[tr]
+		switch role {
+		case "manager":
+			x.Manager = append(x.Manager, email)
+		case "scorer":
+			x.Scorers = append(x.Scorers, email)
+		case "approver":
+			x.Approvers = append(x.Approvers, email)
+		}
+		out[tr] = x
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for tr, x := range out {
+		out[tr] = config.Roles{Manager: nonNil(x.Manager), Scorers: nonNil(x.Scorers), Approvers: nonNil(x.Approvers)}
+	}
+	return out, nil
 }

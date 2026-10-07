@@ -118,7 +118,7 @@ func NewRouter(d Deps) chi.Router {
 				sort.Strings(teams)
 			}
 			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor,
-				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email)})
+				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email), "config_in_db": d.Org != nil && d.OrgAPI.ConfigInDB})
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {

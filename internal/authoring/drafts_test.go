@@ -5,12 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
+	"crucible/internal/notify"
 )
 
 var moveIntro = []gitsync.Op{
@@ -29,7 +29,7 @@ func TestDraftLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := f.s.Submit(ctx, f.leader, d.ID)
+	e, err := f.s.Submit(ctx, f.leader, d.ID, d.UpdatedAt)
 	if err != nil || e.Status != "pending" {
 		t.Fatalf("submit: %+v %v", e, err)
 	}
@@ -51,7 +51,7 @@ func TestDraftLifecycle(t *testing.T) {
 	if err != nil || d.State != "editing" || d.EditID != nil {
 		t.Fatalf("saving a returned draft unlinks it: %+v %v", d, err)
 	}
-	e, err = f.s.Submit(ctx, f.leader, d.ID)
+	e, err = f.s.Submit(ctx, f.leader, d.ID, d.UpdatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestDraftLimitsAndAccess(t *testing.T) {
 	if _, err := f.s.Get(ctx, f.leader, ids[0]); !errors.Is(err, apperr.NotFound) {
 		t.Fatalf("someone else's draft: %v", err)
 	}
-	if _, err := f.s.Save(ctx, f.senior, ids[0], SaveDraft{BaseSHA: strings.Repeat("b", 40), UpdatedAt: time.Now()}); !errors.Is(err, apperr.Conflict) {
+	if _, err := f.s.Save(ctx, f.senior, ids[0], SaveDraft{BaseSHA: strings.Repeat("b", 40), UpdatedAt: d.UpdatedAt}); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "rebase it") {
 		t.Fatalf("a base that is neither the draft's nor the head: %v", err)
 	}
 	// The senior becomes enrolled: their drafts, files and checks close at once.
@@ -134,7 +134,7 @@ func TestDraftLimitsAndAccess(t *testing.T) {
 		"file":     second(f.s.File(ctx, f.senior, ids[0], "modules/m1/quiz.yaml")),
 		"validate": second(f.s.Validate(ctx, f.senior, ValidateReq{Training: "t1", BaseSHA: f.head()})),
 		"rebase":   second(f.s.Rebase(ctx, f.senior, ids[0])),
-		"submit":   second(f.s.Submit(ctx, f.senior, ids[0])),
+		"submit":   second(f.s.Submit(ctx, f.senior, ids[0], d.UpdatedAt)),
 	} {
 		if !errors.Is(err, apperr.Forbidden) {
 			t.Errorf("%s while enrolled: %v", name, err)
@@ -181,7 +181,7 @@ func TestRebaseFollowsUntouchedFiles(t *testing.T) {
 	if err != nil || len(r.Conflicts) != 0 || r.Draft.BaseSHA != head {
 		t.Fatalf("rebase: %+v %v", r, err)
 	}
-	if _, err := f.s.Submit(ctx, f.leader, d.ID); err != nil {
+	if _, err := f.s.Submit(ctx, f.leader, d.ID, r.Draft.UpdatedAt); err != nil {
 		t.Fatalf("a rebased draft submits: %v", err)
 	}
 }
@@ -210,5 +210,85 @@ func TestRebaseConflictWhenUpstreamDeleted(t *testing.T) {
 	d, err = f.s.Save(ctx, f.leader, d.ID, SaveDraft{Title: "Intro", BaseSHA: head, UpdatedAt: r.Draft.UpdatedAt})
 	if err != nil || d.BaseSHA != head {
 		t.Fatalf("resolved: %+v %v", d, err)
+	}
+}
+
+// The cap counts only drafts I can still open: drafts of a training I'm now enrolled in (or that left the platform)
+// are hidden from List and refused by Discard, so they must not hold my slots.
+func TestDraftCapCountsVisibleDraftsOnly(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	for range maxDrafts {
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO content_drafts (author, training, base_sha) VALUES ('senior@crucible.local', 'gone', 'x')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.s.Create(ctx, f.senior, NewDraft{Training: "t1"}); err != nil {
+		t.Fatalf("hidden drafts hold no slot: %v", err)
+	}
+}
+
+type notifyFunc func()
+
+func (n notifyFunc) Notify(context.Context, notify.Event) error { n(); return nil }
+
+func pending(t *testing.T, f *fx) int {
+	t.Helper()
+	var n int
+	if err := f.s.DB.QueryRow(context.Background(), `SELECT count(*) FROM content_edits WHERE status = 'pending'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Submit is compare-and-set too: a stale tab, a double click, or an autosave racing the submit never links an edit
+// holding older ops, and never leaves a second pending edit behind.
+func TestSubmitCompareAndSet(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	put := func(body string) []gitsync.Op {
+		return []gitsync.Op{{Op: "put", Path: "modules/m1/reading/intro.md", Content: "# Intro\n\n" + body + "\n"}}
+	}
+	d, _ := f.s.Create(ctx, f.leader, NewDraft{Training: "t1", Title: "Warmer"})
+	stale := d.UpdatedAt
+	d, err := f.s.Save(ctx, f.leader, d.ID, SaveDraft{Title: "Warmer", BaseSHA: d.BaseSHA, Ops: put("A."), UpdatedAt: d.UpdatedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Submit(ctx, f.leader, d.ID, stale); !errors.Is(err, apperr.Conflict) || pending(t, f) != 0 {
+		t.Fatalf("a stale tab can't submit: %v", err)
+	}
+
+	// An autosave lands while the edit is being created: the edit holds older ops, so it is withdrawn.
+	f.edits.Notify = notifyFunc(func() {
+		got, _ := f.s.Get(ctx, f.leader, d.ID)
+		if _, err := f.s.Save(ctx, f.leader, d.ID, SaveDraft{Title: "Warmer", BaseSHA: got.BaseSHA, Ops: put("B."), UpdatedAt: got.UpdatedAt}); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := f.s.Submit(ctx, f.leader, d.ID, d.UpdatedAt); !errors.Is(err, apperr.Conflict) || pending(t, f) != 0 {
+		t.Fatalf("save between read and link: %v, %d pending", err, pending(t, f))
+	}
+	f.edits.Notify = nil
+	d, _ = f.s.Get(ctx, f.leader, d.ID)
+	if d.State != "editing" || d.Ops[0].Content != put("B.")[0].Content {
+		t.Fatalf("the newer work stands, unlinked: %+v", d)
+	}
+
+	// Double submit: exactly one pending edit.
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() { _, err := f.s.Submit(ctx, f.leader, d.ID, d.UpdatedAt); errs <- err }()
+	}
+	var ok int
+	for range 2 {
+		if err := <-errs; err == nil {
+			ok++
+		} else if !errors.Is(err, apperr.Conflict) {
+			t.Fatalf("the losing submit: %v", err)
+		}
+	}
+	if ok != 1 || pending(t, f) != 1 {
+		t.Fatalf("double submit: %d succeeded, %d pending", ok, pending(t, f))
 	}
 }

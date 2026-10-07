@@ -168,9 +168,19 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewDraft) (*Draft
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('content_drafts:' || $1))`, me); err != nil {
 		return nil, err
 	}
-	var n int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+draftFrom+` WHERE d.author = $1 AND coalesce(e.status, '') <> 'merged'`, me).Scan(&n); err != nil {
+	rows, err := tx.Query(ctx, `SELECT d.training FROM `+draftFrom+` WHERE d.author = $1 AND coalesce(e.status, '') <> 'merged'`, me)
+	if err != nil {
 		return nil, err
+	}
+	open, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	n := 0
+	for _, tr := range open { // only drafts I can still see (List's filter): hidden ones can't be discarded
+		if _, _, err := s.Edits.Authorize(u, tr); err == nil {
+			n++
+		}
 	}
 	if n >= maxDrafts {
 		return nil, apperr.Wrap(apperr.Conflict, fmt.Sprintf("you have %d open drafts; submit or discard one first", n))
@@ -245,7 +255,9 @@ func (s *Service) Discard(ctx context.Context, u *auth.User, id int64) error {
 }
 
 // Submit turns the draft into an edit through the normal path (validation, its own branch, review) and links them.
-func (s *Service) Submit(ctx context.Context, u *auth.User, id int64) (*edits.Edit, error) {
+// at is the updated_at the client last saw: like Save, it is compare-and-set, so a stale tab, a double click or an
+// autosave racing the submit fails with Conflict and the edit it created is withdrawn again.
+func (s *Service) Submit(ctx context.Context, u *auth.User, id int64, at time.Time) (*edits.Edit, error) {
 	d, err := s.Get(ctx, u, id)
 	if err != nil {
 		return nil, err
@@ -253,6 +265,8 @@ func (s *Service) Submit(ctx context.Context, u *auth.User, id int64) (*edits.Ed
 	switch {
 	case d.State == "in_review" || d.State == "merged":
 		return nil, apperr.Wrap(apperr.Conflict, "this draft was already submitted")
+	case !d.UpdatedAt.Equal(at):
+		return nil, apperr.Wrap(apperr.Conflict, "this draft changed in another tab or window; reload it")
 	case d.BaseSHA != d.HeadSHA:
 		return nil, apperr.Wrap(apperr.Conflict, "the content changed since this draft started; rebase it, then submit")
 	case len(d.Ops) == 0:
@@ -262,19 +276,36 @@ func (s *Service) Submit(ctx context.Context, u *auth.User, id int64) (*edits.Ed
 	if err != nil {
 		return nil, err
 	}
+	linked := false
+	defer func() {
+		if !linked { // the edit holds ops the draft no longer has, or a second copy: take it back
+			if _, err := s.Edits.Withdraw(context.WithoutCancel(ctx), u, e.ID); err != nil && s.Log != nil {
+				s.Log.Error("withdrawing an unlinked draft edit failed", "edit", e.ID, "err", err)
+			}
+		}
+	}()
 	me := strings.ToLower(u.Email)
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after Commit
-	if _, err := tx.Exec(ctx, `UPDATE content_drafts SET submitted_edit_id = $2, updated_at = `+bump+` WHERE id = $1`, id, e.ID); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE content_drafts SET submitted_edit_id = $3, updated_at = `+bump+` WHERE id = $1 AND author = $2 AND updated_at = $4`,
+		id, me, e.ID, d.UpdatedAt)
+	if err != nil {
 		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, apperr.Wrap(apperr.Conflict, "this draft changed while it was being submitted; reload it")
 	}
 	if err := audit.Log(ctx, tx, me, "content_draft.submit", d.Training, map[string]any{"draft": id, "edit": e.ID}, e.HeadSHA); err != nil {
 		return nil, err
 	}
-	return e, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	linked = true
+	return e, nil
 }
 
 // Rebase moves a draft to the training's current head. Files the draft doesn't touch simply follow. A file the draft

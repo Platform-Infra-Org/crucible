@@ -69,6 +69,7 @@ func TestAuthoringRoutes(t *testing.T) {
 		{"GET", draft + "/file?path=modules/m1/quiz.yaml", leader, "", 200},
 		{"PUT", draft, leader, big, 400},
 		{"POST", draft + "/rebase", leader, `{}`, 200},
+		{"POST", draft + "/submit", leader, `{"updated_at":"2000-01-01T00:00:00Z"}`, 409},
 		{"DELETE", draft, leader, "", 204},
 	} {
 		if got, body := call(t, r, c.method, c.path, c.user, c.body); got != c.want {

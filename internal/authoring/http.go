@@ -3,6 +3,7 @@ package authoring
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -74,7 +75,14 @@ func (s *Service) Routes(r chi.Router) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	r.Post("/api/authoring/drafts/{id}/submit", withID(func(w http.ResponseWriter, r *http.Request, n int64) {
-		v, err := s.Submit(r.Context(), user(r), n)
+		var in struct {
+			UpdatedAt time.Time `json:"updated_at"` // the draft as the client last saw it
+		}
+		if err := httpx.Read(r, &in); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.Submit(r.Context(), user(r), n, in.UpdatedAt)
 		reply(w, v, err)
 	}))
 	r.Post("/api/authoring/drafts/{id}/rebase", withID(func(w http.ResponseWriter, r *http.Request, n int64) {

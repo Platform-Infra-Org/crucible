@@ -225,6 +225,11 @@ func (t *Team) RoleOf(email string) string {
 	return ""
 }
 
+// ValidTrainingID reports whether id can name a training: it becomes a directory name in the content mirror.
+func ValidTrainingID(id string) bool {
+	return id != "" && filepath.IsLocal(id) && !strings.ContainsAny(id, `/\`)
+}
+
 func Load(dir string) (*Platform, error) {
 	p := &Platform{Trainings: map[string]TrainingRef{}, Teams: map[string]*Team{}}
 	var errs []error
@@ -287,7 +292,7 @@ func Load(dir string) (*Platform, error) {
 		errs = append(errs, err)
 	}
 	for id, ref := range reg.Trainings {
-		if id == "" || !filepath.IsLocal(id) || strings.ContainsAny(id, `/\`) { // ids become directory names
+		if !ValidTrainingID(id) {
 			errs = append(errs, fmt.Errorf("trainings.yaml: invalid training id %q", id))
 			continue
 		}

@@ -1,0 +1,87 @@
+package org
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"crucible/internal/apperr"
+	"crucible/internal/config"
+	"crucible/internal/gitsync"
+)
+
+var errNoChange = errors.New("no change")
+
+// AddTraining registers a training, or repoints a registered one; an empty branch means main. Registering the
+// same repo and branch again changes nothing and writes no audit row. A repoint records the previous repo and branch.
+func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string) error {
+	repo, branch = strings.TrimSpace(repo), strings.TrimSpace(branch)
+	if !config.ValidTrainingID(id) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
+	}
+	if repo == "" {
+		return apperr.Wrap(apperr.Invalid, "a training needs a repo URL")
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	if strings.HasPrefix(repo, "-") {
+		return apperr.Wrap(apperr.Invalid, "repo URL cannot start with '-'")
+	}
+	if l := strings.ToLower(repo); !gitsync.AllowFileFromEnv(os.Getenv) && (strings.HasPrefix(l, "file:") || strings.HasPrefix(repo, "/") || strings.HasPrefix(repo, ".")) {
+		return apperr.Wrap(apperr.Invalid, "local repo paths and file:// URLs are not allowed on this instance")
+	}
+	detail := map[string]any{"repo": repo, "branch": branch, "previous_repo": nil, "previous_branch": nil}
+	err := s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
+		var pr, pb string
+		err := tx.QueryRow(ctx, `SELECT repo, branch FROM trainings WHERE id = $1 FOR UPDATE`, id).Scan(&pr, &pb)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			_, err = tx.Exec(ctx, `INSERT INTO trainings (id, repo, branch) VALUES ($1, $2, $3)`, id, repo, branch)
+			return err
+		case err != nil:
+			return err
+		case pr == repo && pb == branch:
+			return errNoChange
+		}
+		detail["previous_repo"], detail["previous_branch"] = pr, pb // audit.Log runs after fn
+		_, err = tx.Exec(ctx, `UPDATE trainings SET repo = $2, branch = $3 WHERE id = $1`, id, repo, branch)
+		return err
+	})
+	if errors.Is(err, errNoChange) {
+		return nil
+	}
+	return err
+}
+
+// RemoveTraining unregisters a training no program uses.
+func (s *Store) RemoveTraining(ctx context.Context, actor, id string) error {
+	detail := map[string]any{}
+	return s.inTx(ctx, actor, "training.remove", id, detail, func(tx pgx.Tx) error {
+		var team string
+		err := tx.QueryRow(ctx, `SELECT team FROM programs WHERE training = $1 ORDER BY team LIMIT 1`, id).Scan(&team)
+		if err == nil {
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("training %q is used by team %s; remove its program first", id, team))
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		var repo, branch string
+		err = tx.QueryRow(ctx, `DELETE FROM trainings WHERE id = $1 RETURNING repo, branch`, id).Scan(&repo, &branch)
+		var pg *pgconn.PgError
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no training %q", id))
+		case errors.As(err, &pg) && pg.Code == "23503": // a program claimed it after our check
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("training %q is used by a program; remove its program first", id))
+		case err != nil:
+			return err
+		}
+		detail["repo"], detail["branch"] = repo, branch
+		return nil
+	})
+}

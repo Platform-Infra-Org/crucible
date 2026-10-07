@@ -28,7 +28,9 @@ editor. Your drafts are listed under **My drafts** on the same page, so you can 
 
 The editor is laid out like VS Code. Down the far left, the activity bar switches the side panel between
 **Explorer**, **Problems**, **Changes** and **Blocks**; Problems and Changes show their count on the icon. The editor
-sits in the middle with a tab for each open file, and the preview on the right.
+sits in the middle with a tab for each open file, and the preview on the right. Above them, the bar holds **All edits**
+(back to the list), the training's name and the draft's title. The code editor takes its colours from your theme and
+changes with it.
 
 Drag the line between two panes to resize them: the side panel, the editor and the preview each keep a minimum width.
 You can also focus a line with Tab and use the arrow keys, or **Home** and **End** for the narrowest and widest.

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { monaco } from './monaco'
-import { languageOf, monacoTheme } from './model'
+import { monaco, syncTheme } from './monaco'
+import { languageOf } from './model'
 import { canKeep, type Choice } from './rebase'
 import type { Conflict } from '../../types'
 
@@ -13,7 +13,7 @@ export function RebasePanel({ conflicts, onDone, onCancel }: { conflicts: Confli
   const c = conflicts[i]
   useEffect(() => {
     if (!host.current || c.op.op !== 'put') return
-    const d = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, originalEditable: false, renderSideBySide: true, theme: monacoTheme(document.documentElement.dataset.theme), accessibilitySupport: 'on' })
+    const d = monaco.editor.createDiffEditor(host.current, { automaticLayout: true, originalEditable: false, renderSideBySide: true, theme: syncTheme(), accessibilitySupport: 'on' })
     d.setModel({ original: monaco.editor.createModel(c.head, languageOf(c.path)), modified: monaco.editor.createModel(c.mine, languageOf(c.path)) })
     diff.current = d
     return () => { const m = d.getModel(); diff.current = null; d.dispose(); m?.original.dispose(); m?.modified.dispose() }

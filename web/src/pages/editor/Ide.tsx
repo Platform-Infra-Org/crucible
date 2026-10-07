@@ -354,10 +354,10 @@ export default function Ide() {
   return (
     <section className="ide" aria-label={`Editing ${draft.training}`}>
       <header className="ide-bar">
-        <Link to="/edits">All edits</Link>
-        <strong>{draft.training}</strong>
-        <label>Title <input value={title} maxLength={200} disabled={readOnly || !!conflicts} onChange={(e) => { setTitle(e.target.value); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }} /></label>
-        {draft.base_sha !== draft.head_sha && draft.state !== 'in_review' && <button disabled={!!conflicts || save.kind === 'conflict'} onClick={rebase}>Newer content: rebase draft</button>}
+        <Link to="/edits" className="ide-btn"><span aria-hidden="true">←</span> All edits</Link>
+        <h1>{draft.training}</h1>
+        <label className="ide-title"><span>Title</span><input value={title} maxLength={200} placeholder="Name this draft" disabled={readOnly || !!conflicts} onChange={(e) => { setTitle(e.target.value); setSave((s) => (canAutosave(s, resolving.current) ? { kind: 'dirty' } : s)) }} /></label>
+        {draft.base_sha !== draft.head_sha && draft.state !== 'in_review' && <button className="ide-btn rebase-btn" disabled={!!conflicts || save.kind === 'conflict'} onClick={rebase}>Newer content: rebase draft</button>}
       </header>
       {draft.state === 'in_review' && <p role="note">This draft is in review. <Link to={`/edits/${draft.edit_id}`}>Open the edit</Link> and withdraw it to keep working here.</p>}
       {save.kind === 'conflict' && <p role="alert" className="error">{save.reason} <button onClick={() => load().catch(setFatal)}>Reload</button></p>}

@@ -42,10 +42,24 @@ import 'monaco-editor/languages/definitions/shell/register'
 import { configureMonacoYaml } from 'monaco-yaml'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
 import YamlWorker from './yaml.worker?worker'
+import { monacoTheme, monacoThemeData } from './model'
 
 ;(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
   getWorker: (_id: string, label: string) => (label === 'yaml' ? new YamlWorker() : new EditorWorker()),
 }
+
+// syncTheme (re)defines the Monaco theme for the app theme now on <html>, from its CSS tokens, and applies it to every
+// editor (Monaco's theme is global). Editors call it when created; the observer follows a theme switch live.
+export function syncTheme() {
+  const theme = document.documentElement.dataset.theme
+  const css = getComputedStyle(document.documentElement)
+  const name = monacoTheme(theme)
+  monaco.editor.defineTheme(name, monacoThemeData(theme, (v) => css.getPropertyValue(v)))
+  monaco.editor.setTheme(name)
+  return name
+}
+// ponytail: never disconnected; it lives as long as the page once the editor chunk loads, and costs nothing until a theme switch.
+new MutationObserver(() => { syncTheme() }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
 let yamlReady = false
 

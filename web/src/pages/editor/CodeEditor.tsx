@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { monaco } from './monaco'
+import { monaco, syncTheme } from './monaco'
 import { isLeaveChord } from '../../lib/advanceFocus'
-import { languageOf, monacoTheme } from './model'
+import { languageOf } from './model'
 
 type Props = {
   draftId: number; path: string; text: string; readOnly: boolean
@@ -23,7 +23,7 @@ export function CodeEditor({ draftId, path, text, readOnly, markers, reveal, onC
     const e = monaco.editor.create(host.current!, {
       automaticLayout: true, accessibilitySupport: 'on', minimap: { enabled: false }, wordWrap: 'on',
       fixedOverflowWidgets: true, // hovers and suggestions escape the pane's clipping
-      fontFamily: "'JetBrains Mono', monospace", theme: monacoTheme(document.documentElement.dataset.theme),
+      fontFamily: "'JetBrains Mono', monospace", theme: syncTheme(),
       renderControlCharacters: true, unicodeHighlight: { invisibleCharacters: true, ambiguousCharacters: true },
       ariaLabel: 'File editor. Press Control+Shift+F6 to leave.',
     })

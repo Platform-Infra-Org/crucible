@@ -119,5 +119,61 @@ export function matchFiles(paths: string[], q: string): string[] {
 export const languageOf = (path: string) =>
   path.endsWith('.md') ? 'markdown' : path.endsWith('.sh') ? 'shell' : /\.ya?ml$/.test(path) ? 'yaml' : 'plaintext'
 
-// Spec: a dark editor for Forge, Quench and High Contrast (high-contrast black there), light for Anvil.
-export const monacoTheme = (theme: string | undefined) => (theme === 'anvil' ? 'vs' : theme === 'contrast' ? 'hc-black' : 'vs-dark')
+// monacoTheme names the editor's Monaco theme for an app theme; monaco.ts defines it from monacoThemeData.
+export const monacoTheme = (theme: string | undefined) => `crucible-${theme === 'anvil' || theme === 'quench' || theme === 'contrast' ? theme : 'forge'}`
+
+// toHex turns a CSS colour as getComputedStyle gives it (#rgb[a], #rrggbb[aa], rgb()/rgba()) into the #rrggbb[aa] Monaco
+// needs; anything else is undefined.
+export function toHex(css: string): string | undefined {
+  const s = css.trim().toLowerCase()
+  if (/^#([0-9a-f]{3,4})$/.test(s)) return '#' + [...s.slice(1)].map((c) => c + c).join('')
+  if (/^#([0-9a-f]{6}|[0-9a-f]{8})$/.test(s)) return s
+  const m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+)(%?))?\s*\)$/.exec(s)
+  if (!m) return undefined
+  const byte = (n: number) => Math.round(Math.min(255, Math.max(0, n))).toString(16).padStart(2, '0')
+  const a = m[4] === undefined ? '' : byte((m[5] ? Number(m[4]) / 100 : Number(m[4])) * 255)
+  return '#' + byte(+m[1]) + byte(+m[2]) + byte(+m[3]) + a
+}
+
+type ThemeData = { base: 'vs' | 'vs-dark' | 'hc-black'; inherit: true; colors: Record<string, string>; rules: { token: string; foreground: string; fontStyle?: string }[] }
+
+// monacoThemeData builds the Monaco theme for an app theme from its CSS tokens (tok reads one, e.g. '--accent'), so
+// tokens.css stays the one place colours live. Anvil is light, High Contrast keeps Monaco's high-contrast base.
+export function monacoThemeData(theme: string | undefined, tok: (name: string) => string): ThemeData {
+  const c = (name: string, alpha = '') => { const h = toHex(tok(name)); return h && (h.length === 7 ? h + alpha : h) }
+  const colors: Record<string, string | undefined> = {
+    'editor.background': c('--bg'), 'editor.foreground': c('--text'), 'editorGutter.background': c('--bg'),
+    'editorLineNumber.foreground': c('--muted'), 'editorLineNumber.activeForeground': c('--accent'), 'editorCursor.foreground': c('--accent'),
+    'editor.selectionBackground': c('--accent', '40'), 'editor.inactiveSelectionBackground': c('--accent', '26'),
+    'editor.selectionHighlightBackground': c('--accent', '26'), 'editor.wordHighlightBackground': c('--accent', '26'),
+    'editor.wordHighlightStrongBackground': c('--accent', '33'), 'editor.findMatchBackground': c('--accent-2', '66'),
+    'editor.findMatchHighlightBackground': c('--accent-2', '33'), 'editorBracketMatch.background': c('--accent', '26'), 'editorBracketMatch.border': c('--accent'),
+    'editorIndentGuide.background1': c('--border'), 'editorIndentGuide.activeBackground1': c('--muted'), 'editorWhitespace.foreground': c('--border'),
+    'editorWidget.background': c('--surface'), 'editorWidget.foreground': c('--text'), 'editorWidget.border': c('--border'),
+    'editorHoverWidget.background': c('--surface'), 'editorHoverWidget.foreground': c('--text'), 'editorHoverWidget.border': c('--border'),
+    'editorSuggestWidget.background': c('--surface'), 'editorSuggestWidget.foreground': c('--text'), 'editorSuggestWidget.border': c('--border'),
+    'editorSuggestWidget.selectedBackground': c('--surface-2'), 'editorSuggestWidget.highlightForeground': c('--accent'),
+    'quickInput.background': c('--surface'), 'quickInput.foreground': c('--text'), 'list.highlightForeground': c('--accent'),
+    'list.hoverBackground': c('--surface-2'), 'list.activeSelectionBackground': c('--surface-2'), 'list.activeSelectionForeground': c('--text'),
+    'list.focusBackground': c('--surface-2'), 'list.focusForeground': c('--text'), 'focusBorder': c('--accent-2'),
+    'input.background': c('--surface-2'), 'input.foreground': c('--text'), 'input.border': c('--border'),
+    'textLink.foreground': c('--accent'), 'textLink.activeForeground': c('--accent-2'), 'textCodeBlock.background': c('--surface-2'),
+    'scrollbarSlider.background': c('--muted', '33'), 'scrollbarSlider.hoverBackground': c('--muted', '55'), 'scrollbarSlider.activeBackground': c('--muted', '77'),
+    'editorOverviewRuler.border': c('--border'), 'editorError.foreground': c('--danger'), 'editorWarning.foreground': c('--accent-2'),
+    'diffEditor.insertedTextBackground': c('--diff-add', '33'), 'diffEditor.removedTextBackground': c('--diff-del', '33'),
+    'diffEditor.insertedLineBackground': c('--diff-add', '1a'), 'diffEditor.removedLineBackground': c('--diff-del', '1a'),
+    'diffEditor.border': c('--border'),
+    // High Contrast marks the current line with its own bright border; the others get a soft band.
+    ...(theme === 'contrast' ? {} : { 'editor.lineHighlightBackground': c('--surface-2'), 'editor.lineHighlightBorder': c('--surface-2') }),
+  }
+  const fg = (name: string) => toHex(tok(name))?.slice(1, 7)
+  const rules = ([
+    ['comment', fg('--muted'), 'italic'], ['type', fg('--accent-2')], ['tag', fg('--accent-2')], ['variable', fg('--accent-2')],
+    ['string.link', fg('--accent-2')], ['string', fg('--text')], ['string.yaml', fg('--text')],
+    ['keyword', fg('--accent')], ['keyword.flow', fg('--accent')], ['number', fg('--accent')], ['number.hex', fg('--accent')],
+  ] as const).flatMap(([token, foreground, fontStyle]) => (foreground ? [fontStyle ? { token, foreground, fontStyle } : { token, foreground }] : []))
+  return {
+    base: theme === 'anvil' ? 'vs' : theme === 'contrast' ? 'hc-black' : 'vs-dark', inherit: true, rules,
+    colors: Object.fromEntries(Object.entries(colors).filter((e): e is [string, string] => !!e[1])),
+  }
+}

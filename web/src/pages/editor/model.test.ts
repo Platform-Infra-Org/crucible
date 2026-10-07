@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { applyInsert, changeList, fileText, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, origin, putText, renamePath, toOps } from './model'
+import { applyInsert, changeList, fileText, currentPaths, deletePath, emptyOps, fromOps, languageOf, matchFiles, monacoTheme, monacoThemeData, toHex, origin, putText, renamePath, toOps } from './model'
 
 const base = ['training.yaml', 'modules/m1/module.yaml', 'modules/m1/reading/a.md', 'modules/m1/reading/b.md']
 
@@ -68,7 +68,35 @@ test('go to file matches in order, best name first', () => {
 
 test('languages and themes', () => {
   expect([languageOf('a.md'), languageOf('a.sh'), languageOf('a.yml'), languageOf('a.yaml')]).toEqual(['markdown', 'shell', 'yaml', 'yaml'])
-  expect([monacoTheme('forge'), monacoTheme('quench'), monacoTheme('contrast'), monacoTheme('anvil')]).toEqual(['vs-dark', 'vs-dark', 'hc-black', 'vs'])
+  expect([monacoTheme('forge'), monacoTheme('quench'), monacoTheme('contrast'), monacoTheme('anvil'), monacoTheme(undefined)])
+    .toEqual(['crucible-forge', 'crucible-quench', 'crucible-contrast', 'crucible-anvil', 'crucible-forge'])
+})
+
+test('css colours become the hex Monaco wants', () => {
+  expect([toHex(' #14110F'), toHex('#000'), toHex('#fff8'), toHex('rgb(255, 122, 26)'), toHex('rgba(255, 122, 26, 0.5)'), toHex('rgb(0 0 0 / 25%)')])
+    .toEqual(['#14110f', '#000000', '#ffffff88', '#ff7a1a', '#ff7a1a80', '#00000040'])
+  expect([toHex(''), toHex('none'), toHex('#12'), toHex('var(--x)')]).toEqual([undefined, undefined, undefined, undefined])
+})
+
+test('a Monaco theme takes its colours from the app theme tokens', () => {
+  const forge: Record<string, string> = { '--bg': '#14110f', '--surface': '#1f1a17', '--surface-2': '#2a231f', '--text': '#f3e9df', '--muted': '#b5a596',
+    '--accent': '#ff7a1a', '--accent-2': '#ffc24b', '--danger': '#ff5a4d', '--ok': '#7bd88f', '--border': '#3a302a', '--diff-add': '#7bd88f', '--diff-del': '#ff5a4d' }
+  const t = monacoThemeData('forge', (v) => forge[v] ?? '')
+  expect(t.base).toBe('vs-dark')
+  expect(t.colors['editor.background']).toBe('#14110f')
+  expect(t.colors['editor.foreground']).toBe('#f3e9df')
+  expect(t.colors['editorCursor.foreground']).toBe('#ff7a1a')
+  expect(t.colors['editorLineNumber.activeForeground']).toBe('#ff7a1a')
+  expect(t.colors['editor.selectionBackground']).toBe('#ff7a1a40')
+  expect(t.colors['editorHoverWidget.background']).toBe('#1f1a17')
+  expect(t.colors['diffEditor.insertedTextBackground']).toBe('#7bd88f33')
+  expect(t.rules).toContainEqual({ token: 'type', foreground: 'ffc24b' })
+  expect(t.rules).toContainEqual({ token: 'comment', foreground: 'b5a596', fontStyle: 'italic' })
+  expect(monacoThemeData('anvil', (v) => forge[v] ?? '').base).toBe('vs')
+  expect(monacoThemeData('contrast', (v) => forge[v] ?? '').base).toBe('hc-black')
+  // No tokens (not loaded yet): Monaco's own colours stay, nothing invalid reaches defineTheme.
+  const bare = monacoThemeData('quench', () => '')
+  expect([bare.base, Object.keys(bare.colors).length, bare.rules.length]).toEqual(['vs-dark', 0, 0])
 })
 
 test('deleting a file and creating one at the same path is one put, never delete+put of a path', () => {

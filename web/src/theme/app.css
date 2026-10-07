@@ -252,7 +252,27 @@ meter { width: 8rem; vertical-align: middle; }
 
 /* the editor: VS Code-like activity bar | side panel | editor | preview, resizable, with a status bar under it */
 .ide { display: flex; flex-direction: column; height: calc(100vh - 4rem); padding: 0 1rem .75rem; }
-.ide-bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; padding: .5rem 0; }
+.ide-bar { display: flex; gap: .6rem 1.1rem; align-items: center; flex-wrap: wrap; padding: .6rem 0; }
+.ide-bar h1 { margin: 0; font-size: 1.2rem; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the header's buttons: a link back and the rebase, as small forged plates that warm on hover */
+.ide-btn { display: inline-flex; align-items: center; gap: .45rem; padding: .35rem .9rem; border: 1px solid var(--border); border-radius: 8px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface)); color: var(--text); text-decoration: none; white-space: nowrap;
+  font: 600 .8rem/1.4 Cinzel, Georgia, serif; letter-spacing: .06em; transition: border-color .2s, box-shadow .2s, color .2s; }
+.ide-btn > span { color: var(--accent); transition: transform .2s; }
+.ide-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); box-shadow: var(--glow); }
+.ide-btn:hover:not(:disabled) > span { transform: translateX(-3px); }
+.ide-bar .rebase-btn { margin-left: auto; border-color: var(--accent-2); }
+/* the draft's title: an engraved line, not a box; the line takes the accent when focused */
+.ide-title { flex: 1 1 16rem; max-width: 40rem; display: flex; align-items: baseline; gap: .6rem; }
+.ide-title > span { font-size: .7rem; text-transform: uppercase; letter-spacing: .14em; color: var(--muted); }
+.ide-title input { flex: 1; min-width: 0; padding: .2rem .15rem; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent;
+  font-family: Cinzel, Georgia, serif; font-size: 1.05rem; letter-spacing: .02em; transition: border-color .2s, box-shadow .2s, background .2s; }
+.ide-title input::placeholder { color: var(--muted); opacity: .7; }
+.ide-title input:hover:not(:disabled) { border-bottom-color: var(--muted); }
+.ide-title input:focus { outline: none; border-bottom-color: var(--accent); box-shadow: 0 1px 0 var(--accent);
+  background: linear-gradient(to top, color-mix(in srgb, var(--accent) 12%, transparent), transparent 80%); }
+.ide-title:has(input:disabled) { opacity: .55; }
+.ide-title input:disabled { border-bottom-style: dashed; cursor: not-allowed; }
 .ide > p.error:empty { margin: 0; }
 .ide-main { flex: 1; display: grid; grid-template-columns: var(--cols); grid-template-rows: minmax(0, 1fr); min-height: 0; border: 1px solid var(--border); border-radius: 8px 8px 0 0; overflow: hidden; background: var(--bg); }
 .ide-main > * { min-height: 0; min-width: 0; }

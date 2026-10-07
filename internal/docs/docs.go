@@ -48,7 +48,7 @@ type front struct {
 
 // Load reads every *.md under fsys (one folder per section) and sorts them by section, order and slug.
 func Load(fsys fs.FS) ([]Page, error) {
-	var pages []Page
+	pages := []Page{}
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || path.Ext(p) != ".md" {
 			return err
@@ -103,7 +103,14 @@ func parse(slug, src string) (Page, error) {
 		}
 	}
 	body = strings.TrimLeft(body, "\n")
-	return Page{Slug: slug, Section: section, Title: f.Title, Roles: f.Roles, Covers: f.Covers, Order: f.Order, Headings: headings(body), Body: body}, nil
+	return Page{Slug: slug, Section: section, Title: f.Title, Roles: f.Roles, Covers: nonNil(f.Covers), Order: f.Order, Headings: headings(body), Body: body}, nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // headings are the ## and ### titles outside code fences (client-side search matches them).

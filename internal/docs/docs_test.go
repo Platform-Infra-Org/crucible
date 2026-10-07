@@ -78,3 +78,21 @@ func TestRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyListsAreArrays(t *testing.T) {
+	get := func(pages []Page, path string) string {
+		r := chi.NewRouter()
+		New(pages).Routes(r)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		return w.Body.String()
+	}
+	empty, _ := Load(fstest.MapFS{})
+	if b := get(empty, "/api/docs"); !strings.Contains(b, `"pages":[]`) {
+		t.Fatalf("no pages: %s", b)
+	}
+	pages, _ := Load(fstest.MapFS{"trainees/x.md": page("title: X\nroles: [trainee]", "x")})
+	if b := get(pages, "/api/docs"); !strings.Contains(b, `"covers":[]`) || !strings.Contains(b, `"headings":[]`) {
+		t.Fatalf("page lists: %s", b)
+	}
+}

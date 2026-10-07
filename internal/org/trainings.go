@@ -20,6 +20,11 @@ import (
 // remoteURL is the allowlist of network remotes; anything else (file:, bare paths, ext::, C:\, a leading "-") is local.
 var remoteURL = regexp.MustCompile(`(?i)^((https?|ssh|git)://[^\s-]\S*|[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:\S*)$`)
 
+var userinfo = regexp.MustCompile(`(://)[^/?#\s]*@`)
+
+// redactRepo drops credentials (user:token@) from a repo URL for display and the audit log; the stored value keeps them so cloning works.
+func redactRepo(repo string) string { return userinfo.ReplaceAllString(repo, "$1") }
+
 var errNoChange = errors.New("no change")
 
 // AddTraining registers a training, or repoints a registered one; an empty branch means main. Registering the
@@ -44,7 +49,7 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 	if !remoteURL.MatchString(repo) && !gitsync.AllowFileFromEnv(os.Getenv) {
 		return apperr.Wrap(apperr.Invalid, "repo must be an https://, http://, ssh://, git:// or user@host:path URL; local paths are not allowed on this instance")
 	}
-	detail := map[string]any{"repo": repo, "branch": branch, "previous_repo": nil, "previous_branch": nil}
+	detail := map[string]any{"repo": redactRepo(repo), "branch": branch, "previous_repo": nil, "previous_branch": nil}
 	err := s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
 		var pr, pb string
 		err := tx.QueryRow(ctx, `SELECT repo, branch FROM trainings WHERE id = $1 FOR UPDATE`, id).Scan(&pr, &pb)
@@ -57,8 +62,8 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 		case pr == repo && pb == branch:
 			return errNoChange
 		}
-		detail["previous_repo"], detail["previous_branch"] = pr, pb // audit.Log runs after fn
-		if pr != repo {                                             // pinned SHAs belong to the old repository; make the move visible
+		detail["previous_repo"], detail["previous_branch"] = redactRepo(pr), pb // audit.Log runs after fn
+		if pr != repo {                                                         // pinned SHAs belong to the old repository; make the move visible
 			var n int
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM programs WHERE training = $1`, id).Scan(&n); err != nil {
 				return err
@@ -98,7 +103,7 @@ func (s *Store) RemoveTraining(ctx context.Context, actor, id string) error {
 		case err != nil:
 			return err
 		}
-		detail["repo"], detail["branch"] = repo, branch
+		detail["repo"], detail["branch"] = redactRepo(repo), branch
 		return nil
 	})
 }

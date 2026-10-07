@@ -146,8 +146,8 @@ type Team struct {
 	Mentors  map[string]string   `yaml:"mentors"` // trainee email → mentor email
 	Programs map[string]*Program `yaml:"-"`       // by training id
 
-	Notifications TeamNotifications `yaml:"notifications"`
-	Budget        Budget            `yaml:"-"` // from budget.yaml
+	Notifications TeamNotifications `yaml:"notifications" json:"-"` // webhook URLs are secrets: never marshalled
+	Budget        Budget            `yaml:"-"`                      // from budget.yaml
 }
 
 type Program struct {

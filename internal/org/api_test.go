@@ -2,6 +2,7 @@ package org
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -30,7 +31,9 @@ type apiFixture struct {
 
 // newAPI seeds team "platform" (leader lead@x, senior senior@x, trainee new@x, other team "other" led by boss@x),
 // admin@x as admin, and serves the routes with a snapshot that only changes when Refresh runs.
-func newAPI(t *testing.T) *apiFixture {
+func newAPI(t *testing.T) *apiFixture { return newAPIWith(t, true) }
+
+func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 	s, ctx := orgFixture(t)
 	mustTeam(t, s, "other", TeamBody{Name: "Other", Leader: "boss@x"})
 	if err := s.AddAdmin(ctx, "root", "admin@x"); err != nil {
@@ -50,11 +53,15 @@ func newAPI(t *testing.T) *apiFixture {
 			next.ServeHTTP(w, r)
 		})
 	})
-	s.Routes(r, APIDeps{
+	deps := APIDeps{
 		Platform: func() *config.Platform { f.mu.Lock(); defer f.mu.Unlock(); return f.snap },
 		Refresh:  func(context.Context) error { f.mu.Lock(); f.refreshes++; f.mu.Unlock(); f.reload(); return nil },
 		CheckPin: func(_ context.Context, _, sha string) error { f.pinCalls = append(f.pinCalls, sha); return f.pinErr },
-	})
+	}
+	if !withPinCheck {
+		deps.CheckPin = nil
+	}
+	s.Routes(r, deps)
 	f.h = r
 	return f
 }
@@ -287,13 +294,20 @@ func TestRosterPermissionCheckMatchesTheVersionWritten(t *testing.T) {
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "reload") {
 		t.Errorf("stale version = %d %s, want 409", w.Code, w.Body)
 	}
-	// A snapshot that lags the database (refresh not run yet) still cannot write: the store's version check refuses.
+	// The demoted leader's snapshot is stale: it still shows lead@x as leader at version v. Two requests, each
+	// refused by a different guard: the route's version check (body at the real version) and the store's (body at v).
 	f.mu.Lock()
 	f.snap = old
 	f.mu.Unlock()
-	lagged := f.teamVersion("platform")
-	if f.teamVersion("platform") != lagged {
-		t.Fatal("snapshot changed unexpectedly")
+	rows := count(t, f.s, `SELECT count(*) FROM audit_log`)
+	for name, ver := range map[string]int64{"client at the stale version": v, "client at the real version": v + 1} {
+		w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(ver, "lead@x", "Platform", "senior@x"))
+		if w.Code != 409 {
+			t.Errorf("%s: demoted leader on a stale snapshot = %d %s, want 409", name, w.Code, w.Body)
+		}
+	}
+	if count(t, f.s, `SELECT count(*) FROM audit_log`) != rows {
+		t.Error("a refused write left an audit row")
 	}
 	if p, _ := f.s.Platform(context.Background()); p.Teams["platform"].Leader != "senior@x" {
 		t.Error("the stale write was applied")
@@ -364,5 +378,67 @@ func TestPinMustResolveBeforeItIsStored(t *testing.T) {
 	}
 	if w := f.do("lead@x", "PUT", path, `{"sha":""}`); w.Code != 200 || f.snap.Teams["platform"].Programs["forge-101"].PinnedRef != "" {
 		t.Errorf("clearing the pin = %d", w.Code)
+	}
+}
+
+func TestLeaderGuardSeesReorderedAndDuplicatedSeniors(t *testing.T) {
+	f := newAPI(t)
+	v := f.teamVersion("platform")
+	// same people in another order, other case, with a repeat: not a change
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "SENIOR@x")); w.Code != 200 {
+		t.Fatalf("same senior in another case = %d %s", w.Code, w.Body)
+	}
+	v++
+	// a duplicate entry is still a different list: refused, not silently deduplicated
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "senior@x", "senior@x")); w.Code != 403 {
+		t.Errorf("duplicated senior = %d, want 403", w.Code)
+	}
+	// reordered with an extra person
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "new@x", "senior@x")); w.Code != 403 {
+		t.Errorf("added senior = %d, want 403", w.Code)
+	}
+}
+
+func TestPinWithoutACheckerIsRefused(t *testing.T) {
+	f := newAPIWith(t, false)
+	w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101/pin", `{"sha":"`+sha1+`"}`)
+	if w.Code != 503 {
+		t.Errorf("no checker = %d %s, want 503, never an unchecked store", w.Code, w.Body)
+	}
+	if n := count(t, f.s, `SELECT count(*) FROM programs WHERE pinned_ref IS NOT NULL`); n != 0 {
+		t.Error("an unchecked sha was stored")
+	}
+}
+
+func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
+	f := newAPI(t)
+	const repo = "https://deploy:t0psecret@git.example.com/org/r.git"
+	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"`+repo+`"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if got := f.snap.Trainings["cred-101"].Repo; got != repo {
+		t.Errorf("stored repo = %q, cloning needs the credentials", got)
+	}
+	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || !strings.Contains(w.Body.String(), "git.example.com/org/r.git") {
+		t.Errorf("list = %s", w.Body)
+	}
+	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if w := f.do("admin@x", "DELETE", "/api/admin/trainings/cred-101", ""); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%'`); n != 0 {
+		t.Errorf("%d audit rows hold the repo credentials", n)
+	}
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 3 {
+		t.Errorf("audit rows with the redacted repo = %d, want 3 (add, repoint, remove)", n)
+	}
+}
+
+func TestTeamNeverMarshalsItsWebhooks(t *testing.T) {
+	b, _ := json.Marshal(&config.Team{Notifications: config.TeamNotifications{SlackWebhook: "https://h/s3cr3t"}})
+	if strings.Contains(string(b), "s3cr3t") {
+		t.Errorf("marshalled team holds the webhook: %s", b)
 	}
 }

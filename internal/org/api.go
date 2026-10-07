@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -182,11 +181,7 @@ func (a *api) postAdmin(w http.ResponseWriter, r *http.Request, actor string, _ 
 }
 
 func (a *api) deleteAdmin(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
-	email, err := url.PathUnescape(chi.URLParam(r, "email"))
-	if err != nil {
-		return apperr.Wrap(apperr.Invalid, "that email address is not valid")
-	}
-	if err := a.s.RemoveAdmin(r.Context(), actor, email); err != nil {
+	if err := a.s.RemoveAdmin(r.Context(), actor, chi.URLParam(r, "email")); err != nil {
 		return err
 	}
 	return a.done(w, r, 0)
@@ -200,7 +195,7 @@ func (a *api) getTrainings(w http.ResponseWriter, r *http.Request, _ string, c r
 	}
 	out := []row{}
 	for id, t := range c.P.Trainings {
-		out = append(out, row{id, t.Repo, t.Branch})
+		out = append(out, row{id, redactRepo(t.Repo), t.Branch}) // credentials in the stored URL never reach the screen
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	httpx.JSON(w, http.StatusOK, map[string]any{"trainings": out})

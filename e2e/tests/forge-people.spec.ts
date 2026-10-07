@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { setEditorText } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
@@ -34,10 +35,10 @@ test('a content edit is reviewed and merged; the trainee earns a badge; mentor a
   await leader.getByRole('link', { name: 'Edits', exact: true }).click()
   await leader.getByLabel('Training').selectOption('forge-102')
   await leader.getByRole('button', { name: 'Start an edit' }).click()
-  await leader.getByRole('button', { name: 'modules/01-sparks/reading/sparks.md' }).click()
-  const editor = leader.getByLabel('Content of modules/01-sparks/reading/sparks.md')
-  await expect(editor).toHaveValue(/Every blade starts as a spark/)
-  await editor.fill((await editor.inputValue()) + `\nThe anvil remembers ${run}.\n`)
+  await leader.getByRole('button', { name: 'modules/01-sparks/reading/sparks.md', exact: true }).click()
+  const sparks = await (await leader.request.get('/api/content/forge-102/file?path=modules/01-sparks/reading/sparks.md')).json()
+  expect(sparks.content).toMatch(/Every blade starts as a spark/)
+  await setEditorText(leader, sparks.content + `\nThe anvil remembers ${run}.\n`)
   await expect(leader.getByTestId('edit-preview')).toContainText(`The anvil remembers ${run}.`)
   await leader.getByLabel('Title').fill(`Add a line about the anvil ${run}`)
   await leader.getByRole('button', { name: 'Submit for review' }).click()

@@ -64,8 +64,8 @@ export function EditReviewPage() {
           {e.can_withdraw && <button className="ghost" disabled={busy} onClick={() => act('withdraw')}>Withdraw</button>}
         </p>
       )}
-      {e.status === 'stale' && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
-        <Link to={`/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Redo on the current version</Link>
+      {['stale', 'rejected', 'withdrawn'].includes(e.status) && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
+        <Link to={`/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
       )}
     </section>
   )

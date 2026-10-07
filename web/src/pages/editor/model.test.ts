@@ -70,3 +70,19 @@ test('languages and themes', () => {
   expect([languageOf('a.md'), languageOf('a.sh'), languageOf('a.yml'), languageOf('a.yaml')]).toEqual(['markdown', 'shell', 'yaml', 'yaml'])
   expect([monacoTheme('forge'), monacoTheme('quench'), monacoTheme('contrast'), monacoTheme('anvil')]).toEqual(['vs-dark', 'vs-dark', 'hc-black', 'vs'])
 })
+
+test('deleting a file and creating one at the same path is one put, never delete+put of a path', () => {
+  let d = deletePath(base, emptyOps(), 'modules/m1/reading/a.md')
+  d = putText(d, 'modules/m1/reading/a.md', '', undefined)
+  expect(toOps(d)).toEqual([{ op: 'put', path: 'modules/m1/reading/a.md', content: '' }])
+  expect(origin(base, d, 'modules/m1/reading/a.md')).toBe('modules/m1/reading/a.md')
+  expect(changeList(base, d)).toEqual([{ kind: 'changed', path: 'modules/m1/reading/a.md' }])
+})
+
+test('reopening an edit keeps its renames and deletes', () => {
+  const ops = [
+    { op: 'rename' as const, from: 'modules/m1/reading/a.md', to: 'modules/m1/reading/z.md' },
+    { op: 'delete' as const, path: 'modules/m1/reading/b.md' },
+  ]
+  expect(toOps(fromOps(ops))).toEqual(ops)
+})

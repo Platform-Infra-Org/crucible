@@ -45,7 +45,9 @@ export function currentPaths(base: string[], d: DraftOps): string[] {
 
 // putText records path's text. original is the text the file starts from (undefined for a new file): a file edited
 // back to its original leaves the draft.
+// A put at a path this draft deleted un-deletes it: the server refuses delete+put of one path.
 export function putText(d: DraftOps, path: string, text: string, original: string | undefined): DraftOps {
+  if (d.deletes.includes(path)) return { ...d, deletes: d.deletes.filter((p) => p !== path), puts: { ...d.puts, [path]: text } }
   const puts = { ...d.puts }
   if (original !== undefined && text === original) delete puts[path]
   else puts[path] = text

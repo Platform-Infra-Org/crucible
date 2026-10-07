@@ -237,3 +237,14 @@ meter { width: 8rem; vertical-align: middle; }
 .docs-nav a[aria-current='page'] { font-weight: 700; }
 .help-link { border: 1px solid var(--accent); border-radius: 50%; width: 1.6rem; height: 1.6rem; display: inline-grid; place-items: center; }
 @media (max-width: 900px) { .docs { grid-template-columns: 1fr; } }
+
+.ide { display: grid; grid-template-rows: auto auto auto 1fr auto; height: calc(100vh - 4rem); padding: 0 1rem; }
+.ide-bar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; padding: .5rem 0; }
+.ide-main { display: grid; grid-template-columns: 260px minmax(0, 1fr) minmax(0, 1fr); gap: .75rem; min-height: 0; }
+.ide-main > * { min-height: 0; overflow: auto; }
+.ide-editor { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+.code-editor { min-height: 60vh; height: 100%; }
+.ide-tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
+.ide-status { display: flex; gap: 1rem; align-items: center; padding: .5rem 0; border-top: 1px solid var(--surface-2); }
+.explorer ul { list-style: none; padding: 0; margin: 0; }
+.explorer button.small, .ide-tabs button.small { padding: 0 .3rem; font-size: .8rem; }

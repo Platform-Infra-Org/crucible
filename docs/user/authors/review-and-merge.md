@@ -42,8 +42,9 @@ instead, and the edit needs a fresh approval.
 ## Stale edits
 
 If the training changed underneath an edit and the two no longer fit, the merge stops and the edit turns *stale*.
-Nothing is lost: as the author, choose **Redo on the current version**. Crucible opens the current files with the old
-diff beside them, so you can make your change again.
+Nothing is lost: as the author, choose **Reopen in the editor**. The link is also on your rejected and withdrawn edits.
+Crucible opens a new draft holding all of the edit's changes, renames and deletes included, on the version of the
+training they were made against. The editor tells you when newer content is on the branch.
 
 ## Limits
 

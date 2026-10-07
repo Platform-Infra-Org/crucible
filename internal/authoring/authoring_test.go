@@ -88,12 +88,46 @@ func setup(t *testing.T) *fx {
 			}
 			return nil
 		}}
+	es.Version = func(_ context.Context, id, sha string) *content.Training { return st.Training(id, sha) }
 	u := func(e string) *auth.User { return &auth.User{Email: e} }
 	return &fx{s: &Service{DB: db, Edits: es}, edits: es, st: st, remote: remote, work: work,
 		leader: u("leader@crucible.local"), senior: u("senior@crucible.local"), trainee: u("trainee@crucible.local")}
 }
 
 func (f *fx) head() string { return f.st.Heads["t1"] }
+
+// advance pushes a commit to t1's main from another clone (someone working in git) and makes it the head. The old
+// version keeps its own directory, as the real syncer's exports do.
+func (f *fx) advance(t *testing.T, put map[string]string, del ...string) string {
+	t.Helper()
+	work := filepath.Join(t.TempDir(), "other")
+	git(t, "", "clone", "-q", f.remote, work)
+	for rel, body := range put {
+		p := filepath.Join(work, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, rel := range del {
+		if err := os.Remove(filepath.Join(work, rel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, work, "add", "-A")
+	git(t, work, "commit", "-qm", "upstream")
+	git(t, work, "push", "-q", "origin", "HEAD:main")
+	head := git(t, work, "rev-parse", "HEAD")
+	tr, probs := content.Load(work)
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	f.st.Trainings["t1@"+head] = tr
+	f.st.Heads["t1"] = head
+	return head
+}
 
 func TestValidateReportsProblemsWithLines(t *testing.T) {
 	ctx := context.Background()

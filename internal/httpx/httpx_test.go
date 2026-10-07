@@ -35,3 +35,15 @@ func TestErrorHidesInternalMessages(t *testing.T) {
 		t.Fatalf("internal error leaked: %s", w.Body.String())
 	}
 }
+
+func TestReadRefusesOversizeBodies(t *testing.T) {
+	var v map[string]string
+	big := httptest.NewRequest("POST", "/", strings.NewReader(`{"a":"`+strings.Repeat("x", 1<<20)+`"}`))
+	if err := Read(big, &v); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "over 1 MiB") {
+		t.Fatalf("an oversize body says so (was: unexpected EOF): %v", err)
+	}
+	ok := httptest.NewRequest("POST", "/", strings.NewReader(`{"a":"`+strings.Repeat("x", 1<<19)+`"}`))
+	if err := Read(ok, &v); err != nil || len(v["a"]) != 1<<19 {
+		t.Fatalf("half a MiB is fine: %v", err)
+	}
+}

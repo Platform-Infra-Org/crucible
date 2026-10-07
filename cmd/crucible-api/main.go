@@ -249,7 +249,7 @@ func run(ctx context.Context) error {
 	// value on the same dir would race it. A training moved to another repo gets a new value and a new dir.
 	var repoMu sync.Mutex
 	repos := map[string]*gitsync.ContentRepo{}
-	editsSvc := &edits.Service{DB: pool, State: syncer.Current, Notify: notifySvc, Resync: syncer.SyncOnce, Log: slog.Default(),
+	editsSvc := &edits.Service{DB: pool, State: syncer.Current, Notify: notifySvc, Resync: syncer.SyncOnce, Version: syncer.Version, Log: slog.Default(),
 		Repo: func(id string) *gitsync.ContentRepo {
 			st := syncer.Current()
 			if st == nil || st.Platform == nil {

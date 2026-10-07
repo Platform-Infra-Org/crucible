@@ -49,17 +49,25 @@ type ValidateReq struct {
 	Ops      []gitsync.Op `json:"ops"`
 }
 
-// base is the training at sha for u. A base from the client is never trusted on its own (the bot's mirror also holds
-// unmerged edit branches): it must be the head. Task 8 also allows the base of one of u's own drafts.
-func (s *Service) base(_ context.Context, u *auth.User, training, sha string) (*content.Training, error) {
-	t, head, err := s.Edits.Authorize(u, training)
+// base is the training at sha for u: the head, or the base of one of u's own drafts of that training. A base from the
+// client is never trusted on its own: the bot's mirror also holds unmerged edit branches.
+func (s *Service) base(ctx context.Context, u *auth.User, training, sha string) (*content.Training, error) {
+	_, head, err := s.Edits.Authorize(u, training)
 	if err != nil {
 		return nil, err
 	}
 	if sha != head {
-		return nil, apperr.Wrap(apperr.Conflict, "the content changed since this draft started; rebase it")
+		var mine bool
+		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM content_drafts WHERE author = $1 AND training = $2 AND base_sha = $3)`,
+			strings.ToLower(u.Email), training, sha).Scan(&mine); err != nil {
+			return nil, err
+		}
+		if !mine {
+			return nil, apperr.Wrap(apperr.Conflict, "the content changed since this draft started; rebase it")
+		}
 	}
-	return t, nil
+	t, _, err := s.Edits.At(ctx, u, training, sha)
+	return t, err
 }
 
 // bounded runs fn with checkTimeout, one at a time per user. The user's slot is released only when fn really ends,

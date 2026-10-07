@@ -120,10 +120,10 @@ func TestEditPermissions(t *testing.T) {
 	if _, _, err := f.s.Files(f.trainee, "t1"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("an enrolled trainee must not read the answer keys: %v", err)
 	}
-	if _, err := f.s.File(f.trainee, "t1", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
+	if _, err := f.s.File(context.Background(), f.trainee, "t1", "", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("file: %v", err)
 	}
-	if body, err := f.s.File(f.leader, "t1", "modules/m1/quiz.yaml"); err != nil || !strings.Contains(body, "answer: 1") {
+	if body, err := f.s.File(context.Background(), f.leader, "t1", "", "modules/m1/quiz.yaml"); err != nil || !strings.Contains(body, "answer: 1") {
 		t.Fatalf("a leader reads the file: %q %v", body, err)
 	}
 	if _, err := f.propose(t, f.trainee, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Forbidden) {
@@ -207,7 +207,7 @@ func TestEditPathRules(t *testing.T) {
 		if _, err := f.propose(t, f.leader, map[string]string{p: "x"}); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%q: %v", p, err)
 		}
-		if _, err := f.s.File(f.leader, "t1", p); !errors.Is(err, apperr.Invalid) {
+		if _, err := f.s.File(context.Background(), f.leader, "t1", "", p); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("file %q: %v", p, err)
 		}
 	}
@@ -371,7 +371,7 @@ func TestProposeIsTeamScoped(t *testing.T) {
 	if _, _, err := f.s.Files(other, "t1"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("files: %v", err)
 	}
-	if _, err := f.s.File(other, "t1", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
+	if _, err := f.s.File(context.Background(), other, "t1", "", "modules/m1/quiz.yaml"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("file: %v", err)
 	}
 	if _, err := f.propose(t, other, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Forbidden) {

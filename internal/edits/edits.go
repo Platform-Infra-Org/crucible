@@ -39,7 +39,9 @@ type Service struct {
 	Repo   func(training string) *gitsync.ContentRepo // the bot's clone of a training's repo, one value per repo; nil when unknown
 	Notify Notifier
 	Resync func(ctx context.Context) error // re-read git after a merge so trainees see it at once
-	Log    *slog.Logger
+	// Version is training id at an older sha (drafts' bases); nil: head only.
+	Version func(ctx context.Context, id, sha string) *content.Training
+	Log     *slog.Logger
 
 	locks sync.Map // training id → chan struct{}: one decision at a time per training
 }
@@ -151,7 +153,7 @@ type TrainingRef struct {
 }
 
 const (
-	maxTitle   = 200
+	MaxTitle   = 200 // an edit's or a draft's title
 	maxNote    = 2000
 	maxOpen    = 5  // pending edits per author
 	maxPerHour = 10 // edits proposed per author per hour
@@ -161,7 +163,8 @@ const (
 // gitTimeout bounds every git section (fetch, merge, push) so a hanging git host fails the request instead of piling up.
 var gitTimeout = 2 * time.Minute
 
-func clean(s string) string { return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "") }
+// Clean drops NUL bytes and invalid UTF-8 from free text (titles, notes).
+func Clean(s string) string { return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "") }
 
 func (s *Service) state() (*gitsync.State, error) {
 	st := s.State()
@@ -269,11 +272,12 @@ func (s *Service) Files(u *auth.User, training string) (string, []FileInfo, erro
 	return sha, files, err
 }
 
-func (s *Service) File(u *auth.User, training, rel string) (string, error) {
+// File is one editable file of training at sha ("" is the head). sha is vouched for by the caller, as for At.
+func (s *Service) File(ctx context.Context, u *auth.User, training, sha, rel string) (string, error) {
 	if err := gitsync.CheckPath(rel); err != nil {
 		return "", err
 	}
-	_, t, _, err := s.training(u, training)
+	t, _, err := s.At(ctx, u, training, sha)
 	if err != nil {
 		return "", err
 	}
@@ -285,6 +289,22 @@ func (s *Service) File(u *auth.User, training, rel string) (string, error) {
 		return "", apperr.Wrap(apperr.NotFound, "file not found")
 	}
 	return string(b), nil
+}
+
+// At is training at sha ("" is the head) for someone allowed to edit it: the head, or an older commit a draft started
+// on. The caller vouches for sha (the head or a draft's stored base), never a value straight from a request: the
+// mirror also holds unmerged edit branches. Permission is decided at the head.
+func (s *Service) At(ctx context.Context, u *auth.User, training, sha string) (*content.Training, string, error) {
+	_, t, head, err := s.training(u, training)
+	if err != nil || sha == "" || sha == head {
+		return t, head, err
+	}
+	if s.Version != nil {
+		if old := s.Version(ctx, training, sha); old != nil {
+			return old, head, nil
+		}
+	}
+	return nil, head, apperr.Wrap(apperr.Conflict, "the version this draft started on is no longer available; rebase it")
 }
 
 // Authorize returns the training's head version and sha when u may propose edits to it: never someone enrolled in it.
@@ -387,8 +407,8 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if in.BaseSHA != sha {
 		return nil, apperr.Wrap(apperr.Conflict, "the content changed since you opened it; reload and redo your change")
 	}
-	title := strings.TrimSpace(clean(in.Title))
-	if title == "" || len(title) > maxTitle {
+	title := strings.TrimSpace(Clean(in.Title))
+	if title == "" || len(title) > MaxTitle {
 		return nil, apperr.Wrap(apperr.Invalid, "give the edit a title of at most 200 characters")
 	}
 	repo := s.Repo(in.Training)
@@ -612,7 +632,7 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 	if err := mayDecide(st, u, e, to); err != nil {
 		return nil, err
 	}
-	note = strings.TrimSpace(clean(note))
+	note = strings.TrimSpace(Clean(note))
 	if len(note) > maxNote {
 		note = strings.ToValidUTF8(note[:maxNote], "")
 	}

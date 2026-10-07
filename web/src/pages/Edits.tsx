@@ -27,14 +27,14 @@ export function EditsPage() {
   return (
     <section className="page">
       <h1>Edits</h1>
-      <p>
-        <label>Training{' '}
+      <div className="toolbar fit">
+        <label>Training
           <select value={training} onChange={(e) => setPick(e.target.value)}>
             {trainings.data.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
           </select>
-        </label>{' '}
-        <button disabled={!training} onClick={() => nav(`/edits/new?training=${encodeURIComponent(training)}`)}>Start an edit</button>
-      </p>
+        </label>
+        <button className="primary" disabled={!training} onClick={() => nav(`/edits/new?training=${encodeURIComponent(training)}`)}>Start an edit</button>
+      </div>
       <h2>My drafts</h2>
       <p role="alert" className="error">{msg}</p>
       {(drafts.data ?? []).length === 0 && <p className="muted">No drafts. Start an edit to open the editor.</p>}

@@ -75,13 +75,26 @@ func TestConcurrentRemovalsLeaveOneAdmin(t *testing.T) {
 	if _, err := hold.Exec(ctx, `SELECT email FROM admins FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
+	defer hold.Rollback(ctx) //nolint:errcheck // no-op after commit
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, e := range []string{"a@x", "b@x"} {
 		wg.Add(1)
 		go func() { defer wg.Done(); errs[i] = s.RemoveAdmin(ctx, "a@x", e) }()
 	}
-	time.Sleep(500 * time.Millisecond) // without FOR UPDATE both removals finish in this window
+	// Release only once both removals are blocked on the lock, so the overlap is certain rather than timed.
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var waiting int
+		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d backends in lock wait; both removals must be waiting", waiting)
+		}
+	}
 	if err := hold.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}

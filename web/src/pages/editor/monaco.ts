@@ -53,8 +53,8 @@ let yamlReady = false
 export function setupYaml(schemas: Record<string, object>) {
   if (yamlReady) return
   yamlReady = true
-  // Hovers end with a link to the Docs (/docs/…, which Monaco parses as a file: URI). Open it in a new tab so the draft
-  // stays open.
+  // Hovers end with a link to the Docs, written file:///docs/… because Monaco drops relative links from hovers. Open its
+  // path in a new tab so the draft stays open.
   monaco.editor.registerLinkOpener({
     open(uri) {
       if (uri.scheme !== 'file' || !uri.path.startsWith('/docs/')) return false

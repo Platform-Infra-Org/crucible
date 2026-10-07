@@ -24,8 +24,9 @@ var itemSchema = map[string]any{"type": "object", "minProperties": 1, "maxProper
 	}}
 
 // docsLink ends every hover (spec §4: editor hovers link to the building-blocks reference). Monaco renders
-// markdownDescription as Markdown, so the plain description is escaped first.
-const docsLink = "[Building blocks: every key](/docs/authors/building-blocks)"
+// markdownDescription as Markdown, so the plain description is escaped first. Monaco drops relative links from hovers;
+// a file: URI survives, and the editor's link opener opens its path (/docs/…) in a new tab.
+const docsLink = "[Building blocks: every key](file:///docs/authors/building-blocks)"
 
 var mdEscape = strings.NewReplacer(`\`, `\\`, "*", `\*`, "_", `\_`, "<", `\<`, ">", `\>`, "[", `\[`, "]", `\]`, "`", "\\`")
 

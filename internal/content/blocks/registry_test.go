@@ -202,8 +202,9 @@ func TestSchemaHasHoverText(t *testing.T) {
 	if d, ok := typ["description"].(string); !ok || d == "" || len(typ["enum"].([]any)) != 10 {
 		t.Fatalf("question type: %v", typ)
 	}
-	// spec §4: hovers link to the building-blocks reference (Monaco renders markdownDescription as Markdown)
-	if md, _ := typ["markdownDescription"].(string); !strings.HasPrefix(md, typ["description"].(string)) || !strings.Contains(md, "](/docs/authors/building-blocks)") {
+	// spec §4: hovers link to the building-blocks reference (Monaco renders markdownDescription as Markdown). Monaco drops
+	// relative links from hovers, so the link is a file: URI, which the editor's link opener opens as /docs/… in a new tab.
+	if md, _ := typ["markdownDescription"].(string); !strings.HasPrefix(md, typ["description"].(string)) || !strings.Contains(md, "](file:///docs/authors/building-blocks)") {
 		t.Fatalf("question type hover: %q", md)
 	}
 }

@@ -40,6 +40,8 @@ export default function Ide() {
   const [view, setView] = useState<'files' | 'editor' | 'preview'>('editor') // below tablet width only
   const explorerRef = useRef<HTMLDivElement>(null)
   const saver = useMemo(() => serialSaves<DraftInfo>(), [])
+  const asked = useRef(new Set<string>()) // originals requested for the Changes panel (once each; a failure is not retried)
+  const vseq = useRef(0) // latest validate request
   const pending = useRef(0) // saves queued or in flight
 
   const load = useCallback(async () => {
@@ -47,7 +49,7 @@ export default function Ide() {
     setupYaml(await api<Record<string, object>>(`/api/authoring/schema?training=${encodeURIComponent(d.training)}`))
     const kept = currentPaths(f.filter((x) => x.editable).map((x) => x.path), fromOps(d.ops))
     saver.set(d)
-    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBaseText({}) // open tabs refetch their base text
+    setDraft(d); setFiles(f); setWork(fromOps(d.ops)); setTitle(d.title); setBaseText({}); asked.current.clear() // open tabs refetch their base text
     setTabs((t) => t.filter((p) => kept.includes(p))); setActive((a) => (kept.includes(a) ? a : ''))
     setSave({ kind: 'saved', at: Date.now() })
   }, [id, saver])
@@ -75,6 +77,17 @@ export default function Ide() {
       .then(({ content }) => setBaseText((b) => ({ ...b, [o]: content })))
       .catch((e: Error) => setMsg(e.message))
   }, [active, base, work, baseText, id])
+  useEffect(() => { // originals of changed files, for their diffs: each fetched once, a failure reported not retried
+    if (panel !== 'changes') return
+    for (const c of changes) {
+      const o = c.kind === 'added' ? undefined : (c.from ?? c.path)
+      if (o === undefined || o in baseText || asked.current.has(o)) continue
+      asked.current.add(o)
+      api<{ content: string }>(`/api/authoring/drafts/${id}/file?path=${encodeURIComponent(o)}`)
+        .then(({ content }) => setBaseText((b) => ({ ...b, [o]: content })))
+        .catch(() => setMsg(`Couldn't load the original of ${o}.`))
+    }
+  }, [panel, changes, baseText, id])
   const change = (next: DraftOps) => { setWork(next); setSave((s) => (canAutosave(s) ? { kind: 'dirty' } : s)) }
   const open = async (p: string) => {
     try { await loadBase(origin(base, work, p)) } catch (e) { return setMsg((e as Error).message) }
@@ -136,12 +149,17 @@ export default function Ide() {
 
   useEffect(() => { // problems about a second after typing stops; a 409 means a check is still running, and the next change re-runs it
     if (!draft || problem) return
-    const t = setTimeout(() => {
-      api<{ problems: Problem[] }>('/api/authoring/validate', { method: 'POST', json: { training: draft.training, base_sha: draft.base_sha, ops } })
-        .then((r) => setProblems(r.problems))
-        .catch((e: ApiError) => { if (e.status !== 409) setMsg(e.message) })
-    }, VALIDATE_MS)
-    return () => clearTimeout(t)
+    const seq = ++vseq.current
+    const run = (retry: boolean) => api<{ problems: Problem[] }>('/api/authoring/validate', { method: 'POST', json: { training: draft.training, base_sha: draft.base_sha, ops } })
+      .then((r) => { if (seq === vseq.current) setProblems(r.problems) }) // an older answer never overwrites a newer one
+      .catch((e: ApiError) => {
+        if (seq !== vseq.current) return
+        if (e.status === 409 && retry) retries = setTimeout(() => run(false), 1500) // another check is running: once more
+        else if (e.status !== 409) setMsg(e.message)
+      })
+    let retries: ReturnType<typeof setTimeout> | undefined
+    const t = setTimeout(() => run(true), VALIDATE_MS)
+    return () => { clearTimeout(t); clearTimeout(retries) }
   }, [draft?.training, draft?.base_sha, ops, problem]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { // Ctrl/Cmd+P outside the editor too (Monaco handles it inside)
@@ -155,7 +173,7 @@ export default function Ide() {
   const jump = async (p: Problem) => { await open(p.file); setView('editor'); setReveal({ line: p.line, n: Date.now() }) }
   const diffOf = (c: Change): string | undefined => {
     const o = c.kind === 'added' ? undefined : (c.from ?? c.path)
-    if (o !== undefined && !(o in baseText)) { loadBase(o).catch(() => {}); return undefined }
+    if (o !== undefined && !(o in baseText)) return undefined
     const before = o === undefined ? '' : baseText[o]
     return unifiedDiff(o, c.kind === 'deleted' ? undefined : c.path, before, c.kind === 'deleted' ? '' : textOf(c.path) ?? '')
   }

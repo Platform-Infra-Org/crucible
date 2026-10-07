@@ -262,7 +262,7 @@ func sortedEmails(in []string) []string {
 		out[i] = em(e)
 	}
 	slices.Sort(out)
-	return out
+	return slices.Compact(out) // a set: repeats are not a change
 }
 
 // putRoster is the leader's route. SetTeam trusts its whole body, so a non-admin may not change the leader, the

@@ -389,10 +389,11 @@ func TestLeaderGuardSeesReorderedAndDuplicatedSeniors(t *testing.T) {
 		t.Fatalf("same senior in another case = %d %s", w.Code, w.Body)
 	}
 	v++
-	// a duplicate entry is still a different list: refused, not silently deduplicated
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "senior@x", "senior@x")); w.Code != 403 {
-		t.Errorf("duplicated senior = %d, want 403", w.Code)
+	// an accidental duplicate is the same set of people: not a change
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "senior@x", "senior@x")); w.Code != 200 {
+		t.Fatalf("duplicated senior = %d %s, want 200", w.Code, w.Body)
 	}
+	v++
 	// reordered with an extra person
 	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "new@x", "senior@x")); w.Code != 403 {
 		t.Errorf("added senior = %d, want 403", w.Code)
@@ -416,10 +417,13 @@ func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"`+repo+`"}`); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
+	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"ssh-101","repo":"ssh://git@git.example.com/o/s.git"}`); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
 	if got := f.snap.Trainings["cred-101"].Repo; got != repo {
 		t.Errorf("stored repo = %q, cloning needs the credentials", got)
 	}
-	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || !strings.Contains(w.Body.String(), "git.example.com/org/r.git") {
+	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || !strings.Contains(w.Body.String(), "https://deploy@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
 		t.Errorf("list = %s", w.Body)
 	}
 	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
@@ -431,8 +435,8 @@ func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%'`); n != 0 {
 		t.Errorf("%d audit rows hold the repo credentials", n)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 3 {
-		t.Errorf("audit rows with the redacted repo = %d, want 3 (add, repoint, remove)", n)
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 4 {
+		t.Errorf("audit rows with the redacted repo = %d, want 4 (two adds, repoint, remove)", n)
 	}
 }
 

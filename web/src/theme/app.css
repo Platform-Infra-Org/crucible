@@ -248,3 +248,16 @@ meter { width: 8rem; vertical-align: middle; }
 .ide-status { display: flex; gap: 1rem; align-items: center; padding: .5rem 0; border-top: 1px solid var(--surface-2); }
 .explorer ul { list-style: none; padding: 0; margin: 0; }
 .explorer button.small, .ide-tabs button.small { padding: 0 .3rem; font-size: .8rem; }
+
+.ide-views { display: none; }
+.ide-activity { display: flex; gap: .25rem; flex-wrap: wrap; margin-bottom: .5rem; }
+.goto { position: fixed; top: 15vh; left: 50%; transform: translateX(-50%); width: min(600px, 90vw); background: var(--surface); border: 1px solid var(--accent); padding: .5rem; z-index: 20; }
+.goto input { width: 100%; }
+.goto ul { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+.goto [aria-selected='true'] { background: var(--surface-2); }
+.problems, .changes { list-style: none; padding: 0; margin: 0; }
+@media (max-width: 900px) {
+  .ide-views { display: flex; gap: .25rem; }
+  .ide-main { grid-template-columns: 1fr; }
+  .ide-main[data-view='files'] > :not(.ide-side), .ide-main[data-view='editor'] > :not(.ide-editor), .ide-main[data-view='preview'] > :not(.ide-preview) { display: none; }
+}

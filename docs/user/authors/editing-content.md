@@ -55,6 +55,27 @@ resumes.
 In `training.yaml`, `module.yaml`, `quiz.yaml` and `lab.yaml`, the editor suggests the keys that fit where you are,
 offers the allowed values, and shows what a key means when you hover over it.
 
+## Problems
+
+Crucible checks the training about a second after you stop typing, with the same rules as `crucible lint`. Problems
+show as squiggles in the file and are listed under **Problems**; click one to jump to its line.
+
+## Changes
+
+**Changes** lists what a reviewer will see, file by file, in the same diff view. Hidden characters are marked.
+
+## Keyboard
+
+- **Ctrl/Cmd+P** goes to a file.
+- **Ctrl/Cmd+Shift+P** opens the command palette.
+- **Ctrl/Cmd+F** and **Ctrl/Cmd+H** find and replace.
+- **Ctrl+Shift+F6** or **Ctrl+Alt+↑** leaves the editor.
+- Every panel is reachable with Tab.
+
+## Small screens
+
+On a narrow screen, Files, Editor and Preview become tabs.
+
 ## Leaving the editor
 
 The editor keeps the Tab key for indenting. To move focus out of it, press **Ctrl+Shift+F6** or **Ctrl+Alt+↑**.

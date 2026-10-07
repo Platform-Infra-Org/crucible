@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { api, type ApiError } from '../../api'
-import type { ContentEdit, DraftInfo, FileEntry } from '../../types'
+import type { ContentEdit, DraftInfo, FileEntry, Problem } from '../../types'
 import { ErrorBox } from '../../components/ErrorBox'
 import { Loader } from '../../components/Loader'
 import { opsProblem } from '../../lib/editLimits'
 import { CodeEditor } from './CodeEditor'
 import { Explorer } from './Explorer'
 import { Preview } from './Preview'
+import { ProblemsPanel } from './ProblemsPanel'
+import { ChangesPanel } from './ChangesPanel'
+import { GoToFile } from './GoToFile'
+import { unifiedDiff } from './diff'
 import { setupYaml } from './monaco'
 import { afterSave, canAutosave, saveLabel, serialSaves, type SaveState } from './autosave'
-import { changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type DraftOps } from './model'
+import { changeList, currentPaths, deletePath, emptyOps, fileText, fromOps, origin, putText, renamePath, toOps, type Change, type DraftOps } from './model'
 
 const AUTOSAVE_MS = 2000
+const VALIDATE_MS = 1000
 
 export default function Ide() {
   const id = Number(useParams().id)
@@ -28,6 +33,11 @@ export default function Ide() {
   const [msg, setMsg] = useState('')
   const [fatal, setFatal] = useState<ApiError>()
   const [now, setNow] = useState(() => Date.now())
+  const [problems, setProblems] = useState<Problem[]>([])
+  const [panel, setPanel] = useState<'explorer' | 'problems' | 'changes'>('explorer')
+  const [reveal, setReveal] = useState<{ line: number; n: number }>()
+  const [goto, setGoto] = useState(false)
+  const [view, setView] = useState<'files' | 'editor' | 'preview'>('editor') // below tablet width only
   const explorerRef = useRef<HTMLDivElement>(null)
   const saver = useMemo(() => serialSaves<DraftInfo>(), [])
   const pending = useRef(0) // saves queued or in flight
@@ -124,6 +134,32 @@ export default function Ide() {
     return () => window.removeEventListener('beforeunload', warn)
   }, [save.kind])
 
+  useEffect(() => { // problems about a second after typing stops; a 409 means a check is still running, and the next change re-runs it
+    if (!draft || problem) return
+    const t = setTimeout(() => {
+      api<{ problems: Problem[] }>('/api/authoring/validate', { method: 'POST', json: { training: draft.training, base_sha: draft.base_sha, ops } })
+        .then((r) => setProblems(r.problems))
+        .catch((e: ApiError) => { if (e.status !== 409) setMsg(e.message) })
+    }, VALIDATE_MS)
+    return () => clearTimeout(t)
+  }, [draft?.training, draft?.base_sha, ops, problem]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { // Ctrl/Cmd+P outside the editor too (Monaco handles it inside)
+    const k = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); setGoto(true) }
+    }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [])
+
+  const jump = async (p: Problem) => { await open(p.file); setView('editor'); setReveal({ line: p.line, n: Date.now() }) }
+  const diffOf = (c: Change): string | undefined => {
+    const o = c.kind === 'added' ? undefined : (c.from ?? c.path)
+    if (o !== undefined && !(o in baseText)) { loadBase(o).catch(() => {}); return undefined }
+    const before = o === undefined ? '' : baseText[o]
+    return unifiedDiff(o, c.kind === 'deleted' ? undefined : c.path, before, c.kind === 'deleted' ? '' : textOf(c.path) ?? '')
+  }
+
   const submit = async () => {
     setMsg('')
     if (!title.trim()) return setMsg("Give the draft a title first: it becomes the edit's title.")
@@ -152,10 +188,20 @@ export default function Ide() {
       {draft.state === 'in_review' && <p role="note">This draft is in review. <Link to={`/edits/${draft.edit_id}`}>Open the edit</Link> and withdraw it to keep working here.</p>}
       {save.kind === 'conflict' && <p role="alert" className="error">{save.reason} <button onClick={() => load().catch(setFatal)}>Reload</button></p>}
       <p role="alert" className="error">{msg}</p>
-      <div className="ide-main">
-        <div ref={explorerRef}>
-          <Explorer paths={paths} greyed={greyed} changed={new Set(changes.map((c) => c.path))} active={active} readOnly={readOnly}
-            onOpen={open} onNew={create} onRename={rename} onDelete={remove} />
+      <div role="tablist" aria-label="Editor views" className="ide-views">
+        {(['files', 'editor', 'preview'] as const).map((v) => <button key={v} role="tab" aria-selected={view === v} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
+      </div>
+      <div className="ide-main" data-view={view}>
+        <div ref={explorerRef} className="ide-side">
+          <div role="toolbar" aria-label="Panels" className="ide-activity">
+            <button aria-pressed={panel === 'explorer'} onClick={() => setPanel('explorer')}>Explorer</button>
+            <button aria-pressed={panel === 'problems'} onClick={() => setPanel('problems')}>Problems ({problems.length})</button>
+            <button aria-pressed={panel === 'changes'} onClick={() => setPanel('changes')}>Changes ({changes.length})</button>
+          </div>
+          {panel === 'explorer' && <Explorer paths={paths} greyed={greyed} changed={new Set(changes.map((c) => c.path))} active={active} readOnly={readOnly}
+            onOpen={(p) => { open(p); setView('editor') }} onNew={create} onRename={rename} onDelete={remove} />}
+          {panel === 'problems' && <ProblemsPanel problems={problems} known={(f) => paths.includes(f)} onJump={jump} />}
+          {panel === 'changes' && <ChangesPanel changes={changes} diffOf={diffOf} onOpen={(p) => { open(p); setView('editor') }} />}
         </div>
         <div className="ide-editor">
           <div className="ide-tabs" role="toolbar" aria-label="Open files">
@@ -170,16 +216,18 @@ export default function Ide() {
           </div>
           {active && textOf(active) === undefined && <Loader label="Opening the file…" />}
           {active && textOf(active) !== undefined
-            ? <CodeEditor draftId={id} path={active} text={textOf(active)!} readOnly={readOnly} markers={[]} onChange={edit} onLeave={leave} onGoToFile={() => {}} />
+            ? <CodeEditor draftId={id} path={active} text={textOf(active)!} readOnly={readOnly} markers={problems.filter((p) => p.file === active).map((p) => ({ line: p.line, message: p.msg }))} reveal={reveal} onChange={edit} onLeave={leave} onGoToFile={() => setGoto(true)} />
             : !active && <p className="muted">Open a file from the explorer.</p>}
         </div>
         {active && <div className="ide-preview" data-testid="edit-preview"><Preview path={active} text={textOf(active) ?? ''} read={textOf} /></div>}
       </div>
       <footer className="ide-status" role="status" aria-live="polite">
         <span>{saveLabel(save, now)}</span>
+        <span>{problems.length} problems</span>
         <span>base {draft.base_sha.slice(0, 7)}</span>
         <button disabled={readOnly} onClick={submit}>Submit for review</button>
       </footer>
+      {goto && <GoToFile paths={paths} onPick={(p) => { setGoto(false); open(p); setView('editor') }} onClose={() => setGoto(false)} />}
     </section>
   )
 }

@@ -26,7 +26,7 @@ export function RebasePanel({ conflicts, onDone, onCancel }: { conflicts: Confli
     else setI(next.findIndex((x) => x === undefined))
   }
   const moved = conflicts.find((x) => x.op.op === 'rename' && x.op.to === c.path && x.path === x.op.from)?.path
-  const what = c.op.op === 'put' && moved ? `You renamed ${moved} to it and changed it; ${moved} changed upstream (left).`
+  const what = c.op.op === 'put' && moved ? `You renamed ${moved} to it and changed it; ${moved} ${c.head_missing ? 'was deleted upstream. Keep your side as a new file, or drop it.' : 'changed upstream (left).'}`
     : c.op.op === 'put' ? (c.head_missing ? 'You changed it; it was deleted or moved upstream.' : 'Changed both here and upstream.')
     : c.op.op === 'delete' ? 'You deleted it; it changed upstream.' : c.path === c.op.to ? `You renamed ${c.op.from} to it; it now exists upstream.` : `You renamed it to ${c.op.to}; it changed upstream.`
   return (

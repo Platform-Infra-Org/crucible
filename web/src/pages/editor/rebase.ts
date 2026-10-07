@@ -14,7 +14,8 @@ export function canKeep(c: Conflict): boolean {
 
 // resolveOps applies the author's choice for each conflict to the draft's ops; ops without a conflict stay as they are.
 // One op can have two conflicts (a rename whose source changed and whose target appeared): dropping either drops it.
-// Dropping a rename also drops the edit of its new name (rename c→d + put d), which would otherwise leave a copy at d.
+// Dropping a rename (c→d) moves the kept edit of its new name back to c, so it neither leaves a copy at d nor is lost.
+// It stays at d, as a new file, when c is gone upstream or the draft writes c again.
 export function resolveOps(ops: EditOp[], conflicts: Conflict[], choices: Choice[]): EditOp[] {
   const kept = ops.flatMap((op) => {
     const mine = choices.filter((_, i) => same(conflicts[i].op, op))
@@ -22,8 +23,14 @@ export function resolveOps(ops: EditOp[], conflicts: Conflict[], choices: Choice
     const put = mine.findLast((ch): ch is { put: string } => typeof ch === 'object')
     return op.op === 'put' && put ? [{ ...op, content: put.put }] : [op]
   })
-  const gone = ops.filter((op) => op.op === 'rename' && !kept.includes(op)).map((op) => (op.op === 'rename' ? op.to : ''))
-  return kept.filter((op) => !(op.op === 'put' && gone.includes(op.path)))
+  const back = new Map<string, string>() // dropped rename's target → its source, where the target's edit goes
+  for (const op of ops) {
+    if (op.op !== 'rename' || kept.includes(op)) continue
+    const sourceGone = conflicts.some((c) => same(c.op, op) && c.path === op.from && c.head_missing)
+    const rewritten = kept.some((k) => k.op === 'put' && k.path === op.from)
+    if (!sourceGone && !rewritten) back.set(op.to, op.from)
+  }
+  return kept.map((op) => (op.op === 'put' && back.has(op.path) ? { ...op, path: back.get(op.path)! } : op))
 }
 
 // BaseTexts are the draft's original file texts, all from one base commit.

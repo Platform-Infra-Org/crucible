@@ -33,10 +33,25 @@ test('a base text fetched for an older base is ignored once the draft moved to a
   expect(withBase(now, 'new', 'm/b.md', 'new b')).toEqual({ sha: 'new', text: { 'm/a.md': 'new a', 'm/b.md': 'new b' } })
 })
 
-test('dropping a rename also drops the edit of its new name, so it never turns into a copy', () => {
+test('dropping a rename moves the edit of its new name back to the old name, so it is neither lost nor a copy', () => {
   const edit = { op: 'put' as const, path: 'm/d.md', content: 'mine' }
   const conflicts = [c(ren, 'm/c.md'), { ...c(edit, 'm/d.md'), head: 'theirs' }]
-  expect(resolveOps([ren, edit], conflicts, ['drop', { put: 'merged' }])).toEqual([])
+  expect(resolveOps([ren, edit], conflicts, ['drop', { put: 'merged' }])).toEqual([{ ...edit, path: 'm/c.md', content: 'merged' }])
   expect(resolveOps([ren, edit], conflicts, ['keep', { put: 'merged' }])).toEqual([ren, { ...edit, content: 'merged' }])
   expect(resolveOps([ren, edit], conflicts, ['keep', 'drop'])).toEqual([ren]) // the renamed file takes upstream's text
+})
+
+// Review Focus 5: upstream deleted the file the draft renamed and edited. The rename can only be dropped; the edited text
+// the author keeps stays, as a new file at the new name.
+test('dropping a rename whose source is gone upstream keeps the edit of its new name as a new file', () => {
+  const edit = { op: 'put' as const, path: 'm/d.md', content: 'mine' }
+  const conflicts = [c(ren, 'm/c.md', true), c(edit, 'm/d.md', true)]
+  expect(resolveOps([ren, edit], conflicts, ['drop', { put: 'kept' }])).toEqual([{ ...edit, content: 'kept' }])
+  expect(resolveOps([ren, edit], conflicts, ['drop', 'drop'])).toEqual([])
+})
+
+test('a dropped rename whose old name the draft wrote again keeps the edit at the new name', () => {
+  const edit = { op: 'put' as const, path: 'm/d.md', content: 'mine' }
+  const again = { op: 'put' as const, path: 'm/c.md', content: 'new c' }
+  expect(resolveOps([ren, edit, again], [c(ren, 'm/c.md')], ['drop'])).toEqual([edit, again])
 })

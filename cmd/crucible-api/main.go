@@ -165,6 +165,17 @@ func run(ctx context.Context) error {
 			return st.Platform
 		}
 		return nil
+	}, Content: func(team, training string) (title, running, head string) {
+		title = training
+		if st := syncer.Current(); st != nil {
+			if t, _ := st.ProgramTraining(team, training); t != nil {
+				title = t.Title
+			} else if t := st.Training(training, st.Heads[training]); t != nil {
+				title = t.Title
+			}
+			running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
+		}
+		return
 	}}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),

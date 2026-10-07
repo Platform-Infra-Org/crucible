@@ -6,12 +6,14 @@ import type { Changes, ProgramConfig, TeamView } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { Conflict, reportSaveError } from '../components/Conflict'
-import { parseEmails } from '../lib/lists'
+import { programRequest } from '../lib/teamRequests'
+
+const STALE = 'Someone changed this program, reload to see the latest.'
 
 export function ProgramSettingsPage() {
   const { team, training } = useParams()
-  const { data, error, reload } = useFetch<TeamView>(`/api/teams/${team}`)
-  const [saved, setSaved] = useState<string>()
+  const { data, error, reload } = useFetch<TeamView>(`/api/org/teams/${team}`)
+  const [saved, setSaved] = useState(false)
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Unrolling the blueprint…" />
   const prog = data.programs.find((p) => p.training === training)
@@ -20,14 +22,14 @@ export function ProgramSettingsPage() {
     <section className="page">
       <Link to={`/teams/${data.id}`}>← {data.name}</Link>
       <h1>Program settings: {prog.title}</h1>
-      <p role="status" className="pass">{saved ? `Saved to git (${saved})` : ''}</p>
-      {prog.can_manage && <ContentVersion key={prog.running_sha + prog.head_sha + prog.pinned_ref} team={data} prog={prog} onDone={reload} />}
-      <ProgramForm key={data.platform_sha} team={data} prog={prog} onReload={reload} onStart={() => setSaved(undefined)} onSaved={(sha) => { setSaved(sha.slice(0, 7)); reload() }} />
+      <p role="status" className="pass">{saved ? 'Program saved.' : ''}</p>
+      {prog.can_manage && <ContentVersion key={prog.running_sha + prog.head_sha + prog.pinned_ref + prog.version} team={data} prog={prog} onDone={reload} />}
+      <ProgramForm key={prog.version} team={data} prog={prog} onReload={reload} onStart={() => setSaved(false)} onSaved={() => { setSaved(true); reload() }} />
     </section>
   )
 }
 
-function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () => void; team: TeamView; prog: ProgramConfig; onSaved: (sha: string) => void; onReload: () => void }) {
+function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () => void; team: TeamView; prog: ProgramConfig; onSaved: () => void; onReload: () => void }) {
   // Enrolled people who left the roster stay listed so they can be removed.
   const people = [...new Set([team.leader, ...team.seniors, ...team.members, ...team.trainees, ...prog.enrolled].map((p) => p.toLowerCase()))]
   const [enrolled, setEnrolled] = useState(() => new Set(prog.enrolled.map((p) => p.toLowerCase())))
@@ -55,11 +57,9 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
     setConflict(false)
     onStart()
     try {
-      const res = await api<{ sha: string }>(`/api/teams/${team.id}/programs/${prog.training}`, { method: 'PUT', json: {
-        base_sha: team.platform_sha, enrolled: [...enrolled],
-        roles: { manager: parseEmails(managers), scorers: parseEmails(scorers), approvers: parseEmails(approvers) },
-        schedule, lab_defaults: { ttl, idle_timeout: idle, max_extension: ext }, budget_usd_month: Number(budget) || 0, review_self_reported: reviewSelf } })
-      onSaved(res.sha)
+      const r = programRequest(team.id, prog, { enrolled, managers, scorers, approvers, schedule, ttl, idle, ext, budget, reviewSelf })
+      await api(r.path, { method: 'PUT', json: r.json })
+      onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))
     } finally {
@@ -69,7 +69,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
   const off = !prog.can_manage || busy
   return (
     <form className="stack" onSubmit={save}>
-      {conflict && <Conflict onReload={onReload} />}
+      {conflict && <Conflict onReload={onReload} message={STALE} />}
       {!prog.can_manage && <p className="muted">Read-only — only the team leader or a program manager can change this.</p>}
       <fieldset className="stack" disabled={off}>
         <legend>Enrolled</legend>
@@ -85,7 +85,7 @@ function ProgramForm({ team, prog, onSaved, onReload, onStart }: { onStart: () =
       </fieldset>
       <fieldset className="stack" disabled={off}>
         <legend>Labs</legend>
-        {prog.inline_schedule && <p>Inline schedule (edit in git): <code>{prog.inline_schedule}</code></p>}
+        {prog.inline_schedule && !schedule && <p className="muted">This program keeps its own schedule windows until you pick a named schedule.</p>}
         <label>Schedule
           <select value={schedule} onChange={(e) => setSchedule(e.target.value)}>
             <option value="">Any time</option>
@@ -109,6 +109,7 @@ function ContentVersion({ team, prog, onDone }: { team: TeamView; prog: ProgramC
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const base = `/api/teams/${team.id}/programs/${prog.training}`
+  const orgBase = `/api/org/teams/${team.id}/programs/${prog.training}`
   const act = async (fn: () => Promise<void>) => {
     if (busy) return
     setBusy(true)
@@ -120,13 +121,13 @@ function ContentVersion({ team, prog, onDone }: { team: TeamView; prog: ProgramC
     } finally { setBusy(false) }
   }
   const pin = (ref: string) => act(async () => {
-    await api(`${base}/pin`, { method: 'PUT', json: { base_sha: team.platform_sha, ref } })
+    await api(`${orgBase}/pin`, { method: 'PUT', json: { sha: ref } })
     onDone()
   })
   return (
     <section className="stack">
       <h2>Content version</h2>
-      {conflict && <Conflict onReload={onDone} />}
+      {conflict && <Conflict onReload={onDone} message={STALE} />}
       <p>Runs {prog.running_sha ? <code>{prog.running_sha.slice(0, 7)}</code> : 'the current version'} {prog.pinned_ref ? '(pinned)' : '(follows the branch head)'}</p>
       {prog.running_sha !== prog.head_sha && (
         <>

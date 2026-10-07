@@ -4,15 +4,15 @@ export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
 export type ProgramConfig = {
-  training: string; title: string; enrolled: string[]; roles: Roles; schedule: string; inline_schedule?: string
+  training: string; title: string; version: number; inline_schedule?: object; enrolled: string[]; roles: Roles; schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string
 }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
 export type TeamView = {
   id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; budget?: { monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
-  available_trainings: { id: string; title: string }[]; schedules: string[]; platform_sha: string
+  mentors: Record<string, string>; budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
+  available_trainings: { id: string; title: string }[]; schedules: string[]; version: number
   can_edit_team: boolean; is_admin: boolean
 }
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }

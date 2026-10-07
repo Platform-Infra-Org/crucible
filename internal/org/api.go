@@ -26,6 +26,8 @@ type APIDeps struct {
 	Platform func() *config.Platform
 	Refresh  func(context.Context) error
 	CheckPin func(ctx context.Context, training, sha string) error
+	// Content names a training and the commits it runs and tracks, for the team page. Nil: the id, no commits.
+	Content func(team, training string) (title, running, head string)
 }
 
 type api struct {
@@ -53,7 +55,12 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))
+	r.Get("/api/org/teams/{id}", a.handle(a.getTeam))
 	r.Put("/api/org/teams/{id}/roster", a.handle(a.putRoster))
+	r.Put("/api/org/teams/{id}/budget", a.admin(a.putBudget))
+	r.Put("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(putProgram)))
+	r.Post("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(postProgram)))
+	r.Delete("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(deleteProgram)))
 	r.Put("/api/org/teams/{team}/programs/{training}/pin", a.handle(a.putPin))
 }
 

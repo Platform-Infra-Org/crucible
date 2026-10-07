@@ -1,21 +1,25 @@
 import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
 import type { TeamSummary, TeamView } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
+import { useMe } from '../me'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { toast } from '../lib/alerts'
-import { formatMentors, parseEmails, parseMentors } from '../lib/lists'
+import { formatMentors } from '../lib/lists'
+import { budgetRequest, rosterRequest } from '../lib/teamRequests'
 
 const usd = (n: number) => `$${n.toFixed(2)}`
+const STALE = 'Someone changed this team, reload to see the latest.'
 
 export function TeamsIndex() {
   const { data, error } = useFetch<TeamSummary[]>('/api/teams')
+  const { me } = useMe()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Gathering the smiths…" />
-  if (data.length === 1) return <Navigate to={`/teams/${data[0].id}`} replace />
+  if (data.length === 1 && !me.is_admin) return <Navigate to={`/teams/${data[0].id}`} replace />
   return (
     <section className="page">
       <h1>Teams</h1>
@@ -25,23 +29,58 @@ export function TeamsIndex() {
           <li key={t.id}><Link to={`/teams/${t.id}`}>{t.name}</Link> <span className="muted">{t.role}</span></li>
         ))}
       </ul>
+      {me.is_admin && <CreateTeam />}
     </section>
+  )
+}
+
+// An admin starts a team here; the leader and the rest of the roster follow on the team's own page.
+export function CreateTeam() {
+  const navigate = useNavigate()
+  const [id, setId] = useState('')
+  const [name, setName] = useState('')
+  const [leader, setLeader] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const create = async (e: FormEvent) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setStatus('')
+    try {
+      await api(`/api/admin/teams/${encodeURIComponent(id.trim())}`, { method: 'POST', json: { name: name.trim(), leader: leader.trim() } })
+      navigate(`/teams/${encodeURIComponent(id.trim())}`)
+    } catch (err) {
+      setStatus(err instanceof ApiError && err.status === 409 ? `A team called ${id.trim()} already exists.` : (err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form className="stack" onSubmit={create}>
+      <h2>Start a team</h2>
+      <label>Team id (short, no spaces) <input required value={id} onChange={(e) => setId(e.target.value)} /></label>
+      <label>Name <input required value={name} onChange={(e) => setName(e.target.value)} /></label>
+      <label>Leader email <input required type="email" value={leader} onChange={(e) => setLeader(e.target.value)} /></label>
+      <button className="primary" disabled={busy}>Create team</button>
+      <p role="status" className="fail">{status}</p>
+    </form>
   )
 }
 
 export function TeamPage() {
   const { team } = useParams()
-  const { data, error, reload } = useFetch<TeamView>(`/api/teams/${team}`)
+  const { data, error, reload } = useFetch<TeamView>(`/api/org/teams/${team}`)
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Gathering the smiths…" />
   return (
     <section className="page">
       <h1>{data.name}</h1>
       <p className="lede">Led by {data.leader} · <Link to={`/teams/${data.id}/journey`}>Journey</Link></p>
-      <Roster key={`r-${data.platform_sha}`} team={data} onSaved={reload} />
-      <Programs key={`p-${data.platform_sha}`} team={data} onConflict={reload} />
+      <Roster key={`r-${data.version}`} team={data} onSaved={reload} />
+      <Programs key={`p-${data.id}-${data.programs.map((p) => p.version).join('.')}-${data.available_trainings.length}`} team={data} onConflict={reload} />
       {data.is_admin && <RevokeAgents people={[data.leader, ...data.seniors, ...data.members, ...data.trainees]} />}
-      <Budget key={`b-${data.platform_sha}`} team={data} onSaved={reload} />
+      <Budget key={`b-${data.budget?.version}`} team={data} onSaved={reload} />
     </section>
   )
 }
@@ -70,10 +109,9 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
     e.preventDefault()
     setBusy(true)
     try {
-      await api(`/api/teams/${team.id}/roster`, { method: 'PUT', json: {
-        base_sha: team.platform_sha, seniors: parseEmails(seniors), members: parseEmails(members),
-        trainees: parseEmails(trainees), mentors: parseMentors(mentors) } })
-      toast('Saved to git')
+      const r = rosterRequest(team, { seniors, members, trainees, mentors })
+      await api(r.path, { method: 'PUT', json: r.json })
+      toast('Roster saved')
       onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))
@@ -84,8 +122,8 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
   return (
     <form className="stack" onSubmit={save}>
       <h2>People</h2>
-      <p className="muted">One email per line. Changes are committed to the platform repo.</p>
-      {conflict && <Conflict onReload={onSaved} />}
+      <p className="muted">One email per line. Saving replaces the roster.</p>
+      {conflict && <Conflict onReload={onSaved} message={STALE} />}
       <label>Seniors <textarea rows={3} value={seniors} onChange={(e) => setSeniors(e.target.value)} /></label>
       <label>Members <textarea rows={3} value={members} onChange={(e) => setMembers(e.target.value)} /></label>
       <label>Trainees <textarea rows={4} value={trainees} onChange={(e) => setTrainees(e.target.value)} /></label>
@@ -131,8 +169,8 @@ function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void
   const enroll = async () => {
     setBusy(true)
     try {
-      await api(`/api/teams/${team.id}/programs/${pick}`, { method: 'PUT', json: {
-        base_sha: team.platform_sha, enrolled: [], roles: { manager: [], scorers: [], approvers: [] }, schedule: '',
+      await api(`/api/org/teams/${team.id}/programs/${pick}`, { method: 'POST', json: {
+        enrolled: [], roles: { manager: [], scorers: [], approvers: [] }, schedule: '',
         lab_defaults: { ttl: '', idle_timeout: '', max_extension: '' }, budget_usd_month: 0 } })
       navigate(`/teams/${team.id}/programs/${pick}`)
     } catch (e) {
@@ -161,7 +199,7 @@ function Programs({ team, onConflict }: { team: TeamView; onConflict: () => void
           </tbody>
         </table>
       )}
-      {conflict && <Conflict onReload={() => { setConflict(false); onConflict() }} />}
+      {conflict && <Conflict onReload={() => { setConflict(false); onConflict() }} message={STALE} />}
       {team.can_edit_team && team.available_trainings.length > 0 && (
         <div className="row">
           <select aria-label="Training to enroll" value={pick} onChange={(e) => setPick(e.target.value)}>
@@ -190,8 +228,9 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
     if (busy) return
     setBusy(true)
     try {
-      await api(`/api/teams/${team.id}/budget`, { method: 'PUT', json: { base_sha: team.platform_sha, monthly_usd: Number(monthly) || 0, hard_cap_usd: Number(cap) || 0 } })
-      toast('Saved to git')
+      const r = budgetRequest(team, monthly, cap)
+      await api(r.path, { method: 'PUT', json: r.json })
+      toast('Budget saved')
       onSaved()
     } catch (err) {
       setConflict(reportSaveError(err))
@@ -203,7 +242,7 @@ function Budget({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
     <form className="stack" onSubmit={save}>
       <h2>Budget</h2>
       <p className="muted">{summary} An alert goes out at 80%; requests that would pass the cap need an admin.</p>
-      {conflict && <Conflict onReload={onSaved} />}
+      {conflict && <Conflict onReload={onSaved} message="Someone changed this budget, reload to see the latest." />}
       <label>Monthly budget (USD) <input type="number" min={0} step="0.01" value={monthly} onChange={(e) => setMonthly(e.target.value)} /></label>
       <label>Hard cap (USD, empty = the budget) <input type="number" min={0} step="0.01" value={cap} onChange={(e) => setCap(e.target.value)} /></label>
       <button className="primary" disabled={busy}>Save budget</button>

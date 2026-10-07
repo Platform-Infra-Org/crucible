@@ -80,24 +80,31 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 
 	gitsync.AllowFileTransport = gitsync.AllowFileFromEnv(os.Getenv)
-	syncer := gitsync.New(env("CRUCIBLE_DATA_DIR", "/data"), must("CRUCIBLE_PLATFORM_REPO"), env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
-	if err := syncer.SyncOnce(ctx); err != nil {
-		slog.Warn("initial git sync failed; retrying in the background", "err", err)
+	orgStore := &org.Store{DB: pool}
+	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
+	platformRepo := os.Getenv("CRUCIBLE_PLATFORM_REPO")
+	syncer := gitsync.New(dataDir, platformRepo, env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
+	var writer *gitsync.Writer
+	if platformRepo == "" {
+		syncer.Config = orgStore.Platform
+		slog.Info("configuration source: Postgres (CRUCIBLE_PLATFORM_REPO is not set)")
+	} else {
+		slog.Info("configuration source: git platform repo (CRUCIBLE_PLATFORM_REPO is set)")
+		writer = &gitsync.Writer{URL: platformRepo, Branch: env("CRUCIBLE_PLATFORM_BRANCH", "main"),
+			Dir:  filepath.Join(dataDir, "writer"),
+			Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	}
-	writer := &gitsync.Writer{URL: must("CRUCIBLE_PLATFORM_REPO"), Branch: env("CRUCIBLE_PLATFORM_BRANCH", "main"),
-		Dir:  filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "writer"),
-		Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	if email := strings.ToLower(strings.TrimSpace(os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))); email != "" {
-		// Once per deployment, only while admins.yaml names no admin; sign-in still needs the IdP to verify this email.
-		// In the background (bounded by its own git timeout) so a slow remote never keeps the server from listening.
-		go func() {
-			if ok, err := configapi.BootstrapAdmin(ctx, pool, writer, email); err != nil {
-				slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
-			} else if ok {
-				slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
-				_ = syncer.SyncOnce(ctx)
-			}
-		}()
+		// Once per deployment, only while no admin exists; sign-in still needs the IdP to verify this email. Seeded
+		// before the first sync so the first snapshot already names the admin.
+		if ok, err := configapi.BootstrapAdmin(ctx, pool, email); err != nil {
+			slog.Warn("seeding the bootstrap admin failed; add an admin from the admin page", "err", err)
+		} else if ok {
+			slog.Info("seeded the bootstrap admin", "email", email)
+		}
+	}
+	if err := syncer.SyncOnce(ctx); err != nil {
+		slog.Warn("initial sync failed; retrying in the background", "err", err)
 	}
 	every, err := time.ParseDuration(env("CRUCIBLE_SYNC_INTERVAL", "60s"))
 	if err != nil {
@@ -139,7 +146,6 @@ func run(ctx context.Context) error {
 		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
 	// Task 9 moves config reads onto the store; until then the snapshot is still git's, so org writes are stored but
 	// not yet read back by the rest of the app.
-	orgStore := &org.Store{DB: pool}
 	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
 		if st := syncer.Current(); st != nil {
 			return st.Platform
@@ -274,7 +280,7 @@ func run(ctx context.Context) error {
 			defer repoMu.Unlock()
 			if repos[key] == nil {
 				repos[key] = &gitsync.ContentRepo{URL: ref.Repo, Branch: ref.Branch, Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "edits", key),
-					Name: writer.Name, Email: writer.Email}
+					Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 			}
 			return repos[key]
 		}}

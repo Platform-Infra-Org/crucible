@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"crucible/internal/audit"
-	"crucible/internal/gitsync"
 	"crucible/internal/org"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,7 +17,7 @@ func SeedAdmin(ctx context.Context, db *pgxpool.Pool, email string) (bool, error
 
 // BootstrapAdmin seeds at most once per deployment: the first run leaves an admin.bootstrap audit row (actor
 // "bootstrap", target the email), and later starts skip, so removing every admin is not undone by a restart.
-func BootstrapAdmin(ctx context.Context, db *pgxpool.Pool, _ *gitsync.Writer, email string) (bool, error) {
+func BootstrapAdmin(ctx context.Context, db *pgxpool.Pool, email string) (bool, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	var done bool
 	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = 'admin.bootstrap')`).Scan(&done); err != nil || done {

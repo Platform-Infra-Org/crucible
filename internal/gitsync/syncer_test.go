@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"crucible/internal/apperr"
+	"crucible/internal/config"
 	"crucible/internal/content"
 )
 
@@ -258,5 +259,27 @@ func TestChangesFlagsTruncationAndReportsGitFailures(t *testing.T) {
 	}
 	if err := s.CheckPin(cctx, "t1", first); !errors.Is(err, apperr.Unavailable) {
 		t.Fatalf("a cancelled git must be Unavailable: %v", err)
+	}
+}
+
+func TestConfigFuncReplacesThePlatformRepo(t *testing.T) {
+	trainingRepo := newRepo(t, training)
+	plat := &config.Platform{Admins: []string{"a@x"}, Trainings: map[string]config.TrainingRef{"t1": {Repo: trainingRepo, Branch: "main"}},
+		Teams: map[string]*config.Team{"a": {Programs: map[string]*config.Program{"t1": {}}}}}
+	s := New(t.TempDir(), "", "main", slog.Default())
+	s.Config = func(context.Context) (*config.Platform, error) { return plat, nil }
+	if err := s.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Current()
+	if st.Platform != plat || st.PlatformSHA != "" {
+		t.Fatalf("platform should come from Config with no sha: %v %q", st.Platform, st.PlatformSHA)
+	}
+	if tr, _ := st.ProgramTraining("a", "t1"); tr == nil || tr.Title != "T1" {
+		t.Fatalf("content should still sync from git: %+v", st.Problems)
+	}
+	s.Config = func(context.Context) (*config.Platform, error) { return nil, errors.New("db down") }
+	if err := s.SyncOnce(context.Background()); err == nil || s.Current().Platform != plat || s.Current().PlatformErr == "" {
+		t.Fatalf("a failing store keeps the last good platform: %v", err)
 	}
 }

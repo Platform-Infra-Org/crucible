@@ -300,6 +300,9 @@ const gitWriteTimeout = 2 * time.Minute
 // write commits one change, records it in the audit log with its commit, and re-reads git. A change that alters
 // nothing makes no commit and no audit entry, and returns the current sha.
 func (s *Service) write(ctx context.Context, u *auth.User, ch gitsync.Change, auditAction, target string, detail map[string]any) (string, error) {
+	if s.Writer == nil { // database mode: config is written through /api/admin/*, not git
+		return "", apperr.Wrap(apperr.Invalid, "this instance keeps its configuration in the database; use the admin settings")
+	}
 	if ch.Base == "" { // the stale check also covers permissions decided on a snapshot that may lag git
 		return "", apperr.Wrap(apperr.Invalid, "base_sha is required")
 	}

@@ -54,6 +54,9 @@ type Syncer struct {
 	// after start never calls it, so a restart does not re-announce old failures. Keys: "platform", "<training>",
 	// "<training>@<sha>", "<team>/<training>". It runs inside SyncOnce and must not call SyncOnce.
 	OnProblem func(key string, problems []content.Problem)
+	// Config, when set, supplies the platform (settings, admins, trainings, teams, programs) instead of the platform
+	// repo; PlatformSHA stays empty and the repo is never fetched. A function, not an org.Store: org imports gitsync.
+	Config func(ctx context.Context) (*config.Platform, error)
 
 	cur     atomic.Pointer[State]
 	mu      sync.Mutex
@@ -99,33 +102,31 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	defer s.mu.Unlock()
 	prev := s.cur.Load()
 
-	pctx, cancel := context.WithTimeout(ctx, repoTimeout)
-	defer cancel()
-	pm := s.mirror(s.PlatformRepo)
-	if err := pm.Fetch(pctx); err != nil {
-		return err
-	}
-	psha, err := pm.Resolve(pctx, s.PlatformBranch)
-	if err != nil {
-		return err
-	}
-	pdir := filepath.Join(s.DataDir, "platform", psha)
-	if err := pm.Export(pctx, psha, pdir); err != nil {
-		return err
-	}
-	plat, err := config.Load(pdir)
-	if err != nil {
-		// Keep serving the last good config; surface the error on Forge Status.
-		next := State{PlatformErr: err.Error()}
-		if prev != nil {
-			next = *prev
-			next.PlatformErr = err.Error()
+	var plat *config.Platform
+	var psha string
+	var err error
+	if s.Config != nil {
+		plat, err = s.Config(ctx)
+		if err != nil {
+			return s.keepPlatform(prev, err, "store")
 		}
-		if prev != nil && prev.PlatformErr != err.Error() && s.OnProblem != nil {
-			s.OnProblem("platform", []content.Problem{{File: "platform", Msg: err.Error()}})
+	} else {
+		pctx, cancel := context.WithTimeout(ctx, repoTimeout)
+		defer cancel()
+		pm := s.mirror(s.PlatformRepo)
+		if err := pm.Fetch(pctx); err != nil {
+			return err
 		}
-		s.cur.Store(&next)
-		return fmt.Errorf("platform config at %.7s: %w", psha, err)
+		if psha, err = pm.Resolve(pctx, s.PlatformBranch); err != nil {
+			return err
+		}
+		pdir := filepath.Join(s.DataDir, "platform", psha)
+		if err := pm.Export(pctx, psha, pdir); err != nil {
+			return err
+		}
+		if plat, err = config.Load(pdir); err != nil {
+			return s.keepPlatform(prev, err, fmt.Sprintf("%.7s", psha))
+		}
 	}
 
 	st := &State{Platform: plat, PlatformSHA: psha, Trainings: map[string]*content.Training{},
@@ -148,6 +149,20 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	}
 	s.cur.Store(st)
 	return nil
+}
+
+// keepPlatform keeps serving the last good config and surfaces the error on Forge Status.
+func (s *Syncer) keepPlatform(prev *State, err error, at string) error {
+	next := State{PlatformErr: err.Error()}
+	if prev != nil {
+		next = *prev
+		next.PlatformErr = err.Error()
+	}
+	if prev != nil && prev.PlatformErr != err.Error() && s.OnProblem != nil {
+		s.OnProblem("platform", []content.Problem{{File: "platform", Msg: err.Error()}})
+	}
+	s.cur.Store(&next)
+	return fmt.Errorf("platform config at %s: %w", at, err)
 }
 
 // syncTraining fetches one training's mirror and loads its head and pinned versions, bounded by repoTimeout so one

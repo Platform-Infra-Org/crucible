@@ -39,7 +39,7 @@ func TestSeedAdminOnlyIntoAnEmptyAdminsFile(t *testing.T) {
 func TestBootstrapAdminRunsOnce(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
-	if ok, err := BootstrapAdmin(ctx, db, nil, "Boss@Example.com"); err != nil || !ok {
+	if ok, err := BootstrapAdmin(ctx, db, "Boss@Example.com"); err != nil || !ok {
 		t.Fatalf("seed: %v %v", ok, err)
 	}
 	var actor, target string
@@ -50,7 +50,7 @@ func TestBootstrapAdminRunsOnce(t *testing.T) {
 	if _, err := db.Exec(ctx, `DELETE FROM admins`); err != nil { // everyone removed on purpose
 		t.Fatal(err)
 	}
-	if ok, err := BootstrapAdmin(ctx, db, nil, "boss@example.com"); err != nil || ok {
+	if ok, err := BootstrapAdmin(ctx, db, "boss@example.com"); err != nil || ok {
 		t.Fatalf("a restart must not seed again: %v %v", ok, err)
 	}
 	if got := admins(t, db); len(got) != 0 {

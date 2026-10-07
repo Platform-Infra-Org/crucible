@@ -112,6 +112,24 @@ type Budget struct {
 	Version    int64   `yaml:"-" json:"-"`
 }
 
+// Validate resolves an unset hard cap to the monthly budget, then checks 0 <= monthly_usd <= hard_cap_usd and that
+// both are finite. It is the one budget rule, shared by config.Load and the Postgres write path.
+func (b *Budget) Validate() error {
+	if math.IsNaN(b.MonthlyUSD) || math.IsInf(b.MonthlyUSD, 0) || math.IsNaN(b.HardCapUSD) || math.IsInf(b.HardCapUSD, 0) {
+		return errors.New("budget amounts must be finite numbers")
+	}
+	if b.HardCapUSD == 0 {
+		b.HardCapUSD = b.MonthlyUSD
+	}
+	if b.MonthlyUSD < 0 || b.HardCapUSD < 0 {
+		return errors.New("budget amounts cannot be negative")
+	}
+	if b.HardCapUSD < b.MonthlyUSD {
+		return fmt.Errorf("the hard cap ($%g) is below the monthly budget ($%g); need 0 <= monthly_usd <= hard_cap_usd", b.HardCapUSD, b.MonthlyUSD)
+	}
+	return nil
+}
+
 type TrainingRef struct {
 	Repo   string `yaml:"repo"`
 	Branch string `yaml:"branch"`
@@ -331,11 +349,8 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 	if err := yamlx.ReadFile(filepath.Join(dir, "budget.yaml"), &t.Budget, false); err != nil {
 		bad("%v", err)
 	}
-	if t.Budget.HardCapUSD == 0 {
-		t.Budget.HardCapUSD = t.Budget.MonthlyUSD
-	}
-	if t.Budget.MonthlyUSD < 0 || t.Budget.HardCapUSD < t.Budget.MonthlyUSD {
-		bad("budget.yaml: need 0 <= monthly_usd <= hard_cap_usd")
+	if err := t.Budget.Validate(); err != nil {
+		bad("budget.yaml: %v", err)
 	}
 
 	if t.Leader == "" {

@@ -16,7 +16,7 @@ services:
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"       # the API reaches it as http://keycloak:8080
       KC_HEALTH_ENABLED: "true"
     ports: ["${KEYCLOAK_PORT:-8081}:8080"]
-    volumes: ["./keycloak:/opt/keycloak/data/import:ro"]
+    volumes: ["./keycloak:/opt/keycloak/data/import:ro,z"]
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
       interval: 5s
@@ -37,7 +37,7 @@ services:
       OIDC_CLIENT_ID: crucible
       OIDC_CLIENT_SECRET: crucible-dev-secret
     ports: ["8080:8080"]
-    volumes: ["../../.local/git:/git", "apidata:/data"]
+    volumes: ["../../.local/git:/git:z", "apidata:/data"]
     depends_on:
       postgres: { condition: service_healthy }
       keycloak: { condition: service_healthy }

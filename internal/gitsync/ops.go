@@ -126,8 +126,11 @@ func CheckOps(ops []Op) error {
 		}
 	}
 	for _, op := range ops {
-		if op.Op == "delete" && (seen["from\x00"+op.Path] || seen["to\x00"+op.Path]) {
+		switch {
+		case op.Op == "delete" && (seen["from\x00"+op.Path] || seen["to\x00"+op.Path]):
 			return invalidf("%s: renamed and deleted in one edit", op.Path)
+		case op.Op == "delete" && seen["put\x00"+op.Path]:
+			return invalidf("%s: deleted and put in one edit", op.Path)
 		}
 	}
 	return nil
@@ -135,8 +138,8 @@ func CheckOps(ops []Op) error {
 
 // ApplyOps applies ops (already accepted by CheckOps) to the tree at dir: renames first (every source is read before any
 // target is written, so swaps work), then deletes, then puts. Nothing is written through a symlink. It returns the
-// paths that are new at dir (put on a missing path, or a rename target); the caller decides their file mode.
-// Existing files keep their mode; rename targets start with the source's mode.
+// paths that are new at dir (put on a missing path, or a rename target). Existing files keep their mode; a rename target
+// already has its source's mode, a new put 0644; the caller adjusts modes (e.g. the exec bit) as policy needs.
 func ApplyOps(dir string, ops []Op) ([]string, error) {
 	regular := func(rel string) (string, fs.FileMode, error) {
 		if err := NoSymlinks(dir, rel); err != nil {
@@ -186,6 +189,20 @@ func ApplyOps(dir string, ops []Op) ([]string, error) {
 			return nil, err
 		}
 		moves = append(moves, move{p, op.To, b, mode})
+	}
+	sources := map[string]bool{}
+	for _, op := range ops {
+		if op.Op == "rename" {
+			sources[op.From] = true
+		}
+	}
+	for _, m := range moves { // refuse a bad target before anything is removed
+		if err := NoSymlinks(dir, m.to); err != nil {
+			return nil, invalidf("%s: %v", m.to, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(m.to))); err == nil && !sources[m.to] {
+			return nil, invalidf("%s: already exists", m.to)
+		}
 	}
 	for _, m := range moves {
 		if err := os.Remove(m.src); err != nil {

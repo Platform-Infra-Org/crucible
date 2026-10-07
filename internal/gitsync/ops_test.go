@@ -45,6 +45,7 @@ func TestCheckOps(t *testing.T) {
 		"to twice":          {{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/c.md"}, {Op: "rename", From: "modules/m1/b.md", To: "modules/m1/c.md"}},
 		"put twice":         {{Op: "put", Path: "modules/m1/a.md"}, {Op: "put", Path: "modules/m1/a.md"}},
 		"renamed+deleted":   {{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/b.md"}, {Op: "delete", Path: "modules/m1/a.md"}},
+		"delete then put":   {{Op: "delete", Path: "modules/m1/a.md"}, {Op: "put", Path: "modules/m1/a.md", Content: "x"}},
 		"deleted target":    {{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/b.md"}, {Op: "delete", Path: "modules/m1/b.md"}},
 		"rename tf":         {{Op: "rename", From: "modules/m1/lab/terraform/main.tf", To: "modules/m1/lab/terraform/x.tf"}},
 		"delete png":        {{Op: "delete", Path: "modules/m1/reading/a.png"}},
@@ -146,19 +147,32 @@ func TestApplyOps(t *testing.T) {
 	if !slices.Equal(created, []string{"modules/m1/a.md", "modules/m1/b.md", "modules/m1/new/d.md"}) {
 		t.Fatalf("created: %v", created)
 	}
-	if err := os.Symlink("/etc", filepath.Join(dir, "modules", "m1", "link")); err != nil {
-		t.Fatal(err)
-	}
-	for name, ops := range map[string][]Op{
-		"missing source": {{Op: "rename", From: "modules/m1/nope.md", To: "modules/m1/x.md"}},
-		"target exists":  {{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/e.md"}},
-		"delete missing": {{Op: "delete", Path: "modules/m1/nope.md"}},
-		"put via link":   {{Op: "put", Path: "modules/m1/link/passwd.md", Content: "x"}},
-		"rename to link": {{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/link/x.md"}},
-		"delete a dir":   {{Op: "delete", Path: "modules/m1/new"}},
+	for name, c := range map[string]struct {
+		ops  []Op
+		want string
+	}{
+		"missing source": {[]Op{{Op: "rename", From: "modules/m1/nope.md", To: "modules/m1/x.md"}}, "no such file"},
+		"target exists":  {[]Op{{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/e.md"}}, "already exists"},
+		"delete missing": {[]Op{{Op: "delete", Path: "modules/m1/nope.md"}}, "no such file"},
+		"put via link":   {[]Op{{Op: "put", Path: "modules/m1/link/passwd.md", Content: "x"}}, "symlink"},
+		"rename to link": {[]Op{{Op: "rename", From: "modules/m1/a.md", To: "modules/m1/link/x.md"}}, "symlink"},
+		"delete a dir":   {[]Op{{Op: "delete", Path: "modules/m1/new"}}, "not a regular file"},
 	} {
-		if _, err := ApplyOps(dir, ops); !errors.Is(err, apperr.Invalid) {
+		d := t.TempDir() // fresh tree per case: a refusal must not depend on what an earlier case did
+		for _, rel := range []string{"a", "e", "new/d"} {
+			if err := writeFile(d, "modules/m1/"+rel+".md", rel); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink("/etc", filepath.Join(d, "modules", "m1", "link")); err != nil {
+			t.Fatal(err)
+		}
+		_, err := ApplyOps(d, c.ops)
+		if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
+		}
+		if _, serr := os.Stat(filepath.Join(d, "modules/m1/a.md")); serr != nil && name == "rename to link" || serr != nil && name == "target exists" {
+			t.Errorf("%s: refused rename removed its source", name)
 		}
 	}
 }

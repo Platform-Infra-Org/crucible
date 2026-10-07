@@ -6,6 +6,9 @@ import './theme/fonts.css'
 import './theme/tokens.css'
 import './theme/app.css'
 import App from './App'
+import { installSparks } from './lib/sparks'
+
+installSparks()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

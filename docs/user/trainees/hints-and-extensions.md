@@ -26,3 +26,5 @@ the schedule window or a budget cap closes.
 - If the longer lab would cost enough to need a higher approver, your request goes to them, and Crucible tells you so.
   Your lab keeps running meanwhile, and the timer shows the request is pending. If they turn it down, the lab keeps its
   current end, and the extension is used up.
+- An extension is also refused if the extra time would take the team or program past its budget's hard cap, even when
+  it stays in the same approval tier. Only an admin can lift that.

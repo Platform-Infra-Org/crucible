@@ -1,7 +1,7 @@
 ---
 title: Using the docs
 roles: [everyone]
-covers: [feature:docs]
+covers: [feature:docs, route:/docs/*]
 order: 50
 ---
 # Using the docs
@@ -11,18 +11,18 @@ or answers.
 
 ## Your section first
 
-The docs open on the section for your role: trainees, authors, scorers, leaders and approvers, or admins. Choose
+Open **Docs** in the top bar. It opens on the section for your role: trainees, authors, scorers, leaders and approvers, or admins. Choose
 **All** to see every section, including the ones for roles you don't have.
 
 ## Searching
 
-Search matches page titles and the headings inside pages. Type a word you'd expect on a screen, such as *budget*,
+The search box in the docs filters pages as you type. It matches page titles and the headings inside pages. Type a word you'd expect on a screen, such as *budget*,
 *hint* or *pairing*.
 
 ## Help from any screen
 
-The **?** next to the menu opens the page about the screen you are on. If no page covers it, you land on the docs
-home.
+The **?** in the top bar, beside your name, opens the page about the screen you are on. It only appears on screens
+that have a page.
 
 ## Which Crucible these docs describe
 

@@ -29,6 +29,7 @@ import { LabsPage } from './pages/Labs'
 import { EditsPage } from './pages/Edits'
 import { EditFilesPage } from './pages/EditFiles'
 import { EditReviewPage } from './pages/EditReview'
+import { DocsPage } from './pages/Docs'
 
 export { useMe }
 
@@ -88,6 +89,7 @@ export default function App() {
           <Route path="/edits/new" element={<EditFilesPage />} />
           <Route path="/edits/:id" element={<EditReviewPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />
+          <Route path="/docs/*" element={<DocsPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>
         <Toaster />

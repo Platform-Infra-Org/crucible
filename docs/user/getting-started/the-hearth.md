@@ -24,4 +24,4 @@ Where you are already enrolled, **Open** takes you in. Ask your team leader to e
 
 ## Help on any page
 
-The **?** next to the menu opens the page of these docs about the screen you are on.
+The **?** in the top bar, beside your name, opens the page of these docs about the screen you are on.

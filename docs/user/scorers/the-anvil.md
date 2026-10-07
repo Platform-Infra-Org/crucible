@@ -7,7 +7,7 @@ order: 10
 # The Anvil
 
 The Anvil is where people's work gets its score. **Anvil** shows in the top bar when you score for at least one
-program. Your team leader picks a program's scorers; by default they are the team's seniors.
+program. Your team leader, or a program manager, picks a program's scorers; by default they are the team's seniors.
 
 ## The queue
 

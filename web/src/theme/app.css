@@ -230,3 +230,10 @@ meter { width: 8rem; vertical-align: middle; }
 .hljs-number, .hljs-literal, .hljs-title { color: var(--accent-2); }
 .hljs-comment { color: var(--muted); font-style: italic; }
 .mermaid svg { max-width: 100%; height: auto; }
+
+.docs { display: grid; grid-template-columns: 240px 1fr; gap: 2rem; max-width: 1200px; }
+.docs-nav ul { list-style: none; padding: 0; margin: 0 0 1rem; }
+.docs-nav h2 { font-size: 0.9rem; text-transform: uppercase; color: var(--muted); }
+.docs-nav a[aria-current='page'] { font-weight: 700; }
+.help-link { border: 1px solid var(--accent); border-radius: 50%; width: 1.6rem; height: 1.6rem; display: inline-grid; place-items: center; }
+@media (max-width: 900px) { .docs { grid-template-columns: 1fr; } }

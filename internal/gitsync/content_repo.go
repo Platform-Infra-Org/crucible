@@ -81,24 +81,8 @@ func (c *ContentRepo) lock(ctx context.Context) (func(), error) {
 }
 
 // CheckEditFiles enforces what a UI edit may touch: 1–20 text files (.md/.yaml/.yml/.sh, ≤256 KiB): training.yaml or
-// files inside modules/<id>/ (editPath). There are no deletes: every entry is the file's new content.
-func CheckEditFiles(files map[string]string) error {
-	if len(files) == 0 || len(files) > maxEditFiles {
-		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("an edit changes 1 to %d files", maxEditFiles))
-	}
-	for rel, body := range files {
-		if err := editPath(rel); err != nil {
-			return apperr.Wrap(apperr.Invalid, err.Error())
-		}
-		if !slices.Contains(editExts, strings.ToLower(path.Ext(rel))) {
-			return apperr.Wrap(apperr.Invalid, rel+": only .md, .yaml, .yml and .sh files can be edited here")
-		}
-		if len(body) > maxEditFile || strings.ContainsRune(body, 0) || !utf8.ValidString(body) {
-			return apperr.Wrap(apperr.Invalid, rel+": must be text of at most 256 KiB")
-		}
-	}
-	return nil
-}
+// files inside modules/<id>/ (editPath). There are no deletes: every entry is the file's new content. (Task 7 removes this)
+func CheckEditFiles(files map[string]string) error { return CheckOps(PutOps(files)) }
 
 // maintainers reads training.yaml's maintainers: the people who review edits, so an edit must never change them.
 func maintainers(dir string) ([]string, error) {

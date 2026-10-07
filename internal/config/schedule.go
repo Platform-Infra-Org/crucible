@@ -35,6 +35,9 @@ func parseHHMM(s string) (int, error) {
 	return h*60 + m, nil
 }
 
+// Validate checks the zone and windows and prepares the schedule for use.
+func (s *Schedule) Validate() error { return s.validate() }
+
 func (s *Schedule) validate() error {
 	loc, err := time.LoadLocation(s.Timezone)
 	if err != nil || s.Timezone == "" {

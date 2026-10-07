@@ -43,6 +43,17 @@ type CostTiers struct {
 	Tier2USD       float64 `yaml:"tier2_usd" json:"tier2_usd"`
 }
 
+// Validate checks the tier ordering.
+func (t *CostTiers) Validate() error {
+	if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
+		return errors.New("cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0")
+	}
+	return nil
+}
+
+// Fill applies the rank defaults to unset thresholds and checks their order.
+func (r *RankThresholds) Fill() error { return r.fill() }
+
 // RankThresholds are the % of enrolled training completed at which each forge rank is earned (spec §7). Ore is 0.
 type RankThresholds struct {
 	Ingot      float64 `yaml:"ingot" json:"ingot"`
@@ -98,6 +109,7 @@ type TeamNotifications struct {
 type Budget struct {
 	MonthlyUSD float64 `yaml:"monthly_usd" json:"monthly_usd"`
 	HardCapUSD float64 `yaml:"hard_cap_usd" json:"hard_cap_usd"` // defaults to monthly_usd; 0 = no cap
+	Version    int64   `yaml:"-" json:"-"`
 }
 
 type TrainingRef struct {
@@ -107,6 +119,7 @@ type TrainingRef struct {
 
 type Team struct {
 	ID       string              `yaml:"-"`
+	Version  int64               `yaml:"-"`
 	Name     string              `yaml:"name"`
 	Leader   string              `yaml:"leader"`
 	Seniors  []string            `yaml:"seniors"`
@@ -121,6 +134,7 @@ type Team struct {
 
 type Program struct {
 	Training    string      `yaml:"training"`
+	Version     int64       `yaml:"-"`
 	PinnedRef   string      `yaml:"pinned_ref"`
 	Roles       Roles       `yaml:"roles"`
 	Enrolled    []string    `yaml:"enrolled"`
@@ -207,8 +221,8 @@ func Load(dir string) (*Platform, error) {
 	}
 	if t := p.Settings.CostTiers; t == nil {
 		errs = append(errs, errors.New("platform.yaml: cost_tiers is required (auto_approve_usd, tier1_usd, tier2_usd); Crucible has no built-in defaults"))
-	} else if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
-		errs = append(errs, errors.New("platform.yaml: cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0"))
+	} else if err := t.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("platform.yaml: %w", err))
 	}
 	if r := p.Settings.ClusterUSDPerHour; r != nil && (*r < 0 || math.IsNaN(*r) || math.IsInf(*r, 0)) {
 		errs = append(errs, errors.New("platform.yaml: cluster_usd_per_hour must be a number >= 0"))

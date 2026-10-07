@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,13 @@ func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 	once.Do(func() {
+		// Under enforcing SELinux the ryuk reaper cannot bind-mount /var/run/docker.sock and never starts,
+		// so every run stalls for a minute. Skip it there, unless the developer chose a value.
+		if b, _ := os.ReadFile("/sys/fs/selinux/enforce"); strings.TrimSpace(string(b)) == "1" {
+			if _, set := os.LookupEnv("TESTCONTAINERS_RYUK_DISABLED"); !set {
+				os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+			}
+		}
 		c, err := postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("crucible"), postgres.WithUsername("crucible"), postgres.WithPassword("crucible"),
 			postgres.BasicWaitStrategies())

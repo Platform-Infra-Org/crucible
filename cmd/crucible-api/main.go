@@ -18,6 +18,7 @@ import (
 	"time"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -72,6 +73,27 @@ func previewGuard(getenv func(string) string) error {
 	return auth.PreviewAllowed(public, token)
 }
 
+// useStore reports whether configuration comes from Postgres: a blank platform repo means no repo.
+func useStore(platformRepo string) bool { return strings.TrimSpace(platformRepo) == "" }
+
+// seedBootstrapAdmin seeds the first admin in database mode only, before the first sync so the first snapshot names
+// them. Git mode reads admins from admins.yaml, so a Postgres row would be a silent no-op: skip and say so.
+func seedBootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, dbMode bool, email string) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return
+	}
+	if !dbMode {
+		slog.Warn("CRUCIBLE_BOOTSTRAP_ADMIN is ignored while CRUCIBLE_PLATFORM_REPO is set; list the admin in admins.yaml instead")
+		return
+	}
+	if ok, err := configapi.BootstrapAdmin(ctx, pool, email); err != nil {
+		slog.Warn("seeding the bootstrap admin failed; add an admin from the admin page", "err", err)
+	} else if ok {
+		slog.Info("seeded the bootstrap admin", "email", email)
+	}
+}
+
 func run(ctx context.Context) error {
 	pool, err := db.Open(ctx, must("DATABASE_URL"))
 	if err != nil {
@@ -82,10 +104,10 @@ func run(ctx context.Context) error {
 	gitsync.AllowFileTransport = gitsync.AllowFileFromEnv(os.Getenv)
 	orgStore := &org.Store{DB: pool}
 	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
-	platformRepo := os.Getenv("CRUCIBLE_PLATFORM_REPO")
+	platformRepo := strings.TrimSpace(os.Getenv("CRUCIBLE_PLATFORM_REPO"))
 	syncer := gitsync.New(dataDir, platformRepo, env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
 	var writer *gitsync.Writer
-	if platformRepo == "" {
+	if useStore(platformRepo) {
 		syncer.Config = orgStore.Platform
 		slog.Info("configuration source: Postgres (CRUCIBLE_PLATFORM_REPO is not set)")
 	} else {
@@ -94,15 +116,7 @@ func run(ctx context.Context) error {
 			Dir:  filepath.Join(dataDir, "writer"),
 			Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 	}
-	if email := strings.ToLower(strings.TrimSpace(os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))); email != "" {
-		// Once per deployment, only while no admin exists; sign-in still needs the IdP to verify this email. Seeded
-		// before the first sync so the first snapshot already names the admin.
-		if ok, err := configapi.BootstrapAdmin(ctx, pool, email); err != nil {
-			slog.Warn("seeding the bootstrap admin failed; add an admin from the admin page", "err", err)
-		} else if ok {
-			slog.Info("seeded the bootstrap admin", "email", email)
-		}
-	}
+	seedBootstrapAdmin(ctx, pool, useStore(platformRepo), os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial sync failed; retrying in the background", "err", err)
 	}

@@ -19,8 +19,12 @@ func (s *Store) AddAdmin(ctx context.Context, actor, email string) error {
 	if err := config.CheckEmail("admin", email); err != nil {
 		return err
 	}
-	return s.inTx(ctx, actor, "admin.add", email, map[string]any{"email": email}, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO admins (email) VALUES ($1) ON CONFLICT DO NOTHING`, email)
+	detail := map[string]any{"email": email}
+	return s.inTx(ctx, actor, "admin.add", email, detail, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `INSERT INTO admins (email) VALUES ($1) ON CONFLICT DO NOTHING`, email)
+		if err == nil && tag.RowsAffected() == 0 {
+			detail["already"] = true // no grant happened: the audit row must not read as one
+		}
 		return err
 	})
 }

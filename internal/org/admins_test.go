@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"crucible/internal/apperr"
 	"crucible/internal/db/dbtest"
@@ -66,11 +67,23 @@ func TestConcurrentRemovalsLeaveOneAdmin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Hold the admin rows locked so both removals start, and are waiting, before either can look.
+	hold, err := s.DB.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hold.Exec(ctx, `SELECT email FROM admins FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, e := range []string{"a@x", "b@x"} {
 		wg.Add(1)
 		go func() { defer wg.Done(); errs[i] = s.RemoveAdmin(ctx, "a@x", e) }()
+	}
+	time.Sleep(500 * time.Millisecond) // without FOR UPDATE both removals finish in this window
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	wg.Wait()
 	if admins, _ := s.Admins(ctx); len(admins) != 1 {
@@ -115,5 +128,11 @@ func TestAddAdminIsIdempotentAndValidatesTheAddress(t *testing.T) {
 	}
 	if admins, _ := s.Admins(ctx); len(admins) != 1 || admins[0] != "new@x" {
 		t.Errorf("admins = %v, want one row", admins)
+	}
+	var grants, repeats int
+	s.DB.QueryRow(ctx, `SELECT count(*) FILTER (WHERE detail->>'already' IS NULL), count(*) FILTER (WHERE detail->>'already' = 'true')
+		FROM audit_log WHERE action = 'admin.add' AND target = 'new@x'`).Scan(&grants, &repeats)
+	if grants != 1 || repeats != 1 {
+		t.Errorf("audit: %d grants, %d marked already; want 1 and 1", grants, repeats)
 	}
 }

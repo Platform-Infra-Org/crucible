@@ -1,0 +1,7 @@
+id: forge-103
+title: "Forge 103: The Smithy"
+description: The authoring end-to-end test reshapes this training on every run.
+maintainers: [senior@crucible.local]
+progression: free
+estimated_hours: 0.5
+modules: [01-anvil]

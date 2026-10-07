@@ -126,7 +126,7 @@ A draft in review is read-only. To keep working on it, open its edit and withdra
 
 When the training moved on while you worked, the editor offers **Newer content: rebase draft**. Files you didn't touch
 update silently. For a file changed on both sides, you see the newest version on the left and yours on the right. Edit
-the right side and use it, or drop your change. A rename or delete of a file that changed upstream can be kept or
+the right side and choose **Use the right side**, or choose **Drop my change (take theirs)**. A rename or delete of a file that changed upstream can be kept or
 dropped; if the file is gone upstream, or a rename's new name now exists, you can only drop it. If you renamed a file and
 changed it, and the original changed upstream, you merge upstream's version into yours the same way; dropping the
 rename drops your changes to it too. **Cancel** leaves the draft as it was. You need to rebase before you can submit.

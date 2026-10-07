@@ -63,7 +63,7 @@ func TestMatrix(t *testing.T) {
 		t.Errorf("unknown team: got %v want false", got)
 	}
 
-	if n := len(c.Enrollments("TRAINEE@crucible.local")); n != 1 {
+	if n := len(c.Enrollments("TRAINEE@crucible.local")); n != 2 { // forge-101 and forge-103
 		t.Errorf("enrollments = %d", n)
 	}
 }

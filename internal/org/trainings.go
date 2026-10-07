@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -14,6 +15,9 @@ import (
 	"crucible/internal/config"
 	"crucible/internal/gitsync"
 )
+
+// remoteURL is the allowlist of network remotes; anything else (file:, bare paths, ext::, C:\, a leading "-") is local.
+var remoteURL = regexp.MustCompile(`(?i)^((https?|ssh|git)://[^\s-]|[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:\S)`)
 
 var errNoChange = errors.New("no change")
 
@@ -30,11 +34,8 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 	if branch == "" {
 		branch = "main"
 	}
-	if strings.HasPrefix(repo, "-") {
-		return apperr.Wrap(apperr.Invalid, "repo URL cannot start with '-'")
-	}
-	if l := strings.ToLower(repo); !gitsync.AllowFileFromEnv(os.Getenv) && (strings.HasPrefix(l, "file:") || strings.HasPrefix(repo, "/") || strings.HasPrefix(repo, ".")) {
-		return apperr.Wrap(apperr.Invalid, "local repo paths and file:// URLs are not allowed on this instance")
+	if !remoteURL.MatchString(repo) && !gitsync.AllowFileFromEnv(os.Getenv) {
+		return apperr.Wrap(apperr.Invalid, "repo must be an https://, http://, ssh://, git:// or user@host:path URL; local paths are not allowed on this instance")
 	}
 	detail := map[string]any{"repo": repo, "branch": branch, "previous_repo": nil, "previous_branch": nil}
 	err := s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
@@ -50,6 +51,15 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 			return errNoChange
 		}
 		detail["previous_repo"], detail["previous_branch"] = pr, pb // audit.Log runs after fn
+		if pr != repo {                                             // pinned SHAs belong to the old repository; make the move visible
+			var n int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM programs WHERE training = $1`, id).Scan(&n); err != nil {
+				return err
+			}
+			if n > 0 {
+				detail["programs_pinned"] = n
+			}
+		}
 		_, err = tx.Exec(ctx, `UPDATE trainings SET repo = $2, branch = $3 WHERE id = $1`, id, repo, branch)
 		return err
 	})

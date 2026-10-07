@@ -2,6 +2,7 @@ package org
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -22,6 +23,12 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 		"file url":    {"x", "file:///git/x.git", "main"},
 		"local path":  {"x", "/git/x.git", "main"},
 		"dash repo":   {"x", "--upload-pack=evil", "main"},
+		"dot path":    {"x", "./x", "main"},
+		"FILE upper":  {"x", "FILE:///x", "main"},
+		"bare rel":    {"x", "repos/x.git", "main"},
+		"bare name":   {"x", "x", "main"},
+		"ext":         {"x", "ext::sh -c id", "main"},
+		"windows":     {"x", `C:\x`, "main"},
 	} {
 		if err := s.AddTraining(ctx, "admin@x", args[0], args[1], args[2]); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%s: want Invalid, got %v", name, err)
@@ -35,11 +42,24 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 	if err := s.AddTraining(ctx, "admin@x", "forge-101", "https://git/x.git", ""); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := s.Platform(ctx)
+	p, perr := s.Platform(ctx)
+	if perr != nil {
+		t.Fatal(perr)
+	}
 	if ref := p.Trainings["forge-101"]; ref.Branch != "main" {
 		t.Errorf("branch = %q, want the main default", ref.Branch)
 	}
+	for _, ok := range []string{"http://h/x.git", "ssh://git@h/x.git", "git://h/x.git", "git@github.com:o/x.git", "HTTPS://h/x"} {
+		if err := s.AddTraining(ctx, "admin@x", "net", ok, "main"); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
 	t.Setenv("CRUCIBLE_GIT_ALLOW_FILE", "1")
+	for _, local := range []string{"./x", "FILE:///x", "repos/x.git", `C:\x`} {
+		if err := s.AddTraining(ctx, "admin@x", "loc", local, "main"); err != nil {
+			t.Errorf("%s with the env var set: %v", local, err)
+		}
+	}
 	if err := s.AddTraining(ctx, "admin@x", "local", "file:///git/x.git", "main"); err != nil {
 		t.Errorf("file url with CRUCIBLE_GIT_ALLOW_FILE=1: %v", err)
 	}
@@ -94,13 +114,35 @@ func TestTrainingWritesAreAudited(t *testing.T) {
 	if n := count("training.add"); n != 1 {
 		t.Fatalf("repeat add wrote audit rows: %d, want 1", n)
 	}
-	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "dev"))
-	var detail string
-	err := s.DB.QueryRow(ctx, `SELECT detail::text FROM audit_log WHERE action = 'training.add' ORDER BY id DESC LIMIT 1`).Scan(&detail)
-	if err != nil || !strings.Contains(detail, "a.git") || !strings.Contains(detail, "b.git") || !strings.Contains(detail, `"dev"`) {
-		t.Errorf("repoint detail = %s, %v", detail, err)
+	mustExec(t, s.DB, `INSERT INTO teams (id, name) VALUES ('forge', 'F')`)
+	mustExec(t, s.DB, `INSERT INTO programs (team, training, pinned_ref) VALUES ('forge','t','abc123')`)
+	detailOf := func() map[string]any {
+		var raw []byte
+		if err := s.DB.QueryRow(ctx, `SELECT detail FROM audit_log WHERE action = 'training.add' ORDER BY id DESC LIMIT 1`).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var d map[string]any
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
 	}
-	p, _ := s.Platform(ctx)
+	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "dev"))
+	d := detailOf()
+	if d["repo"] != "https://git/b.git" || d["branch"] != "dev" || d["previous_repo"] != "https://git/a.git" || d["previous_branch"] != "main" || d["programs_pinned"] != float64(1) {
+		t.Errorf("repoint detail = %v", d)
+	}
+	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "stable"))
+	d = detailOf()
+	if _, has := d["programs_pinned"]; has || d["branch"] != "stable" || d["previous_branch"] != "dev" || d["previous_repo"] != "https://git/b.git" {
+		t.Errorf("branch-only detail = %v", d)
+	}
+	must(s.AddTraining(ctx, "boss@x", "t", "https://git/b.git", "dev"))
+	mustExec(t, s.DB, `DELETE FROM teams`)
+	p, perr := s.Platform(ctx)
+	if perr != nil {
+		t.Fatal(perr)
+	}
 	if ref := p.Trainings["t"]; ref.Repo != "https://git/b.git" || ref.Branch != "dev" {
 		t.Errorf("not repointed: %+v", ref)
 	}

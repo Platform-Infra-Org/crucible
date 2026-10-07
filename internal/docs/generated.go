@@ -34,8 +34,9 @@ var referenceTypes = []struct {
 
 // Generated are the pages built from the block registry at startup, so they can't drift from the code.
 func Generated() []Page {
+	const title = "Building blocks: every key"
 	var b strings.Builder
-	b.WriteString("Every key Crucible reads from a training repo. The editor shows the same text when you hover a key.\n")
+	b.WriteString("# " + title + "\n\nEvery key Crucible reads from a training repo. The editor shows the same text when you hover a key.\n")
 	for _, rt := range referenceTypes {
 		t := reflect.TypeOf(rt.v)
 		fmt.Fprintf(&b, "\n## %s\n\n| Key | Type | Required | What it does |\n|---|---|---|---|\n", rt.title)
@@ -56,12 +57,12 @@ func Generated() []Page {
 		}
 	}
 	body := b.String()
-	pages := []Page{{Slug: "authors/building-blocks", Section: "authors", Title: "Building blocks: every key", Roles: []string{"author"},
+	pages := []Page{{Slug: "authors/building-blocks", Section: "authors", Title: title, Roles: []string{"author"},
 		Covers: []string{"feature:blocks.reference"}, Order: 90, Headings: headings(body), Body: body}}
 	for i, g := range blocks.Groups {
 		var b strings.Builder
 		var covers []string
-		fmt.Fprintf(&b, "The %s blocks of the editor's Blocks panel. Each one is a form; what it writes is shown below.\n", strings.ToLower(g))
+		fmt.Fprintf(&b, "# Building blocks: %s\n\nThe %s blocks of the editor's Blocks panel. Each one is a form; what it writes is shown below.\n", g, strings.ToLower(g))
 		for _, bl := range blocks.Catalog {
 			if bl.Group != g {
 				continue

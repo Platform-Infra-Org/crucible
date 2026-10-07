@@ -96,3 +96,16 @@ func TestEmptyListsAreArrays(t *testing.T) {
 		t.Fatalf("page lists: %s", b)
 	}
 }
+
+// Every page, written or generated, opens with its title as the one top-level heading: the page shows no other.
+func TestEveryPageStartsWithItsTitle(t *testing.T) {
+	pages, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pages {
+		if first, _, _ := strings.Cut(strings.TrimLeft(p.Body, "\n"), "\n"); first != "# "+p.Title {
+			t.Errorf("%s starts with %q, want %q", p.Slug, first, "# "+p.Title)
+		}
+	}
+}

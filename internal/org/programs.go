@@ -28,7 +28,7 @@ type ProgramBody struct {
 	TTL                string           `json:"ttl"`
 	IdleTimeout        string           `json:"idle_timeout"`
 	MaxExtension       string           `json:"max_extension"`
-	BudgetUSDMonth     float64          `json:"budget_usd_month"`
+	BudgetUSDMonth     *float64         `json:"budget_usd_month"` // required: 0 means "no program budget", so a missing key must not store it
 	ReviewSelfReported bool             `json:"review_self_reported"`
 }
 
@@ -63,7 +63,10 @@ func emails(field string, in []string) ([]string, error) {
 }
 
 func (b ProgramBody) validate() (*program, error) {
-	p := &program{roles: map[string][]string{}, budget: b.BudgetUSDMonth, review: b.ReviewSelfReported}
+	if b.BudgetUSDMonth == nil {
+		return nil, apperr.Wrap(apperr.Invalid, "budget_usd_month is required; send 0 for no program budget")
+	}
+	p := &program{roles: map[string][]string{}, budget: *b.BudgetUSDMonth, review: b.ReviewSelfReported}
 	var err error
 	for _, g := range []struct {
 		role string
@@ -101,7 +104,7 @@ func (b ProgramBody) validate() (*program, error) {
 		s := dur.String()
 		p.durs[i] = &s
 	}
-	if err := (&config.Budget{MonthlyUSD: b.BudgetUSDMonth}).Validate(); err != nil {
+	if err := (&config.Budget{MonthlyUSD: p.budget}).Validate(); err != nil {
 		return nil, apperr.Wrap(apperr.Invalid, "budget_usd_month: "+err.Error())
 	}
 	return p, nil

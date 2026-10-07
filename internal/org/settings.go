@@ -103,7 +103,7 @@ func (s *Store) SetSchedule(ctx context.Context, actor, name string, sched confi
 	if err != nil {
 		return err
 	}
-	return s.inTx(ctx, actor, "schedule.update", name, nil, func(tx pgx.Tx) error {
+	return s.inTx(ctx, actor, "schedule.update", name, map[string]any{"timezone": sched.Timezone, "windows": len(sched.Windows)}, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO schedules (name, timezone, windows) VALUES ($1, $2, $3)
 			ON CONFLICT (name) DO UPDATE SET timezone = EXCLUDED.timezone, windows = EXCLUDED.windows`,
 			name, sched.Timezone, windows)
@@ -112,7 +112,8 @@ func (s *Store) SetSchedule(ctx context.Context, actor, name string, sched confi
 }
 
 func (s *Store) DeleteSchedule(ctx context.Context, actor, name string) error {
-	return s.inTx(ctx, actor, "schedule.delete", name, nil, func(tx pgx.Tx) error {
+	detail := map[string]any{}
+	return s.inTx(ctx, actor, "schedule.delete", name, detail, func(tx pgx.Tx) error {
 		var team, training string
 		err := tx.QueryRow(ctx, `SELECT team, training FROM programs WHERE schedule_name = $1 ORDER BY team, training LIMIT 1`, name).Scan(&team, &training)
 		if err == nil {
@@ -120,13 +121,16 @@ func (s *Store) DeleteSchedule(ctx context.Context, actor, name string) error {
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM schedules WHERE name = $1`, name)
-		if err != nil {
+		var tz string
+		var windows []byte
+		if err := tx.QueryRow(ctx, `DELETE FROM schedules WHERE name = $1 RETURNING timezone, windows`, name).Scan(&tz, &windows); errors.Is(err, pgx.ErrNoRows) {
+			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no schedule named %q", name))
+		} else if err != nil {
 			return scheduleInUse(err, name)
 		}
-		if tag.RowsAffected() == 0 {
-			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no schedule named %q", name))
-		}
+		var ws []json.RawMessage
+		_ = json.Unmarshal(windows, &ws)
+		detail["timezone"], detail["windows"] = tz, len(ws)
 		return nil
 	})
 }

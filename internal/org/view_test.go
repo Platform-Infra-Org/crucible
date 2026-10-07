@@ -64,10 +64,10 @@ func TestProgramAndBudgetRoutesByRole(t *testing.T) {
 	mustTraining(t, f.s, "net-101")
 	f.reload()
 	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
-	prog := fmt.Sprintf(`{"version":%d,"enrolled":["new@x"]}`, pv)
+	prog := fmt.Sprintf(`{"version":%d,"enrolled":["new@x"],"budget_usd_month":0}`, pv)
 	routes := []struct{ method, path, body string }{
 		{"PUT", "/api/org/teams/platform/programs/forge-101", prog},
-		{"POST", "/api/org/teams/platform/programs/net-101", `{"enrolled":["new@x"]}`},
+		{"POST", "/api/org/teams/platform/programs/net-101", `{"enrolled":["new@x"],"budget_usd_month":0}`},
 		{"DELETE", "/api/org/teams/platform/programs/forge-101", ""},
 	}
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
@@ -114,7 +114,7 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	}
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for _, c := range []struct{ path, body string }{
-		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"enrolled":["new@x"]}`, pv+7)},
+		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"enrolled":["new@x"],"budget_usd_month":0}`, pv+7)},
 		{"/api/org/teams/platform/budget", `{"version":0,"monthly_usd":99}`},
 		{"/api/org/teams/platform/budget", `{"version":9,"monthly_usd":99}`},
 	} {
@@ -201,16 +201,16 @@ func TestOrgWriteRoutesAreAbsentInGitMode(t *testing.T) {
 		{"PUT", "/api/org/teams/platform/programs/forge-101"}, {"POST", "/api/org/teams/platform/programs/forge-101"},
 		{"DELETE", "/api/org/teams/platform/programs/forge-101"}, {"PUT", "/api/org/teams/platform/programs/forge-101/pin"},
 		{"POST", "/api/admin/teams/x"}, {"DELETE", "/api/admin/teams/platform"},
+		{"PUT", "/api/admin/teams/platform/webhooks/slack"},
+		{"GET", "/api/admin/settings"}, {"PUT", "/api/admin/settings"}, {"PUT", "/api/admin/schedules/days"},
+		{"DELETE", "/api/admin/schedules/days"}, {"PUT", "/api/admin/quotes"}, {"GET", "/api/admin/admins"},
+		{"POST", "/api/admin/admins"}, {"DELETE", "/api/admin/admins/a@x"}, {"GET", "/api/admin/trainings"},
+		{"POST", "/api/admin/trainings"}, {"DELETE", "/api/admin/trainings/forge-101"},
 	} {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
 		if w.Code != 404 && w.Code != 405 {
 			t.Errorf("%s %s = %d in git mode, want it unmounted", c.method, c.path, w.Code)
 		}
-	}
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest("GET", "/api/admin/admins", nil))
-	if w.Code != 200 {
-		t.Errorf("registry/admin routes should stay: %d", w.Code)
 	}
 }

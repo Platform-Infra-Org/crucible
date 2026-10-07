@@ -292,3 +292,22 @@ func TestInTxRollsBackTheChangeWhenTheAuditWriteFails(t *testing.T) {
 		t.Errorf("the change survived a failed audit write: %d quotes", n)
 	}
 }
+
+func TestScheduleAuditRowsCarryDetail(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	ctx := context.Background()
+	sc := config.Schedule{Timezone: "Europe/Bucharest", Windows: []config.Window{{Days: []string{"mon"}, Start: "08:00", End: "19:00"}, {Days: []string{"tue"}, Start: "08:00", End: "19:00"}}}
+	if err := s.SetSchedule(ctx, "admin@x", "days", sc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSchedule(ctx, "admin@x", "days"); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"schedule.update", "schedule.delete"} {
+		var tz string
+		var n int
+		if err := s.DB.QueryRow(ctx, `SELECT detail->>'timezone', (detail->>'windows')::int FROM audit_log WHERE action = $1`, action).Scan(&tz, &n); err != nil || tz != "Europe/Bucharest" || n != 2 {
+			t.Errorf("%s detail = %q, %d, %v", action, tz, n, err)
+		}
+	}
+}

@@ -35,6 +35,7 @@ export function AdminTrainingsPage() {
   }
   const save = (e: FormEvent) => {
     e.preventDefault()
+    if (warn && !window.confirm(warn)) return
     void act(() => api('/api/admin/trainings', { method: 'POST', json: { id: id.trim(), repo: repo.trim(), branch: branch.trim() } }), `${id.trim()} is ${existing ? 'updated' : 'registered'}.`)
   }
   return (

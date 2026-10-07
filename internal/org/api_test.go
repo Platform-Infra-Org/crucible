@@ -39,7 +39,7 @@ func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 	if err := s.AddAdmin(ctx, "root", "admin@x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	f := &apiFixture{t: t, s: s}

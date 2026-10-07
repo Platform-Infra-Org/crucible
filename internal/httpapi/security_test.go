@@ -215,7 +215,7 @@ func mustRead(t *testing.T, p string) string {
 // The org routes sit behind the same guard as every other state-changing route: a browser request from elsewhere, or
 // with a non-JSON body, never reaches them (it would otherwise answer 401 for a signed-out caller).
 func TestOrgRoutesNeedSameOrigin(t *testing.T) {
-	r := NewRouter(Deps{Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), Org: &org.Store{},
+	r := NewRouter(Deps{Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), Org: &org.Store{}, OrgAPI: org.APIDeps{ConfigInDB: true},
 		PublicURL: "https://crucible.example.com"})
 	for _, c := range []struct {
 		name, method, path string

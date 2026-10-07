@@ -1,7 +1,9 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import { AdminMenu } from './AdminMenu'
+import { AdminMenu, adminItems } from './AdminMenu'
+
+vi.mock('../me', () => ({ useMe: () => ({ me: { config_in_db: true } }) }))
 
 const at = (path: string) => renderToStaticMarkup(<MemoryRouter initialEntries={[path]}><AdminMenu /></MemoryRouter>)
 
@@ -20,5 +22,10 @@ describe('Administrator menu', () => {
     expect(at('/admin/trainings')).toContain('admin-menu-button active')
     expect(at('/admin')).toContain('admin-menu-button active')
     expect(at('/labs')).not.toContain('admin-menu-button active')
+  })
+
+  test('Settings and Registry appear only when the configuration is in Postgres; Forge Status always', () => {
+    expect(adminItems(false).map((i) => i.label)).toEqual(['Forge Status'])
+    expect(adminItems(true).map((i) => i.label)).toEqual(['Forge Status', 'Forge settings', 'Registry'])
   })
 })

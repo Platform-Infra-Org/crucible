@@ -45,7 +45,7 @@ func orgFixture(t *testing.T) (*Store, context.Context) {
 
 func TestEnrollAppliesRoleDefaults(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
@@ -76,7 +76,7 @@ func TestEnrollAppliesRoleDefaults(t *testing.T) {
 	if audits(t, s, "program.enroll") != 1 {
 		t.Error("enroll must be audited once")
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{}); !errors.Is(err, apperr.Conflict) {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("second enroll = %v, want Conflict", err)
 	}
 	if audits(t, s, "program.enroll") != 1 {
@@ -86,11 +86,11 @@ func TestEnrollAppliesRoleDefaults(t *testing.T) {
 
 func TestSetProgramStoresExplicitRoles(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	// an admin overrides the scorers with the leader; an empty list would restore the default instead
-	b := ProgramBody{Version: 1, Roles: config.Roles{Manager: []string{"Lead@x"}, Scorers: []string{"lead@x"}, Approvers: []string{"lead@x"}}, Enrolled: []string{" New@x "}}
+	b := ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Roles: config.Roles{Manager: []string{"Lead@x"}, Scorers: []string{"lead@x"}, Approvers: []string{"lead@x"}}, Enrolled: []string{" New@x "}}
 	if err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", b); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestSetProgramStoresExplicitRoles(t *testing.T) {
 	if err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", b); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("stale version = %v, want Conflict", err)
 	}
-	if err := s.SetProgram(ctx, "admin@x", "platform", "nope", ProgramBody{Version: 1}); !errors.Is(err, apperr.NotFound) {
+	if err := s.SetProgram(ctx, "admin@x", "platform", "nope", ProgramBody{BudgetUSDMonth: usd(0), Version: 1}); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("missing program = %v, want NotFound", err)
 	}
 	if audits(t, s, "program.update") != 1 {
@@ -120,13 +120,13 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		b    ProgramBody
 		want string
 	}{
-		"unknown schedule": {ProgramBody{Schedule: "nights"}, "nights"},
-		"both schedules":   {ProgramBody{Schedule: "nights", InlineSchedule: inline}, "not both"},
-		"bad ttl":          {ProgramBody{TTL: "banana"}, "ttl"},
-		"negative idle":    {ProgramBody{IdleTimeout: "-5m"}, "idle_timeout"},
-		"bad extension":    {ProgramBody{MaxExtension: "2 hours"}, "max_extension"},
-		"negative budget":  {ProgramBody{BudgetUSDMonth: -1}, "negative"},
-		"bad email":        {ProgramBody{Enrolled: []string{"not-an-email"}}, "not-an-email"},
+		"unknown schedule": {ProgramBody{BudgetUSDMonth: usd(0), Schedule: "nights"}, "nights"},
+		"both schedules":   {ProgramBody{BudgetUSDMonth: usd(0), Schedule: "nights", InlineSchedule: inline}, "not both"},
+		"bad ttl":          {ProgramBody{BudgetUSDMonth: usd(0), TTL: "banana"}, "ttl"},
+		"negative idle":    {ProgramBody{BudgetUSDMonth: usd(0), IdleTimeout: "-5m"}, "idle_timeout"},
+		"bad extension":    {ProgramBody{BudgetUSDMonth: usd(0), MaxExtension: "2 hours"}, "max_extension"},
+		"negative budget":  {ProgramBody{BudgetUSDMonth: usd(-1)}, "negative"},
+		"bad email":        {ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"not-an-email"}}, "not-an-email"},
 	} {
 		err := s.Enroll(ctx, "admin@x", "platform", "forge-101", c.b)
 		if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), c.want) {
@@ -137,16 +137,16 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		t.Error("refused enrolls must leave no program and no audit row")
 	}
 	// an unknown training is refused too
-	if err := s.Enroll(ctx, "admin@x", "platform", "ghost", ProgramBody{}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "ghost") {
+	if err := s.Enroll(ctx, "admin@x", "platform", "ghost", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "ghost") {
 		t.Errorf("unknown training = %v", err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{}); !errors.Is(err, apperr.NotFound) {
+	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("unknown team = %v", err)
 	}
 	if err := s.SetSchedule(ctx, "admin@x", "days", *inline); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Schedule: "days", TTL: "2h", IdleTimeout: "20m", MaxExtension: "1h", BudgetUSDMonth: 50}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Schedule: "days", TTL: "2h", IdleTimeout: "20m", MaxExtension: "1h", BudgetUSDMonth: usd(50)}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
@@ -155,7 +155,7 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		t.Errorf("program = %+v", pr)
 	}
 	// SetProgram with an unknown named schedule: refused naming it, no audit
-	err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", ProgramBody{Version: 1, Schedule: "nights"})
+	err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Schedule: "nights"})
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "nights") {
 		t.Errorf("update with unknown schedule = %v", err)
 	}
@@ -166,11 +166,11 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 
 func TestEnrollRefusesSomeoneOutsideTheTeam(t *testing.T) {
 	s, ctx := orgFixture(t)
-	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"Stranger@x"}})
+	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"Stranger@x"}})
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "stranger@x") {
 		t.Errorf("enrolling a stranger = %v", err)
 	}
-	err = s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Roles: config.Roles{Scorers: []string{"outsider@x"}}})
+	err = s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Roles{Scorers: []string{"outsider@x"}}})
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "outsider@x") {
 		t.Errorf("role for an outsider = %v", err)
 	}
@@ -181,7 +181,7 @@ func TestEnrollRefusesSomeoneOutsideTheTeam(t *testing.T) {
 
 func TestSetPinRecordsTheSHAAndIsAudited(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"main", "abc", sha1[:39], sha1 + "0", strings.Repeat("g", 40)} {
@@ -235,7 +235,7 @@ func progressFixture(t *testing.T, s *Store) int64 {
 
 func TestDeleteProgramKeepsLearningHistory(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
 		t.Fatal(err)
 	}
 	uid := progressFixture(t, s)
@@ -261,7 +261,7 @@ func TestDeleteProgramKeepsLearningHistory(t *testing.T) {
 
 func TestDeleteTeamKeepsLearningHistoryAndDropsItsPrograms(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
 		t.Fatal(err)
 	}
 	uid := progressFixture(t, s)
@@ -278,7 +278,7 @@ func TestDeleteTeamKeepsLearningHistoryAndDropsItsPrograms(t *testing.T) {
 
 func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
 		t.Fatal(err)
 	}
 	// a restored snapshot can lack the foreign key's guarantee; replica mode skips the check
@@ -305,7 +305,7 @@ func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 
 func TestEnrollStoresExplicitRoles(t *testing.T) {
 	s, ctx := orgFixture(t)
-	b := ProgramBody{Roles: config.Roles{Manager: []string{"senior@x"}, Scorers: []string{"Lead@x"}, Approvers: []string{"senior@x"}}}
+	b := ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Roles{Manager: []string{"senior@x"}, Scorers: []string{"Lead@x"}, Approvers: []string{"senior@x"}}}
 	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", b); err != nil {
 		t.Fatal(err)
 	}
@@ -316,5 +316,19 @@ func TestEnrollStoresExplicitRoles(t *testing.T) {
 	r := p.Teams["platform"].Programs["forge-101"].Roles
 	if !slices.Equal(r.Manager, []string{"senior@x"}) || !slices.Equal(r.Scorers, []string{"lead@x"}) || !slices.Equal(r.Approvers, []string{"senior@x"}) {
 		t.Errorf("roles = %+v: explicit roles must replace the defaults", r)
+	}
+}
+
+func usd(v float64) *float64 { return &v }
+
+func TestProgramBudgetMustBeSent(t *testing.T) {
+	s, ctx := orgFixture(t)
+	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}})
+	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "budget_usd_month") {
+		t.Fatalf("err = %v, want Invalid naming budget_usd_month", err)
+	}
+	var n int
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM programs`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("programs stored = %d, %v; want none", n, err)
 	}
 }

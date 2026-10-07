@@ -32,6 +32,8 @@ func AllowFileFromEnv(getenv func(string) string) bool {
 // git runs git with no host config: only CRUCIBLE_GIT_CONFIG (the image's credential helper and safe.directory)
 // applies, so a host's filters, hooksPath or fsmonitor never run in the bot's clones.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
+	// ext:: runs a command as the server; git permits it for a direct clone unless told otherwise.
+	args = append([]string{"-c", "protocol.ext.allow=never"}, args...)
 	if !AllowFileTransport {
 		args = append([]string{"-c", "protocol.file.allow=never"}, args...)
 	}

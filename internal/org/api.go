@@ -43,6 +43,9 @@ type api struct {
 //
 // /api/admin/... is admin-only. The two team-scoped routes (/api/org/...) check the caller against the snapshot.
 func (s *Store) Routes(r chi.Router, d APIDeps) {
+	if !d.ConfigInDB {
+		return
+	}
 	a := &api{s, d}
 	r.Get("/api/admin/settings", a.admin(a.getSettings))
 	r.Put("/api/admin/settings", a.admin(a.putSettings))
@@ -55,9 +58,6 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Get("/api/admin/trainings", a.admin(a.getTrainings))
 	r.Post("/api/admin/trainings", a.admin(a.postTraining))
 	r.Delete("/api/admin/trainings/{id}", a.admin(a.deleteTraining))
-	if !d.ConfigInDB {
-		return
-	}
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))

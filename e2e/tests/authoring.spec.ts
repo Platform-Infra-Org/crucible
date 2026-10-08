@@ -21,6 +21,17 @@ async function startEdit(page: Page, training: string): Promise<number> {
 // savedOps is the draft as the server has it: what autosave wrote.
 const savedOps = async (page: Page, id: number) => JSON.stringify((await (await page.request.get(`/api/authoring/drafts/${id}`)).json()).ops)
 
+// shareWithContainer makes a seeded repo writable by the api container, which runs as its own uid. On a Linux host
+// that container already owns the objects it pushed, and only root may chmod those, so fall back to a throwaway root
+// container. Docker Desktop and rootless Podman map its writes back to us, where the plain chmod is enough.
+function shareWithContainer(bare: string) {
+  try {
+    execFileSync('chmod', ['-R', 'a+rwX', bare], { stdio: 'pipe' }) // quiet: failing here is expected on Linux
+  } catch {
+    execFileSync('docker', ['run', '--rm', '-v', `${bare}:/git:z`, 'alpine:3.22', 'chmod', '-R', 'a+rwX', '/git'])
+  }
+}
+
 // pushUpstream commits a change to a seeded content repo, as a maintainer would in git, and returns the new head. The
 // API picks it up on its next sync (10 s in compose).
 function pushUpstream(training: string, file: string, change: (text: string) => string): string {
@@ -28,11 +39,12 @@ function pushUpstream(training: string, file: string, change: (text: string) => 
   const work = mkdtempSync(join(tmpdir(), 'crucible-e2e-'))
   const git = (...args: string[]) => execFileSync('git', ['-C', work, '-c', 'user.name=crucible', '-c', 'user.email=crucible@local', ...args], { encoding: 'utf8' }).trim()
   try {
+    shareWithContainer(bare) // earlier tests merged through the api container, which owns the objects it wrote
     execFileSync('git', ['clone', '-q', bare, work])
     writeFileSync(join(work, file), change(readFileSync(join(work, file), 'utf8')))
     git('commit', '-qam', `upstream change ${run}`)
     git('push', '-q', 'origin', 'HEAD:main')
-    execFileSync('chmod', ['-R', 'a+rwX', bare]) // the api container (another uid) pushes merges here too
+    shareWithContainer(bare) // and it pushes merges here after us
     return git('rev-parse', 'HEAD')
   } finally {
     rmSync(work, { recursive: true, force: true })

@@ -16,7 +16,7 @@ export function ApprovalsPage() {
   return (
     <section className="page">
       <h1>Approvals</h1>
-      {data.length === 0 && <p className="muted">Nothing waiting. The forge is quiet.</p>}
+      {data.length === 0 && <p className="muted empty">Nothing waiting. The forge is quiet.</p>}
       <ul className="approvals">
         {data.map((a) => <ApprovalCard key={a.kind + a.id} a={a} onDone={reload} />)}
       </ul>

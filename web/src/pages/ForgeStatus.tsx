@@ -29,12 +29,14 @@ export function ForgeStatusPage() {
   return (
     <section className="page">
       <h1>Forge Status</h1>
+      <section className="panel">
       <h2>Lab kill switch</h2>
       <p role="status" data-testid="kill-switch-status" className={k.enabled ? 'error' : 'pass'}>
         {k.enabled ? `Labs are paused (by ${k.changed_by}, ${new Date(k.changed_at ?? '').toLocaleString()}).` : 'Labs are running.'}
       </p>
       <button className={k.enabled ? 'primary' : 'danger'} onClick={toggle}>{k.enabled ? 'Resume labs' : 'Pause all labs'}</button>
-
+      </section>
+      <section className="panel">
       <h2>Needs attention</h2>
       {p.pending_edits > 0 && <p><Link to="/edits">{p.pending_edits} content edit{p.pending_edits === 1 ? '' : 's'} waiting for review</Link></p>}
       {p.attention.length === 0 ? <p className="pass">No failed or stuck labs.</p> : (
@@ -46,6 +48,8 @@ export function ForgeStatusPage() {
           ))}</tbody>
         </table></div>
       )}
+      </section>
+      <section className="panel">
       <h2>Program versions</h2>
       <div className="table-wrap"><table className="grid">
         <thead><tr><th>Program</th><th>Runs</th><th>Branch head</th></tr></thead>
@@ -54,7 +58,8 @@ export function ForgeStatusPage() {
             <td><code>{g.head.slice(0, 7)}</code>{!g.pinned_ref && g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
         ))}</tbody>
       </table></div>
-
+      </section>
+      <section className="panel">
       <h2>Sync</h2>
       <dl className="facts">
         <dt>Last sync</dt><dd>{new Date(p.synced_at).toLocaleString()}</dd>
@@ -71,7 +76,8 @@ export function ForgeStatusPage() {
           ))}
         </tbody>
       </table></div>
-
+      </section>
+      <section className="panel">
       <h2>Forge settings</h2>
       <p className="muted">Change these under <Link to="/admin/settings">Forge settings</Link>; they take effect at once.</p>
       <dl className="facts">
@@ -82,6 +88,8 @@ export function ForgeStatusPage() {
         <dt>Admins</dt><dd>{p.admins.join(', ')}</dd>
       </dl>
 
+      </section>
+      <section className="panel">
       <h2>Recent privileged actions</h2>
       <div className="table-wrap"><table className="grid">
         <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Commit</th></tr></thead>
@@ -94,6 +102,7 @@ export function ForgeStatusPage() {
           ))}
         </tbody>
       </table></div>
+      </section>
     </section>
   )
 }

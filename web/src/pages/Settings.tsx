@@ -12,7 +12,8 @@ export function SettingsPage() {
   return (
     <section className="page">
       <h1>Settings</h1>
-      <h2>Theme</h2>
+      <section className="panel" aria-labelledby="theme-h">
+      <h2 id="theme-h">Theme</h2>
       <div className="themes" role="radiogroup" aria-label="Theme">
         {THEMES.map((t) => (
           <button key={t.id} role="radio" aria-checked={theme === t.id} onClick={() => setPrefs(t.id, me.user.calm_motion)}>
@@ -22,10 +23,13 @@ export function SettingsPage() {
           </button>
         ))}
       </div>
-      <h2>Motion</h2>
+      </section>
+      <section className="panel" aria-labelledby="motion-h">
+      <h2 id="motion-h">Motion</h2>
       <label>
         <input type="checkbox" checked={me.user.calm_motion} onChange={(e) => setPrefs(theme, e.target.checked)} /> Calm forge (turn off animations)
       </label>
+      </section>
       <NotificationSettings />
     </section>
   )
@@ -49,8 +53,8 @@ function NotificationSettings() {
     }
   }
   return (
-    <>
-      <h2>Email notifications</h2>
+    <section className="panel" aria-labelledby="email-h">
+      <h2 id="email-h">Email notifications</h2>
       {!data.email_enabled && <p className="muted">Email is not configured on this Crucible yet; these choices apply once it is.</p>}
       <fieldset className="stack" disabled={saving}>
         <legend className="muted">Email me when…</legend>
@@ -60,6 +64,6 @@ function NotificationSettings() {
           </label>
         ))}
       </fieldset>
-    </>
+    </section>
   )
 }

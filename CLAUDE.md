@@ -10,6 +10,12 @@ writes content edits back to git as a bot. Configuration and people live in Post
   `docs/superpowers/plans/2026-10-05-crucible-roadmap.md`
 - Per-milestone plans: `docs/superpowers/plans/`; rulings made during the build: `docs/superpowers/rulings-m3-m7.md`
 - Operator guides: `docs/runbooks/aws.md`, `docs/runbooks/cognito.md`
+- AWS for newcomers: `docs/aws-guide.html` — every AWS component, an architecture diagram, deploying step by step, and
+  how AWS labs use Terraform and IAM. Update it when `deploy/aws` or the AWS lab path changes.
+- Terraform or Crossplane for AWS labs: `docs/terraform-vs-crossplane.html` — how each would run a lab, with diagrams,
+  and the trade-offs here.
+- Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
+  from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 
 ## Toolchain
 
@@ -48,7 +54,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
   (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
-- `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`
+- `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`, styles in `web/src/theme/app.css`
+- `.claude/skills/crucible-ui/` — the UI design skill (tokens, components, motion, accessibility, how to check a page)
 - `examples/` — training repos (seeded into `.local/git` by `scripts/seed-git.sh`) and `platform`, the configuration
   seed every e2e starts from (imported into Postgres by `CRUCIBLE_SEED_DIR`)
 - `deploy/compose` (local), `deploy/helm` (k3s), `deploy/aws/{persistent,main,labs}` (Terraform)
@@ -68,6 +75,13 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - **Tests first** for behaviour changes; every security or money path keeps a test that fails without the fix.
 - **Docs:** any capability change updates `docs/user` in the same commit. `go test ./internal/docs` fails when a SPA
   route, a role or a catalog block has no page, or a page covers something that no longer exists.
+
+## UI design
+
+- **Use the `crucible-ui` skill for any UI design or styling task** (a page, a component, a restyle, motion, a theme or
+  token change). It holds the project's design patterns; read it before writing JSX or CSS.
+- **Keep it current:** a change that adds, alters or removes a design pattern updates
+  `.claude/skills/crucible-ui/SKILL.md` in the same commit.
 
 ## Invariants worth knowing before changing code
 

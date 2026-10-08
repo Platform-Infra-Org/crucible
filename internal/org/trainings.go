@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -59,14 +60,8 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 	if branch == "" {
 		branch = "main"
 	}
-	if strings.IndexFunc(repo, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
-		return apperr.Wrap(apperr.Invalid, "repo URL cannot contain whitespace or control characters")
-	}
-	if strings.HasPrefix(repo, "-") { // before the env bypass: no setting lets an option through as a path
-		return apperr.Wrap(apperr.Invalid, "repo URL cannot start with '-'")
-	}
-	if !remoteURL.MatchString(repo) && !gitsync.AllowFileFromEnv(os.Getenv) {
-		return apperr.Wrap(apperr.Invalid, "repo must be an https://, http://, ssh://, git:// or user@host:path URL; local paths are not allowed on this instance")
+	if err := checkRepo(repo); err != nil {
+		return err
 	}
 	detail := map[string]any{"repo": redactRepo(repo), "branch": branch, "previous_repo": nil, "previous_branch": nil}
 	err := s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
@@ -100,25 +95,44 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 	return err
 }
 
-// RemoveTraining unregisters a training no program uses.
+// checkRepo refuses a repo URL git could read as an option or a local path (unless this instance allows file remotes).
+func checkRepo(repo string) error {
+	if strings.IndexFunc(repo, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return apperr.Wrap(apperr.Invalid, "repo URL cannot contain whitespace or control characters")
+	}
+	if strings.HasPrefix(repo, "-") { // before the env bypass: no setting lets an option through as a path
+		return apperr.Wrap(apperr.Invalid, "repo URL cannot start with '-'")
+	}
+	if !remoteURL.MatchString(repo) && !gitsync.AllowFileFromEnv(os.Getenv) {
+		return apperr.Wrap(apperr.Invalid, "repo must be an https://, http://, ssh://, git:// or user@host:path URL; local paths are not allowed on this instance")
+	}
+	return nil
+}
+
+// RemoveTraining deletes Crucible's connection to a training's repository (the repository is untouched) and stops the
+// training for every team that runs it, in one step. Progress, scores and badges stay: they are keyed by name, not by
+// these rows, and come back if the training is registered again and started.
 func (s *Store) RemoveTraining(ctx context.Context, actor, id string) error {
 	detail := map[string]any{}
 	return s.inTx(ctx, actor, "training.remove", id, detail, func(tx pgx.Tx) error {
-		var team string
-		err := tx.QueryRow(ctx, `SELECT team FROM programs WHERE training = $1 ORDER BY team LIMIT 1`, id).Scan(&team)
-		if err == nil {
-			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("training %q is used by team %s; remove its program first", id, team))
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		rows, err := tx.Query(ctx, `DELETE FROM programs WHERE training = $1 RETURNING team`, id) // roles and enrollments cascade
+		if err != nil {
 			return err
 		}
+		stopped, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		slices.Sort(stopped)
+		detail["stopped_for"] = nonNil(stopped)
 		var repo, branch string
 		err = tx.QueryRow(ctx, `DELETE FROM trainings WHERE id = $1 RETURNING repo, branch`, id).Scan(&repo, &branch)
 		var pg *pgconn.PgError
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no training %q", id))
-		case errors.As(err, &pg) && pg.Code == "23503": // a program claimed it after our check
-			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("training %q is used by a program; remove its program first", id))
+		case errors.As(err, &pg) && pg.Code == "23503": // a team started it while this ran
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("a team started %q just now; try again", id))
 		case err != nil:
 			return err
 		}

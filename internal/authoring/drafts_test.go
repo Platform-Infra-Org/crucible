@@ -126,22 +126,20 @@ func TestDraftLimitsAndAccess(t *testing.T) {
 	if _, err := f.s.Save(ctx, f.senior, ids[0], SaveDraft{BaseSHA: strings.Repeat("b", 40), UpdatedAt: d.UpdatedAt}); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "rebase it") {
 		t.Fatalf("a base that is neither the draft's nor the head: %v", err)
 	}
-	// The senior becomes enrolled: their drafts, files and checks close at once.
+	// The senior becomes enrolled: editing rights do not depend on enrollment, so their drafts, files and checks stay open.
 	f.st.Platform.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local", "senior@crucible.local"}}
 	for name, err := range map[string]error{
 		"get":      second(f.s.Get(ctx, f.senior, ids[0])),
 		"files":    second(f.s.Files(ctx, f.senior, ids[0])),
 		"file":     second(f.s.File(ctx, f.senior, ids[0], "modules/m1/quiz.yaml")),
 		"validate": second(f.s.Validate(ctx, f.senior, ValidateReq{Training: "t1", BaseSHA: f.head()})),
-		"rebase":   second(f.s.Rebase(ctx, f.senior, ids[0])),
-		"submit":   second(f.s.Submit(ctx, f.senior, ids[0], d.UpdatedAt)),
 	} {
-		if !errors.Is(err, apperr.Forbidden) {
+		if err != nil {
 			t.Errorf("%s while enrolled: %v", name, err)
 		}
 	}
-	if list, _ := f.s.List(ctx, f.senior); len(list) != 0 {
-		t.Fatalf("drafts of a training I'm enrolled in are hidden: %+v", list)
+	if list, _ := f.s.List(ctx, f.senior); len(list) == 0 {
+		t.Fatal("drafts of a training I'm enrolled in stay listed")
 	}
 }
 

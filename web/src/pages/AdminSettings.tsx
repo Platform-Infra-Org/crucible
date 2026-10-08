@@ -65,6 +65,7 @@ export function AdminSettingsPage() {
       <Admins list={admins.data.admins} reload={reloadAll} />
       <Schedules map={plat.data.schedules} reload={reloadAll} />
       <Quotes key={meta.data.quotes.join('\n')} quotes={meta.data.quotes} reload={reloadAll} />
+      <Move reload={reloadAll} />
     </section>
   )
 }
@@ -183,6 +184,32 @@ function Quotes({ quotes, reload }: { quotes: string[]; reload: () => void }) {
       <p className="muted">One line per quote, shown while the forge loads.</p>
       <label>Quotes <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} /></label>
       <button className="primary" disabled={busy}>Save quotes</button>
+      {note}
+    </form>
+  )
+}
+
+// Move carries an instance to a new environment: everything people set up here and everyone's progress, as one file.
+function Move({ reload }: { reload: () => void }) {
+  const [file, setFile] = useState<File>()
+  const { run, note, busy } = useSave(reload)
+  const load = (e: FormEvent) => {
+    e.preventDefault()
+    if (!file || !window.confirm(`Import ${file.name}? It brings in its settings, teams, trainings and everyone's progress.`)) return
+    void run(async () => {
+      await api('/api/admin/import', { method: 'POST', body: await file.text(), headers: { 'Content-Type': 'application/json' } })
+    }, 'Imported. People link to their progress when they first sign in here.')
+  }
+  return (
+    <form className="stack" onSubmit={load}>
+      <h2>Move this forge</h2>
+      <p className="muted">The export is one file with the settings, admins, schedules, trainings, teams, enrollments, roles, budgets,
+        webhooks and everyone&apos;s progress and scores. It holds personal data: keep it somewhere private and never commit it.
+        Labs, spend, sessions and the audit log stay behind.</p>
+      <p><a className="button-link" href="/api/admin/export" download>Download an export</a></p>
+      <p className="muted">Import into a fresh forge, one with no teams or trainings yet. The file replaces its settings; you stay an admin.</p>
+      <label>Export file <input type="file" accept=".json,application/json" onChange={(e) => setFile(e.target.files?.[0])} /></label>
+      <button className="primary" disabled={busy || !file}>Import</button>
       {note}
     </form>
   )

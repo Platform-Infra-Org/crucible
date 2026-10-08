@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
@@ -127,6 +128,8 @@ func TestAdminRoutesAreAdminOnly(t *testing.T) {
 		{"DELETE", "/api/admin/trainings/new-101", ""},
 		{"DELETE", "/api/admin/admins/second@x", ""},
 		{"DELETE", "/api/admin/schedules/nights", ""},
+		{"GET", "/api/admin/export", ""},
+		{"POST", "/api/admin/import", `{"crucible_export":1}`},
 	}
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for _, who := range []string{"lead@x", "senior@x", "new@x", "boss@x", "nobody@x"} {
@@ -142,10 +145,23 @@ func TestAdminRoutesAreAdminOnly(t *testing.T) {
 	if f.refreshes != 0 || count(t, f.s, `SELECT count(*) FROM audit_log`) != before {
 		t.Fatalf("refused requests changed something (refreshes %d)", f.refreshes)
 	}
-	for _, rt := range routes {
+	for _, rt := range routes[:len(routes)-1] { // the import has its own test
 		if w := f.do("admin@x", rt.method, rt.path, rt.body); w.Code/100 != 2 {
 			t.Errorf("admin %s %s = %d: %s", rt.method, rt.path, w.Code, w.Body)
 		}
+	}
+}
+
+// The export downloads as a file; importing it back into the configured instance it came from is refused.
+func TestExportDownloadsAndImportRefusesAConfiguredInstance(t *testing.T) {
+	f := newAPI(t)
+	w := f.do("admin@x", "GET", "/api/admin/export", "")
+	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Disposition"), `attachment; filename="crucible-export-`) ||
+		!strings.Contains(w.Body.String(), `"lead@x"`) {
+		t.Fatalf("export = %d %q %.100s", w.Code, w.Header().Get("Content-Disposition"), w.Body)
+	}
+	if i := f.do("admin@x", "POST", "/api/admin/import", w.Body.String()); i.Code != 409 || f.refreshes != 0 {
+		t.Fatalf("import into a configured instance = %d %s (refreshes %d), want 409", i.Code, i.Body, f.refreshes)
 	}
 }
 
@@ -178,9 +194,6 @@ func TestConflictIsReportedAsConflict(t *testing.T) {
 	if w := f.do("admin@x", "POST", "/api/admin/teams/platform", `{"name":"Again","leader":"x@x"}`); w.Code != 409 {
 		t.Errorf("duplicate team = %d, want 409", w.Code)
 	}
-	if w := f.do("admin@x", "DELETE", "/api/admin/trainings/forge-101", ""); w.Code != 409 {
-		t.Errorf("training in use = %d, want 409", w.Code)
-	}
 }
 
 func TestStatusesFollowTheErrorKind(t *testing.T) {
@@ -198,7 +211,7 @@ func TestStatusesFollowTheErrorKind(t *testing.T) {
 			t.Errorf("%s %s = %d, want %d: %s", c.method, c.path, w.Code, c.want, w.Body)
 		}
 	}
-	f.s.DB.Close()
+	f.s.DB.(*pgxpool.Pool).Close()
 	if w := f.do("admin@x", "GET", "/api/admin/admins", ""); w.Code != 500 || strings.Contains(w.Body.String(), "pool") {
 		t.Errorf("database failure = %d %s, want a bare 500", w.Code, w.Body)
 	}

@@ -5,8 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"crucible/internal/config"
 	"crucible/internal/db/dbtest"
 )
@@ -73,7 +71,7 @@ func TestSeedLeavesAConfiguredInstanceAlone(t *testing.T) {
 	}
 }
 
-func mustScan(t *testing.T, pool *pgxpool.Pool, q string, dst any) {
+func mustScan(t *testing.T, pool DB, q string, dst any) {
 	t.Helper()
 	if err := pool.QueryRow(context.Background(), q).Scan(dst); err != nil {
 		t.Fatalf("%s: %v", q, err)

@@ -126,6 +126,20 @@ func NewRouter(d Deps) chi.Router {
 			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor,
 				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email), "can_manage_trainings": manage})
 		})
+		r.Put("/api/me/avatar", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Avatar string `json:"avatar"`
+			}
+			if err := httpx.Read(r, &body); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			if err := d.Auth.SetAvatar(r.Context(), auth.UserFrom(r.Context()).ID, body.Avatar); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				Theme      string `json:"theme"`

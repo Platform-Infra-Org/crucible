@@ -8,6 +8,8 @@ import { Loader } from '../components/Loader'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { toast } from '../lib/alerts'
 import { repoWarning } from '../lib/adminConfig'
+import { useMe } from '../me'
+import { EditList } from './Edits'
 import { addTraineeRequest, enrollPlan, enrollRequest, people, pinRequest, programChange, programFields } from '../lib/teamRequests'
 
 const STALE = 'Someone changed this while you were looking. Reload to see the latest.'
@@ -52,7 +54,7 @@ export function ManageTrainingsPage() {
   return (
     <section className="page manage">
       <h1>Manage trainings</h1>
-      <p className="lede">Start a training for a team, enroll people and hand out roles. The content itself comes from each training&apos;s git repository.</p>
+      <p className="lede">Start a training for a team, enroll people, hand out roles and edit the content. The content lives in each training&apos;s git repository; edits reach it after review.</p>
       <div className="manage-grid">
         <nav aria-label="Trainings" className="manage-list">
           {data.trainings.length === 0 && <p className="muted">No trainings are registered yet.</p>}
@@ -112,6 +114,7 @@ function TrainingDetail({ t, data, onChange }: { t: ManagedTraining; data: Train
       <h2>{t.title}</h2>
       <p className="muted"><code>{t.id}</code>{!t.available && <> · <span className="badge warn">content not loaded yet</span></>}</p>
       {data.is_admin && <Source t={t} onChange={onChange} />}
+      <ContentEdits t={t} />
       <h3>Teams running it</h3>
       {t.programs.length === 0 && <p className="muted">No team runs this training yet{free.length > 0 ? '; start it for one below.' : '.'}</p>}
       {t.programs.map((p) => {
@@ -123,7 +126,7 @@ function TrainingDetail({ t, data, onChange }: { t: ManagedTraining; data: Train
   )
 }
 
-// Source is where the content comes from, for admins: repoint it or unregister the training.
+// Source is where the content comes from, for admins: repoint it, or delete the training (its repository stays).
 function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
   const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
@@ -138,9 +141,10 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
       setEditing(false)
     }
   }
-  const unregister = async () => {
-    if (!window.confirm(`Unregister ${t.id}? Its content stays in git; register it again to bring it back.`)) return
-    if (await act.run(() => api(`/api/admin/trainings/${encodeURIComponent(t.id)}`, { method: 'DELETE' }), `${t.id} is unregistered.`)) {
+  const remove = async () => {
+    const teams = t.programs.map((p) => p.team).join(', ')
+    if (!window.confirm(`Delete ${t.title} from Crucible?${teams ? ` It stops for ${teams}.` : ''} The repository itself is not touched, and everyone's progress is kept: register it again to bring it back.`)) return
+    if (await act.run(() => api(`/api/admin/trainings/${encodeURIComponent(t.id)}`, { method: 'DELETE' }), `${t.title} is deleted.`)) {
       navigate('/trainings/manage')
     }
   }
@@ -155,9 +159,7 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
       {!editing && (
         <div className="row">
           <button type="button" onClick={() => { setRepo(''); setBranch(t.branch ?? 'main'); setEditing(true) }}>Change source</button>
-          <button type="button" className="ghost" disabled={act.busy || t.programs.length > 0} onClick={unregister}
-            title={t.programs.length > 0 ? 'Stop it for every team first' : undefined}>Unregister</button>
-          {t.programs.length > 0 && <span className="muted">Stop it for every team before unregistering.</span>}
+          <button type="button" className="ghost danger-text" disabled={act.busy} onClick={remove}>Delete training</button>
         </div>
       )}
       {editing && (
@@ -172,6 +174,26 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
         </form>
       )}
     </div>
+  )
+}
+
+// ContentEdits is the training's content side: open the editor on it, and its drafts and edits waiting on you.
+function ContentEdits({ t }: { t: ManagedTraining }) {
+  const { me } = useMe()
+  const editable = useFetch<{ id: string }[]>(me.can_edit_content ? '/api/content' : null)
+  if (!me.can_edit_content) return null
+  const canEdit = !!editable.data?.some((x) => x.id === t.id)
+  return (
+    <section className="panel" aria-label="Content edits">
+      <div className="row panel-head">
+        <h3>Content edits</h3>
+        <span className="spacer" />
+        <Link className="muted" to="/edits">All trainings&apos; edits</Link>
+        {canEdit && <Link className="button-link" to={`/edits/new?training=${encodeURIComponent(t.id)}`}>Edit content</Link>}
+      </div>
+      <p className="muted">Changes to the readings, quizzes and labs go to review, then into the training&apos;s git repository.</p>
+      <EditList training={t.id} />
+    </section>
   )
 }
 

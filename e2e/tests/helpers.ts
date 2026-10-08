@@ -11,6 +11,18 @@ export async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
+// contentEdits opens a training on Manage trainings, the way a person gets there, and returns its Content edits panel:
+// where an edit starts and where drafts and edits waiting for review are listed.
+export async function contentEdits(page: Page, training: string) {
+  await page.getByRole('link', { name: 'Trainings', exact: true }).click()
+  await page.getByRole('link', { name: 'Manage trainings' }).click()
+  await page.getByRole('navigation', { name: 'Trainings' }).getByRole('link', { name: new RegExp(`\\b${training}\\b`) }).click()
+  await expect(page).toHaveURL(new RegExp(`/trainings/manage/${training}$`))
+  const panel = page.getByRole('region', { name: 'Content edits' })
+  await expect(panel).toBeVisible()
+  return panel
+}
+
 // enroll does what a leader does on Manage trainings: start the training for The Forge if the team doesn't run it yet,
 // then enroll email. Idempotent, so it runs again on a KEEP=1 stack.
 export async function enroll(page: Page, training: string, email: string) {

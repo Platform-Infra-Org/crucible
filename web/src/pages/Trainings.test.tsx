@@ -5,7 +5,7 @@ import { TrainingsPage } from './Trainings'
 import type { CatalogEntry } from '../types'
 
 let data: CatalogEntry[] = []
-const me = { can_manage_trainings: false }
+const me = { can_manage_trainings: false, can_edit_content: false, is_admin: false, teams: ['forge'] }
 vi.mock('../useFetch', () => ({ useFetch: () => ({ data, error: undefined }) }))
 vi.mock('../me', () => ({ useMe: () => ({ me }) }))
 
@@ -19,6 +19,24 @@ describe('Trainings catalog', () => {
     me.can_manage_trainings = true
     expect(html()).toContain('href="/trainings/manage"')
     me.can_manage_trainings = false
+  })
+  test('an author reaches the editor through Manage trainings, or the Edits list when they are on no team', () => {
+    data = [entry]
+    me.can_edit_content = true
+    expect(html()).toContain('href="/trainings/manage"')
+    me.teams = []
+    expect(html()).toContain('href="/edits"')
+    me.can_edit_content = false
+    me.teams = ['forge']
+  })
+  test('a card opens the training on Manage trainings for those who manage, and stays plain for trainees', () => {
+    data = [entry]
+    expect(html()).not.toContain('href="/trainings/manage/forge-101"')
+    me.can_manage_trainings = true
+    const h = html()
+    me.can_manage_trainings = false
+    expect(h).toContain('href="/trainings/manage/forge-101"')
+    expect(h).toContain('href="/p/forge/forge-101"') // the Open link still works inside the card
   })
   test('empty state', () => {
     data = []

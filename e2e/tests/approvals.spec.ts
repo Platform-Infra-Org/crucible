@@ -22,7 +22,7 @@ async function login(browser: Browser, user: string): Promise<Page> {
 test('a leader enrolls a trainee on Manage trainings, approves a paid lab, and an admin pauses all labs', async ({ browser }) => {
   // The leader starts Forge 201 for the team and enrolls the trainee in it.
   const leader = await login(browser, 'leader')
-  await leader.getByRole('link', { name: 'Team', exact: true }).click()
+  await leader.getByRole('link', { name: 'Teams', exact: true }).click()
   await expect(leader.getByRole('heading', { name: 'The Forge' })).toBeVisible()
   await expect(leader.getByRole('link', { name: 'Start a training for this team' })).toBeVisible()
   await enroll(leader, 'forge-201', 'trainee@crucible.local')

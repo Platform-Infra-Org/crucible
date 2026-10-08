@@ -38,7 +38,29 @@ pick one in their settings. Saving under a name that exists replaces it. A sched
 deleted; change the program first. See
 [Schedules, budgets and caps](/docs/leaders/schedules-budgets-and-caps) for what a schedule does to a lab.
 
+## Moving the forge
+
+**Move this forge**, at the bottom of Forge settings, carries an instance to a new environment, for example from a
+test install to the real one, or from one identity provider to another.
+
+**Download an export** saves one JSON file with everything people set up here: settings, admins, schedules, quotes,
+trainings, teams with their people, mentors, budgets and webhooks, programs with their roles and enrollments, and
+everyone's progress, quiz attempts, scored work, ranks and badges. Each export is written to the audit log.
+
+The file is personal data: names, emails, answers, scores and webhook URLs. Keep it somewhere private, delete it when
+the move is done, and never commit it to a repository.
+
+Left behind: running and past labs, spend, sessions and laptop pairings (everyone signs in and pairs again), and the
+audit log. Uploaded files stay where they are stored; they open on the new forge when it uses the same storage.
+
+To import, sign in to the new forge as its first admin, open Forge settings, choose the file under **Export file** and
+choose **Import**. It only goes into a fresh forge, one with no teams or trainings yet, and it replaces that forge's
+settings, schedules and quotes. You stay an admin. The file lands whole or not at all: if anything in it is wrong, such
+as a bad email or a repository URL this forge refuses, nothing is imported and the page says what was wrong.
+
+People are matched by email. The first time someone signs in to the new forge, their progress is theirs again.
+
 ## Trainings
 
-The trainings this Crucible knows about — registering one, pointing it at another repository, unregistering it — are
+The trainings this Crucible knows about — registering one, pointing it at another repository, deleting it — are
 on [Manage trainings](/docs/leaders/manage-trainings), under **Administrator → Trainings**.

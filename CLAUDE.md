@@ -71,8 +71,10 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 ## Invariants worth knowing before changing code
 
-- Anyone enrolled in a training never sees its answer keys: rubrics (`json:"-"`, only via `ScorerView`), raw files,
-  edit diffs, Anvil data, peers' uploads. Enrolled users never score their own training (admins included).
+- Anyone enrolled in a training never sees its answer keys (rubrics — `json:"-"`, only via `ScorerView` — raw files,
+  edit diffs, Anvil data, peers' uploads), **unless they may edit it**: admins, its maintainers, and leaders/seniors of
+  teams running it keep editing and reviewing while enrolled (owner's ruling, 2026-10-08; `TestEnrolledEditorsKeepEditing`).
+  Enrolled users never score their own training (admins included).
 - Git is the source of truth for **training content**. Configuration and org data (settings, tiers, schedules, quotes,
   admins, the training registry, teams, membership, mentors, webhooks, budgets, programs, roles, enrollments, pins)
   live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes, and nowhere else (no
@@ -155,7 +157,8 @@ should scale or skip under `-race`.
 
 1. **Look at the nav in a browser.** Docs, the `?` link and the Administrator menu now share the right-hand side.
    No test can judge whether that reads well.
-2. **Export/import** (the rest of M8b): the owner asked for it; nothing is built. The seed is one-way, from YAML.
+2. **Export/import** is built (spec §14): Forge settings → **Move this forge**, `GET /api/admin/export`,
+   `POST /api/admin/import` (fresh instances only). Not built: a CLI, `--force`, copying upload blobs.
 3. **First-run flow.** An admin on a fresh Postgres instance has rights over nothing: no trainings, so
    `Edits.CanUse` is false and the **Edits** button is absent; empty Hearth; no teams. The path works (Registry →
    Team → roster) but nothing guides you through it. Consider a first-run checklist.

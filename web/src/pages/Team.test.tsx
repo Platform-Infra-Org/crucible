@@ -5,7 +5,7 @@ import { ApiError } from '../api'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { addTraineeRequest, budgetRequest, enrollPlan, enrollRequest, pinRequest, programChange, programFields, programRequest, rosterRequest, teamPath } from '../lib/teamRequests'
 import type { ProgramConfig, TeamView } from '../types'
-import { CreateTeam, TeamPage } from './Team'
+import { CreateTeam, TeamPage, TeamsIndex } from './Team'
 
 const prog: ProgramConfig = {
   training: 'forge-101', title: 'Forge 101', version: 7, enrolled: ['a@x'], roles: { manager: ['l@x'], scorers: [], approvers: [] },
@@ -19,7 +19,8 @@ const team: TeamView = {
 }
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ team: 'platform', training: 'forge-101' }) }))
 const fetched: string[] = []
-vi.mock('../useFetch', () => ({ useFetch: (path: string) => { fetched.push(path); return { data: team, error: undefined, reload: () => {} } } }))
+const teams = [{ id: 'platform', name: 'Platform', role: 'admin' }, { id: 'apps', name: 'Apps', role: 'admin' }]
+vi.mock('../useFetch', () => ({ useFetch: (path: string) => { fetched.push(path); return { data: path === '/api/teams' ? teams : team, error: undefined, reload: () => {} } } }))
 vi.mock('../me', () => ({ useMe: () => ({ me: { is_admin: true, can_manage_trainings: true } }) }))
 
 describe('requests', () => {
@@ -92,6 +93,18 @@ describe('pages', () => {
     expect(h).toContain('href="/trainings/manage/forge-101#team-platform"')
     expect(h).toContain('Start a training for this team')
     expect(h).not.toContain('Enroll the team')
+    expect(h).toContain('Delete team') // admins only: the server refuses everyone else
+    team.is_admin = false
+    const leader = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
+    team.is_admin = true
+    expect(leader).not.toContain('Delete team')
+  })
+  test('the team list shows cards and keeps the create form behind + Start a team', () => {
+    const h = renderToStaticMarkup(<MemoryRouter><TeamsIndex /></MemoryRouter>)
+    expect(h).toContain('href="/teams/platform"')
+    expect(h.indexOf('Apps')).toBeLessThan(h.indexOf('Platform')) // sorted by name
+    expect(h).toContain('Start a team')
+    expect(h).not.toContain('Create team')
   })
   test('create-team has labelled id, name and leader', () => {
     const h = renderToStaticMarkup(<MemoryRouter><CreateTeam /></MemoryRouter>)

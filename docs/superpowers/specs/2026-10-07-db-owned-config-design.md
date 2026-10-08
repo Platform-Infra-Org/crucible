@@ -341,3 +341,27 @@ Git mode is gone; export/import is not built yet. Where this differs from §7–
   (`/trainings/manage`, read by `GET /api/org/trainings`, visible teams following `getTeam`'s rule). Enrolling an
   email that is not on the team adds it as a trainee first (a roster save, then a program save, from the page), and
   only for someone who may edit the team.
+
+## 14. As built (M8b, export and import)
+
+`org.Store.Export` and `org.Store.Import` behind `GET /api/admin/export` and `POST /api/admin/import` (admins only),
+with **Move this forge** on Forge settings. Where this differs from §7:
+
+- **Sections are tables.** The file is `{"crucible_export": 1, "generated_at": …, "tables": {…}}`, one key per table in
+  §7's list, each the table's rows as JSON (`to_jsonb`), read in one repeatable-read snapshot. Import inserts them in
+  parent-before-child order with `jsonb_populate_record` in one transaction, then reads the result back through
+  `Store.Platform` on that transaction and re-runs the save-time checks the read-back does not cover (training ids,
+  repo URLs — local paths and option-like URLs refused as in `AddTraining` — team ids, every email, the roster rules)
+  before it commits. Every section must be present; an unknown version is refused naming the one this build reads.
+- **Identity.** `users.sub` stays `NOT NULL UNIQUE`: an imported person gets the placeholder sub `import:<email>`, and
+  `auth.Store.UpsertUser` hands that row to the first login with that (provider-verified) email and an unused sub
+  (`TestImportRelinksUsersByEmail`). Someone already signed in at the target keeps their row; the importing admin stays
+  an admin (admins merge, everything else must be empty).
+- **No CLI and no `--force`.** The endpoints and the page cover moving an instance; import refuses any instance with a
+  team or a training (409). Settings, schedules and quotes of the fresh instance are replaced.
+- **No blob copy.** Submissions keep their `file_keys`; uploads open again when the new instance uses the same blob
+  store. Terminal transcripts belong to lab instances, which stay behind, so they stay behind too; so do content edits
+  and drafts. `submissions.lab_id` is cleared on import.
+- **Tests:** `TestExportImportRoundTrip`, `TestImportRefusesNonEmptyInstance`, `TestImportRefusesUnknownVersion`,
+  `TestImportIsAllOrNothing` (truncated file, unknown person, local and option-like repo URLs, bad email, no leader,
+  plain-http webhook), `TestExportDownloadsAndImportRefusesAConfiguredInstance`, `TestImportRelinksUsersByEmail`.

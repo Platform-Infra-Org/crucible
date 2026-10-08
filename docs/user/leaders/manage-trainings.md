@@ -1,16 +1,18 @@
 ---
 title: Manage trainings
-roles: [leader, admin]
+roles: [leader, admin, author]
 covers: [route:/trainings/manage, route:/trainings/manage/:training]
 order: 5
 ---
 # Manage trainings
 
 **Manage trainings** is the one place for everything about who takes a training and who runs it: start a training
-for a team, enroll people, see who is enrolled, and hand out roles. Admins also register trainings here.
+for a team, enroll people, see who is enrolled, hand out roles and edit the content. Admins also register trainings
+here.
 
-Open it with **Manage trainings** at the top of the **Trainings** page, from **Administrator → Trainings**, or with
-**Manage** next to a program on your team page. It is there for admins, team leaders and program managers.
+Open it with **Manage trainings** at the top of the **Trainings** page, by choosing a training's card there (it opens
+that training), from **Administrator → Trainings**, or with
+**Manage** next to a program on your team page. It is there for admins, team leaders, program managers, and anyone who may edit a training's content.
 
 The page lists the trainings on the left; pick one to see it on the right. Under each training's name you see how
 many teams run it and how many people are enrolled. You see the teams you belong to; an admin sees every team.
@@ -33,11 +35,18 @@ Under **Source**, an admin sees where a training's content comes from:
 - **Change source** points it at another repository or branch, for a move between hosts, say. Crucible warns you
   first and names how many teams run it, because the content versions they are pinned to belong to the repository you
   are leaving.
-- **Unregister** removes the training from Crucible. Its content stays in git. A training a team still runs can't be
-  unregistered; stop it for every team first.
+- **Delete training** removes the training from Crucible: its connection to the repository, and its program in every
+  team that runs it (Crucible names those teams and asks first). The repository itself is not touched, and everyone's
+  progress, scores and badges are kept. Register it again and start it for a team to bring it back.
 
 What Crucible found in the repository — the head commit, and anything that stopped it loading — is under **Sync** on
 [Forge Status](/docs/admins/forge-status-and-kill-switch).
+
+## Content edits
+
+If you may edit a training, its page has a **Content edits** panel. **Edit content** opens the editor on a fresh
+draft; below it are your drafts of this training and its edits waiting for review. See
+[The editor](/docs/authors/editing-content) and [Review and merge](/docs/authors/review-and-merge).
 
 ## Starting a training for a team
 

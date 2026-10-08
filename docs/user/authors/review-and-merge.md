@@ -10,8 +10,9 @@ Every edit is reviewed before trainees see it.
 
 ## The Edits list
 
-**Edits** lists your own edits and the ones you may review, pending ones first, then the newest. Each shows its
-status: *pending*, *merged*, *rejected*, *withdrawn* or *stale*. Open one to see the change
+A training's **Content edits** panel on [Manage trainings](/docs/leaders/manage-trainings) lists its edits: your
+own and the ones you may review. **All trainings' edits** there opens the **Edits** list, the same for every training
+at once, pending ones first, then the newest. Each shows its status: *pending*, *merged*, *rejected*, *withdrawn* or *stale*. Open one to see the change
 as a diff, and each changed file in full.
 
 ## What reviewers see
@@ -27,8 +28,8 @@ changed but never renamed or deleted.
 
 ## Reviewing
 
-A maintainer of the training, or an admin, reviews the edit. You never review your own, and nobody enrolled in the
-training reviews it. A reviewer can leave a note and:
+A maintainer of the training, or an admin, reviews the edit, whether or not they are enrolled in it. You never review
+your own. A reviewer can leave a note and:
 
 - **Approve and merge**: the bot merges exactly the commit that was reviewed, and Crucible picks up the new version.
 - **Reject**: nothing changes in the training.

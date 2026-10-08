@@ -66,8 +66,12 @@ export default function App() {
     setMe({ ...me, user: { ...me.user, theme, calm_motion: calm } })
     applyTheme(theme, calm)
   }
+  const setAvatar = async (avatar: string) => {
+    await api('/api/me/avatar', { method: 'PUT', json: { avatar } })
+    setMe({ ...me, user: { ...me.user, avatar } })
+  }
   return wrap(
-    <MeContext.Provider value={{ me, setPrefs }}>
+    <MeContext.Provider value={{ me, setPrefs, setAvatar }}>
         <Nav />
         <Routes>
           <Route path="/" element={<Hearth />} />

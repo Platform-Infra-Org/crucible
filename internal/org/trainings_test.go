@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 
 	"crucible/internal/apperr"
@@ -72,31 +71,33 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 	}
 }
 
-func TestRemoveTrainingRefusedWhileAProgramUsesIt(t *testing.T) {
+// Deleting a training removes Crucible's connection to its repository (the repository itself is untouched) and stops
+// it for every team that ran it, in one audited step. Everyone's progress stays.
+func TestRemoveTrainingStopsItForEveryTeam(t *testing.T) {
 	pool := dbtest.New(t)
 	s := &Store{DB: pool}
 	ctx := context.Background()
 	if err := s.AddTraining(ctx, "admin@x", "forge-101", "https://git/x.git", "main"); err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
-	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('forge','forge-101')`)
-	err := s.RemoveTraining(ctx, "admin@x", "forge-101")
-	if !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "forge") || !strings.Contains(err.Error(), "forge-101") {
-		t.Fatalf("want a Conflict naming team and training, got %v", err)
-	}
-	// the raw foreign key maps to the same kind
-	if _, err := pool.Exec(ctx, `DELETE FROM trainings WHERE id = 'forge-101'`); err == nil {
-		t.Fatal("foreign key should block the delete")
-	}
-	var n int
-	pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'training.remove'`).Scan(&n)
-	if n != 0 {
-		t.Errorf("refused removal wrote %d audit rows", n)
-	}
-	mustExec(t, pool, `DELETE FROM programs`)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge'), ('anvil', 'Anvil')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('forge','forge-101'), ('anvil','forge-101')`)
+	mustExec(t, pool, `INSERT INTO enrollments (team, training, email) VALUES ('forge','forge-101','a@x')`)
+	mustExec(t, pool, `INSERT INTO users (sub, email) VALUES ('s1', 'a@x')`)
+	mustExec(t, pool, `INSERT INTO item_progress (user_id, team, training, module, item, status) SELECT id, 'forge', 'forge-101', 'm', 'r', 'complete' FROM users`)
 	if err := s.RemoveTraining(ctx, "admin@x", "forge-101"); err != nil {
 		t.Fatal(err)
+	}
+	var left, progress int
+	mustScan(t, pool, `SELECT (SELECT count(*) FROM trainings) + (SELECT count(*) FROM programs) + (SELECT count(*) FROM enrollments)`, &left)
+	mustScan(t, pool, `SELECT count(*) FROM item_progress`, &progress)
+	if left != 0 || progress != 1 {
+		t.Errorf("after delete: %d training/program/enrollment rows left, %d progress rows (want 0 and 1)", left, progress)
+	}
+	var stopped string
+	mustScan(t, pool, `SELECT detail->>'stopped_for' FROM audit_log WHERE action = 'training.remove'`, &stopped)
+	if stopped != `["anvil", "forge"]` {
+		t.Errorf("audit names the teams it was stopped for: %s", stopped)
 	}
 	if err := s.RemoveTraining(ctx, "admin@x", "forge-101"); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("second remove = %v, want NotFound", err)

@@ -32,6 +32,12 @@ describe('tiers', () => {
   })
 })
 
+test('the page offers the export and the import', () => {
+  const h = page()
+  expect(h).toContain('href="/api/admin/export"')
+  expect(h).toContain('Import into a fresh forge')
+})
+
 describe('banners', () => {
   test('cost tiers banner shows while unset and goes once set', () => {
     tiers = null

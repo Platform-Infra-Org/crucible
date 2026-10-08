@@ -13,13 +13,21 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"crucible/internal/config"
 	"crucible/internal/yamlx"
 )
 
-type Store struct{ DB *pgxpool.Pool }
+// DB is what the store runs on: the pool, or an import's own transaction while that import checks what it wrote.
+type DB interface {
+	Begin(context.Context) (pgx.Tx, error)
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type Store struct{ DB DB }
 
 // Platform reads every table into the struct config.Load returns.
 func (s *Store) Platform(ctx context.Context) (*config.Platform, error) {

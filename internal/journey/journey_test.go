@@ -106,11 +106,17 @@ func TestHeatMapAndStuckFlags(t *testing.T) {
 		}
 	}
 
+	if _, err := db.Exec(ctx, `UPDATE users SET avatar = 'flame' WHERE id = $1`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
 	rows, err := f.s.Team(ctx, f.leader, "forge")
 	if err != nil || len(rows) != 1 || rows[0].Email != "trainee@crucible.local" {
 		t.Fatalf("leader sees the trainee: %+v %v", rows, err)
 	}
 	r := rows[0]
+	if r.Avatar != "flame" {
+		t.Errorf("the row carries the person's icon for the page: %q", r.Avatar)
+	}
 	heat := map[string]string{}
 	for _, c := range r.Cells {
 		heat[c.Module] = c.Heat

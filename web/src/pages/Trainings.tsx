@@ -8,6 +8,8 @@ import { Loader } from '../components/Loader'
 export function TrainingsPage() {
   const { data, error } = useFetch<CatalogEntry[]>('/api/catalog')
   const { me } = useMe()
+  // Manage trainings lists the trainings of the caller's teams; an author on no team edits from the Edits list.
+  const manage = (me.can_manage_trainings || me.can_edit_content) && (me.is_admin || me.teams.length > 0)
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Opening the catalog…" />
   return (
@@ -15,13 +17,16 @@ export function TrainingsPage() {
       <div className="row">
         <h1>Trainings</h1>
         <span className="spacer" />
-        {me.can_manage_trainings && <Link className="button-link" to="/trainings/manage">Manage trainings</Link>}
+        {(me.can_manage_trainings || me.can_edit_content) && (
+          <Link className="button-link" to={manage ? '/trainings/manage' : '/edits'}>Manage trainings</Link>
+        )}
       </div>
       {data.length === 0 && <p className="muted">No trainings are available yet.</p>}
       <div className="cards">
         {data.map((c) => (
-          <article key={c.id} className="card" data-testid={`catalog-${c.id}`}>
-            <h2>{c.title}</h2>
+          <article key={c.id} className={manage ? 'card card-link' : 'card'} data-testid={`catalog-${c.id}`}>
+            {/* the title's link covers the card (CSS); the Open links stay on top of it */}
+            <h2>{manage ? <Link to={`/trainings/manage/${c.id}`}>{c.title}</Link> : c.title}</h2>
             {c.description && <p>{c.description}</p>}
             {!c.available && <p className="warn">Content unavailable right now</p>}
             {c.available && <p className="muted">

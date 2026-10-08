@@ -16,7 +16,7 @@ import (
 	"crucible/internal/db/dbtest"
 )
 
-func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
+func mustExec(t *testing.T, pool DB, sql string, args ...any) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), sql, args...); err != nil {
 		t.Fatalf("%s: %v", sql, err)

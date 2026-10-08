@@ -43,6 +43,7 @@ type Flag struct {
 type Row struct {
 	Email      string     `json:"email"`
 	Name       string     `json:"name"`
+	Avatar     string     `json:"avatar"` // the person's forge icon, "" for initials
 	Team       string     `json:"team"`
 	Training   string     `json:"training"`
 	Title      string     `json:"title"`
@@ -84,8 +85,9 @@ type Mentee struct {
 type want struct{ training, email string }
 
 type person struct {
-	id   int64
-	name string
+	id     int64
+	name   string
+	avatar string
 }
 
 func (s *Service) state() (*gitsync.State, error) {
@@ -129,7 +131,7 @@ func (s *Service) people(ctx context.Context, ws []want) (map[string]person, err
 	for _, w := range ws {
 		emails = append(emails, w.email)
 	}
-	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (email) email, id, name FROM users
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (email) email, id, name, avatar FROM users
 		WHERE email = ANY($1) ORDER BY email, id DESC`, emails)
 	if err != nil {
 		return nil, err
@@ -137,7 +139,7 @@ func (s *Service) people(ctx context.Context, ws []want) (map[string]person, err
 	out := map[string]person{}
 	var e string
 	var p person
-	_, err = pgx.ForEachRow(rows, []any{&e, &p.id, &p.name}, func() error { out[e] = p; return nil })
+	_, err = pgx.ForEachRow(rows, []any{&e, &p.id, &p.name, &p.avatar}, func() error { out[e] = p; return nil })
 	return out, err
 }
 
@@ -171,7 +173,7 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, team string, ws [
 			out = append(out, r)
 			continue
 		}
-		r.Name = p.name
+		r.Name, r.Avatar = p.name, p.avatar
 		// ponytail: Standing is one small indexed query per (person, program); batch it inside learn if pages grow past a few hundred rows.
 		sd, err := s.Learn.Standing(ctx, p.id, team, w.training)
 		if err != nil {

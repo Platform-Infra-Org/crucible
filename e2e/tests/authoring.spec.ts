@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { login, setEditorText, watchCsp } from './helpers'
+import { contentEdits, login, setEditorText, watchCsp } from './helpers'
 
 // Idempotent on a KEEP=1 stack: every name carries a run id; the reading renamed and the hint deleted are whichever
 // exist now, and a fresh hint file is left for the next run. The other tests discard their drafts.
@@ -11,9 +11,7 @@ const run = Date.now().toString(36)
 
 // startEdit opens a fresh draft of training in the editor and returns its id.
 async function startEdit(page: Page, training: string): Promise<number> {
-  await page.getByRole('link', { name: 'Edits', exact: true }).click()
-  await page.getByRole('combobox', { name: 'Training' }).selectOption(training) // not the Hearth's "Training forged" bar
-  await page.getByRole('button', { name: 'Start an edit' }).click()
+  await (await contentEdits(page, training)).getByRole('link', { name: 'Edit content' }).click()
   await expect(page.getByRole('region', { name: 'Explorer' })).toBeVisible()
   return Number(/\/edits\/drafts\/(\d+)/.exec(page.url())![1])
 }
@@ -131,8 +129,7 @@ test('a leader shapes Forge 103 in the editor, a maintainer merges it, the train
   expect(csp, csp.join('\n')).toEqual([])
 
   const senior = await login(browser, 'senior')
-  await senior.getByRole('link', { name: 'Edits', exact: true }).click()
-  await senior.getByRole('link', { name: `Shape the smithy ${run}` }).click()
+  await (await contentEdits(senior, 'forge-103')).getByRole('link', { name: `Shape the smithy ${run}` }).click()
   await senior.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(senior.getByTestId('edit-status')).toHaveText('merged', { timeout: 30_000 })
 

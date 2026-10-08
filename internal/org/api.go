@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -55,6 +57,8 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))
+	r.Get("/api/admin/export", a.admin(a.getExport))
+	r.Post("/api/admin/import", a.admin(a.postImport))
 	r.Get("/api/org/trainings", a.handle(a.trainingsPage))
 	r.Get("/api/org/teams/{id}", a.handle(a.getTeam))
 	r.Put("/api/org/teams/{id}/roster", a.handle(a.putRoster))
@@ -108,6 +112,31 @@ func (a *api) done(w http.ResponseWriter, r *http.Request, version int64) error 
 	}
 	httpx.JSON(w, http.StatusOK, map[string]int64{"version": version})
 	return nil
+}
+
+func (a *api) getExport(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
+	b, err := a.s.Export(r.Context(), actor)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="crucible-export-%s.json"`, time.Now().UTC().Format("2006-01-02")))
+	_, err = w.Write(b)
+	return err
+}
+
+// maxImport bounds an import file; httpx.Read's 1 MiB is too small for an instance with history.
+const maxImport = 256 << 20
+
+func (a *api) postImport(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxImport))
+	if err != nil {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("the file could not be read (the limit is %d MiB): %v", maxImport>>20, err))
+	}
+	if err := a.s.Import(r.Context(), actor, b); err != nil {
+		return err
+	}
+	return a.done(w, r, 0)
 }
 
 func (a *api) getSettings(w http.ResponseWriter, r *http.Request, _ string, _ rbac.Checker) error {

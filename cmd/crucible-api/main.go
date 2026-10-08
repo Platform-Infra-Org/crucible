@@ -75,18 +75,44 @@ func previewGuard(getenv func(string) string) error {
 	return auth.PreviewAllowed(public, token)
 }
 
-// useStore reports whether configuration comes from Postgres: a blank platform repo means no repo.
-func useStore(platformRepo string) bool { return strings.TrimSpace(platformRepo) == "" }
+// configSource checks the environment for the configuration store. Configuration lives in Postgres only; an old
+// git-mode deployment that still sets CRUCIBLE_PLATFORM_REPO would otherwise start on an empty database without a
+// word, so it is refused with what to do instead.
+func configSource(getenv func(string) string) error {
+	if strings.TrimSpace(getenv("CRUCIBLE_PLATFORM_REPO")) != "" {
+		return errors.New("CRUCIBLE_PLATFORM_REPO is no longer read: configuration lives in Postgres. Remove it, start with " +
+			"CRUCIBLE_BOOTSTRAP_ADMIN set and configure the instance in the UI, or import a platform directory once with CRUCIBLE_SEED_DIR")
+	}
+	return nil
+}
 
-// seedBootstrapAdmin seeds the first admin in database mode only, before the first sync so the first snapshot names
-// them. Git mode reads admins from admins.yaml, so a Postgres row would be a silent no-op: skip and say so.
-func seedBootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, dbMode bool, email string) {
+// seed imports CRUCIBLE_SEED_DIR (a platform directory in the YAML layout, e.g. examples/platform) into an empty
+// database, once; see org.Store.Seed. A seed that does not load or does not validate stops the server: it is set on
+// purpose, and half an instance is worse than none.
+func seed(ctx context.Context, s *org.Store, dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	p, err := config.Load(dir)
+	if err != nil {
+		return fmt.Errorf("CRUCIBLE_SEED_DIR: %w", err)
+	}
+	ok, err := s.Seed(ctx, p)
+	if err != nil {
+		return fmt.Errorf("CRUCIBLE_SEED_DIR: %w", err)
+	}
+	if ok {
+		slog.Info("seeded the configuration", "dir", dir, "teams", len(p.Teams), "trainings", len(p.Trainings))
+	} else {
+		slog.Info("CRUCIBLE_SEED_DIR is set but this database is already configured or was seeded before; leaving it alone", "dir", dir)
+	}
+	return nil
+}
+
+// seedBootstrapAdmin seeds the first admin before the first sync, so the first snapshot names them.
+func seedBootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email string) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
-		return
-	}
-	if !dbMode {
-		slog.Warn("CRUCIBLE_BOOTSTRAP_ADMIN is ignored while CRUCIBLE_PLATFORM_REPO is set; list the admin in admins.yaml instead")
 		return
 	}
 	if ok, err := configapi.BootstrapAdmin(ctx, pool, email); err != nil {
@@ -104,21 +130,16 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 
 	gitsync.AllowFileTransport = gitsync.AllowFileFromEnv(os.Getenv)
-	orgStore := &org.Store{DB: pool}
-	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
-	platformRepo := strings.TrimSpace(os.Getenv("CRUCIBLE_PLATFORM_REPO"))
-	syncer := gitsync.New(dataDir, platformRepo, env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
-	var writer *gitsync.Writer
-	if useStore(platformRepo) {
-		syncer.Config = orgStore.Platform
-		slog.Info("configuration source: Postgres (CRUCIBLE_PLATFORM_REPO is not set)")
-	} else {
-		slog.Info("configuration source: git platform repo (CRUCIBLE_PLATFORM_REPO is set)")
-		writer = &gitsync.Writer{URL: platformRepo, Branch: env("CRUCIBLE_PLATFORM_BRANCH", "main"),
-			Dir:  filepath.Join(dataDir, "writer"),
-			Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
+	if err := configSource(os.Getenv); err != nil {
+		return err
 	}
-	seedBootstrapAdmin(ctx, pool, useStore(platformRepo), os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
+	orgStore := &org.Store{DB: pool}
+	if err := seed(ctx, orgStore, os.Getenv("CRUCIBLE_SEED_DIR")); err != nil {
+		return err
+	}
+	seedBootstrapAdmin(ctx, pool, os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
+	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
+	syncer := gitsync.New(dataDir, orgStore.Platform, slog.Default())
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial sync failed; retrying in the background", "err", err)
 	}
@@ -158,11 +179,8 @@ func run(ctx context.Context) error {
 		slog.Warn("CRUCIBLE_QUIZ_SECRET is not set; using a fixed development value. Set it in production so learners cannot predict quiz choice ids")
 		quizSecret = "crucible-dev-quiz-secret"
 	}
-	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce,
-		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
-	// Task 9 moves config reads onto the store; until then the snapshot is still git's, so org writes are stored but
-	// not yet read back by the rest of the app.
-	orgAPI := org.APIDeps{ConfigInDB: useStore(platformRepo), Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
+	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Changes: syncer.Changes}
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
 		if st := syncer.Current(); st != nil {
 			return st.Platform
 		}

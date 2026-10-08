@@ -24,8 +24,7 @@ import (
 
 type State struct {
 	Platform    *config.Platform
-	PlatformSHA string
-	PlatformErr string                       // last platform config error; config stays at PlatformSHA
+	PlatformErr string                       // last error reading the configuration; the previous one stays in use
 	Trainings   map[string]*content.Training // "id@sha" → valid training
 	Heads       map[string]string            // training id → tracked branch HEAD
 	ProgramSHAs map[string]string            // "team/training" → sha the program runs
@@ -48,14 +47,14 @@ func (s *State) ProgramTraining(team, training string) (*content.Training, strin
 }
 
 type Syncer struct {
-	DataDir, PlatformRepo, PlatformBranch string
-	Log                                   *slog.Logger
+	DataDir string
+	Log     *slog.Logger
 	// OnProblem, if set, is called for every problem key that is new compared with the previous sync. The first sync
 	// after start never calls it, so a restart does not re-announce old failures. Keys: "platform", "<training>",
 	// "<training>@<sha>", "<team>/<training>". It runs inside SyncOnce and must not call SyncOnce.
 	OnProblem func(key string, problems []content.Problem)
-	// Config, when set, supplies the platform (settings, admins, trainings, teams, programs) instead of the platform
-	// repo; PlatformSHA stays empty and the repo is never fetched. A function, not an org.Store: org imports gitsync.
+	// Config supplies the platform (settings, admins, trainings, teams, programs): org.Store.Platform in the server.
+	// A function, not an org.Store: org imports gitsync. Git holds training content only.
 	Config func(ctx context.Context) (*config.Platform, error)
 
 	cur     atomic.Pointer[State]
@@ -63,8 +62,8 @@ type Syncer struct {
 	trigger chan struct{}
 }
 
-func New(dataDir, platformRepo, platformBranch string, log *slog.Logger) *Syncer {
-	return &Syncer{DataDir: dataDir, PlatformRepo: platformRepo, PlatformBranch: platformBranch, Log: log, trigger: make(chan struct{}, 1)}
+func New(dataDir string, cfg func(ctx context.Context) (*config.Platform, error), log *slog.Logger) *Syncer {
+	return &Syncer{DataDir: dataDir, Config: cfg, Log: log, trigger: make(chan struct{}, 1)}
 }
 
 // Current returns the latest state, or nil before the first successful sync.
@@ -102,34 +101,12 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	defer s.mu.Unlock()
 	prev := s.cur.Load()
 
-	var plat *config.Platform
-	var psha string
-	var err error
-	if s.Config != nil {
-		plat, err = s.Config(ctx)
-		if err != nil {
-			return s.keepPlatform(prev, err, "store")
-		}
-	} else {
-		pctx, cancel := context.WithTimeout(ctx, repoTimeout)
-		defer cancel()
-		pm := s.mirror(s.PlatformRepo)
-		if err := pm.Fetch(pctx); err != nil {
-			return err
-		}
-		if psha, err = pm.Resolve(pctx, s.PlatformBranch); err != nil {
-			return err
-		}
-		pdir := filepath.Join(s.DataDir, "platform", psha)
-		if err := pm.Export(pctx, psha, pdir); err != nil {
-			return err
-		}
-		if plat, err = config.Load(pdir); err != nil {
-			return s.keepPlatform(prev, err, fmt.Sprintf("%.7s", psha))
-		}
+	plat, err := s.Config(ctx)
+	if err != nil {
+		return s.keepPlatform(prev, err)
 	}
 
-	st := &State{Platform: plat, PlatformSHA: psha, Trainings: map[string]*content.Training{},
+	st := &State{Platform: plat, Trainings: map[string]*content.Training{},
 		Heads: map[string]string{}, ProgramSHAs: map[string]string{}, Problems: map[string][]content.Problem{}, SyncedAt: time.Now(), validated: map[string]bool{}}
 	if prev != nil {
 		// ponytail: every version ever loaded stays in memory so running labs keep their content after a pin bump.
@@ -152,7 +129,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 }
 
 // keepPlatform keeps serving the last good config and surfaces the error on Forge Status.
-func (s *Syncer) keepPlatform(prev *State, err error, at string) error {
+func (s *Syncer) keepPlatform(prev *State, err error) error {
 	next := State{PlatformErr: err.Error()}
 	if prev != nil {
 		next = *prev
@@ -162,7 +139,7 @@ func (s *Syncer) keepPlatform(prev *State, err error, at string) error {
 		s.OnProblem("platform", []content.Problem{{File: "platform", Msg: err.Error()}})
 	}
 	s.cur.Store(&next)
-	return fmt.Errorf("platform config at %s: %w", at, err)
+	return fmt.Errorf("reading the configuration: %w", err)
 }
 
 // syncTraining fetches one training's mirror and loads its head and pinned versions, bounded by repoTimeout so one

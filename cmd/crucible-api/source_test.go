@@ -2,34 +2,58 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"crucible/internal/db/dbtest"
+	"crucible/internal/org"
 )
 
-func TestUseStore(t *testing.T) {
-	for in, want := range map[string]bool{"": true, " ": true, "\t\n": true, "https://git/x.git": false} {
-		if got := useStore(in); got != want {
-			t.Errorf("useStore(%q) = %v, want %v", in, got, want)
-		}
+func TestAPlatformRepoIsRefused(t *testing.T) {
+	get := func(v string) func(string) string { return func(string) string { return v } }
+	if err := configSource(get("")); err != nil {
+		t.Fatalf("no platform repo: %v", err)
+	}
+	if err := configSource(get("file:///git/platform.git")); err == nil || !strings.Contains(err.Error(), "CRUCIBLE_SEED_DIR") {
+		t.Fatalf("a leftover platform repo must stop the server and say what to do: %v", err)
 	}
 }
 
-func TestBootstrapAdminOnlyInDatabaseMode(t *testing.T) {
+func TestBootstrapAdminSeedsAnEmptyInstance(t *testing.T) {
 	pool := dbtest.New(t)
 	ctx := context.Background()
-	count := func(q string) (n int) {
-		if err := pool.QueryRow(ctx, q).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		return
+	seedBootstrapAdmin(ctx, pool, "Boss@example.com")
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM admins WHERE email = 'boss@example.com'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("bootstrap admin: %d %v", n, err)
 	}
-	seedBootstrapAdmin(ctx, pool, false, "boss@example.com")
-	if n := count(`SELECT count(*) FROM admins`) + count(`SELECT count(*) FROM audit_log WHERE action = 'admin.bootstrap'`); n != 0 {
-		t.Fatalf("git mode must write no admins or bootstrap audit rows, got %d", n)
+}
+
+func TestSeedDirImportsOnceAndRefusesABrokenDir(t *testing.T) {
+	t.Setenv("CRUCIBLE_GIT_ALLOW_FILE", "1") // examples/platform registers file:// repos, as the local stack does
+	pool := dbtest.New(t)
+	ctx := context.Background()
+	s := &org.Store{DB: pool}
+	if err := seed(ctx, s, ""); err != nil {
+		t.Fatalf("no seed dir is a no-op: %v", err)
 	}
-	seedBootstrapAdmin(ctx, pool, true, "boss@example.com")
-	if count(`SELECT count(*) FROM admins`) != 1 {
-		t.Fatal("database mode must seed the admin")
+	if err := seed(ctx, s, "../../examples/platform"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Platform(ctx)
+	if err != nil || p.Teams["forge"] == nil || len(p.Teams["forge"].Programs) == 0 || len(p.Admins) != 1 {
+		t.Fatalf("seeded platform: %+v %v", p, err)
+	}
+	if err := seed(ctx, s, "../../examples/platform"); err != nil {
+		t.Fatalf("a second start with the seed set: %v", err)
+	}
+	bad := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bad, "platform.yaml"), []byte("bogus: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed(ctx, &org.Store{DB: dbtest.New(t)}, bad); err == nil {
+		t.Fatal("a seed dir that does not load must stop the server")
 	}
 }

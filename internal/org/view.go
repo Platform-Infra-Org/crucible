@@ -122,19 +122,24 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 			continue
 		}
 		spend = spend || c.Can(actor, rbac.ViewSpend, id, tr, "")
-		v.Programs = append(v.Programs, ProgramView{Training: tr, Title: title, Version: p.Version, Enrolled: nonNil(p.Enrolled),
-			Roles:          config.Roles{Manager: nonNil(stored[tr].Manager), Scorers: nonNil(stored[tr].Scorers), Approvers: nonNil(stored[tr].Approvers)},
-			EffectiveRoles: config.Roles{Manager: nonNil(p.Roles.Manager), Scorers: nonNil(p.Roles.Scorers), Approvers: nonNil(p.Roles.Approvers)},
-			Schedule:       p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
-			PinnedRef: p.PinnedRef, RunningSHA: running, HeadSHA: head, CanManage: c.Can(actor, rbac.ManageProgram, id, tr, ""),
-			LabDefaults: map[string]string{"ttl": dur(p.LabDefaults.TTL), "idle_timeout": dur(p.LabDefaults.IdleTimeout),
-				"max_extension": dur(p.LabDefaults.MaxExtension)}})
+		v.Programs = append(v.Programs, programView(c, actor, id, tr, p, stored[tr], title, running, head))
 	}
 	if spend {
 		v.Budget = &BudgetView{Version: t.Budget.Version, MonthlyUSD: t.Budget.MonthlyUSD, HardCapUSD: t.Budget.HardCapUSD}
 	}
 	httpx.JSON(w, http.StatusOK, v)
 	return nil
+}
+
+// programView is a program as the team and trainings pages show it. stored is the explicit role rows (see storedRoles).
+func programView(c rbac.Checker, actor, team, tr string, p *config.Program, stored config.Roles, title, running, head string) ProgramView {
+	return ProgramView{Training: tr, Title: title, Version: p.Version, Enrolled: nonNil(p.Enrolled),
+		Roles:          config.Roles{Manager: nonNil(stored.Manager), Scorers: nonNil(stored.Scorers), Approvers: nonNil(stored.Approvers)},
+		EffectiveRoles: config.Roles{Manager: nonNil(p.Roles.Manager), Scorers: nonNil(p.Roles.Scorers), Approvers: nonNil(p.Roles.Approvers)},
+		Schedule:       p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
+		PinnedRef: p.PinnedRef, RunningSHA: running, HeadSHA: head, CanManage: c.Can(actor, rbac.ManageProgram, team, tr, ""),
+		LabDefaults: map[string]string{"ttl": dur(p.LabDefaults.TTL), "idle_timeout": dur(p.LabDefaults.IdleTimeout),
+			"max_extension": dur(p.LabDefaults.MaxExtension)}}
 }
 
 // programRoute checks the caller before the body is read: program managers (the leader, or a named manager) and

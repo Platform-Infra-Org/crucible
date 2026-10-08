@@ -81,12 +81,8 @@ func preview(args []string) int {
 		fmt.Fprintln(os.Stderr, "snapshot:", err)
 		return 1
 	}
-	platformSrc := filepath.Join(work, "platform-src")
-	if err := writePlatform(platformSrc, t.ID); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	if err := bareFromDir(platformSrc, filepath.Join(work, "git", "platform.git")); err != nil {
+	// The preview's configuration: imported into its empty database at start (CRUCIBLE_SEED_DIR=/git/seed).
+	if err := writePlatform(filepath.Join(work, "git", "seed"), t.ID); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -304,7 +300,8 @@ func gitRun(dir string, args ...string) error {
 	return nil
 }
 
-// writePlatform makes a one-team platform repo in which the preview author is an admin and enrolled in training.
+// writePlatform makes a one-team platform directory (the seed layout) in which the preview author is an admin and
+// enrolled in training.
 func writePlatform(dir, training string) error {
 	files := map[string]string{
 		"platform.yaml":           "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 1, tier2_usd: 2}\n",
@@ -323,16 +320,6 @@ func writePlatform(dir, training string) error {
 		}
 	}
 	return nil
-}
-
-func bareFromDir(dir, bare string) error {
-	for _, a := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"},
-		{"-c", "user.name=crucible preview", "-c", "user.email=preview@crucible.local", "commit", "-q", "-m", "preview platform"}} {
-		if err := gitRun(dir, a...); err != nil {
-			return err
-		}
-	}
-	return gitRun("", "clone", "-q", "--bare", dir, bare)
 }
 
 // openUp makes the bare repos readable by the container's user.
@@ -368,7 +355,7 @@ func fingerprint(dir string) (string, error) {
 }
 
 // composeFile is the preview stack. Only the API publishes a port, and only on 127.0.0.1; Postgres keeps its data in
-// tmpfs. CRUCIBLE_GIT_ALLOW_FILE lets gitsync read the file:// snapshot repos mounted read-only at /git.
+// tmpfs. CRUCIBLE_GIT_ALLOW_FILE lets gitsync read the file:// snapshot repo mounted read-only at /git, beside the seed.
 func composeFile(project, image string, port int, token, hook, pgPass, gitDir string) string {
 	return fmt.Sprintf(`name: %s
 services:
@@ -381,7 +368,7 @@ services:
     image: %q
     environment:
       DATABASE_URL: postgres://crucible:%s@postgres:5432/crucible?sslmode=disable
-      CRUCIBLE_PLATFORM_REPO: file:///git/platform.git
+      CRUCIBLE_SEED_DIR: /git/seed
       CRUCIBLE_PUBLIC_URL: http://localhost:%d
       CRUCIBLE_SYNC_INTERVAL: 30s
       CRUCIBLE_PREVIEW_TOKEN: %q

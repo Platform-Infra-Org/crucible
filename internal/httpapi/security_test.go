@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"crucible/internal/agenthub"
+	"crucible/internal/config"
 	"crucible/internal/gitsync"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
@@ -116,7 +118,8 @@ func (c logCount) WithGroup(string) slog.Handler      { return c }
 
 func TestGitHookNeedsTheSecret(t *testing.T) {
 	syncs := make(logCount, 10)
-	syncer := gitsync.New(t.TempDir(), filepath.Join(t.TempDir(), "missing.git"), "main", slog.New(syncs))
+	noConfig := func(context.Context) (*config.Platform, error) { return nil, errors.New("no configuration") }
+	syncer := gitsync.New(t.TempDir(), noConfig, slog.New(syncs))
 	r := NewRouter(Deps{Sync: syncer, HookSecret: "s3cret", Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New()})
 	hook := func(secret string) int {
 		req := httptest.NewRequest("POST", "/api/git/hook", strings.NewReader(`{"ref":"refs/heads/main"}`))
@@ -185,15 +188,7 @@ func TestMetaServesThemeAndQuotes(t *testing.T) {
 		t.Fatalf("cp: %v %s", err, out)
 	}
 	_ = os.WriteFile(filepath.Join(work, "platform.yaml"), []byte(strings.Replace(mustRead(t, filepath.Join(work, "platform.yaml")), "default_theme: forge", "default_theme: quench", 1)), 0o644)
-	bare := filepath.Join(t.TempDir(), "p.git")
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-qm", "seed"}, {"clone", "-q", "--bare", work, bare}} {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
-		cmd.Dir = work
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
-	}
-	syncer := gitsync.New(t.TempDir(), bare, "main", slog.Default())
+	syncer := gitsync.New(t.TempDir(), func(context.Context) (*config.Platform, error) { return config.Load(work) }, slog.Default())
 	if err := syncer.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +210,7 @@ func mustRead(t *testing.T, p string) string {
 // The org routes sit behind the same guard as every other state-changing route: a browser request from elsewhere, or
 // with a non-JSON body, never reaches them (it would otherwise answer 401 for a signed-out caller).
 func TestOrgRoutesNeedSameOrigin(t *testing.T) {
-	r := NewRouter(Deps{Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), Org: &org.Store{}, OrgAPI: org.APIDeps{ConfigInDB: true},
+	r := NewRouter(Deps{Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), Org: &org.Store{}, OrgAPI: org.APIDeps{},
 		PublicURL: "https://crucible.example.com"})
 	for _, c := range []struct {
 		name, method, path string

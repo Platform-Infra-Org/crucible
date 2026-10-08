@@ -122,7 +122,7 @@ func TestFingerprintNoticesEditsAndStaging(t *testing.T) {
 
 func TestComposeFileStaysOnLoopback(t *testing.T) {
 	c := composeFile("p1", "crucible:dev", 8090, "tok", "hook", "pw1", "/tmp/git")
-	for _, want := range []string{`"127.0.0.1:8090:8080"`, `CRUCIBLE_PREVIEW_TOKEN: "tok"`, `CRUCIBLE_GIT_ALLOW_FILE: "1"`, `CRUCIBLE_PUBLIC_URL: http://localhost:8090`, `name: p1`} {
+	for _, want := range []string{`"127.0.0.1:8090:8080"`, `CRUCIBLE_PREVIEW_TOKEN: "tok"`, `CRUCIBLE_GIT_ALLOW_FILE: "1"`, `CRUCIBLE_PUBLIC_URL: http://localhost:8090`, `name: p1`, `CRUCIBLE_SEED_DIR: /git/seed`} {
 		if !strings.Contains(c, want) {
 			t.Errorf("compose file lacks %s:\n%s", want, c)
 		}

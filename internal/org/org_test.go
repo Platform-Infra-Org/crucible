@@ -215,7 +215,9 @@ func TestProgramNeedsARegisteredTraining(t *testing.T) {
 }
 
 // The same small org as YAML and as rows must give the same *config.Platform, so the two paths cannot drift.
-func TestPlatformMatchesConfigLoad(t *testing.T) {
+// writePlatformYAML writes a platform directory that uses every field config.Load reads.
+func writePlatformYAML(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	write := func(rel, body string) {
 		t.Helper()
@@ -250,7 +252,7 @@ notifications: { slack_webhook: "https://hooks/s", teams_webhook: "https://hooks
 `)
 	write("teams/t/budget.yaml", "monthly_usd: 200\nhard_cap_usd: 250\n")
 	write("teams/t/programs/a.yaml", `training: a
-pinned_ref: abc123
+pinned_ref: 0123456789abcdef0123456789abcdef01234567
 roles: { manager: [m@x], scorers: [s2@x], approvers: [s1@x] }
 enrolled: [tr@x]
 lab_defaults: { ttl: 2h, idle_timeout: 30m, max_extension: 45m }
@@ -260,6 +262,11 @@ review_self_reported: true
 `)
 	write("teams/t/programs/b.yaml", `schedule: { timezone: UTC, windows: [ { days: [sat], start: "09:00", end: "12:00" } ] }
 `)
+	return dir
+}
+
+func TestPlatformMatchesConfigLoad(t *testing.T) {
+	dir := writePlatformYAML(t)
 	want, err := config.Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +285,7 @@ review_self_reported: true
 		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s'),('t','teams','https://hooks/t')`,
 		`INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('t',200,250)`,
 		`INSERT INTO programs (team, training, pinned_ref, schedule_name, ttl, idle_timeout, max_extension, budget_usd_month, review_self_reported)
-			VALUES ('t','a','abc123','bh','2h','30m','45m',50,true)`,
+			VALUES ('t','a','0123456789abcdef0123456789abcdef01234567','bh','2h','30m','45m',50,true)`,
 		`INSERT INTO programs (team, training, inline_schedule) VALUES ('t','b','{"timezone":"UTC","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`,
 		`INSERT INTO program_roles VALUES ('t','a','m@x','manager'),('t','a','s2@x','scorer'),('t','a','s1@x','approver')`,
 		`INSERT INTO enrollments VALUES ('t','a','tr@x')`,

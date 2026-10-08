@@ -26,9 +26,6 @@ type APIDeps struct {
 	Platform func() *config.Platform
 	Refresh  func(context.Context) error
 	CheckPin func(ctx context.Context, training, sha string) error
-	// ConfigInDB: configuration is read from Postgres. Only then are the team, program and budget write routes
-	// mounted; in git mode they would store rows nothing reads back.
-	ConfigInDB bool
 	// Content names a training and the commits it runs and tracks, for the team page. Nil: the id, no commits.
 	Content func(team, training string) (title, running, head string)
 }
@@ -43,9 +40,6 @@ type api struct {
 //
 // /api/admin/... is admin-only. The two team-scoped routes (/api/org/...) check the caller against the snapshot.
 func (s *Store) Routes(r chi.Router, d APIDeps) {
-	if !d.ConfigInDB {
-		return
-	}
 	a := &api{s, d}
 	r.Get("/api/admin/settings", a.admin(a.getSettings))
 	r.Put("/api/admin/settings", a.admin(a.putSettings))
@@ -61,6 +55,7 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))
+	r.Get("/api/org/trainings", a.handle(a.trainingsPage))
 	r.Get("/api/org/teams/{id}", a.handle(a.getTeam))
 	r.Put("/api/org/teams/{id}/roster", a.handle(a.putRoster))
 	r.Put("/api/org/teams/{id}/budget", a.admin(a.putBudget))

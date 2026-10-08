@@ -46,10 +46,9 @@ func TestStoreDrivesTheSnapshotWithoutGit(t *testing.T) {
 	ctx := context.Background()
 	s := &Store{DB: dbtest.New(t)}
 	repo := newTrainingRepo(t)
-	sy := gitsync.New(t.TempDir(), "", "main", slog.Default())
-	sy.Config = s.Platform
+	sy := gitsync.New(t.TempDir(), s.Platform, slog.Default())
 
-	// bootstrap admin in database mode: seeded row -> snapshot -> rbac
+	// bootstrap admin: seeded row -> snapshot -> rbac
 	if ok, err := s.SeedAdmin(ctx, "Boss@Example.com"); err != nil || !ok {
 		t.Fatalf("seed: %v %v", ok, err)
 	}

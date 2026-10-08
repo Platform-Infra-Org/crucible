@@ -1,13 +1,6 @@
 package org
 
 import (
-	"net/http"
-	"net/http/httptest"
-
-	"github.com/go-chi/chi/v5"
-
-	"crucible/internal/auth"
-	"crucible/internal/config"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -184,33 +177,5 @@ func TestGetThenPutBackStoresNoRoles(t *testing.T) {
 	}
 	if n := count(t, f.s, `SELECT count(*) FROM program_roles`); n != 0 {
 		t.Errorf("%d program_roles rows after a round trip; defaults must stay dynamic", n)
-	}
-}
-
-func TestOrgWriteRoutesAreAbsentInGitMode(t *testing.T) {
-	f := newAPI(t)
-	r := chi.NewRouter()
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
-			next.ServeHTTP(w, q.WithContext(auth.WithUser(q.Context(), &auth.User{Email: "admin@x"})))
-		})
-	})
-	f.s.Routes(r, APIDeps{Platform: func() *config.Platform { return f.snap }})
-	for _, c := range []struct{ method, path string }{
-		{"GET", "/api/org/teams/platform"}, {"PUT", "/api/org/teams/platform/roster"}, {"PUT", "/api/org/teams/platform/budget"},
-		{"PUT", "/api/org/teams/platform/programs/forge-101"}, {"POST", "/api/org/teams/platform/programs/forge-101"},
-		{"DELETE", "/api/org/teams/platform/programs/forge-101"}, {"PUT", "/api/org/teams/platform/programs/forge-101/pin"},
-		{"POST", "/api/admin/teams/x"}, {"DELETE", "/api/admin/teams/platform"},
-		{"PUT", "/api/admin/teams/platform/webhooks/slack"},
-		{"GET", "/api/admin/settings"}, {"PUT", "/api/admin/settings"}, {"PUT", "/api/admin/schedules/days"},
-		{"DELETE", "/api/admin/schedules/days"}, {"PUT", "/api/admin/quotes"}, {"GET", "/api/admin/admins"},
-		{"POST", "/api/admin/admins"}, {"DELETE", "/api/admin/admins/a@x"}, {"GET", "/api/admin/trainings"},
-		{"POST", "/api/admin/trainings"}, {"DELETE", "/api/admin/trainings/forge-101"},
-	} {
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader("{}")))
-		if w.Code != 404 && w.Code != 405 {
-			t.Errorf("%s %s = %d in git mode, want it unmounted", c.method, c.path, w.Code)
-		}
 	}
 }

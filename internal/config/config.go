@@ -1,4 +1,5 @@
-// Package config loads the platform repo: teams, roles, programs, trainings registry.
+// Package config holds the configuration types (settings, teams, roles, programs, the trainings registry) and Load,
+// which reads them from a platform directory in YAML: the seed format (CRUCIBLE_SEED_DIR, examples/platform).
 package config
 
 import (

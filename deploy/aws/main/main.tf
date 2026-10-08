@@ -67,7 +67,6 @@ resource "random_password" "hook" {
 locals {
   params = {
     oidc_client_secret = data.aws_cognito_user_pool_client.crucible.client_secret
-    platform_repo      = var.platform_repo
     git_credentials    = var.git_credentials == "" ? "none" : var.git_credentials # SSM rejects empty values
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
@@ -85,7 +84,6 @@ resource "aws_ssm_parameter" "env" {
     NAME=${var.name}
     DATA_BUCKET=${var.data_bucket}
     DOMAIN=${var.domain}
-    PLATFORM_BRANCH=${var.platform_branch}
     OIDC_ISSUER=${var.oidc_issuer}
     OIDC_CLIENT_ID=${var.oidc_client_id}
     BACKUP_CRON='${var.backup_cron}'
@@ -113,7 +111,7 @@ resource "aws_ssm_parameter" "helm_values" {
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "platform_repo", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "infracost_api_key"])
+  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "infracost_api_key"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]

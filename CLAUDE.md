@@ -89,3 +89,83 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only
   `/api/git/hook` (HMAC) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
 - Write prose and UI copy from the user's side of the screen, plainly; Crucible's voice is the forge metaphor.
+
+---
+
+## Handoff — `victa_dev` → `main`, 2026-10-08
+
+**Temporary. Delete this section in the commit that merges `victa_dev` into `main`.** Written for whoever picks the
+branch up next; everything above it is the standing instruction set.
+
+`victa_dev` is pushed (`origin/victa_dev`) and carries M8a **plus `main` merged into it**. `main` itself is
+untouched. A PR into `main` was not opened — the token lacked the scope — so open it from
+`compare/main...victa_dev`; a prepared body sits outside the repo at `~/crucible-pr-body.md`.
+
+### What this branch did
+
+Configuration and org data moved out of the platform repo into Postgres, behind `internal/org`. Git keeps
+**training content**; the two config sources coexist, chosen at startup by `CRUCIBLE_PLATFORM_REPO`. See the
+Invariants section above, the spec at `docs/superpowers/specs/2026-10-07-db-owned-config-design.md` and the plan at
+`docs/superpowers/plans/2026-10-07-m8-config-in-db.md` (its "As built" notes record where the build diverged).
+
+New UI: an **Administrator** menu (top right) holding Forge Status, **Forge settings** and **Registry**; the latter
+two exist only in Postgres mode, because they read *and* write Postgres — mounted in git mode they would show empty
+defaults and silently discard saves. `internal/org.Routes` gates on mode at the top, and
+`TestOrgWriteRoutesAreAbsentInGitMode` pins it. Team and Program settings now pick their endpoint from
+`config_in_db` on `/api/me`.
+
+### What the merge required
+
+- Our migration was renumbered `00018_org_config.sql` → **`00020`** (`main` took 00018 and 00019; goose refuses a
+  duplicate version). A local database created from the branch before this will fail to migrate — drop it.
+- Seven conflicts, all "both branches appended to the same list"; `git rerere` has the resolutions recorded.
+- `55772d5` — `main` fails `go test ./internal/configapi` on its own (13 tests, one cause): `examples/platform`
+  enrols the forge team in forge-103 while `configapi_test.go` overrides `trainings.yaml` with a two-training
+  registry. Fixed by registering forge-103 in that fixture. **Replace it if you'd rather fix it another way.**
+- `523e68e` — on a Linux host the api container (uid 10001) owns the git objects it pushes into the `.local/git`
+  bind mount, so `seed-git.sh` could not remove them and `authoring.spec.ts` could not chmod them. Both now fall
+  back to a throwaway root container. Docker Desktop and rootless Podman map those writes to the host user, so
+  nothing changes there.
+- Your rewrite of `internal/edits` fixed `TestApproveMovedEdit`, which fails on `main` and on this branch's base
+  but passes merged.
+
+### Verified on the merged branch
+
+`go build`, `go vet`, `gofmt`, `go test ./...` (31/31 packages), `go test -race ./...` (**no data races**),
+`npx tsc -b`, `npm run lint`, `npm test` (32 files, 289 tests), `shellcheck scripts/seed-git.sh`, and
+`KEYCLOAK_PORT=8082 make local-check` — 9 of 9 browser journeys, including the authoring and docs ones.
+
+Known red: `TestAWSLabModuleRejectsHostileInputFast/token_flood` fails under `-race` only — it asserts the terraform
+lint finishes inside a second and measures ~1.2s with the detector's instrumentation. Not a race; the threshold
+should scale or skip under `-race`.
+
+### What still needs doing
+
+1. **Look at the nav in a browser.** Docs, the `?` link and the Administrator menu now share the right-hand side.
+   No test can judge whether that reads well.
+2. **M8b**, the owner's stated direction (see concerns below): delete the git config write-back, move the e2e
+   fixtures onto Postgres, add config export/import, and give Terraform a Postgres-mode node (`platform_repo` is
+   currently a required variable and SSM rejects an empty value). All nine browser journeys drive git mode today,
+   so this is a real chunk of work, not a flag flip.
+3. **First-run flow.** An admin on a fresh Postgres instance has rights over nothing: no trainings, so
+   `Edits.CanUse` is false and the **Edits** button is absent; empty Hearth; no teams. The path works (Registry →
+   Team → roster) but nothing guides you through it. Consider a first-run checklist.
+4. **Orphan programs** are skipped with a `slog.Warn` where `config.Load` failed the whole load. Availability over
+   strictness, but it deserves an operator-visible marker on Forge Status.
+5. The `-race` timing assertion in (Known red).
+
+### The owner's concerns, in their words
+
+- **"no personal data in git, only application global config."** People, permissions, budgets and teams belong in
+  the database. This is the principle the whole change serves — keep it when extending `internal/org`.
+- **"I want 1 admin user when booting the app first. then that user will configure all else. everything is saved
+  to db and can be exported or imported into a new instance if env change."** The bootstrap admin and DB-owned
+  config are done; **export/import is not** and is the part they asked for that is still missing.
+- **"the application management should be done in the application"** — not by committing YAML. Changing a
+  permission, quota, team or budget should never require git.
+- **They want git mode gone**, keeping Postgres mode only. Treat the two-mode bridge as scaffolding with a
+  deadline, not a feature.
+- **Two people, two agents, one repo.** Verify each side independently, then merge deliberately — that is how this
+  merge was done. Prefer small pathspec commits; never rewrite shared history.
+- **They want to understand and explain every change themselves.** Say what you plan to do before doing it, and
+  keep commit messages explanatory rather than terse.

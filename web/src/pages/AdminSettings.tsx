@@ -92,7 +92,7 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
     }, 'Settings saved.')
   }
   return (
-    <form className="stack" onSubmit={save}>
+    <form className="stack panel" onSubmit={save}>
       <h2>Look</h2>
       <label>Default theme
         <select value={theme} onChange={(e) => setTheme(e.target.value)}>
@@ -122,7 +122,7 @@ function Admins({ list, reload }: { list: string[]; reload: () => void }) {
   const { run, note, busy } = useSave(reload)
   const only = list.length === 1
   return (
-    <div className="stack">
+    <div className="stack panel">
       <h2>Admins</h2>
       <ul>
         {list.map((a) => (
@@ -154,7 +154,7 @@ function Schedules({ map, reload }: { map: Record<string, string>; reload: () =>
   }
   const names = Object.keys(map).sort()
   return (
-    <form className="stack" onSubmit={add}>
+    <form className="stack panel" onSubmit={add}>
       <h2>Lab schedules</h2>
       <p className="muted">A schedule says when a program's labs may run. Saving under an existing name replaces it.</p>
       {names.length === 0 && <p className="muted">No schedules yet; programs can run labs any time.</p>}
@@ -179,7 +179,7 @@ function Quotes({ quotes, reload }: { quotes: string[]; reload: () => void }) {
   const [text, setText] = useState(quotes.join('\n'))
   const { run, note, busy } = useSave(reload)
   return (
-    <form className="stack" onSubmit={(e) => { e.preventDefault(); void run(() => api('/api/admin/quotes', { method: 'PUT', json: { quotes: text.split('\n').map((q) => q.trim()).filter(Boolean) } }), 'Quotes saved.') }}>
+    <form className="stack panel" onSubmit={(e) => { e.preventDefault(); void run(() => api('/api/admin/quotes', { method: 'PUT', json: { quotes: text.split('\n').map((q) => q.trim()).filter(Boolean) } }), 'Quotes saved.') }}>
       <h2>Loading quotes</h2>
       <p className="muted">One line per quote, shown while the forge loads.</p>
       <label>Quotes <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} /></label>
@@ -201,7 +201,7 @@ function Move({ reload }: { reload: () => void }) {
     }, 'Imported. People link to their progress when they first sign in here.')
   }
   return (
-    <form className="stack" onSubmit={load}>
+    <form className="stack panel" onSubmit={load}>
       <h2>Move this forge</h2>
       <p className="muted">The export is one file with the settings, admins, schedules, trainings, teams, enrollments, roles, budgets,
         webhooks and everyone&apos;s progress and scores. It holds personal data: keep it somewhere private and never commit it.

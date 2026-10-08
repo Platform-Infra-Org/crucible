@@ -597,3 +597,105 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
   .hide-preview, .show-preview { display: none !important; }
   .ide-main[data-view='files'] > :not(.ide-side), .ide-main[data-view='editor'] > :not(.ide-editor), .ide-main[data-view='preview'] > :not(.ide-preview) { display: none; }
 }
+
+/* ── The forge finish ──────────────────────────────────────────────────────────────────────────────────────────────
+   One look for every page, in the user card's spirit and kept quiet: surfaces whose edges run warm at two corners, a
+   faint ember glow over the page, a molten underline under the nav item you are on, a short molten rule under each
+   page title, contents that rise in as a page opens, and bars of metal that flow. Everything is drawn from the theme's
+   tokens, so each theme recolours it, and the calm and reduced-motion rules above stop every animation. */
+
+body { background: radial-gradient(ellipse 70% 32rem at 50% -8rem, color-mix(in srgb, var(--accent) 10%, transparent), transparent 75%) no-repeat, var(--bg); }
+input[type='checkbox'], input[type='radio'], input[type='range'], progress { accent-color: var(--accent); }
+a { text-underline-offset: 0.18em; text-decoration-thickness: 1px; transition: color 0.15s; }
+a:hover { color: var(--accent-2); }
+
+/* surfaces: the heated edge. --edge is the border's paint; a state (complete, right, wrong, danger) swaps it for a solid colour */
+.panel, .stack.panel, .card, .module, .question, .result, .cooled, .request, .rank-card, .journey-row, .stats li, .toolbar {
+  --edge: linear-gradient(155deg, color-mix(in srgb, var(--accent) 42%, var(--border)), var(--border) 32%, var(--border) 72%, color-mix(in srgb, var(--accent-2) 28%, var(--border)));
+  border: 1px solid transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box, var(--edge) border-box;
+}
+.module.complete { --edge: linear-gradient(var(--ok), var(--ok)); }
+.question.right { --edge: linear-gradient(var(--ok), var(--ok)); }
+.question.wrong, .panel.danger-zone { --edge: linear-gradient(var(--danger), var(--danger)); }
+.card.new-card { background: var(--surface); border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.card:hover { --edge: linear-gradient(155deg, var(--accent), var(--border) 40%, var(--border) 65%, var(--accent-2)); }
+.stats li { position: relative; overflow: hidden; }
+.stats li::before { content: ''; position: absolute; inset: 0 0 auto; height: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2), transparent 85%); opacity: 0.8; }
+
+/* the nav: a line of light along its foot, and a molten underline that slides under the page you are on */
+.nav { background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 55%, transparent), transparent) bottom / 100% 1px no-repeat, var(--surface); border-bottom-color: transparent; }
+.nav > a:not(.brand):not(.help-link) { position: relative; transition: color 0.2s; }
+.nav > a:not(.brand):not(.help-link)::after { content: ''; position: absolute; left: 0; right: 0; bottom: -0.3rem; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); transform: scaleX(0); transform-origin: left; transition: transform 0.25s ease-out; }
+.nav > a.active:not(.brand)::after { transform: scaleX(1); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); }
+.nav > a:not(.brand):not(.help-link):not(.active):hover::after { transform: scaleX(0.6); opacity: 0.6; }
+.brand-mark { display: inline-block; transition: transform 0.3s; }
+.brand:hover .brand-mark { transform: rotate(-14deg); }
+
+/* page titles carry a short molten rule; a page's contents rise in, one after another */
+.page h1::after { content: ''; display: block; width: 2.75rem; height: 3px; margin-top: 0.45rem; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 50%, transparent); }
+@keyframes page-in { from { opacity: 0; transform: translateY(8px); } }
+/* :where keeps this weightless, so a component's own animation wins; backwards fill leaves no transform behind once done */
+:where(.page) > * { animation: page-in 0.4s ease-out backwards; }
+:where(.page) > :nth-child(2) { animation-delay: 0.04s; }
+:where(.page) > :nth-child(3) { animation-delay: 0.08s; }
+:where(.page) > :nth-child(4) { animation-delay: 0.12s; }
+:where(.page) > :nth-child(5) { animation-delay: 0.16s; }
+:where(.page) > :nth-child(n + 6) { animation-delay: 0.2s; }
+
+/* section labels inside panels get the user card's molten underline */
+.panel h5 { padding-bottom: 0.25rem; border-bottom: 1px solid transparent; border-image: linear-gradient(90deg, var(--accent), var(--accent-2) 30%, transparent 80%) 1; }
+
+/* controls: ghost buttons and plain buttons warm under the pointer; focused fields glow */
+button { transition: border-color 0.2s, box-shadow 0.2s, color 0.2s; } /* weaker than any component's own transition */
+button:not(.primary):not(:disabled):hover { border-color: color-mix(in srgb, var(--accent) 65%, var(--border)); }
+a.button-link { transition: border-color 0.2s, box-shadow 0.2s; }
+a.button-link:hover { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+input, select, textarea { transition: border-color 0.15s, box-shadow 0.15s; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 1px; }
+
+/* tables: quiet headers, rows that light up under the pointer */
+.grid th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+.grid tbody tr { transition: background 0.15s; }
+.grid tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+/* metal that flows: progress bars roll like the pour in the user card; the pattern repeats at the bar's width, so the loop has no seam */
+.molten-bar .fill { background: linear-gradient(90deg, var(--accent), var(--accent-2) 25%, var(--accent) 50%, var(--accent-2) 75%, var(--accent)) 0 0 / 200% 100%;
+  animation: bar-flow 6s linear infinite; }
+@keyframes bar-flow { to { background-position: 100% 0; } }
+
+/* small things */
+.badge { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.chip { transition: border-color 0.15s; }
+.chip:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.manage-list a { transition: background 0.15s, border-color 0.15s; }
+.manage-list a.active { box-shadow: inset 3px 0 0 var(--accent); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+.toast { animation: toast-in 0.25s ease-out; border-color: transparent;
+  background: linear-gradient(var(--surface), var(--surface)) padding-box, linear-gradient(155deg, var(--accent-2), var(--accent)) border-box; }
+.modal { animation: card-cast 0.22s ease-out; }
+.panel h2:not(:first-child) { margin-top: 1.4rem; }
+.stack.panel > label:not(:has(> input[type='checkbox'])) { max-width: 36rem; } /* fields keep a readable width in a wide panel */
+.stack.roster-form > label { max-width: none; }
+/* an empty state: a quiet, dashed hearth with the forge mark, instead of a lone grey line */
+.empty { display: flex; align-items: center; gap: 0.75rem; padding: 1.1rem 1.4rem; border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 12px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.empty::before { content: '⚒'; font-size: 1.35rem; color: var(--accent); text-shadow: var(--glow); }
+/* budget meters: molten while spend is low, the warmer accent past 80%, danger at the cap (low/high/optimum on the element) */
+meter { appearance: none; height: 10px; border: 0; border-radius: 999px; background: var(--surface-2); }
+meter::-webkit-meter-bar { height: 10px; border: 0; border-radius: 999px; background: var(--surface-2); }
+meter::-webkit-meter-optimum-value { border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+meter::-webkit-meter-suboptimum-value { border-radius: 999px; background: var(--accent-2); }
+meter::-webkit-meter-even-less-good-value { border-radius: 999px; background: var(--danger); }
+meter::-moz-meter-bar { border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--accent-2); }
+meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
+/* the Docs list reads like the Manage trainings list: quiet links, the open page marked with a molten edge */
+.docs-nav li a { display: block; padding: 0.15rem 0.6rem; margin-left: -0.6rem; border-radius: 6px; color: var(--muted); text-decoration: none;
+  border-left: 2px solid transparent; transition: color 0.15s, background 0.15s, border-color 0.15s; }
+.docs-nav li a:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.docs-nav li a[aria-current='page'] { color: var(--text); border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.docs-nav h2:not(.docs-search-title) { font-family: inherit; font-size: 0.72rem; letter-spacing: 0.1em; margin: 1.2rem 0 0.4rem; }

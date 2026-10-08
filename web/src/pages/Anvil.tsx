@@ -33,7 +33,7 @@ export function AnvilPage() {
         </label>
         <button className="primary" type="submit">Filter</button>
       </form>
-      {data.length === 0 && <p className="muted">Nothing on the anvil. Every piece is scored.</p>}
+      {data.length === 0 && <p className="muted empty">Nothing on the anvil. Every piece is scored.</p>}
       <ul className="queue">
         {data.map((s) => (
           <li key={s.id} className="card">

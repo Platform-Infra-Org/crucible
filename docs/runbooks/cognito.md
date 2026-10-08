@@ -13,7 +13,7 @@ Crucible signs people in through any standard OIDC provider. On AWS we use an **
 | Resource | Setting | Why |
 |---|---|---|
 | User pool `crucible` | Essentials tier | Modern "managed login" pages. Free ≤ 10,000 monthly active users, then $0.01/user. |
-| | Email is the username | Matches the emails in the teams (the platform repo's `team.yaml` files in git mode; the team pages in Postgres mode) |
+| | Email is the username | Matches the emails on the team pages |
 | | Self sign-up **off** (admin invites only) | Only people you invite can get in |
 | | MFA optional (authenticator app) | Users can turn it on; you can make it mandatory later (§5) |
 | | Password ≥ 12 chars, upper + lower + number; temporary password valid 7 days | |
@@ -66,11 +66,11 @@ Then continue with `crucible aws up` as described in `docs/runbooks/aws.md`.
 
 A person needs **two things** to use Crucible:
 1. A **Cognito account**, which lets them sign in.
-2. Their **email in a team** in the platform repo in git mode, or on the team page in Postgres mode (`teams/<team>/team.yaml`, and `programs/*.yaml` for trainees). This decides what they can see and do.
+2. Their **email in a team**, on the team page, and enrolled in a training on **Manage trainings** if they are a trainee. This decides what they can see and do.
 
 The email must be the same in both places. Crucible compares emails in lowercase.
 
-Invite the `bootstrap_admin` email (see `aws.md`) first. Crucible writes that address into `admins.yaml` on first start; it can act as admin once it signs in through this pool with a verified email.
+Invite the `bootstrap_admin` email (see `aws.md`) first. Crucible makes that address the first admin on first start; it can act as admin once it signs in through this pool with a verified email.
 
 ### Invite with the CLI
 ```bash
@@ -93,11 +93,9 @@ Cognito → User pools → `crucible` → **Users** → **Create user**:
 - Temporary password: *Generate a password*
 
 ### Then add them to a team
-In the platform repo, for example `teams/forge/team.yaml` and `teams/forge/programs/forge-101.yaml`:
-```yaml
-trainees: [alice@example.com]
-```
-Commit and push. Crucible picks it up within the sync interval (60 s), or immediately if the git webhook is configured.
+In Crucible: the team's leader (or an admin) adds `alice@example.com` on the team page, then enrolls her on **Manage
+trainings**. Typing a new email in a training's **Enroll** box does both at once: it adds her to the team as a trainee
+and enrolls her. The change applies at once.
 
 ---
 
@@ -107,7 +105,7 @@ Commit and push. Crucible picks it up within the sync interval (60 s), or immedi
 |---|---|---|
 | Resend an expired invite | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@example.com --message-action RESEND` | Select user → *Resend invitation* |
 | Reset a password | `aws cognito-idp admin-reset-user-password --user-pool-id "$POOL" --username alice@example.com` | Select user → *Reset password* |
-| Someone leaves: block sign-in | `aws cognito-idp admin-disable-user --user-pool-id "$POOL" --username alice@example.com`, then remove them from `team.yaml` | Select user → *Disable user access* |
+| Someone leaves: block sign-in | `aws cognito-idp admin-disable-user --user-pool-id "$POOL" --username alice@example.com`, then remove them from the team page | Select user → *Disable user access* |
 | Delete for good | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice@example.com` | Select user → *Delete* |
 | List everyone | `aws cognito-idp list-users --user-pool-id "$POOL" --query 'Users[].Attributes[?Name==\`email\`].Value' --output text` | Users table |
 | Make MFA mandatory | Change `mfa_configuration = "ON"` in `deploy/aws/persistent/cognito.tf`, re-run `crucible aws init …` | Sign-in tab → Multi-factor authentication → *Require MFA* |

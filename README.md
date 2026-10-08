@@ -25,16 +25,16 @@ uses a fixed development value; the local compose stack sets a dev value.
 
 ## Where configuration lives
 
-Training content is always in git. Configuration and org data (settings, trainings registry, teams, programs, budgets)
-come from one of two places, chosen at startup:
+Training content is in git. Configuration and org data (settings, the trainings registry, teams, programs, roles,
+enrollments, budgets) are in Postgres, changed in the app: **Administrator → Forge settings**, the team pages, and
+**Manage trainings**. A fresh instance needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (the first admin's
+email); that admin configures everything else.
 
-- `CRUCIBLE_PLATFORM_REPO` set: a git platform repo, as in `examples/platform`. The local stack and its end-to-end
-  tests run this way.
-- unset: Postgres. A fresh instance needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (the first admin's
-  email); that admin then configures everything under **Administrator** in the app. `CRUCIBLE_BOOTSTRAP_ADMIN` is
-  ignored in git mode.
+`CRUCIBLE_SEED_DIR` imports a platform directory in the YAML layout of `examples/platform` into an empty database, once.
+The local stack, the end-to-end tests and `crucible preview` start this way. A server that still has
+`CRUCIBLE_PLATFORM_REPO` set refuses to start and says what to do instead.
 
-Export/import between the two is not built yet (planned as M8b).
+Export/import of an instance is not built yet.
 
 ## Local labs and your laptop
 

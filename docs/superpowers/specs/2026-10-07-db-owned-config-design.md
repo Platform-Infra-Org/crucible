@@ -324,3 +324,20 @@ deleting the git config write-back are M8b. Where the build deliberately differs
   the last good version, as `TestBadPinKeepsLastGood` does.
 - **Credentials are masked.** In the admin trainings list and in audit detail a repo URL's userinfo shows as
   `***@` (`https://***@host/…`, `***@host:path`); stored credentials never leave the server (`TestRedactRepo`).
+
+## 13. As built (M8b, first part)
+
+Git mode is gone; export/import is not built yet. Where this differs from §7–§8:
+
+- **Seed, not a seed endpoint.** `examples/platform` stays in its YAML layout (still checked by `crucible lint`).
+  `CRUCIBLE_SEED_DIR` names such a directory; at start `config.Load` reads it and `org.Store.Seed` writes it through the
+  store's own validated, audited writes (actor `seed`) into an empty database, once (a `seed.import` audit row marks
+  it). It is an operator setting rather than a dev-only endpoint: it can only fill an empty instance, and a seed that
+  does not load or validate stops the server. Compose and `crucible preview` use it; the check scripts need no step.
+  Role lists equal to `config.Load`'s defaults are stored as unset, so the defaults keep following the team.
+- **A leftover `CRUCIBLE_PLATFORM_REPO` stops the server** with what to do instead, rather than starting an upgraded
+  git-mode deployment on an empty database without a word.
+- **One page for trainings.** The admin registry and the per-program settings page became **Manage trainings**
+  (`/trainings/manage`, read by `GET /api/org/trainings`, visible teams following `getTeam`'s rule). Enrolling an
+  email that is not on the team adds it as a trainee first (a roster save, then a program save, from the page), and
+  only for someone who may edit the team.

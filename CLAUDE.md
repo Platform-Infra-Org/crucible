@@ -3,7 +3,7 @@
 A self-hosted training platform: git-sourced trainings (readings, quizzes, labs), hands-on labs that run on the
 trainee's laptop (Docker), in Kubernetes, or in a shared AWS account, human scoring, cost approvals and budgets,
 forge ranks, and mentoring. One Go API serves a React SPA. Git is the source of truth for config and content; the UI
-writes back to git as a bot.
+writes content edits back to git as a bot. Configuration and people live in Postgres.
 
 - Spec: `docs/superpowers/specs/2026-10-05-crucible-design.md` (the authority on behaviour)
 - Roadmap, coverage table (spec section → proving test), accepted deviations, decisions to revisit:
@@ -36,7 +36,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |
-| Fresh local stack without tests | `make build && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` |
+| Fresh local stack without tests | `make build && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` (the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
 
 Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App at http://localhost:8080.
 
@@ -49,7 +49,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
 - `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`
-- `examples/` — platform config + training repos used by every e2e (seeded into `.local/git` by `scripts/seed-git.sh`)
+- `examples/` — training repos (seeded into `.local/git` by `scripts/seed-git.sh`) and `platform`, the configuration
+  seed every e2e starts from (imported into Postgres by `CRUCIBLE_SEED_DIR`)
 - `deploy/compose` (local), `deploy/helm` (k3s), `deploy/aws/{persistent,main,labs}` (Terraform)
 
 ## Hard rules
@@ -74,11 +75,10 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   edit diffs, Anvil data, peers' uploads. Enrolled users never score their own training (admins included).
 - Git is the source of truth for **training content**. Configuration and org data (settings, tiers, schedules, quotes,
   admins, the training registry, teams, membership, mentors, webhooks, budgets, programs, roles, enrollments, pins)
-  live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes. Two modes, chosen
-  at startup: `CRUCIBLE_PLATFORM_REPO` set → git platform repo (UI saves go through the bot Writer with `base_sha`, a
-  permission re-check at the tip, validation before push, and an audit row; this is what the e2e fixtures still use);
-  unset → Postgres, which needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (ignored in git mode). Both coexist
-  until M8b. Content edits use per-edit branches merged by the bot after review,
+  live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes, and nowhere else (no
+  git platform repo; a set `CRUCIBLE_PLATFORM_REPO` stops the server). A fresh instance needs only `DATABASE_URL` and
+  `CRUCIBLE_BOOTSTRAP_ADMIN`; `CRUCIBLE_SEED_DIR` imports a YAML platform directory into an empty database once (dev,
+  e2e, preview) through the same store writes. Content edits use per-edit branches merged by the bot after review,
   limited to `training.yaml` and `modules/<id>/…`. All git calls go through `gitsync.git` (isolated config,
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.
@@ -104,15 +104,11 @@ untouched. A PR into `main` was not opened — the token lacked the scope — so
 ### What this branch did
 
 Configuration and org data moved out of the platform repo into Postgres, behind `internal/org`. Git keeps
-**training content**; the two config sources coexist, chosen at startup by `CRUCIBLE_PLATFORM_REPO`. See the
+**training content**. (M8a bridged both sources; the second session below removed git mode.) See the
 Invariants section above, the spec at `docs/superpowers/specs/2026-10-07-db-owned-config-design.md` and the plan at
 `docs/superpowers/plans/2026-10-07-m8-config-in-db.md` (its "As built" notes record where the build diverged).
 
-New UI: an **Administrator** menu (top right) holding Forge Status, **Forge settings** and **Registry**; the latter
-two exist only in Postgres mode, because they read *and* write Postgres — mounted in git mode they would show empty
-defaults and silently discard saves. `internal/org.Routes` gates on mode at the top, and
-`TestOrgWriteRoutesAreAbsentInGitMode` pins it. Team and Program settings now pick their endpoint from
-`config_in_db` on `/api/me`.
+New UI: an **Administrator** menu (top right) holding Forge Status, **Forge settings** and **Trainings**.
 
 ### What the merge required
 
@@ -139,14 +135,27 @@ Known red: `TestAWSLabModuleRejectsHostileInputFast/token_flood` fails under `-r
 lint finishes inside a second and measures ~1.2s with the detector's instrumentation. Not a race; the threshold
 should scale or skip under `-race`.
 
+### Second session, 2026-10-08: git mode removed, one Trainings page
+
+- **Postgres only.** `CRUCIBLE_PLATFORM_REPO`/`_BRANCH`, the platform-repo sync, `gitsync.Writer` (config write-back)
+  and the git-backed `configapi` writes are gone; `configapi` keeps its reads (team list, Forge Status, program diff).
+  `org.Routes` is always mounted; `config_in_db` on `/api/me` became `can_manage_trainings`. A set
+  `CRUCIBLE_PLATFORM_REPO` stops the server with instructions (`configSource`). Helm and Terraform lost
+  `platformBranch`/`platform_repo`/`platform_branch`.
+- **Seed.** `CRUCIBLE_SEED_DIR` → `org.Store.Seed`: `config.Load` of a YAML platform dir, written through the store's
+  own validated, audited writes (actor `seed`), once per database (`seed.import` audit row). Compose mounts
+  `examples/platform` at `/seed`; `crucible preview` writes its seed to `/git/seed`. `TestSeedImportsAPlatformOnce`
+  proves the seeded rows read back exactly as `config.Load` read the YAML.
+- **Manage trainings** (`/trainings/manage[/:training]`, `GET /api/org/trainings`): register/repoint/unregister
+  (admins), start or stop a training for a team, enroll (a new email joins the team as a trainee first), roles,
+  lab settings, content version. It replaced the Registry and Program settings pages; the Team page links to it. The
+  four e2e journeys that enrolled through Program settings use `enroll()` in `e2e/tests/helpers.ts`.
+
 ### What still needs doing
 
 1. **Look at the nav in a browser.** Docs, the `?` link and the Administrator menu now share the right-hand side.
    No test can judge whether that reads well.
-2. **M8b**, the owner's stated direction (see concerns below): delete the git config write-back, move the e2e
-   fixtures onto Postgres, add config export/import, and give Terraform a Postgres-mode node (`platform_repo` is
-   currently a required variable and SSM rejects an empty value). All nine browser journeys drive git mode today,
-   so this is a real chunk of work, not a flag flip.
+2. **Export/import** (the rest of M8b): the owner asked for it; nothing is built. The seed is one-way, from YAML.
 3. **First-run flow.** An admin on a fresh Postgres instance has rights over nothing: no trainings, so
    `Edits.CanUse` is false and the **Edits** button is absent; empty Hearth; no teams. The path works (Registry →
    Team → roster) but nothing guides you through it. Consider a first-run checklist.
@@ -163,8 +172,7 @@ should scale or skip under `-race`.
   config are done; **export/import is not** and is the part they asked for that is still missing.
 - **"the application management should be done in the application"** — not by committing YAML. Changing a
   permission, quota, team or budget should never require git.
-- **They want git mode gone**, keeping Postgres mode only. Treat the two-mode bridge as scaffolding with a
-  deadline, not a feature.
+- **They want git mode gone**, keeping Postgres mode only. Done in the second session.
 - **Two people, two agents, one repo.** Verify each side independently, then merge deliberately — that is how this
   merge was done. Prefer small pathspec commits; never rewrite shared history.
 - **They want to understand and explain every change themselves.** Say what you plan to do before doing it, and

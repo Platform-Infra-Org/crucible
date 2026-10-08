@@ -39,41 +39,112 @@ type Service struct {
 	Repo   func(training string) *gitsync.ContentRepo // the bot's clone of a training's repo, one value per repo; nil when unknown
 	Notify Notifier
 	Resync func(ctx context.Context) error // re-read git after a merge so trainees see it at once
-	Log    *slog.Logger
+	// Version is training id at an older sha (drafts' bases); nil: head only.
+	Version func(ctx context.Context, id, sha string) *content.Training
+	Log     *slog.Logger
 
 	locks sync.Map // training id → chan struct{}: one decision at a time per training
 }
 
 type Edit struct {
-	ID          int64             `json:"id"`
-	Training    string            `json:"training"`
-	Title       string            `json:"title"`
-	Author      string            `json:"author"`
-	BaseSHA     string            `json:"base_sha"`
-	HeadSHA     string            `json:"head_sha"`
-	Branch      string            `json:"branch"`
-	Status      string            `json:"status"`
-	Reviewer    string            `json:"reviewer,omitempty"`
-	Note        string            `json:"note,omitempty"`
-	MergeSHA    string            `json:"merge_sha,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	DecidedAt   *time.Time        `json:"decided_at,omitempty"`
-	Files       map[string]string `json:"files,omitempty"` // detail only
-	Diff        string            `json:"diff,omitempty"`  // detail only: git's unified diff, as is
-	CanReview   bool              `json:"can_review"`
-	CanWithdraw bool              `json:"can_withdraw"`
+	ID          int64        `json:"id"`
+	Training    string       `json:"training"`
+	Title       string       `json:"title"`
+	Author      string       `json:"author"`
+	BaseSHA     string       `json:"base_sha"`
+	HeadSHA     string       `json:"head_sha"`
+	Branch      string       `json:"branch"`
+	Status      string       `json:"status"`
+	Reviewer    string       `json:"reviewer,omitempty"`
+	Note        string       `json:"note,omitempty"`
+	MergeSHA    string       `json:"merge_sha,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	DecidedAt   *time.Time   `json:"decided_at,omitempty"`
+	Ops         []gitsync.Op `json:"ops,omitempty"`  // detail only
+	Diff        string       `json:"diff,omitempty"` // detail only: git's unified diff, as is
+	CanReview   bool         `json:"can_review"`
+	CanWithdraw bool         `json:"can_withdraw"`
 }
 
 type NewEdit struct {
-	Training string            `json:"training"`
-	BaseSHA  string            `json:"base_sha"`
-	Title    string            `json:"title"`
-	Files    map[string]string `json:"files"`
+	Training string       `json:"training"`
+	BaseSHA  string       `json:"base_sha"`
+	Title    string       `json:"title"`
+	Ops      []gitsync.Op `json:"ops"`
+	// Files is the pre-ops shape ({path: new content}), accepted as puts for one release.
+	// ponytail: remove after the release that ships ops (roadmap "decisions to revisit").
+	Files map[string]string `json:"files,omitempty"`
+}
+
+func (in NewEdit) ops() ([]gitsync.Op, error) {
+	if len(in.Files) > 0 && len(in.Ops) > 0 {
+		return nil, apperr.Wrap(apperr.Invalid, "send ops or files, not both")
+	}
+	if len(in.Files) > 0 {
+		return gitsync.PutOps(in.Files), nil
+	}
+	return in.Ops, nil
 }
 
 type FileInfo struct {
-	Path string `json:"path"`
-	Size int64  `json:"size"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+	Editable bool   `json:"editable"`
+	Reason   string `json:"reason,omitempty"` // why it can't be edited here
+}
+
+// ListFiles lists every regular file of a training checkout (hidden folders skipped), marking what an edit may touch.
+func ListFiles(dir string) ([]FileInfo, error) {
+	out := []FileInfo{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && p != dir {
+			return filepath.SkipDir
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		rel = filepath.ToSlash(rel)
+		fi, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		f := FileInfo{Path: rel, Size: fi.Size(), Editable: true}
+		if err := gitsync.CheckPath(rel); err != nil {
+			f.Editable, f.Reason = false, strings.TrimSuffix(err.Error(), ": invalid")
+		}
+		out = append(out, f)
+		return nil
+	})
+	return out, err
+}
+
+// putFiles is the legacy files column: the puts, kept for one release so a Down migration loses no content it had.
+func putFiles(ops []gitsync.Op) map[string]string {
+	out := map[string]string{}
+	for _, op := range ops {
+		if op.Op == "put" {
+			out[op.Path] = op.Content
+		}
+	}
+	return out
+}
+
+// touched lists every path ops name, for the audit row.
+func touched(ops []gitsync.Op) []string {
+	var out []string
+	for _, op := range ops {
+		for _, p := range []string{op.Path, op.From, op.To} {
+			if p != "" && !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 type TrainingRef struct {
@@ -82,17 +153,18 @@ type TrainingRef struct {
 }
 
 const (
-	maxTitle   = 200
+	MaxTitle   = 200 // an edit's or a draft's title
 	maxNote    = 2000
 	maxOpen    = 5  // pending edits per author
 	maxPerHour = 10 // edits proposed per author per hour
-	cols       = `id, training, title, author, base_sha, head_sha, branch, status, reviewer, note, merge_sha, created_at, decided_at, files, diff`
+	cols       = `id, training, title, author, base_sha, head_sha, branch, status, reviewer, note, merge_sha, created_at, decided_at, ops, diff`
 )
 
 // gitTimeout bounds every git section (fetch, merge, push) so a hanging git host fails the request instead of piling up.
 var gitTimeout = 2 * time.Minute
 
-func clean(s string) string { return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "") }
+// Clean drops NUL bytes and invalid UTF-8 from free text (titles, notes).
+func Clean(s string) string { return strings.ToValidUTF8(strings.ReplaceAll(s, "\x00", ""), "") }
 
 func (s *Service) state() (*gitsync.State, error) {
 	st := s.State()
@@ -142,9 +214,6 @@ func canReview(p *config.Platform, training string, t *content.Training, email, 
 	return email != author && !enrolled(p, training, email) && ((rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email))
 }
 
-// checkPath allows exactly what gitsync lets an edit touch (training.yaml and modules/<id>/…, text extensions).
-func checkPath(rel string) error { return gitsync.CheckEditFiles(map[string]string{rel: ""}) }
-
 func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Training, string, error) {
 	st, err := s.state()
 	if err != nil {
@@ -192,37 +261,23 @@ func (s *Service) CanUse(email string) bool {
 	return false
 }
 
-// Files lists the editable files of the training at its branch head, and that head (the base of a new edit).
+// Files lists every file of the training at its branch head, marking what an edit may touch, and that head (the base
+// of a new edit).
 func (s *Service) Files(u *auth.User, training string) (string, []FileInfo, error) {
 	_, t, sha, err := s.training(u, training)
 	if err != nil {
 		return "", nil, err
 	}
-	out := []FileInfo{}
-	err = filepath.WalkDir(t.Dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") && p != t.Dir {
-			return filepath.SkipDir
-		}
-		rel, _ := filepath.Rel(t.Dir, p)
-		rel = filepath.ToSlash(rel)
-		if d.Type().IsRegular() && checkPath(rel) == nil {
-			if fi, err := d.Info(); err == nil {
-				out = append(out, FileInfo{Path: rel, Size: fi.Size()})
-			}
-		}
-		return nil
-	})
-	return sha, out, err
+	files, err := ListFiles(t.Dir)
+	return sha, files, err
 }
 
-func (s *Service) File(u *auth.User, training, rel string) (string, error) {
-	if err := checkPath(rel); err != nil {
+// File is one editable file of training at sha ("" is the head). sha is vouched for by the caller, as for At.
+func (s *Service) File(ctx context.Context, u *auth.User, training, sha, rel string) (string, error) {
+	if err := gitsync.CheckPath(rel); err != nil {
 		return "", err
 	}
-	_, t, _, err := s.training(u, training)
+	t, _, err := s.At(ctx, u, training, sha)
 	if err != nil {
 		return "", err
 	}
@@ -236,56 +291,96 @@ func (s *Service) File(u *auth.User, training, rel string) (string, error) {
 	return string(b), nil
 }
 
-// validate applies the edit to a copy of the head content and loads it, so an edit that would break the training is
-// refused before anything is pushed. It returns the files that actually change.
-func validate(t *content.Training, files map[string]string) (map[string]string, error) {
-	if err := gitsync.CheckEditFiles(files); err != nil {
-		return nil, err
+// At is training at sha ("" is the head) for someone allowed to edit it: the head, or an older commit a draft started
+// on. The caller vouches for sha (the head or a draft's stored base), never a value straight from a request: the
+// mirror also holds unmerged edit branches. Permission is decided at the head.
+func (s *Service) At(ctx context.Context, u *auth.User, training, sha string) (*content.Training, string, error) {
+	_, t, head, err := s.training(u, training)
+	if err != nil || sha == "" || sha == head {
+		return t, head, err
 	}
-	changed := map[string]string{}
-	for rel, body := range files {
-		if old, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(rel))); err != nil || string(old) != body {
-			changed[rel] = body
+	if s.Version != nil {
+		if old := s.Version(ctx, training, sha); old != nil {
+			return old, head, nil
 		}
 	}
-	if len(changed) == 0 {
-		return nil, apperr.Wrap(apperr.Invalid, "nothing changed")
+	return nil, head, apperr.Wrap(apperr.Conflict, "the version this draft started on is no longer available; rebase it")
+}
+
+// Authorize returns the training's head version and sha when u may propose edits to it: never someone enrolled in it.
+func (s *Service) Authorize(u *auth.User, training string) (*content.Training, string, error) {
+	_, t, sha, err := s.training(u, training)
+	return t, sha, err
+}
+
+// Workspace copies t into a temp dir and applies the ops that change something (a put equal to the current file is
+// dropped, unless a rename in the same ops moves that path: then the base file isn't there any more). Ops must have passed gitsync.CheckOps. The caller loads the copy, then calls cleanup. New .sh files are
+// made executable there because lint wants lab scripts executable; ContentRepo.PushEdit sets the modes git records.
+func Workspace(t *content.Training, ops []gitsync.Op) (string, []gitsync.Op, func(), error) {
+	moved := map[string]bool{}
+	for _, op := range ops {
+		if op.Op == "rename" {
+			moved[op.From], moved[op.To] = true, true
+		}
+	}
+	var changed []gitsync.Op
+	for _, op := range ops {
+		if op.Op == "put" && !moved[op.Path] {
+			if old, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(op.Path))); err == nil && string(old) == op.Content {
+				continue
+			}
+		}
+		changed = append(changed, op)
 	}
 	tmp, err := os.MkdirTemp("", "crucible-edit-*")
 	if err != nil {
-		return nil, err
+		return "", nil, nil, err
 	}
-	defer os.RemoveAll(tmp)
+	cleanup := func() { _ = os.RemoveAll(tmp) }
 	if err := os.CopyFS(tmp, os.DirFS(t.Dir)); err != nil {
-		return nil, fmt.Errorf("copying the training to check the edit: %w", err)
+		cleanup()
+		return "", nil, nil, fmt.Errorf("copying the training to check the edit: %w", err)
 	}
-	for rel, body := range changed {
-		p := filepath.Join(tmp, filepath.FromSlash(rel))
-		if err := gitsync.NoSymlinks(tmp, rel); err != nil {
-			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s can't be edited: %v", rel, err))
-		}
-		if err := os.WriteFile(p, []byte(body), 0o755); err != nil { // lint wants lab scripts executable; gitsync sets real modes
-			return nil, err
+	created, err := gitsync.ApplyOps(tmp, changed)
+	if err != nil {
+		cleanup()
+		return "", nil, nil, err
+	}
+	for _, rel := range created {
+		if strings.HasSuffix(rel, ".sh") {
+			_ = os.Chmod(filepath.Join(tmp, filepath.FromSlash(rel)), 0o755)
 		}
 	}
-	nt, probs := content.Load(tmp)
+	return tmp, changed, cleanup, nil
+}
+
+// Check applies ops to a copy of t and loads it: the ops that change something, and the problems the training would
+// then have. err is for ops that are refused or can't apply, and for an edit that changes nothing.
+func Check(t *content.Training, ops []gitsync.Op) ([]gitsync.Op, []content.Problem, error) {
+	if err := gitsync.CheckOps(ops); err != nil {
+		return nil, nil, err
+	}
+	dir, changed, cleanup, err := Workspace(t, ops)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanup()
+	if len(changed) == 0 {
+		return nil, nil, apperr.Wrap(apperr.Invalid, "nothing changed")
+	}
+	nt, probs := content.Load(dir)
 	if len(probs) == 0 && nt.ID != t.ID {
 		probs = []content.Problem{{File: "training.yaml", Msg: "the training id must stay " + t.ID}}
 	}
-	if len(probs) > 0 {
-		msgs := []string{}
-		for _, p := range probs[:min(len(probs), 10)] {
-			if rel, err := filepath.Rel(tmp, p.File); err == nil && filepath.IsLocal(rel) {
-				p.File = filepath.ToSlash(rel)
-			}
-			msgs = append(msgs, p.String())
-		}
-		return nil, apperr.Wrap(apperr.Invalid, "this edit would break the training: "+strings.Join(msgs, "; "))
+	return changed, probs, nil
+}
+
+func broken(probs []content.Problem) error {
+	msgs := []string{}
+	for _, p := range probs[:min(len(probs), 10)] {
+		msgs = append(msgs, p.String())
 	}
-	return changed, nil
+	return apperr.Wrap(apperr.Invalid, "this edit would break the training: "+strings.Join(msgs, "; "))
 }
 
 // limits are the per-author volume limits. Create checks them cheaply first, then again, authoritatively, in the
@@ -318,8 +413,8 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if in.BaseSHA != sha {
 		return nil, apperr.Wrap(apperr.Conflict, "the content changed since you opened it; reload and redo your change")
 	}
-	title := strings.TrimSpace(clean(in.Title))
-	if title == "" || len(title) > maxTitle {
+	title := strings.TrimSpace(Clean(in.Title))
+	if title == "" || len(title) > MaxTitle {
 		return nil, apperr.Wrap(apperr.Invalid, "give the edit a title of at most 200 characters")
 	}
 	repo := s.Repo(in.Training)
@@ -329,9 +424,16 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if err := limits(ctx, s.DB, me); err != nil { // before the copy validate makes
 		return nil, err
 	}
-	changed, err := validate(t, in.Files)
+	ops, err := in.ops()
 	if err != nil {
 		return nil, err
+	}
+	changed, probs, err := Check(t, ops)
+	if err != nil {
+		return nil, err
+	}
+	if len(probs) > 0 {
+		return nil, broken(probs)
 	}
 	var id int64
 	if err := s.DB.QueryRow(ctx, `SELECT nextval(pg_get_serial_sequence('content_edits', 'id'))`).Scan(&id); err != nil {
@@ -366,11 +468,11 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 	if err := limits(ctx, tx, me); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO content_edits (id, training, title, author, base_sha, files, status, branch, head_sha, diff)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)`, id, in.Training, title, me, sha, changed, branch, headSHA, diff); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO content_edits (id, training, title, author, base_sha, files, ops, status, branch, head_sha, diff)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9, $10)`, id, in.Training, title, me, sha, putFiles(changed), changed, branch, headSHA, diff); err != nil {
 		return nil, err
 	}
-	if err := audit.Log(ctx, tx, me, "content_edit.propose", in.Training, map[string]any{"edit": id, "title": title, "files": slices.Sorted(maps.Keys(changed))}, headSHA); err != nil {
+	if err := audit.Log(ctx, tx, me, "content_edit.propose", in.Training, map[string]any{"edit": id, "title": title, "files": touched(changed)}, headSHA); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -401,7 +503,7 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 func scan(row pgx.Row) (*Edit, error) {
 	var e Edit
 	err := row.Scan(&e.ID, &e.Training, &e.Title, &e.Author, &e.BaseSHA, &e.HeadSHA, &e.Branch, &e.Status, &e.Reviewer, &e.Note,
-		&e.MergeSHA, &e.CreatedAt, &e.DecidedAt, &e.Files, &e.Diff)
+		&e.MergeSHA, &e.CreatedAt, &e.DecidedAt, &e.Ops, &e.Diff)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "edit not found")
 	}
@@ -439,7 +541,7 @@ func (s *Service) List(ctx context.Context, u *auth.User) ([]Edit, error) {
 			return nil, err
 		}
 		if visible(st, u, e) {
-			e.Files, e.Diff = nil, ""
+			e.Ops, e.Diff = nil, ""
 			out = append(out, *e)
 		}
 	}
@@ -536,7 +638,7 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 	if err := mayDecide(st, u, e, to); err != nil {
 		return nil, err
 	}
-	note = strings.TrimSpace(clean(note))
+	note = strings.TrimSpace(Clean(note))
 	if len(note) > maxNote {
 		note = strings.ToValidUTF8(note[:maxNote], "")
 	}
@@ -602,10 +704,12 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 	return s.Get(gctx, u, e.ID)
 }
 
-// restore re-pushes the stored (reviewed) files to an edit branch someone changed outside Crucible. The new commit and
+// restore re-pushes the stored (reviewed) ops to an edit branch someone changed outside Crucible. The new commit and
 // diff replace the old ones, so nothing merges until a reviewer approves again. Returns ErrEditMoved when it worked.
 func (s *Service) restore(ctx context.Context, repo *gitsync.ContentRepo, e *Edit, me string) error {
-	headSHA, diff, err := repo.PushEdit(ctx, e.Branch, e.BaseSHA, e.Files, e.Author, "crucible: "+e.Title)
+	// A message of its own: the same tree, parent, author and message within the same second would recreate the
+	// reviewed commit byte for byte, so the branch would look restored while head_sha never changed.
+	headSHA, diff, err := repo.PushEdit(ctx, e.Branch, e.BaseSHA, e.Ops, e.Author, "crucible: "+e.Title+" (restored after the branch moved)")
 	if err != nil {
 		return err
 	}

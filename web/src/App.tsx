@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link, Route, Routes } from 'react-router'
 import { MotionConfig } from 'motion/react'
 import { api } from './api'
@@ -29,10 +29,13 @@ import { ProgramSettingsPage } from './pages/ProgramSettings'
 import { TrainingsPage } from './pages/Trainings'
 import { LabsPage } from './pages/Labs'
 import { EditsPage } from './pages/Edits'
-import { EditFilesPage } from './pages/EditFiles'
+import { NewDraftPage } from './pages/NewDraft'
 import { EditReviewPage } from './pages/EditReview'
+import { DocsPage } from './pages/Docs'
 
 export { useMe }
+
+const Ide = lazy(() => import('./pages/editor/Ide')) // Monaco stays out of the main bundle (scripts/check-chunks.mjs)
 
 export default function App() {
   const [me, setMe] = useState<Me>()
@@ -87,11 +90,13 @@ export default function App() {
           <Route path="/anvil" element={<AnvilPage />} />
           <Route path="/anvil/:id" element={<AnvilDetailPage />} />
           <Route path="/edits" element={<EditsPage />} />
-          <Route path="/edits/new" element={<EditFilesPage />} />
+          <Route path="/edits/new" element={<NewDraftPage />} />
+          <Route path="/edits/drafts/:id" element={<Suspense fallback={<Loader label="Heating the editor…" />}><Ide /></Suspense>} />
           <Route path="/edits/:id" element={<EditReviewPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />
           <Route path="/admin/settings" element={<AdminSettingsPage />} />
           <Route path="/admin/trainings" element={<AdminTrainingsPage />} />
+          <Route path="/docs/*" element={<DocsPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>
         <Toaster />

@@ -1,9 +1,8 @@
 import { expect, test } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DiffView } from './DiffView'
-import { editProblem } from '../lib/editLimits'
 import { conflictNotice } from '../lib/conflictNotice'
-import { byteLen, changedFiles, headVersions } from '../lib/editDraft'
+import { byteLen } from '../lib/editDraft'
 
 test('diff lines are marked added, removed or context', () => {
   const html = renderToStaticMarkup(<DiffView diff={'diff --git a/x.md b/x.md\n@@ -1,2 +1,2 @@\n # Intro\n-Hello.\n+Hello, smith.\n'} />)
@@ -41,27 +40,8 @@ test('every invisible code point is marked, astral ones included', () => {
   expect(renderToStaticMarkup(<DiffView diff={'+plain 😀 ünï'} />)).not.toContain('‹')
 })
 
-test('CRLF files keep their line endings, unchanged files are not submitted', () => {
-  const orig = { 'a.md': 'x\r\ny\r\n', 'b.md': 'k\n' }
-  expect(changedFiles(orig, { 'a.md': 'x\r\ny\r\n', 'b.md': 'k\n' })).toEqual({})
-  expect(changedFiles(orig, { 'a.md': 'x\nz\n', 'b.md': 'k\nm\n' })).toEqual({ 'a.md': 'x\r\nz\r\n', 'b.md': 'k\nm\n' })
+test('byte length counts UTF-8 bytes', () => {
   expect(byteLen('é')).toBe(2)
-})
-
-test('redo seeds paths with the head text, not the stale edit', async () => {
-  const head = await headVersions(['a.md', 'new.md'], async (p) => { if (p === 'new.md') throw new Error('404'); return 'HEAD ' + p })
-  expect(head).toEqual({ 'a.md': 'HEAD a.md' })
-  expect(changedFiles(head, head)).toEqual({})
-})
-
-test('client limits mirror the server', () => {
-  expect(editProblem({ 'training.yaml': 'a' })).toBeUndefined()
-  expect(editProblem({ 'modules/m1/a.md': 'a' })).toBeUndefined()
-  expect(editProblem({})).toMatch(/1 to 20/)
-  expect(editProblem(Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`modules/m/${i}.md`, 'a'])))).toMatch(/1 to 20/)
-  expect(editProblem({ 'README.md': 'a' })).toMatch(/modules/)
-  expect(editProblem({ 'modules/m/a.png': 'a' })).toMatch(/only \.md/)
-  expect(editProblem({ 'modules/m/a.md': 'a'.repeat(256 * 1024 + 1) })).toMatch(/256 KiB/)
 })
 
 test('409s are told apart', () => {

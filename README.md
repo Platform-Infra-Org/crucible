@@ -45,6 +45,13 @@ Export/import between the two is not built yet (planned as M8b).
 Content lives in git: see `examples/forge-101` and the spec in `docs/superpowers/specs/`.
 Validate a content repo with `go run ./cmd/crucible lint <dir>`.
 
+You can also edit a training in the app: **Edits** opens a browser editor on a draft that autosaves to the server, with
+YAML completion, the same problems `crucible lint` reports, a preview of readings, quizzes and labs, and a **Blocks**
+panel that adds modules, readings, questions, labs, tasks and hints through forms. Submitting pushes the draft to its
+own branch for a maintainer to review; the bot merges it once approved. Nobody enrolled in a training can edit it. The
+**Docs** tab explains every screen by role, and the generated *Building blocks* pages list every key a training repo
+can use.
+
 Things that catch authors out:
 
 - **A score-rule module can get stuck.** With `completion: score` and a `threshold`, a module completes only when the

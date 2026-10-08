@@ -71,6 +71,25 @@ Status: **P** proven by the named tests · **D** accepted deviation (see below) 
 | §14 Security: no checks in the API pod, short-lived AWS creds, secrets never to the browser, audit, CSRF/Origin, CSP | M1–M7 | `TestClusterPSAPolicy`; `TestSweepRefreshesReadyAWSLabCredentials`; `TestRubricOnlyReachesScorerViews`; `TestAssetsServeOnlySandboxedAllowlistedFiles`; `TestLogRollsBackWithTheTransaction`; `TestStateChangingRequestsNeedSameOrigin`; `TestSecurityHeaders` (CSP is `'self'` only; fonts are self-hosted) | P |
 | §14 Testing: Go + testcontainers, kind runner tests, Vitest, Playwright, lint fixtures | every milestone | `go test -race ./...`; `make cluster-check`; `npm test`; `make local-check`; `TestLintExamplesPass` | P; D (AWS sandbox nightly, Forge 401) |
 
+## Docs & editor coverage
+
+Branch `feat/docs-and-editor`, spec `2026-10-07-docs-and-editor-design.md`, plan `2026-10-07-docs-and-editor.md`.
+Proof names Go tests, Vitest files (`web/src/...`) and Playwright specs (`authoring.spec.ts`, `docs.spec.ts`, run by
+`make local-check`).
+
+| Spec section | Proof | Status |
+|---|---|---|
+| §1 Goals: Docs tab kept current, IDE editor, building blocks | `TestDocsCoverEveryRouteAndRole`; authoring.spec.ts; docs.spec.ts | P |
+| §2 Architecture: blocks registry, authoring package, Monaco lazily loaded | `TestAuthoringRoutes`; `web/scripts/check-chunks.mjs` (Monaco stays out of the entry chunk, run by `npm run build`) | P |
+| §3 Block registry: every content field described, schema from the structs, hover text | `TestEveryContentFieldIsDescribed`; `TestSchemaAcceptsEveryExample`; `TestSchemaRejects`; `TestSchemaHasHoverText`; `TestValidateReportsProblemsWithLines`; `TestOneCheckAtATimePerUser`; `TestBackToBackValidateSameUser` | P; D (problem lines are heuristics) |
+| §4 Docs tab: pages by role, search, ? links, version, generated reference | `TestLoadParsesAndOrders`; `TestLoadRefusesBadPages`; `TestRoutes`; `TestEmptyListsAreArrays`; `TestEveryPageStartsWithItsTitle`; `TestDocsCoverEveryRouteAndRole`; lib/docs.test.ts; docs.spec.ts | P |
+| §5 Editor: explorer, tabs, YAML completion and hover, Problems, Changes, go to file, preview, small screens | Explorer.test.tsx; panels.test.tsx; Preview.test.tsx; previewModel.test.ts; diff.test.ts; DiffView.test.tsx; model.test.ts; authoring.spec.ts (hover link, Ctrl/Cmd+Z after an insert) | P; Hand (keyboard and screen-reader sweep) |
+| §6 Drafts: server-side autosave, compare-and-set, limits, rebase, reopen a returned edit, discard | `TestDraftLifecycle`; `TestDraftCompareAndSet`; `TestSubmitCompareAndSet`; `TestDraftLimitsAndAccess`; `TestDraftCapCountsVisibleDraftsOnly`; `TestDraftFromAReturnedEdit`; `TestRebaseFollowsUntouchedFiles`; `TestRebaseConflictWhenUpstreamDeleted`; `TestRebaseConflictWhenRenamedAndEditedSourceChanged`; autosave.test.ts; rebase.test.ts; editLimits.test.ts; authoring.spec.ts (newer content) | P |
+| §7 Edits as operations: put, rename, delete; exec bits; rename-aware stored diff; legacy files map | `TestCheckOps`; `TestApplyOps`; `TestPushEditRenameDeleteAndModes`; `TestPushEditOpsRefusals`; `TestEditOpsRenameAndDelete`; `TestEditOpsAreValidated`; `TestFilesMapIsTranslatedToPuts`; `TestFilesListsEverythingWithWhatIsEditable`; `TestMigrationsCreateTablesAndAreIdempotent` | P; D (files map for one release, case-only renames refused) |
+| §8 Blocks catalog: forms, targets, literal values, comment-preserving inserts, git-only blocks | `TestEveryBlockSampleLoadsAndLints`; `TestCatalogCoversTheContentModel`; `TestInsertValuesAreLiteral`; `TestInsertWritesWhatWasTyped`; `TestInsertReturnsOpsForTheDraft`; `TestInsertIntoBrokenFile`; `TestLabBlockInBrokenModule`; yamlx `TestInsert…` and `FuzzInsert`; forms.test.ts; BlocksPanel.test.tsx; authoring.spec.ts | P; D (AWS template and new training are git-only) |
+| §9 Security: enrolled users refused, isolated checks, editor-only answer marks, CSP unchanged, ops path tricks | `TestAuthoringRefusesEnrolledAndBadInput`; `TestReadRefusesOversizeBodies`; `TestCSPStaysStrict`; `TestCheckOps`; `TestPushEditOpsRefusals`; Preview.test.tsx; docs.spec.ts and authoring.spec.ts (zero CSP violations) | P |
+| §10 Testing: Go, web and end-to-end as listed | `go test -race ./...`; `npm test`; `make local-check` | P |
+
 ## Deviations (accepted)
 
 Every one of these was ruled on in a milestone ledger (`.superpowers/sdd/*/progress.md`) or in the M7 coverage audit.
@@ -142,6 +161,24 @@ Every one of these was ruled on in a milestone ledger (`.superpowers/sdd/*/progr
 - The lint's code-block detection is a line scanner, not a Markdown parser.
 - Unavailable content neither helps nor hurts a forge rank until it syncs again.
 - A lab started in the instant between an agent reconnect and its reconcile could be ended too (one round trip).
+
+**Docs & editor**
+- The legacy `files` map on `POST /api/edits` is translated to puts by `edits.NewEdit`, and `content_edits.files`
+  keeps the puts, for one release. Drop both after it.
+- A rename- or delete-only edit stores `files = {}`, so after the 00018 Down the old code would refuse to restore it
+  (it wants 1 to 20 files).
+- Problem lines are heuristics: `authoring.locate` reads YAML's "line N", a question's or task's `id:`, or the line
+  that names a missing file; anything else points at line 1. Give `content.Problem` real positions if authors find
+  them wrong.
+- A rename that only changes case is refused: the case-collision check sees the old name still at HEAD.
+- The AWS settings block (spec §1.3 and §3; plan Ruling 6) was dropped from the catalog (progress ruling P7):
+  authors write those keys by hand. Only `template.lab.aws` and "new training" are git-only.
+- The AWS lab template and "new training" are git-only blocks. The server's insert refusal for them
+  (`gitOnlyWhy` in `internal/content/blocks/catalog.go`) still gives the file-types reason, which is wrong for a new
+  training (that is a new repo).
+- Draft previews have no asset base, so images in a reading don't show in the editor preview.
+- Docker images don't set `CRUCIBLE_VERSION` (no build passes the build arg), so deployed builds show the docs
+  version as `dev`.
 
 **Platform**
 - **No container registry.** Releases are S3 tarballs imported into containerd. When more nodes are added (M4 upgrade path), switch to ECR with the kubelet credential provider.

@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router'
 import { api, ApiError } from '../api'
 import { useMe } from '../me'
 import { useFetch } from '../useFetch'
-import type { ContentEdit } from '../types'
+import type { ContentEdit, DraftInfo } from '../types'
 import { DiffView } from '../components/DiffView'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
@@ -15,11 +15,13 @@ export function EditReviewPage() {
   const { id } = useParams()
   const { me } = useMe()
   const { data: e, error, reload } = useFetch<ContentEdit>(`/api/edits/${id}`)
+  const drafts = useFetch<DraftInfo[]>(me.can_edit_content ? '/api/authoring/drafts' : null)
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
   if (error) return <ErrorBox error={error} />
   if (!e) return <Loader label="Reading the edit…" />
+  const draft = drafts.data?.find((d) => d.edit_id === e.id) // the draft it came from, still as the author left it
 
   const act = async (action: 'approve' | 'reject' | 'withdraw') => {
     setBusy(true)
@@ -47,12 +49,15 @@ export function EditReviewPage() {
       <h2>Changes</h2>
       <DiffView diff={e.diff ?? ''} />
       <h2>Files</h2>
-      {Object.entries(e.files ?? {}).map(([p, t]) => (
-        <details key={p}>
-          <summary>{p}</summary>
-          {p.endsWith('.md') ? <Markdown text={t} /> : <pre>{t}</pre>}
-        </details>
-      ))}
+      {(e.ops ?? []).map((op, i) =>
+        op.op === 'put' ? (
+          <details key={i}>
+            <summary>{op.path}</summary>
+            {op.path.endsWith('.md') ? <Markdown text={op.content} /> : <pre>{op.content}</pre>}
+          </details>
+        ) : op.op === 'rename' ? <p key={i}>Renamed <code>{op.from}</code> to <code>{op.to}</code></p>
+          : <p key={i}>Deleted <code>{op.path}</code> (its full text is in the changes above)</p>,
+      )}
       {(e.can_review || e.can_withdraw) && (
         <p>
           {e.can_review && <><label>Review note <textarea value={note} onChange={(x) => byteLen(x.target.value) <= 2000 && setNote(x.target.value)} /></label>{' '}</>}
@@ -61,8 +66,8 @@ export function EditReviewPage() {
           {e.can_withdraw && <button className="ghost" disabled={busy} onClick={() => act('withdraw')}>Withdraw</button>}
         </p>
       )}
-      {e.status === 'stale' && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
-        <Link to={`/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Redo on the current version</Link>
+      {['stale', 'rejected', 'withdrawn'].includes(e.status) && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
+        <Link to={draft ? `/edits/drafts/${draft.id}` : `/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
       )}
     </section>
   )

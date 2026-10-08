@@ -65,6 +65,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   or `commit -a` when other work may be in the tree. Never rewrite history or force-push. Trailer:
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Tests first** for behaviour changes; every security or money path keeps a test that fails without the fix.
+- **Docs:** any capability change updates `docs/user` in the same commit. `go test ./internal/docs` fails when a SPA
+  route, a role or a catalog block has no page, or a page covers something that no longer exists.
 
 ## Invariants worth knowing before changing code
 

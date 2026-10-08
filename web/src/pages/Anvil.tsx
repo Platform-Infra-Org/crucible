@@ -22,7 +22,7 @@ export function AnvilPage() {
   return (
     <section className="page anvil">
       <h1>Anvil</h1>
-      <form className="row filters" onSubmit={(e) => { e.preventDefault(); setFilter(draft) }}>
+      <form className="toolbar" onSubmit={(e) => { e.preventDefault(); setFilter(draft) }}>
         <label>Training <input value={draft.training} placeholder="any" onChange={(e) => setDraft({ ...draft, training: e.target.value })} /></label>
         <label>Trainee <input value={draft.trainee} placeholder="email" onChange={(e) => setDraft({ ...draft, trainee: e.target.value })} /></label>
         <label>Type
@@ -31,7 +31,7 @@ export function AnvilPage() {
             {Object.entries(typeLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </label>
-        <button className="ghost" type="submit">Filter</button>
+        <button className="primary" type="submit">Filter</button>
       </form>
       {data.length === 0 && <p className="muted">Nothing on the anvil. Every piece is scored.</p>}
       <ul className="queue">

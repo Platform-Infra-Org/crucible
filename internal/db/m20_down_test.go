@@ -10,8 +10,8 @@ import (
 	"crucible/internal/db/dbtest"
 )
 
-// 00018's Down must run, and the migration must come back up afterwards.
-func TestMigration00018DownThenUp(t *testing.T) {
+// 00020's Down must run, and the migration must come back up afterwards.
+func TestMigration00020DownThenUp(t *testing.T) {
 	pool := dbtest.New(t) // already migrated to head
 	sqlDB := stdlib.OpenDBFromPool(pool)
 	defer sqlDB.Close()
@@ -21,10 +21,10 @@ func TestMigration00018DownThenUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := goose.GetDBVersion(sqlDB)
-	if err != nil || v < 18 {
+	if err != nil || v < 20 {
 		t.Fatalf("version = %d, %v", v, err)
 	}
-	for v >= 18 {
+	for v >= 20 {
 		if err := goose.Down(sqlDB, "migrations"); err != nil {
 			t.Fatalf("down from %d: %v", v, err)
 		}

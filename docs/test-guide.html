@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crucible Test Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a sticky phase index on the left beside one long column; the cloud-lab flow is a numbered pour from request to bill.
+   Palette: Crucible's own themes. Light is Anvil (steel and iron) with an ember accent; dark is Forge (charcoal and molten metal). */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e4e9ef; --text: #1c232b; --muted: #55616e; --border: #cbd3dc;
+  --accent: #b4500e; --accent-2: #c98612; --iron: #2f5d8a; --ok: #276b2b; --danger: #b3261e; --on-accent: #ffffff;
+  --glow: 0 0 0 transparent;
+  --display: 'Cinzel', Georgia, 'Times New Roman', serif;
+  --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --border: #3a302a;
+  --accent: #ff7a1a; --accent-2: #ffc24b; --iron: #8fb4dc; --ok: #7bd88f; --danger: #ff6b5e; --on-accent: #1a0f05;
+  --glow: 0 0 22px rgba(255, 122, 26, 0.35); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --border: #3a302a;
+  --accent: #ff7a1a; --accent-2: #ffc24b; --iron: #8fb4dc; --ok: #7bd88f; --danger: #ff6b5e; --on-accent: #1a0f05;
+  --glow: 0 0 22px rgba(255, 122, 26, 0.35); color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--body); padding-inline: 16px; padding-block: 0 4rem; }
+h1, h2, h3 { font-family: var(--display); letter-spacing: 0.02em; line-height: 1.2; text-wrap: balance; margin: 0; }
+a { color: var(--accent); text-underline-offset: 0.18em; }
+code, pre, kbd { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--surface-2); padding: 0.05em 0.35em; border-radius: 4px; }
+:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+
+.wrap { max-width: 1180px; margin: 0 auto; }
+.hero { padding-block: 2.5rem 1.5rem; display: grid; gap: 1rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+.eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.hero h1 { font-size: clamp(2rem, 5vw, 3rem); }
+.hero p { max-width: 68ch; color: var(--muted); margin: 0; font-size: 1.05rem; }
+.meter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; }
+.meter { flex: 1 1 18rem; height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.meter > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: var(--glow); transition: width 0.4s ease-out; }
+.meter-label { font-variant-numeric: tabular-nums; font-weight: 600; }
+.tools { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+button { font: inherit; font-size: 0.9rem; cursor: pointer; border-radius: 8px; padding: 0.4rem 0.85rem; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+button:hover { border-color: var(--accent); }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.confirm { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.9rem; }
+
+.layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } .toc { position: static; } }
+.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem); font-size: 0.9rem; }
+.toc h2 { font-family: var(--body); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+.toc ol { list-style: none; padding: 0; margin: 0 0 1.25rem; display: grid; gap: 0.1rem; }
+.toc a { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.25rem 0.55rem; border-radius: 6px; color: var(--text); text-decoration: none; border-left: 2px solid transparent; }
+.toc a:hover { background: var(--surface-2); border-left-color: var(--accent); }
+.toc .n { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.82rem; }
+.toc .n.full { color: var(--ok); }
+
+main { display: grid; gap: 3.25rem; min-width: 0; }
+section > h2 { font-size: clamp(1.4rem, 3vw, 1.9rem); margin-bottom: 0.4rem; }
+section > h2::after { content: ''; display: block; width: 2.5rem; height: 3px; margin-top: 0.45rem; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.lede { color: var(--muted); max-width: 68ch; margin: 0.75rem 0 1.25rem; }
+.prose { max-width: 70ch; }
+.prose p { margin: 0 0 0.8rem; }
+
+/* capabilities */
+.caps { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.cap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.15rem; min-width: 0; }
+.cap h3 { font-size: 1.05rem; margin-bottom: 0.15rem; }
+.cap .who { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--iron); font-weight: 600; }
+.cap ul { margin: 0.6rem 0 0; padding-left: 1.1rem; display: grid; gap: 0.25rem; font-size: 0.92rem; }
+.runtimes { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; margin-top: 1rem; }
+.rt { border-top: 3px solid var(--accent); background: var(--surface); border-radius: 0 0 12px 12px; padding: 0.9rem 1.1rem; }
+.rt.cluster { border-top-color: var(--iron); }
+.rt.aws { border-top-color: var(--accent-2); }
+.rt h3 { font-size: 1rem; }
+.rt p { margin: 0.4rem 0 0; font-size: 0.92rem; color: var(--muted); }
+.rt .tag { font-family: var(--mono); font-size: 0.78rem; color: var(--text); }
+
+/* the pour: how an aws lab runs, step by step */
+.pour { list-style: none; padding: 0; margin: 1.25rem 0; display: grid; gap: 0; counter-reset: pour; }
+.pour li { position: relative; display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0 1rem; padding-bottom: 1.15rem; counter-increment: pour; }
+.pour li::before { content: counter(pour); grid-row: span 2; width: 2.2rem; height: 2.2rem; display: grid; place-items: center; border-radius: 50%; font-family: var(--display); font-weight: 700;
+  color: var(--on-accent); background: linear-gradient(160deg, var(--accent-2), var(--accent)); box-shadow: var(--glow); position: relative; z-index: 1; }
+.pour li:not(:last-child)::after { content: ''; position: absolute; left: 1.08rem; top: 2.2rem; bottom: 0; width: 2px; background: linear-gradient(var(--accent), var(--border)); }
+.pour h3 { font-family: var(--body); font-size: 1rem; font-weight: 600; letter-spacing: 0; margin-top: 0.3rem; }
+.pour p { margin: 0.2rem 0 0; color: var(--muted); max-width: 70ch; }
+.guards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.6rem 1.5rem; padding: 1rem 1.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin: 0; }
+.guards div { min-width: 0; }
+.guards dt { font-weight: 600; }
+.guards dd { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.92rem; }
+.table-wrap { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.note { border-left: 3px solid var(--iron); background: var(--surface); padding: 0.75rem 1rem; border-radius: 0 10px 10px 0; margin: 1rem 0; max-width: 72ch; }
+.note.warn { border-left-color: var(--danger); }
+.note strong:first-child { display: block; margin-bottom: 0.15rem; }
+
+/* checklists */
+.phase-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; }
+.phase-head .count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.9rem; }
+.phase-head .count.full { color: var(--ok); font-weight: 600; }
+.where { font-size: 0.85rem; color: var(--iron); font-weight: 600; }
+.items { list-style: none; padding: 0; margin: 1rem 0 0; display: grid; gap: 0.75rem; }
+.item { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.85rem 1.1rem; min-width: 0; transition: opacity 0.2s, border-color 0.2s; }
+.item > label { display: flex; gap: 0.75rem; align-items: flex-start; cursor: pointer; font-weight: 600; }
+.item input[type="checkbox"] { width: 1.15rem; height: 1.15rem; margin-top: 0.2rem; flex: none; accent-color: var(--accent); }
+.item.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.item.done > label .t { text-decoration: line-through; text-decoration-color: var(--muted); color: var(--muted); }
+body.hide-done .item.done { display: none; }
+.body { margin: 0.5rem 0 0 1.9rem; display: grid; gap: 0.5rem; min-width: 0; }
+.body p { margin: 0; }
+.how { margin: 0; padding-left: 1.15rem; display: grid; gap: 0.25rem; }
+.expect { padding: 0.45rem 0.75rem; border-radius: 8px; background: color-mix(in srgb, var(--ok) 9%, transparent); font-size: 0.93rem; }
+.expect b { color: var(--ok); margin-right: 0.35rem; }
+.cmd { position: relative; margin: 0; }
+.cmd pre { margin: 0; padding: 0.65rem 4.6rem 0.65rem 0.85rem; background: var(--surface-2); border-radius: 8px; overflow-x: auto; white-space: pre; line-height: 1.5; }
+.cmd button { position: absolute; top: 0.35rem; right: 0.35rem; font-size: 0.78rem; padding: 0.2rem 0.55rem; }
+.pill { display: inline-block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; padding: 0.05rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-left: 0.4rem; vertical-align: 0.1em; }
+.pill.cost { border-color: var(--danger); color: var(--danger); }
+.pill.auto { border-color: var(--iron); color: var(--iron); }
+.users { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.5rem; }
+.users div { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.8rem; font-size: 0.9rem; }
+.users code { background: none; padding: 0; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="hero">
+    <span class="eyebrow">Proving run · every capability, end to end</span>
+    <h1>Crucible Test Guide</h1>
+    <p>Work through Crucible from a fresh local stack to labs in a real AWS account: creating trainings, laptop labs, cluster labs on
+      your own machine and cloud labs. Each step says how to test it and what you should see. Your ticks stay in this browser.</p>
+    <div class="meter-row">
+      <div class="meter" role="progressbar" aria-label="Checks done" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="bar"></span></div>
+      <span class="meter-label" id="overall">0 of 0 checked</span>
+      <div class="tools">
+        <button type="button" id="hide" aria-pressed="false">Hide checked</button>
+        <span id="reset-zone"><button type="button" class="danger" id="reset">Clear ticks</button></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="On this page">
+      <h2>Understand</h2>
+      <ol>
+        <li><a href="#capabilities">What Crucible does</a></li>
+        <li><a href="#cloud">How cloud labs work</a></li>
+        <li><a href="#before">Before you start</a></li>
+      </ol>
+      <h2>Check</h2>
+      <ol id="toc-phases"></ol>
+    </nav>
+
+    <main>
+      <!-- ───────────── capabilities ───────────── -->
+      <section id="capabilities">
+        <h2>What Crucible does</h2>
+        <p class="lede">Crucible takes new colleagues from zero to productive. Trainings live in git: readings, quizzes and hands-on labs.
+          People, teams, budgets and settings live in Crucible's own database. One Go server runs everything and serves the web app.</p>
+        <div class="caps">
+          <div class="cap"><span class="who">Trainees</span><h3>Learn</h3>
+            <ul>
+              <li>The Hearth: your trainings, progress, rank and badges</li>
+              <li>Readings, then quizzes scored at once (choice, exact, pattern, order, match) or by a person (written, upload, live sign-off)</li>
+              <li>Modules in order or free, as the training sets</li>
+              <li>Ranks from Ore to Masterwork, which only ever rise; a badge per finished training</li>
+            </ul></div>
+          <div class="cap"><span class="who">Trainees</span><h3>Labs</h3>
+            <ul>
+              <li>Tasks on the left, tabbed terminals on the right, a <b>Check</b> per task</li>
+              <li>Hints that can cost points; break-fix scenarios prepared by setup scripts; <b>Reset scenario</b></li>
+              <li>A timer, an idle prompt, one extension, recorded terminals</li>
+              <li>Three places to run: laptop, cluster, AWS (below)</li>
+            </ul></div>
+          <div class="cap"><span class="who">Scorers, mentors, leaders</span><h3>Score and follow</h3>
+            <ul>
+              <li>The Anvil: written answers, uploads, lab reviews and self-reported labs, with rubrics; return for rework</li>
+              <li>Journey: each person and training as heat cells, with flags for who may be stuck</li>
+              <li>Mentor page; email and Slack/Teams notifications</li>
+            </ul></div>
+          <div class="cap"><span class="who">Approvers, leaders, admins</span><h3>Spend safely</h3>
+            <ul>
+              <li>Every lab is priced before it runs; cost tiers decide who approves</li>
+              <li>Escalation up the tiers inside schedule hours</li>
+              <li>Monthly team and program budgets, alerts at 80%, hard caps; budgets fail closed</li>
+              <li>Schedules, a kill switch, and the Ledger of estimates and real AWS bills</li>
+            </ul></div>
+          <div class="cap"><span class="who">Admins</span><h3>Run the forge</h3>
+            <ul>
+              <li>Forge settings, teams, rosters and Manage trainings, all audited</li>
+              <li>Move this forge: export to one file, import into a fresh instance</li>
+              <li>Sign-in through Keycloak or Cognito; one admin to start</li>
+              <li>AWS deployment on one k3s node that sleeps outside working hours</li>
+            </ul></div>
+          <div class="cap"><span class="who">Authors</span><h3>Write trainings</h3>
+            <ul>
+              <li>A plain git repo: <code>training.yaml</code>, <code>modules/…</code></li>
+              <li><code>crucible lint</code> and <code>crucible preview</code> on your machine</li>
+              <li>An editor in Crucible: drafts become edits on their own branch, reviewed, then merged by the bot</li>
+              <li>Programs can pin a training to an exact content version</li>
+            </ul></div>
+        </div>
+
+        <div class="runtimes">
+          <div class="rt"><h3>Laptop labs</h3><span class="tag">runtime: local</span>
+            <p>The trainee runs <code>crucible-agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
+          <div class="rt cluster"><h3>Cluster labs</h3><span class="tag">runtime: cluster</span>
+            <p>Each lab gets its own Kubernetes namespace on Crucible's cluster: one pod (sysbox in production) runs the Compose file, with a quota and a deny-by-default network policy. Nothing to install. Priced by the platform's hourly rate; unset means unavailable, never free.</p></div>
+          <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: aws</span>
+            <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced with infracost, and always approved by a person. Explained in full below.</p></div>
+        </div>
+      </section>
+
+      <!-- ───────────── cloud labs ───────────── -->
+      <section id="cloud">
+        <h2>How cloud labs work</h2>
+        <p class="lede">An AWS lab is a Terraform module in the training repo plus tasks and check scripts. Crucible never lets it run without a
+          price, a person's approval and a way to clean up everything it made. Here is one lab's life.</p>
+        <ol class="pour">
+          <li><h3>The trainee asks</h3>
+            <p>The lab page shows an estimate: infracost prices the lab's Terraform per hour, times the lab's time limit. A lab above its own
+              <code>max_hourly_usd</code>, or in a region this Crucible doesn't allow, can't be requested.</p></li>
+          <li><h3>A person approves</h3>
+            <p>AWS labs never start on their own. The estimate picks the tier: program approver, team leader, then admin. A request that would pass a
+              team or program budget cap needs an admin, as an audited override. Unanswered requests move up a tier after the escalation hours,
+              counted only inside the program's schedule.</p></li>
+          <li><h3>Credentials for one lab</h3>
+            <p>Crucible assumes the lab role with AWS STS, tagging the session <code>crucible:lab-id=&lt;id&gt;</code>. The one-hour credentials are
+              refreshed for as long as the lab runs. A permission boundary limits them to EC2 and S3, small instance types and the allowed regions; IAM
+              refuses any create without the lab's own tag, and any change to another lab's resources.</p></li>
+          <li><h3>Terraform builds it</h3>
+            <p>In the lab's namespace on Crucible's cluster, a <code>tf-apply</code> pod runs <code>terraform apply</code>. Crucible adds its own
+              <code>crucible.tf</code> to the module: an S3 state backend keyed by the lab id, and the AWS provider with default tags
+              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.</p></li>
+          <li><h3>The trainee works</h3>
+            <p>A workspace pod with the AWS CLI, Terraform and kubectl backs the terminals. Checks and setup scripts run there with the lab's
+              credentials, out of the trainee's sight. The pods can't reach the node's metadata service, so they can never borrow the node's role.</p></li>
+          <li><h3>It ends, and is cleaned up</h3>
+            <p>The time limit, the idle timeout, the schedule closing, a budget cap, <b>End lab</b> or the kill switch all end it the same way:
+              <code>terraform destroy</code>, then a tag sweep deletes anything else carrying the lab's id, including what the trainee made by hand
+              and instances with termination protection.</p></li>
+          <li><h3>The reaper checks hourly</h3>
+            <p>Anything tagged with a lab that ended over an hour ago is deleted. Resources tagged with a lab Crucible doesn't know, and untagged
+              creates seen in CloudTrail, are reported to admins instead.</p></li>
+          <li><h3>The real bill arrives</h3>
+            <p>Every six hours Crucible reads Cost Explorer, grouped by the <code>crucible:*</code> cost-allocation tags. The Ledger shows a running lab's
+              estimate, switches to the AWS bill once it settles (24–48 hours), and tracks estimate against actual.</p></li>
+        </ol>
+
+        <h3 style="font-size:1.15rem;margin:1.5rem 0 0.75rem">The guardrails</h3>
+        <dl class="guards">
+          <div><dt>Tags are compulsory</dt><dd>EC2 creates without <code>crucible:lab-id</code> are denied, lab tags can't be removed, and every instance must use the lab's own security group.</dd></div>
+          <div><dt>Small and close</dt><dd>Small instance types, gp3 volumes of limited size, allowed regions only, no dedicated tenancy, no IAM.</dd></div>
+          <div><dt>Budgets fail closed</dt><dd>If Crucible can't read spend, it starts nothing. A running lab ends when its cost would reach a cap.</dd></div>
+          <div><dt>Isolation is best effort</dt><dd>Labs share one account. Trainees can read account-wide <code>Describe</code> calls and their own Terraform state, so use a dedicated sandbox account and keep secrets out of state.</dd></div>
+        </dl>
+
+        <h3 style="font-size:1.15rem;margin:1.75rem 0 0">Three ways to run AWS labs</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Mode</th><th>Set by</th><th>What happens</th><th>Where you test it</th></tr></thead>
+          <tbody>
+            <tr><td>Off</td><td><code>CRUCIBLE_AWS_LABS</code> unset</td><td>AWS labs can't be requested.</td><td>The plain local stack</td></tr>
+            <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code>, <code>CRUCIBLE_INFRACOST=off</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Prices come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
+            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, an infracost key, the labs stack</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <!-- ───────────── before you start ───────────── -->
+      <section id="before">
+        <h2>Before you start</h2>
+        <div class="prose">
+          <p>Run every command from the repo root. Docker Desktop needs about 8 GiB. Run one heavy suite at a time: two local stacks share a
+            compose project and collide.</p>
+        </div>
+        <div class="users" aria-label="Local accounts">
+          <div><code>trainee</code><br><span class="where">takes trainings</span></div>
+          <div><code>senior</code><br><span class="where">scores, mentors, maintains</span></div>
+          <div><code>leader</code><br><span class="where">leads The Forge, approves</span></div>
+          <div><code>admin</code><br><span class="where">runs the forge</span></div>
+        </div>
+        <p class="lede" style="margin-top:0.75rem">Passwords equal the user name. The app is at <code>http://localhost:8080</code>. Keycloak listens on 8081 unless you set
+          <code>KEYCLOAK_PORT</code> (use another port if 8081 is taken).</p>
+        <div class="note warn"><strong>Real money is only in phase 9.</strong>Every other phase runs on your machine with fakes. Never point the local
+          scripts at real AWS: Terraform here runs only with mock providers.</div>
+      </section>
+
+      <!-- ───────────── phases ───────────── -->
+      <section class="phase" id="p-stack" data-title="Bring up the forge">
+        <div class="phase-head"><h2>1 · Bring up the forge</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="stack-path"><label><input type="checkbox" id="c-stack-path"><span class="t">Use the repo's own toolchain</span></label>
+            <div class="body"><p>The system Go and Terraform are too old; the repo carries Go 1.26 and Terraform in <code>.local/tools</code>.</p>
+              <div class="cmd"><pre><code>export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
+go version</code></pre></div>
+              <p class="expect"><b>Expect</b><code>go1.26</code>. Every later shell that builds or tests needs this line first.</p></div></li>
+          <li class="item" data-id="stack-up"><label><input type="checkbox" id="c-stack-up"><span class="t">Start the local stack</span></label>
+            <div class="body"><p>Builds the binaries, seeds the example training repos into <code>.local/git</code>, and starts Postgres, Keycloak and Crucible. The API imports <code>examples/platform</code> into the empty database.</p>
+              <div class="cmd"><pre><code>make build &amp;&amp; ./scripts/seed-git.sh &amp;&amp; \
+KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code></pre></div>
+              <p class="expect"><b>Expect</b>three healthy containers and the sign-in page at localhost:8080. <code>seed-git.sh</code> wipes <code>.local/git</code>, so rerunning it deletes any training repo you add there.</p></div></li>
+          <li class="item" data-id="stack-roles"><label><input type="checkbox" id="c-stack-roles"><span class="t">Sign in as each role</span></label>
+            <div class="body"><p>Use a private window per person. Compare the top bar.</p>
+              <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; mentors see <b>Mentor</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
+          <li class="item" data-id="stack-card"><label><input type="checkbox" id="c-stack-card"><span class="t">User card, themes and calm motion</span></label>
+            <div class="body"><ol class="how"><li>Choose your icon and name at the top right: check your name, email and teams; pick a forge icon.</li><li>Settings: switch through Forge, Anvil, Quench and High Contrast; tick <b>Calm forge</b>.</li></ol>
+              <p class="expect"><b>Expect</b>the icon survives a reload and another browser; team names link to their pages; Calm forge stops every animation.</p></div></li>
+          <li class="item" data-id="stack-docs"><label><input type="checkbox" id="c-stack-docs"><span class="t">In-app Docs</span></label>
+            <div class="body"><p>Open <b>Docs</b> as each role, and the <b>?</b> next to your name on any page.</p>
+              <p class="expect"><b>Expect</b>each role lands on its own section; <b>?</b> opens the page about the screen you are on.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-config" data-title="Configure the forge">
+        <div class="phase-head"><h2>2 · Configure the forge</h2><span class="count"></span></div>
+        <p class="where">As admin · Administrator → Forge settings</p>
+        <ul class="items">
+          <li class="item" data-id="cfg-tiers"><label><input type="checkbox" id="c-cfg-tiers"><span class="t">Cost tiers</span></label>
+            <div class="body"><ol class="how"><li>Set auto-approve 0, program approver 5, admin above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
+              <p class="expect"><b>Expect</b>the out-of-order save is refused with the reason; with tiers cleared, a banner warns that labs costing money can't be approved.</p></div></li>
+          <li class="item" data-id="cfg-cluster-rate"><label><input type="checkbox" id="c-cfg-cluster-rate"><span class="t">Cluster lab rate</span></label>
+            <div class="body"><p>Clear <b>Cluster lab rate</b>, then set it to 0.5.</p>
+              <p class="expect"><b>Expect</b>empty makes cluster labs unavailable, never free; a value prices them per hour.</p></div></li>
+          <li class="item" data-id="cfg-schedule"><label><input type="checkbox" id="c-cfg-schedule"><span class="t">Lab schedules</span></label>
+            <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a program that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
+              <p class="expect"><b>Expect</b>outside the window the lab page says when the next one opens; the delete is refused while in use.</p></div></li>
+          <li class="item" data-id="cfg-admins"><label><input type="checkbox" id="c-cfg-admins"><span class="t">Admins and the lockout guard</span></label>
+            <div class="body"><p>With one admin, note the warning. Add <code>senior@crucible.local</code>, then remove them again.</p>
+              <p class="expect"><b>Expect</b>the warning goes once there are two; the last admin can't be removed.</p></div></li>
+          <li class="item" data-id="cfg-ranks"><label><input type="checkbox" id="c-cfg-ranks"><span class="t">Ranks, quotes and default theme</span></label>
+            <div class="body"><p>Change a rank threshold, edit the loading quotes, change the default theme.</p>
+              <p class="expect"><b>Expect</b>quotes appear on the Hearth and loading screens; a person who never picked a theme gets the new default.</p></div></li>
+          <li class="item" data-id="cfg-status"><label><input type="checkbox" id="c-cfg-status"><span class="t">Forge Status and the audit trail</span></label>
+            <div class="body"><p>Administrator → Forge Status.</p>
+              <p class="expect"><b>Expect</b>every training synced with a head commit and no problems; your changes above listed under <b>Recent privileged actions</b>.</p></div></li>
+          <li class="item" data-id="cfg-kill"><label><input type="checkbox" id="c-cfg-kill"><span class="t">Kill switch</span></label>
+            <div class="body"><p><b>Pause all labs</b>, try to start a lab as trainee and to approve as leader, then <b>Resume labs</b>.</p>
+              <p class="expect"><b>Expect</b>running labs end, nothing new starts, approvals are blocked, and the lab page says labs are paused.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-teams" data-title="Teams and people">
+        <div class="phase-head"><h2>3 · Teams and people</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="team-create"><label><input type="checkbox" id="c-team-create"><span class="t">Start a team</span></label>
+            <div class="body"><p>As admin: <b>Teams</b> → <b>+ Start a team</b> → id <code>anvil</code>, a name, leader <code>leader@crucible.local</code>.</p>
+              <p class="expect"><b>Expect</b>you land on the new team's page; a duplicate id is refused.</p></div></li>
+          <li class="item" data-id="team-roster"><label><input type="checkbox" id="c-team-roster"><span class="t">Roster and mentors</span></label>
+            <div class="body"><ol class="how"><li><b>Edit the roster</b>: add a senior, a trainee and a pair <code>trainee = senior</code>.</li><li>List one person in two roles; name a mentor who isn't on the team.</li></ol>
+              <p class="expect"><b>Expect</b>valid saves show as chips; each wrong one is refused and names the person.</p></div></li>
+          <li class="item" data-id="team-budget"><label><input type="checkbox" id="c-team-budget"><span class="t">Team budget</span></label>
+            <div class="body"><p>As admin, set a monthly budget and hard cap on the team page.</p>
+              <p class="expect"><b>Expect</b>the summary updates; leaders see it read-only; the Ledger shows the meter.</p></div></li>
+          <li class="item" data-id="team-journey"><label><input type="checkbox" id="c-team-journey"><span class="t">Journey</span></label>
+            <div class="body"><p>Team page → <b>Journey</b>. Switch <b>By person / By training</b>; filter by a person, a training, and <b>Only those who need a look</b>.</p>
+              <p class="expect"><b>Expect</b>the numbers follow the filters, the address keeps them, and flags such as <i>Not started yet</i> appear.</p></div></li>
+          <li class="item" data-id="team-delete"><label><input type="checkbox" id="c-team-delete"><span class="t">Delete a team</span></label>
+            <div class="body"><p>Admin, on the throwaway team only: <b>Delete team</b> at the bottom of its page.</p>
+              <p class="expect"><b>Expect</b>it asks first, then you are back on the team list; its trainings stop for it; progress stays.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-author" data-title="Create a new training">
+        <div class="phase-head"><h2>4 · Create a new training</h2><span class="count"></span></div>
+        <p class="lede">A training is its own git repo. Locally, Crucible reads repos from <code>.local/git</code>, which the API container mounts at <code>/git</code>.</p>
+        <ul class="items">
+          <li class="item" data-id="auth-write"><label><input type="checkbox" id="c-auth-write"><span class="t">Write the repo</span></label>
+            <div class="body"><p>Start from the one-module example and give it its own id.</p>
+              <div class="cmd"><pre><code>mkdir -p ~/trainings &amp;&amp; cp -R examples/forge-001 ~/trainings/forge-501
+cd ~/trainings/forge-501 &amp;&amp; git init -q -b main
+# training.yaml: id: forge-501, a title, maintainers: [senior@crucible.local]
+# add modules/01-spark/quiz.yaml and list "- quiz: quiz.yaml" in module.yaml
+git add -A &amp;&amp; git commit -qm "Forge 501"</code></pre></div>
+              <p class="expect"><b>Expect</b>the layout from Docs → <i>How a training repo is laid out</i>; every key is in <i>Building blocks: every key</i>.</p></div></li>
+          <li class="item" data-id="auth-lint"><label><input type="checkbox" id="c-auth-lint"><span class="t">Lint it</span></label>
+            <div class="body"><div class="cmd"><pre><code>./bin/crucible lint ~/trainings/forge-501</code></pre></div>
+              <p>Then break it on purpose: point the module at a reading that doesn't exist.</p>
+              <p class="expect"><b>Expect</b><i>Ready for the forge</i> when clean; otherwise every problem with its file and a non-zero exit, so it fits CI.</p></div></li>
+          <li class="item" data-id="auth-preview"><label><input type="checkbox" id="c-auth-preview"><span class="t">Preview it as a trainee</span></label>
+            <div class="body"><div class="cmd"><pre><code>./bin/crucible preview ~/trainings/forge-501 --port 8090 --free</code></pre></div>
+              <p>Needs Docker and the <code>crucible:dev</code> image. Edit a reading and save.</p>
+              <p class="expect"><b>Expect</b>a link to a private Crucible with just this training; saved changes show within seconds; files git doesn't track are left out; Ctrl-C removes everything.</p></div></li>
+          <li class="item" data-id="auth-publish"><label><input type="checkbox" id="c-auth-publish"><span class="t">Publish it to the local git host</span></label>
+            <div class="body"><div class="cmd"><pre><code>git clone -q --bare ~/trainings/forge-501 .local/git/forge-501.git
+git -C .local/git/forge-501.git config core.sharedRepository world
+chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
+              <p class="expect"><b>Expect</b>a bare repo the API container can read and push edits into.</p></div></li>
+          <li class="item" data-id="auth-register"><label><input type="checkbox" id="c-auth-register"><span class="t">Register it</span></label>
+            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch <code>main</code>.</p>
+              <p class="expect"><b>Expect</b>it appears in the list, marked <i>content not loaded yet</i> until the next sync (about 10 seconds locally), then with its title. Local paths work here only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
+          <li class="item" data-id="auth-refuse"><label><input type="checkbox" id="c-auth-refuse"><span class="t">Unsafe repository URLs are refused</span></label>
+            <div class="body"><p>Try registering repo <code>--upload-pack=touch</code> and one with a space in it.</p>
+              <p class="expect"><b>Expect</b>both refused with the reason; nothing is saved.</p></div></li>
+          <li class="item" data-id="auth-start"><label><input type="checkbox" id="c-auth-start"><span class="t">Start it for a team and enroll people</span></label>
+            <div class="body"><ol class="how"><li><b>Start it for a team</b> → The Forge.</li><li>Enroll <code>trainee@crucible.local</code>; then a brand-new email.</li><li>Under <b>Roles</b>, add a scorer and an approver.</li></ol>
+              <p class="expect"><b>Expect</b>the new email is first offered as a new trainee on the team; empty roles show their defaults (the leader manages and approves, seniors score).</p></div></li>
+          <li class="item" data-id="auth-take"><label><input type="checkbox" id="c-auth-take"><span class="t">The trainee takes it</span></label>
+            <div class="body"><p>As trainee: Hearth → the new card; read, take the quiz.</p>
+              <p class="expect"><b>Expect</b>with <code>progression: linear</code>, later modules stay locked until earlier ones are forged; the Trainings card offers <b>Open</b>.</p></div></li>
+          <li class="item" data-id="auth-version"><label><input type="checkbox" id="c-auth-version"><span class="t">Content versions and pinning</span></label>
+            <div class="body"><p>Push a new commit to the bare repo. Then on the program: <b>Content version</b> → <b>Show what changed</b> → <b>Pin</b>; later <b>Follow the branch head</b>.</p>
+              <p class="expect"><b>Expect</b>the commit list and diff stat; a pinned program keeps running the pinned version; labs always run at their exact content version.</p></div></li>
+          <li class="item" data-id="auth-delete"><label><input type="checkbox" id="c-auth-delete"><span class="t">Delete the training</span></label>
+            <div class="body"><p><b>Source</b> → <b>Delete training</b>, then register it again and start it for the team.</p>
+              <p class="expect"><b>Expect</b>it names the teams it stops for; the repo is untouched; progress comes back after re-registering.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-edits" data-title="Edit content in Crucible">
+        <div class="phase-head"><h2>5 · Edit content in Crucible</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="ed-open"><label><input type="checkbox" id="c-ed-open"><span class="t">Open the editor</span></label>
+            <div class="body"><p>As leader: Manage trainings → a training → <b>Content edits</b> → <b>Edit content</b>.</p>
+              <p class="expect"><b>Expect</b>a VS Code-like editor: Explorer, Problems, Changes, Blocks, and a live preview; Terraform and other non-editable files are greyed with the reason.</p></div></li>
+          <li class="item" data-id="ed-write"><label><input type="checkbox" id="c-ed-write"><span class="t">Change, insert a block, break and fix</span></label>
+            <div class="body"><p>Edit a reading, insert a block from <b>Blocks</b>, then put a mistake in <code>quiz.yaml</code>.</p>
+              <p class="expect"><b>Expect</b>autosave; the mistake appears under Problems with its file and line, and clears when fixed.</p></div></li>
+          <li class="item" data-id="ed-review"><label><input type="checkbox" id="c-ed-review"><span class="t">Review and merge</span></label>
+            <div class="body"><p>Submit. As senior (a maintainer), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
+              <p class="expect"><b>Expect</b>the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
+          <li class="item" data-id="ed-enrolled"><label><input type="checkbox" id="c-ed-enrolled"><span class="t">Who may edit</span></label>
+            <div class="body"><p>Enroll the leader in the training; check the trainee's view.</p>
+              <p class="expect"><b>Expect</b>the enrolled leader can still edit (they run it); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
+          <li class="item" data-id="ed-rebase"><label><input type="checkbox" id="c-ed-rebase"><span class="t">Newer content while you edit</span></label>
+            <div class="body"><p>With a draft open, push a change to the same file in git.</p>
+              <p class="expect"><b>Expect</b>the draft offers to rebase, shows the conflict and ends on the new base.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-learn" data-title="Learning and scoring">
+        <div class="phase-head"><h2>6 · Learning and scoring</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="ln-quiz"><label><input type="checkbox" id="c-ln-quiz"><span class="t">Quizzes scored at once</span></label>
+            <div class="body"><p>As trainee: Forge 101 → <i>Welcome to the Forge</i> → Quiz.</p>
+              <p class="expect"><b>Expect</b>right and wrong shown at once; the best attempt counts; attempt limits and cooldowns when the quiz sets them.</p></div></li>
+          <li class="item" data-id="ln-human"><label><input type="checkbox" id="c-ln-human"><span class="t">Answers a person scores</span></label>
+            <div class="body"><p>Forge 301 → Quiz: a written answer and an upload.</p>
+              <p class="expect"><b>Expect</b><i>Waiting for a scorer</i>; the senior sees both on the <b>Anvil</b> with the rubric. Nobody scores a training they are enrolled in.</p></div></li>
+          <li class="item" data-id="ln-anvil"><label><input type="checkbox" id="c-ln-anvil"><span class="t">Score, return for rework, sign off</span></label>
+            <div class="body"><p>As senior: score one, return the other with feedback; mark a live sign-off passed.</p>
+              <p class="expect"><b>Expect</b>the trainee sees the feedback; a returned answer can be sent again; a scored one is final (an admin can reset it from the Journey).</p></div></li>
+          <li class="item" data-id="ln-rank"><label><input type="checkbox" id="c-ln-rank"><span class="t">Ranks and badges</span></label>
+            <div class="body"><p>Finish Forge 102 as trainee.</p>
+              <p class="expect"><b>Expect</b>a badge on the Hearth and a rank-up moment when a threshold is passed; ranks never drop.</p></div></li>
+          <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Mentor and Journey</span></label>
+            <div class="body"><p>As senior: <b>Mentor</b>. As leader: the team's Journey.</p>
+              <p class="expect"><b>Expect</b>the mentee's rank, heat map, work waiting on a scorer and recent lab trouble; Journey flags someone stuck or quiet.</p></div></li>
+          <li class="item" data-id="ln-notify"><label><input type="checkbox" id="c-ln-notify"><span class="t">Notifications</span></label>
+            <div class="body"><p>Settings → <b>Email notifications</b>: untick one kind.</p>
+              <p class="expect"><b>Expect</b>locally the page says email isn't configured; the choice is kept and applies once SMTP is set.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-local" data-title="Laptop labs">
+        <div class="phase-head"><h2>7 · Laptop labs</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="lo-pair"><label><input type="checkbox" id="c-lo-pair"><span class="t">Pair the agent</span></label>
+            <div class="body"><p>As trainee: <b>Connect your laptop</b> → <b>Generate pairing token</b>, then run the command it shows from the repo root:</p>
+              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; ./bin/crucible-agent --server http://localhost:8080</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Agent connected. Your forge is lit.</i> A new token voids the old one.</p></div></li>
+          <li class="item" data-id="lo-ignite"><label><input type="checkbox" id="c-lo-ignite"><span class="t">Run Forge 101's first lab</span></label>
+            <div class="body"><p>Forge 101 → <i>First Heat</i> → Lab → <b>Ignite the forge</b>.</p>
+              <p class="expect"><b>Expect</b>no approval (laptop labs are free); containers start in your Docker; tabbed terminals; <b>Check</b> passes a finished task with sparks.</p></div></li>
+          <li class="item" data-id="lo-hints"><label><input type="checkbox" id="c-lo-hints"><span class="t">Hints, setup scripts, Reset scenario</span></label>
+            <div class="body"><p>Reveal a hint; break a task's state; use <b>Reset scenario</b>.</p>
+              <p class="expect"><b>Expect</b>a costed hint asks first and its cost comes off that task's points; Reset re-runs the task's setup (at most every 5 minutes).</p></div></li>
+          <li class="item" data-id="lo-timer"><label><input type="checkbox" id="c-lo-timer"><span class="t">Timer, idle prompt, extend, end</span></label>
+            <div class="body"><p>Watch the timer; stay idle until <i>Are you still there?</i>; <b>Extend</b> once; <b>End lab</b>; <b>Ignite again</b>.</p>
+              <p class="expect"><b>Expect</b>the timer turns amber at 15 minutes and red at 5; passed tasks stay passed and the new lab resumes at the first unfinished task.</p></div></li>
+          <li class="item" data-id="lo-review"><label><input type="checkbox" id="c-lo-review"><span class="t">Self-reported results go to a scorer</span></label>
+            <div class="body"><p>On the program's <b>Lab settings</b>, tick <i>Scorers review self-reported (laptop) lab results</i>, then finish the lab.</p>
+              <p class="expect"><b>Expect</b>a <b>Self-reported lab</b> waiting on the Anvil; the lab counts as forged only once a scorer passes it.</p></div></li>
+          <li class="item" data-id="lo-author"><label><input type="checkbox" id="c-lo-author"><span class="t">Add a laptop lab to your training</span></label>
+            <div class="body"><p>In <code>forge-501</code>, add <code>modules/01-spark/lab/</code> with <code>lab.yaml</code> (<code>runtime: local</code>), <code>compose.yaml</code>, a task, a check script, and <code>- lab: lab</code> in <code>module.yaml</code>. Use Forge 101's <code>02-first-lab</code> as the model.</p>
+              <p class="expect"><b>Expect</b>lint checks scripts exist and are executable and that <code>run_in</code> names a service; preview runs the lab and its setups on your Docker.</p></div></li>
+          <li class="item" data-id="lo-revoke"><label><input type="checkbox" id="c-lo-revoke"><span class="t">Revoke the pairing</span></label>
+            <div class="body"><p>Trainee: <b>Revoke pairing</b>; or admin: team page → <b>Laptop agents</b> → <b>Revoke agent</b>.</p>
+              <p class="expect"><b>Expect</b>the agent disconnects at once and its token stops working.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-cluster" data-title="Cluster labs on your machine">
+        <div class="phase-head"><h2>8 · Cluster labs on your machine</h2><span class="count"></span></div>
+        <p class="lede">A local kind cluster stands in for k3s. Docker Desktop can't run sysbox, so lab pods are privileged Docker-in-Docker here; everything else is real: namespaces, quotas, network policy, exec terminals and the chart's RBAC.</p>
+        <ul class="items">
+          <li class="item" data-id="cl-run"><label><input type="checkbox" id="c-cl-run"><span class="t">Run the cluster check and keep it</span></label>
+            <div class="body"><p>Needs <code>kind</code> 0.24 or later, <code>kubectl</code> and <code>helm</code>. It uses its own kubeconfig in <code>.local/kind</code> and never touches <code>~/.kube/config</code>.</p>
+              <div class="cmd"><pre><code>KEEP=1 KEYCLOAK_PORT=8081 make cluster-check</code></pre></div>
+              <p class="expect"><b>Expect</b>it ends with <i>Cluster check passed. The crucible holds.</i> and leaves the kind cluster <code>crucible-m4</code> and the stack running with cluster labs and AWS dry run on.</p></div></li>
+          <li class="item" data-id="cl-price"><label><input type="checkbox" id="c-cl-price"><span class="t">Price and approval</span></label>
+            <div class="body"><p>With a cluster rate set, open Forge 101 → <i>Into the Crucible</i> as trainee. Then raise the rate above the auto-approve tier.</p>
+              <p class="expect"><b>Expect</b>the estimate on the lab page; under auto-approve it starts at once, above it goes to the approver.</p></div></li>
+          <li class="item" data-id="cl-lab"><label><input type="checkbox" id="c-cl-lab"><span class="t">Work the lab</span></label>
+            <div class="body"><p><b>Ignite the forge</b>: terminals <code>shell</code> and <code>web</code>; task 2's setup breaks nginx for you to fix.</p>
+              <p class="expect"><b>Expect</b>nothing to install; checks run on the server, so results are not self-reported.</p></div></li>
+          <li class="item" data-id="cl-inspect"><label><input type="checkbox" id="c-cl-inspect"><span class="t">Inspect the namespace</span></label>
+            <div class="body"><div class="cmd"><pre><code>export KUBECONFIG=$PWD/.local/kind/admin.kubeconfig
+kubectl get ns -l crucible.io/lab
+kubectl -n lab-&lt;id&gt; get pod,resourcequota,networkpolicy</code></pre></div>
+              <p class="expect"><b>Expect</b>one <code>lab-&lt;id&gt;</code> namespace with the <code>lab</code> pod running, a quota and the network policy. The script already proved the pod can't reach the metadata service, the Kubernetes API or other pods.</p></div></li>
+          <li class="item" data-id="cl-end"><label><input type="checkbox" id="c-cl-end"><span class="t">End it</span></label>
+            <div class="body"><p><b>End lab</b>, then list the lab namespaces again.</p>
+              <p class="expect"><b>Expect</b>the namespace is gone within a minute.</p></div></li>
+          <li class="item" data-id="cl-clean"><label><input type="checkbox" id="c-cl-clean"><span class="t">Clean up</span></label>
+            <div class="body"><div class="cmd"><pre><code>kind delete cluster --name crucible-m4</code></pre></div>
+              <p class="expect"><b>Expect</b>only <code>crucible-m4</code> is removed. Leave any other kind cluster (such as <code>platform</code>) alone.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-dry" data-title="Cloud labs, dry run">
+        <div class="phase-head"><h2>9a · Cloud labs, dry run</h2><span class="count"></span></div>
+        <p class="lede">On the stack <code>make cluster-check</code> left running. A fake lab account stands in for AWS, Forge 401's <i>Cloud Heat</i> is priced at $0.04 an hour, and nothing leaves your machine.</p>
+        <ul class="items">
+          <li class="item" data-id="dr-request"><label><input type="checkbox" id="c-dr-request"><span class="t">Request Cloud Heat</span></label>
+            <div class="body"><p>Start Forge 401 for The Forge and enroll the trainee. As trainee open <i>Cloud Heat</i>.</p>
+              <p class="expect"><b>Expect</b><b>Request approval ($0.04)</b>: AWS labs never start on their own; the page shows who it waits for and offers <b>Withdraw request</b>.</p></div></li>
+          <li class="item" data-id="dr-approve"><label><input type="checkbox" id="c-dr-approve"><span class="t">Approve it</span></label>
+            <div class="body"><p>As leader: <b>Approvals</b>.</p>
+              <p class="expect"><b>Expect</b>the estimate and how it was worked out, the team's and program's spend, the schedule and the trainee's recent labs; approving starts the lab at once.</p></div></li>
+          <li class="item" data-id="dr-pods"><label><input type="checkbox" id="c-dr-pods"><span class="t">See the Terraform and workspace pods</span></label>
+            <div class="body"><div class="cmd"><pre><code>kubectl -n lab-&lt;id&gt; get pods
+kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
+              <p class="expect"><b>Expect</b><code>tf-apply</code> completed, its log ending <i>dry run … nothing was applied or destroyed</i>, and the workspace pod running. The terminal opens, but AWS commands in it have no real account behind them.</p></div></li>
+          <li class="item" data-id="dr-sweep"><label><input type="checkbox" id="c-dr-sweep"><span class="t">End it and watch the sweep</span></label>
+            <div class="body"><p><b>End lab</b>. As admin open the <b>Ledger</b> and choose <b>Refresh now</b>.</p>
+              <p class="expect"><b>Expect</b>the lab is cooled; the fake account's stray volume shows under reaper findings as <i>end-of-lab sweep / deleted</i>; the lab gets a small AWS bill to compare with its estimate.</p></div></li>
+          <li class="item" data-id="dr-guards"><label><input type="checkbox" id="c-dr-guards"><span class="t">Money guardrails on a priced lab</span></label>
+            <div class="body"><ol class="how"><li>Set the program's monthly budget below the estimate and request again.</li><li>Close the program's schedule window and request again.</li><li>Pause all labs and request again.</li></ol>
+              <p class="expect"><b>Expect</b>over a cap only an admin can approve, as an audited override; outside the window the page says when it opens; while paused nothing starts.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-aws" data-title="Cloud labs on a real AWS sandbox">
+        <div class="phase-head"><h2>9b · Cloud labs on a real AWS sandbox</h2><span class="count"></span></div>
+        <div class="note warn"><strong>This creates real resources and costs real money.</strong>Use a dedicated sandbox account and a deployed Crucible
+          (<code>crucible aws init</code>, then <code>crucible aws up</code>). The full commands and every must-fail case are in <code>docs/runbooks/aws.md</code>.</div>
+        <ul class="items">
+          <li class="item" data-id="aw-init"><label><input type="checkbox" id="c-aw-init"><span class="t">Create the labs stack <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>With lab-account credentials:</p>
+              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1</code></pre></div>
+              <p class="expect"><b>Expect</b>the lab role, permission boundary and state bucket, and account-wide S3 Block Public Access. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
+          <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on cost data and pricing <span class="pill cost">AWS</span></span></label>
+            <div class="body"><ol class="how"><li>In the payer account, activate cost-allocation tags <code>crucible:lab-id</code>, <code>crucible:team</code>, <code>crucible:training</code> (after the first lab; up to 24 hours).</li><li>Open Cost Explorer once in the lab account.</li><li><code>infracost auth login</code>; put the key in <code>crucible.tfvars</code> as <code>infracost_api_key</code>.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li></ol>
+              <p class="expect"><b>Expect</b>AWS labs switch on; without the key, requests say no estimate is available.</p></div></li>
+          <li class="item" data-id="aw-run"><label><input type="checkbox" id="c-aw-run"><span class="t">Run Cloud Heat for real <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Request and approve it, then in the workspace terminal:</p>
+              <div class="cmd"><pre><code>aws sts get-caller-identity
+echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.txt</code></pre></div>
+              <p class="expect"><b>Expect</b><code>assumed-role/crucible-lab/crucible-lab-&lt;id&gt;</code>; both tasks pass with <b>Check</b>; on the node, <code>tf-apply</code> completed and <code>lab</code> running.</p></div></li>
+          <li class="item" data-id="aw-boundary"><label><input type="checkbox" id="c-aw-boundary"><span class="t">The boundary holds <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Positive controls first: a dry-run <code>t3.micro</code> launch with the lab's tags and own security group returns <i>DryRunOperation</i>. Then each must fail:</p>
+              <ul class="how"><li>a volume with no lab tag, another lab's id, or the tag key in other letter case</li><li>an instance in the default security group, a <code>t3.large</code>, dedicated tenancy, an io2 or oversized volume</li><li>removing lab tags, a bucket not named <code>crucible-lab-&lt;id&gt;…</code>, a region outside the allowed list</li><li>reading another lab's Terraform state, <code>aws iam list-roles</code>, reaching the metadata service</li></ul>
+              <p class="expect"><b>Expect</b>AccessDenied or UnauthorizedOperation for every one, and DryRunOperation for the positive controls.</p></div></li>
+          <li class="item" data-id="aw-sweep"><label><input type="checkbox" id="c-aw-sweep"><span class="t">Leftovers are swept <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Create a tagged volume by hand in the workspace, then <b>End lab</b>.</p>
+              <p class="expect"><b>Expect</b>within about 5 minutes the lab is cooled and the Ledger shows the volume as <i>end-of-lab sweep / deleted</i>; nothing tagged with the lab id is left (terminated instances stay listed about an hour; that is AWS).</p></div></li>
+          <li class="item" data-id="aw-reaper"><label><input type="checkbox" id="c-aw-reaper"><span class="t">The reaper <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>With admin credentials, create one volume tagged with a lab that ended over an hour ago and one tagged <code>cccccccccccc</code>. Ledger → <b>Refresh now</b>.</p>
+              <p class="expect"><b>Expect</b>the first is deleted, the second reported and kept, and admins get one email.</p></div></li>
+          <li class="item" data-id="aw-refresh"><label><input type="checkbox" id="c-aw-refresh"><span class="t">Credentials outlive an hour <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run a lab with a 2-hour limit; after 65 minutes run <code>aws sts get-caller-identity</code> again.</p>
+              <p class="expect"><b>Expect</b>it still works.</p></div></li>
+          <li class="item" data-id="aw-trail"><label><input type="checkbox" id="c-aw-trail"><span class="t">CloudTrail and tags <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>After the boundary tests, Ledger → <b>Refresh now</b>; look up a create in CloudTrail event history.</p>
+              <p class="expect"><b>Expect</b>no CloudTrail finding (every successful create was tagged); the user name is the session name <code>crucible-lab-&lt;id&gt;</code>.</p></div></li>
+          <li class="item" data-id="aw-ec2"><label><input type="checkbox" id="c-aw-ec2"><span class="t">An EC2 lab end to end <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>In your sandbox content repo, add the runbook's <code>terraform/ec2.tf</code> (a <code>t3.nano</code>, its own security group, a data volume) next to Cloud Heat's <code>main.tf</code>.</p>
+              <p class="expect"><b>Expect</b>a non-zero infracost estimate; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
+          <li class="item" data-id="aw-bill"><label><input type="checkbox" id="c-aw-bill"><span class="t">The bill arrives <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>24–48 hours later: Ledger → <b>Refresh now</b>.</p>
+              <p class="expect"><b>Expect</b>the lab's row shows its AWS bill without <i>(so far)</i>, and <i>Estimate vs actual</i> counts it.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-money" data-title="Approvals, budgets and the Ledger">
+        <div class="phase-head"><h2>10 · Approvals, budgets and the Ledger</h2><span class="count"></span></div>
+        <p class="lede">The local stack prices Forge 201's <i>Paid Heat</i> laptop lab at $0.50 an hour for testing, so approvals work without any cloud.</p>
+        <ul class="items">
+          <li class="item" data-id="mo-route"><label><input type="checkbox" id="c-mo-route"><span class="t">Routing by tier</span></label>
+            <div class="body"><p>As trainee request <i>Paid Heat</i>; move the tiers up and down between requests.</p>
+              <p class="expect"><b>Expect</b>the request waits for the program approver, the leader or an admin, as the estimate falls; nobody approves their own; someone higher can decide a cheaper request.</p></div></li>
+          <li class="item" data-id="mo-escalate"><label><input type="checkbox" id="c-mo-escalate"><span class="t">Escalation</span></label>
+            <div class="body"><p>Set <b>Hours before a waiting request escalates</b> very low and leave a request unanswered inside the schedule window.</p>
+              <p class="expect"><b>Expect</b>it moves up a tier and the next people hear about it; if even admins don't answer, it expires.</p></div></li>
+          <li class="item" data-id="mo-extend"><label><input type="checkbox" id="c-mo-extend"><span class="t">Extensions that cost more</span></label>
+            <div class="body"><p>In a running priced lab, <b>Extend</b> past what the current tier allows.</p>
+              <p class="expect"><b>Expect</b><i>Extension pending</i> on the timer and an <b>Extension:</b> request in the approvals queue; the lab keeps running meanwhile.</p></div></li>
+          <li class="item" data-id="mo-budget"><label><input type="checkbox" id="c-mo-budget"><span class="t">Budgets and caps</span></label>
+            <div class="body"><p>Set a team budget a little above current spend, run a priced lab past 80%, then to the cap.</p>
+              <p class="expect"><b>Expect</b>an alert at 80% and at the cap; a lab ends when its cost would reach the cap; the timer says which limit ends it.</p></div></li>
+          <li class="item" data-id="mo-ledger"><label><input type="checkbox" id="c-mo-ledger"><span class="t">The Ledger</span></label>
+            <div class="body"><p>As leader and as admin: <b>Ledger</b>.</p>
+              <p class="expect"><b>Expect</b>budget meters (molten, amber past 80%, red at the cap), spend day by day, running labs with cost so far, labs this month, and for admins reaper findings.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-move" data-title="Move the forge">
+        <div class="phase-head"><h2>11 · Move the forge</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="mv-export"><label><input type="checkbox" id="c-mv-export"><span class="t">Export</span></label>
+            <div class="body"><p>Admin: Forge settings → <b>Move this forge</b> → <b>Download an export</b>.</p>
+              <p class="expect"><b>Expect</b>a JSON file starting <code>{"crucible_export":1</code> with settings, teams, trainings, programs and everyone's progress; an <code>org.export</code> entry in the audit log. It is personal data: keep it private.</p></div></li>
+          <li class="item" data-id="mv-refuse"><label><input type="checkbox" id="c-mv-refuse"><span class="t">Import refuses a configured forge</span></label>
+            <div class="body"><p>Import the same file back into this stack.</p>
+              <p class="expect"><b>Expect</b>refused: this instance already has teams or trainings. Nothing changes.</p></div></li>
+          <li class="item" data-id="mv-import"><label><input type="checkbox" id="c-mv-import"><span class="t">Import into a fresh forge</span></label>
+            <div class="body"><p>On an instance with an empty database and no seed, sign in as its first admin and import the file.</p>
+              <p class="expect"><b>Expect</b>everything arrives in one step; you stay an admin; each person gets their progress back at their first sign-in, matched by email.</p></div></li>
+        </ul>
+      </section>
+
+      <section class="phase" id="p-auto" data-title="Automated suites">
+        <div class="phase-head"><h2>12 · Automated suites</h2><span class="count"></span></div>
+        <ul class="items">
+          <li class="item" data-id="au-go"><label><input type="checkbox" id="c-au-go"><span class="t">Go</span></label>
+            <div class="body"><div class="cmd"><pre><code>gofmt -l cmd internal &amp;&amp; go vet ./... &amp;&amp; go test -race ./...</code></pre></div>
+              <p class="expect"><b>Expect</b>no files listed and every package ok. Known: <code>TestAWSLabModuleRejectsHostileInputFast/token_flood</code> can miss its one-second limit under <code>-race</code> only. If tests fail with lost database connections, check Docker's free disk.</p></div></li>
+          <li class="item" data-id="au-web"><label><input type="checkbox" id="c-au-web"><span class="t">Web</span></label>
+            <div class="body"><div class="cmd"><pre><code>cd web &amp;&amp; npm test &amp;&amp; npx tsc -b &amp;&amp; npm run build &amp;&amp; npm run lint</code></pre></div>
+              <p class="expect"><b>Expect</b>all tests pass; the build keeps Monaco out of the main bundle; lint shows no errors.</p></div></li>
+          <li class="item" data-id="au-infra"><label><input type="checkbox" id="c-au-infra"><span class="t">Terraform and Helm</span></label>
+            <div class="body"><div class="cmd"><pre><code>for d in persistent main labs; do (cd deploy/aws/$d &amp;&amp; terraform test); done
+bash deploy/helm/test.sh</code></pre></div>
+              <p class="expect"><b>Expect</b>all pass with mock providers; nothing touches AWS.</p></div></li>
+          <li class="item" data-id="au-e2e"><label><input type="checkbox" id="c-au-e2e"><span class="t">Browser journeys on a fresh database</span></label>
+            <div class="body"><p>The journeys assume a fresh database: on a kept one, the Forge 101 and scoring journeys fail because earlier runs already finished their work. This wipes the local stack's data.</p>
+              <div class="cmd"><pre><code>docker compose -f deploy/compose/docker-compose.yml down -v
+KEYCLOAK_PORT=8081 make local-check</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Local check passed. The forge holds.</i> with every journey green.</p></div></li>
+          <li class="item" data-id="au-cluster"><label><input type="checkbox" id="c-au-cluster"><span class="t">Cluster journeys</span></label>
+            <div class="body"><div class="cmd"><pre><code>KEYCLOAK_PORT=8081 make cluster-check</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Cluster check passed. The crucible holds.</i>; the kind cluster is removed afterwards unless <code>KEEP=1</code>.</p></div></li>
+        </ul>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  var KEY = 'crucible-test-guide-v1';
+  var done = {};
+  try { done = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { done = {}; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (e) { /* ticks just won't persist */ } }
+
+  var items = Array.prototype.slice.call(document.querySelectorAll('.item'));
+  var phases = Array.prototype.slice.call(document.querySelectorAll('.phase'));
+  var toc = document.getElementById('toc-phases');
+
+  phases.forEach(function (p) {
+    var li = document.createElement('li');
+    var a = document.createElement('a');
+    a.href = '#' + p.id;
+    a.innerHTML = '<span></span><span class="n"></span>';
+    a.firstChild.textContent = p.querySelector('h2').textContent;
+    li.appendChild(a);
+    toc.appendChild(li);
+    p._toc = a.lastChild;
+  });
+
+  items.forEach(function (li) {
+    var cb = li.querySelector('input[type="checkbox"]');
+    cb.checked = !!done[li.dataset.id];
+    li.classList.toggle('done', cb.checked);
+    cb.addEventListener('change', function () {
+      if (cb.checked) done[li.dataset.id] = true; else delete done[li.dataset.id];
+      li.classList.toggle('done', cb.checked);
+      save();
+      update();
+    });
+  });
+
+  function update() {
+    var total = items.length, n = items.filter(function (li) { return done[li.dataset.id]; }).length;
+    document.getElementById('overall').textContent = n + ' of ' + total + ' checked';
+    var pct = total ? Math.round(n / total * 100) : 0;
+    document.getElementById('bar').style.width = pct + '%';
+    document.querySelector('.meter').setAttribute('aria-valuenow', String(pct));
+    phases.forEach(function (p) {
+      var its = p.querySelectorAll('.item'), k = 0;
+      its.forEach(function (li) { if (done[li.dataset.id]) k++; });
+      var label = k + ' / ' + its.length;
+      var head = p.querySelector('.count');
+      head.textContent = label + ' checked';
+      head.classList.toggle('full', k === its.length);
+      p._toc.textContent = label;
+      p._toc.classList.toggle('full', k === its.length);
+    });
+  }
+  update();
+
+  // copy buttons on every command
+  document.querySelectorAll('.cmd').forEach(function (box) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', function () {
+      var code = box.querySelector('code');
+      var text = code.textContent;
+      var shown = function (t) { btn.textContent = t; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+      var select = function () {
+        var r = document.createRange(); r.selectNodeContents(code);
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+        shown('Selected');
+      };
+      try {
+        navigator.clipboard.writeText(text).then(function () { shown('Copied'); }, select);
+      } catch (e) { select(); }
+    });
+    box.appendChild(btn);
+  });
+
+  var hide = document.getElementById('hide');
+  hide.addEventListener('click', function () {
+    var on = hide.getAttribute('aria-pressed') !== 'true';
+    hide.setAttribute('aria-pressed', String(on));
+    document.body.classList.toggle('hide-done', on);
+  });
+
+  var zone = document.getElementById('reset-zone');
+  function resetButton() {
+    zone.innerHTML = '<button type="button" class="danger" id="reset">Clear ticks</button>';
+    document.getElementById('reset').addEventListener('click', ask);
+  }
+  function ask() {
+    var n = Object.keys(done).length;
+    if (!n) return;
+    zone.innerHTML = '<span class="confirm">Clear all ' + n + ' ticks? <button type="button" class="danger" id="yes">Clear</button><button type="button" id="no">Keep them</button></span>';
+    document.getElementById('yes').addEventListener('click', function () {
+      done = {}; save();
+      items.forEach(function (li) { li.querySelector('input').checked = false; li.classList.remove('done'); });
+      update(); resetButton();
+    });
+    document.getElementById('no').addEventListener('click', resetButton);
+  }
+  document.getElementById('reset').addEventListener('click', ask);
+})();
+</script>
+</body>
+</html>

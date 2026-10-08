@@ -68,6 +68,38 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--s
 .toolbar.fit label { flex: 0 1 auto; }
 .toolbar.fit input, .toolbar.fit select { width: auto; max-width: 100%; }
 
+/* Manage trainings: a list of trainings beside the chosen one; each team's program is a panel of chips and controls. */
+.manage-grid { display: grid; grid-template-columns: minmax(12rem, 16rem) 1fr; gap: 1.5rem; align-items: start; }
+@media (max-width: 760px) { .manage-grid { grid-template-columns: 1fr; } }
+.manage-list ul { list-style: none; padding: 0; margin: 0 0 0.75rem; display: grid; gap: 0.25rem; }
+.manage-list a { display: block; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid transparent; color: var(--text); text-decoration: none; }
+.manage-list a:hover { background: var(--surface); }
+.manage-list a.active { border-color: var(--accent); background: var(--surface); }
+.manage-list small { display: block; color: var(--muted); }
+.manage-list .new-training { color: var(--accent); }
+.manage-detail > h2 { margin-top: 0; }
+.panel { padding: 1rem 1.25rem; margin: 0 0 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.panel h3, .panel h4 { margin: 0 0 0.5rem; }
+.panel h5 { margin: 1rem 0 0.25rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.panel-head { margin: 0; }
+.panel-head h4 { margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; list-style: none; padding: 0; margin: 0.25rem 0 0.5rem; }
+.chip { display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.15rem 0.7rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.chip:has(button) { padding-right: 0.2rem; }
+.chip button { padding: 0 0.45rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); line-height: 1.4; }
+.chip button:hover:not(:disabled) { color: var(--danger); background: var(--surface); }
+.enroll { margin: 0.25rem 0 0; }
+.enroll input { min-width: min(18rem, 100%); }
+.enroll [role='alert'] { flex-basis: 100%; margin: 0; }
+.role-row { display: grid; grid-template-columns: 7rem 1fr; gap: 0.5rem; align-items: baseline; margin: 0.35rem 0; }
+.role-name { color: var(--muted); }
+.role-default { margin: 0.2rem 0 0.4rem; }
+.lab-settings { margin-top: 1rem; }
+.lab-settings summary { cursor: pointer; color: var(--accent); }
+.lab-settings[open] summary { margin-bottom: 0.75rem; }
+a.button-link { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; }
+a.button-link:hover { border-color: var(--accent); }
+
 .nav { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.6rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .nav a { color: var(--muted); text-decoration: none; }
 .nav a.active, .nav a:hover { color: var(--text); }

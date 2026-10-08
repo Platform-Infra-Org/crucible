@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { enroll } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
@@ -19,15 +20,9 @@ async function typeIn(page: Page, tab: string, command: string) {
 }
 
 test('an aws lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger', async ({ browser }) => {
-  // The leader enrols the team and the trainee in Forge 401 (two bot commits), as approvals.spec.ts does for 201.
+  // The leader starts Forge 401 for the team and enrols the trainee, as approvals.spec.ts does for 201.
   const leader = await login(browser, 'leader')
-  await leader.getByRole('link', { name: 'Team', exact: true }).click()
-  await leader.getByLabel('Training to enroll').selectOption('forge-401')
-  await leader.getByRole('button', { name: 'Enroll the team' }).click()
-  await expect(leader.getByRole('heading', { name: /Program settings/ })).toBeVisible()
-  await leader.getByRole('checkbox', { name: 'trainee@crucible.local' }).check()
-  await leader.getByRole('button', { name: 'Save program' }).click()
-  await expect(leader.getByRole('status').filter({ hasText: /Saved to git/ })).toBeVisible()
+  await enroll(leader, 'forge-401', 'trainee@crucible.local')
 
   // Estimated ($0.04/h × 1 h in dry-run pricing). AWS labs always need an approver.
   const trainee = await login(browser, 'trainee')

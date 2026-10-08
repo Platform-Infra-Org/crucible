@@ -1,15 +1,13 @@
 ---
-title: Forge settings and the registry
+title: Forge settings
 roles: [admin]
-covers: [route:/admin/settings, route:/admin/trainings]
+covers: [route:/admin/settings]
 order: 20
 ---
-# Forge settings and the registry
+# Forge settings
 
-**Administrator** in the top bar gathers the admin-only pages. Two of them, **Forge settings** and **Registry**,
-appear only when this Crucible keeps its configuration in its own database. If you don't see them, your
-configuration lives in the platform repo instead: change it in git, and Crucible picks it up on the next sync. See
-**Sync** on [Forge Status](/docs/admins/forge-status-and-kill-switch).
+**Administrator** in the top bar gathers the admin pages: **Forge Status**, **Forge settings** and **Trainings**.
+Crucible keeps all of its configuration in its own database, so you change it here, never in git.
 
 Everything on these pages is checked before it is saved, and every save is written to the audit log with your name,
 what it touched, and the values before and after.
@@ -40,21 +38,7 @@ pick one in their settings. Saving under a name that exists replaces it. A sched
 deleted; change the program first. See
 [Schedules, budgets and caps](/docs/leaders/schedules-budgets-and-caps) for what a schedule does to a lab.
 
-## Registry
+## Trainings
 
-**Registry** is the list of trainings this Crucible knows about: an id, a repository and a branch. A training has to
-be registered before any team can be enrolled in it.
-
-- **Register a training** — the id is what programs refer to, so keep it short and stable (`forge-101`). The
-  repository must be an `https://`, `http://`, `ssh://`, `git://` or `user@host:path` URL. Local paths are refused
-  on an ordinary install. Credentials in the URL are stored so cloning works, but the page and the audit log show
-  them as `***@`.
-- **Edit** fills the form from a registered training so you can **repoint** it at another repository or branch — for
-  a move between hosts, say. Crucible warns you first and names how many programs are affected, because the content
-  versions those programs are pinned to belong to the repository you are leaving. Registering the same repository
-  and branch again changes nothing and writes no audit row.
-- **Unregister** removes a training. One that a program still uses can't be unregistered; remove that program first.
-
-Content itself always comes from git, whichever way this Crucible stores its configuration. The registry only says
-where to look. What Crucible found there — the head commit, and anything that stopped it loading — is under **Sync**
-on Forge Status.
+The trainings this Crucible knows about — registering one, pointing it at another repository, unregistering it — are
+on [Manage trainings](/docs/leaders/manage-trainings), under **Administrator → Trainings**.

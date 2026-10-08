@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router'
-import { useMe } from '../me'
 
-// Settings and Registry write Postgres, so they exist only when the configuration lives there.
-const items = [
-  { to: '/admin', label: 'Forge Status', end: true, dbOnly: false },
-  { to: '/admin/settings', label: 'Forge settings', end: false, dbOnly: true },
-  { to: '/admin/trainings', label: 'Registry', end: false, dbOnly: true },
+export const adminItems = [
+  { to: '/admin', label: 'Forge Status', end: true },
+  { to: '/admin/settings', label: 'Forge settings', end: false },
+  { to: '/trainings/manage', label: 'Trainings', end: false },
 ]
-
-export const adminItems = (inDB: boolean) => items.filter((i) => inDB || !i.dbOnly)
 
 // AdminMenu gathers the admin-only pages behind one control, so the main row stays the things
 // everyone uses. Rendered only for admins.
@@ -17,8 +13,8 @@ export function AdminMenu() {
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
-  const inDB = useMe().me.config_in_db
-  const here = useLocation().pathname.startsWith('/admin')
+  const path = useLocation().pathname
+  const here = adminItems.some((i) => (i.end ? path === i.to : path.startsWith(i.to)))
 
   useEffect(() => {
     if (!open) return
@@ -64,7 +60,7 @@ export function AdminMenu() {
       </button>
       {open && (
         <div className="admin-menu-list" role="menu" aria-label="Administrator">
-          {adminItems(inDB).map((i) => (
+          {adminItems.map((i) => (
             <NavLink key={i.to} to={i.to} end={i.end} role="menuitem" onClick={() => close(false)}>
               {i.label}
             </NavLink>

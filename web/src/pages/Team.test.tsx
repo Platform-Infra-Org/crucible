@@ -3,10 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { ApiError } from '../api'
 import { Conflict, reportSaveError } from '../components/Conflict'
-import { budgetRequest, enrollRequest, pinRequest, programRequest, rosterRequest, teamPath } from '../lib/teamRequests'
+import { addTraineeRequest, budgetRequest, enrollPlan, enrollRequest, pinRequest, programChange, programFields, programRequest, rosterRequest, teamPath } from '../lib/teamRequests'
 import type { ProgramConfig, TeamView } from '../types'
 import { CreateTeam, TeamPage } from './Team'
-import { ProgramSettingsPage } from './ProgramSettings'
 
 const prog: ProgramConfig = {
   training: 'forge-101', title: 'Forge 101', version: 7, enrolled: ['a@x'], roles: { manager: ['l@x'], scorers: [], approvers: [] },
@@ -20,47 +19,55 @@ const team: TeamView = {
 }
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ team: 'platform', training: 'forge-101' }) }))
 const fetched: string[] = []
-const meFlag = { inDB: true }
 vi.mock('../useFetch', () => ({ useFetch: (path: string) => { fetched.push(path); return { data: team, error: undefined, reload: () => {} } } }))
-vi.mock('../me', () => ({ useMe: () => ({ me: { config_in_db: meFlag.inDB, is_admin: true } }) }))
+vi.mock('../me', () => ({ useMe: () => ({ me: { is_admin: true, can_manage_trainings: true } }) }))
 
-const f = { enrolled: ['a@x'], managers: '', scorers: '', approvers: '', schedule: '', ttl: '', idle: '', ext: '', budget: '', reviewSelf: false }
-describe('the endpoint follows config_in_db', () => {
-  test('in the database: /api/org, version echoed, no base_sha', () => {
-    const r = rosterRequest(true, team, { seniors: '', members: '', trainees: 'a@x', mentors: '' })
+describe('requests', () => {
+  test('go to /api/org and echo the version the page read', () => {
+    const r = rosterRequest(team, { seniors: '', members: '', trainees: 'a@x', mentors: '' })
     expect(r.path).toBe('/api/org/teams/platform/roster')
     expect(r.json).toMatchObject({ version: 3, name: 'Platform', leader: 'l@x', trainees: ['a@x'] })
-    expect(budgetRequest(true, team, '10', '').json).toEqual({ version: 5, monthly_usd: 10, hard_cap_usd: 0 })
-    expect(budgetRequest(true, { ...team, budget: undefined }, '4', '').json).toMatchObject({ version: 0 }) // no budget row yet
-    const p = programRequest(true, team, prog, f)
+    expect(budgetRequest(team, '10', '').json).toEqual({ version: 5, monthly_usd: 10, hard_cap_usd: 0 })
+    expect(budgetRequest({ ...team, budget: undefined }, '4', '').json).toMatchObject({ version: 0 }) // no budget row yet
+    const p = programRequest('platform', prog, programFields(prog))
     expect(p.path).toBe('/api/org/teams/platform/programs/forge-101')
-    expect(p.json).toMatchObject({ version: 7, enrolled: ['a@x'], ttl: '' })
-    expect(JSON.stringify(p.json)).not.toContain('base_sha')
-    expect(enrollRequest(true, team, 'net-101')).toMatchObject({ method: 'POST', path: '/api/org/teams/platform/programs/net-101' })
-    expect(pinRequest(true, team, 'forge-101', 'abc')).toEqual({ path: '/api/org/teams/platform/programs/forge-101/pin', json: { sha: 'abc' } })
+    expect(p.json).toMatchObject({ version: 7, enrolled: ['a@x'], ttl: '', roles: { manager: ['l@x'] } })
+    expect(enrollRequest('platform', 'net-101')).toMatchObject({ method: 'POST', path: '/api/org/teams/platform/programs/net-101' })
+    expect(pinRequest('platform', 'forge-101', 'abc')).toEqual({ path: '/api/org/teams/platform/programs/forge-101/pin', json: { sha: 'abc' } })
+    expect(teamPath('platform')).toBe('/api/org/teams/platform')
   })
-  test('in git: the git-backed routes with base_sha', () => {
-    const g = { ...team, platform_sha: 'deadbeef' }
-    expect(rosterRequest(false, g, { seniors: '', members: '', trainees: '', mentors: '' })).toMatchObject({ path: '/api/teams/platform/roster', json: { base_sha: 'deadbeef' } })
-    expect(budgetRequest(false, g, '1', '').path).toBe('/api/teams/platform/budget')
-    expect(programRequest(false, g, prog, f)).toMatchObject({ path: '/api/teams/platform/programs/forge-101', json: { base_sha: 'deadbeef' } })
-    expect(enrollRequest(false, g, 'net-101')).toMatchObject({ method: 'PUT', path: '/api/teams/platform/programs/net-101' })
-    expect(pinRequest(false, g, 'forge-101', '')).toMatchObject({ path: '/api/teams/platform/programs/forge-101/pin', json: { ref: '' } })
-    expect(teamPath(false, 'platform')).toBe('/api/teams/platform')
+  test('one change keeps everything else as it stands', () => {
+    const p = { ...prog, schedule: 'nights', budget_usd_month: 25, review_self_reported: true, lab_defaults: { ttl: '2h', idle_timeout: '30m', max_extension: '' } }
+    expect(programChange('platform', p, { enrolled: ['a@x', 'b@x'] }).json).toEqual({ version: 7, enrolled: ['a@x', 'b@x'],
+      roles: p.roles, schedule: 'nights', budget_usd_month: 25, review_self_reported: true, ttl: '2h', idle_timeout: '30m', max_extension: '' })
   })
-  test('the pages read from the endpoint the flag picks', () => {
-    for (const inDB of [true, false]) {
-      fetched.length = 0
-      meFlag.inDB = inDB
-      renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
-      renderToStaticMarkup(<MemoryRouter><ProgramSettingsPage /></MemoryRouter>)
-      expect(fetched).toEqual(Array(2).fill(inDB ? '/api/org/teams/platform' : '/api/teams/platform'))
-    }
+  test('roles sent are the stored ones, never the effective defaults', () => {
+    const p = { ...prog, roles: { manager: [], scorers: [], approvers: [] }, effective_roles: { manager: ['l@x'], scorers: ['s@x'], approvers: ['l@x'] } }
+    expect(programChange('platform', p, { enrolled: [] }).json.roles).toEqual({ manager: [], scorers: [], approvers: [] })
   })
   test('inline windows are kept unless a named schedule replaces them', () => {
     const inl = { ...prog, inline_schedule: { timezone: 'UTC' } }
-    expect(programRequest(true, team, inl, { ...f, schedule: '' }).json).toHaveProperty('inline_schedule')
-    expect(programRequest(true, team, inl, { ...f, schedule: 'nights' }).json).not.toHaveProperty('inline_schedule')
+    expect(programChange('platform', inl, { schedule: '' }).json).toHaveProperty('inline_schedule')
+    expect(programChange('platform', inl, { schedule: 'nights' }).json).not.toHaveProperty('inline_schedule')
+  })
+  test('adding a trainee keeps the rest of the roster', () => {
+    expect(addTraineeRequest({ ...team, seniors: ['s@x'], mentors: { 'a@x': 's@x' } }, ' New@X ').json).toEqual({ version: 3, name: 'Platform',
+      leader: 'l@x', seniors: ['s@x'], members: [], trainees: ['a@x', 'new@x'], mentors: { 'a@x': 's@x' } })
+  })
+})
+
+describe('enrolling someone', () => {
+  const t = { ...team, seniors: ['s@x'], trainees: ['a@x', 'b@x'] }
+  test('a team member is enrolled; someone already enrolled is refused', () => {
+    expect(enrollPlan(t, prog, ' B@x ')).toEqual({ kind: 'enroll', email: 'b@x' })
+    expect(enrollPlan(t, prog, 'a@x')).toMatchObject({ kind: 'refuse', reason: 'a@x is already enrolled.' })
+  })
+  test('someone new joins the team first, but only when you may edit the team', () => {
+    expect(enrollPlan(t, prog, 'new@x')).toEqual({ kind: 'add-and-enroll', email: 'new@x' })
+    expect(enrollPlan({ ...t, can_edit_team: false }, prog, 'new@x')).toMatchObject({ kind: 'refuse', reason: expect.stringMatching(/not on Platform/) })
+  })
+  test('what is not an email address is refused before anything is sent', () => {
+    expect(enrollPlan(t, prog, 'bob')).toMatchObject({ kind: 'refuse' })
   })
 })
 
@@ -76,15 +83,15 @@ describe('a stale save', () => {
 })
 
 describe('pages', () => {
-  test('team page renders from the org read, with a labelled save for each form', () => {
+  test('team page reads /api/org, has a labelled save for each form, and sends programs to the trainings page', () => {
+    fetched.length = 0
     const h = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
+    expect(fetched).toEqual(['/api/org/teams/platform'])
     expect(h).toContain('Save roster')
     expect(h).toContain('Save budget')
-  })
-  test('program page renders and announces saves', () => {
-    const h = renderToStaticMarkup(<MemoryRouter><ProgramSettingsPage /></MemoryRouter>)
-    expect(h).toContain('Save program')
-    expect(h).toContain('role="status"')
+    expect(h).toContain('href="/trainings/manage/forge-101#team-platform"')
+    expect(h).toContain('Start a training for this team')
+    expect(h).not.toContain('Enroll the team')
   })
   test('create-team has labelled id, name and leader', () => {
     const h = renderToStaticMarkup(<MemoryRouter><CreateTeam /></MemoryRouter>)

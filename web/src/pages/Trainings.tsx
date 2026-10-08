@@ -1,4 +1,5 @@
 import { Link } from 'react-router'
+import { useMe } from '../me'
 import { useFetch } from '../useFetch'
 import type { CatalogEntry } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
@@ -6,11 +7,16 @@ import { Loader } from '../components/Loader'
 
 export function TrainingsPage() {
   const { data, error } = useFetch<CatalogEntry[]>('/api/catalog')
+  const { me } = useMe()
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Opening the catalog…" />
   return (
     <section className="page">
-      <h1>Trainings</h1>
+      <div className="row">
+        <h1>Trainings</h1>
+        <span className="spacer" />
+        {me.can_manage_trainings && <Link className="button-link" to="/trainings/manage">Manage trainings</Link>}
+      </div>
       {data.length === 0 && <p className="muted">No trainings are available yet.</p>}
       <div className="cards">
         {data.map((c) => (

@@ -13,7 +13,7 @@ const pages = [
   p('admins/forge-status', ['admin'], ['route:/admin'], 10),
 ]
 const me = (over: Partial<Me>): Me => ({ user: { id: 1, email: 'x@y', name: 'X', theme: '', calm_motion: false }, is_admin: false, default_theme: 'forge',
-  teams: [], can_approve: false, can_score: false, can_view_spend: false, is_mentor: false, can_edit_content: false, config_in_db: false, ...over })
+  teams: [], can_approve: false, can_score: false, can_view_spend: false, is_mentor: false, can_edit_content: false, can_manage_trainings: false, ...over })
 
 test('roles come from /api/me flags', () => {
   expect(rolesOf(me({}))).toEqual(['everyone', 'trainee'])

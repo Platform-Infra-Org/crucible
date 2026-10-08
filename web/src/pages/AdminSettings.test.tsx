@@ -2,7 +2,6 @@ import { describe, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { AdminSettingsPage } from './AdminSettings'
-import { AdminTrainingsPage } from './AdminTrainings'
 import { Conflict } from '../components/Conflict'
 import { repoWarning, tiersRequest } from '../lib/adminConfig'
 
@@ -15,7 +14,6 @@ vi.mock('../useFetch', () => ({
       '/api/admin/admins': { admins },
       '/api/admin/platform': { schedules: {}, programs: [{ team: 't', training: 'forge-101' }, { team: 'u', training: 'forge-101' }] },
       '/api/meta': { quotes: [] },
-      '/api/admin/trainings': { trainings: [{ id: 'forge-101', repo: 'https://git.example/old.git', branch: 'main' }] },
     }
     return { data: data[path], error: undefined, reload: () => {} }
   },
@@ -54,9 +52,6 @@ describe('repoint', () => {
     expect(repoWarning('old', 'new', 2)).toMatch(/^2 programs are pinned/)
     expect(repoWarning('old', 'old', 2)).toBe('')
     expect(repoWarning(undefined, 'new', 2)).toBe('') // a new registration
-  })
-  test('the registry page starts without a warning', () => {
-    expect(renderToStaticMarkup(<AdminTrainingsPage />)).not.toContain('pinned to content')
   })
 })
 

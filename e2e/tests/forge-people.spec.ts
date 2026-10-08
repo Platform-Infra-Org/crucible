@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { setEditorText } from './helpers'
+import { enroll, setEditorText } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
@@ -12,28 +12,17 @@ async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
-// Idempotent on a KEEP=1 stack: titles and the appended line carry a run id, and enrolling tolerates an existing program.
+// Idempotent on a KEEP=1 stack: titles and the appended line carry a run id, and enroll tolerates an existing program.
 const run = Date.now().toString(36)
 
 test('a content edit is reviewed and merged; the trainee earns a badge; mentor and leader see the journey', async ({ browser }) => {
-  // The leader enrols the team, and the trainee, in Forge 102 (two bot commits to the platform repo).
+  // The leader starts Forge 102 for the team and enrols the trainee (a no-op on a KEEP=1 rerun).
   const leader = await login(browser, 'leader')
-  await leader.getByRole('link', { name: 'Team', exact: true }).click()
-  await leader.getByLabel('Training to enroll').or(leader.getByRole('row', { name: /Forge 102/ })).first().waitFor() // team page loaded
-  if (await leader.getByLabel('Training to enroll').locator('option[value="forge-102"]').count()) {
-    await leader.getByLabel('Training to enroll').selectOption('forge-102')
-    await leader.getByRole('button', { name: 'Enroll the team' }).click()
-  } else {
-    await leader.getByRole('row', { name: /Forge 102/ }).getByRole('link', { name: 'Settings' }).click() // already enrolled
-  }
-  await expect(leader.getByRole('heading', { name: /Program settings/ })).toBeVisible()
-  await leader.getByRole('checkbox', { name: 'trainee@crucible.local' }).check() // no-op when already enrolled
-  await leader.getByRole('button', { name: 'Save program' }).click()
-  await expect(leader.getByRole('status').filter({ hasText: /Saved to git/ })).toBeVisible()
+  await enroll(leader, 'forge-102', 'trainee@crucible.local')
 
   // The leader proposes an edit; authors never approve their own.
   await leader.getByRole('link', { name: 'Edits', exact: true }).click()
-  await leader.getByLabel('Training').selectOption('forge-102')
+  await leader.getByRole('combobox', { name: 'Training', exact: true }).selectOption('forge-102')
   await leader.getByRole('button', { name: 'Start an edit' }).click()
   await leader.getByRole('treeitem', { name: 'modules/01-sparks/reading/sparks.md', exact: true }).click()
   const sparks = await (await leader.request.get('/api/content/forge-102/file?path=modules/01-sparks/reading/sparks.md')).json()

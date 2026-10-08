@@ -10,8 +10,8 @@ Labs cost money and time. These settings keep both in bounds.
 
 ## Schedules
 
-Your admins name schedules in the platform repo, such as office hours, each a set of days and hours in a time zone.
-A program picks one in its settings, or **Any time**. (A program can also carry its own hours, set in git.)
+Your admins name schedules, such as office hours, each a set of days and hours in a time zone. A program picks one
+in its settings, or **Any time**. (A program can also carry hours of its own, rather than a named schedule.)
 
 Inside a schedule:
 

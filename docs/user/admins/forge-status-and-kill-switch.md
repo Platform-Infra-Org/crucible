@@ -27,13 +27,21 @@ the branch but hasn't caught up is marked *behind*.
 
 ## Sync
 
-The platform repo commit Crucible runs, when it last synced, and any error. Below it, every training: its repo,
-branch, head commit, and the problems that keep it from loading, if any.
+When Crucible last synced and any error, with the platform repo commit it runs where the configuration lives in
+git. Below it, every training: its repo, branch, head commit, and the problems that keep it from loading, if any.
+Training content comes from git either way, so this list is always here.
 
 ## Platform settings
 
-The cost tiers, escalation hours, schedules and admins this Crucible runs with. They live in the platform repo
-(`platform.yaml`, `admins.yaml`): change them there, and Crucible picks them up on the next sync.
+The cost tiers, escalation hours, schedules and admins this Crucible runs with, and where they are kept. Either:
+
+- **In Crucible's own database** — change them under **Administrator → Forge settings**, and they take effect at
+  once. See [Forge settings and the registry](/docs/admins/settings-and-registry).
+- **In the platform repo** (`platform.yaml`, `admins.yaml`) — change them in git, and Crucible picks them up on the
+  next sync.
+
+Whoever installs this Crucible chooses. The **Administrator** menu tells you which: **Forge settings** and
+**Registry** are there only in the first case.
 
 ## Recent privileged actions
 

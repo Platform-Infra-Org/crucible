@@ -8,17 +8,25 @@ order: 30
 
 ## Who is an admin
 
-Admins are listed in `admins.yaml` in the platform repo. To add or remove one, change that file in git. Crucible
-picks it up on the next sync.
+Where admins are kept depends on how this Crucible was installed, and **Platform settings** on
+[Forge Status](/docs/admins/forge-status-and-kill-switch) says which:
+
+- **In Crucible's own database** — add and remove them under **Administrator → Forge settings**. See
+  [Forge settings and the registry](/docs/admins/settings-and-registry).
+- **In the platform repo** — admins are listed in `admins.yaml`. Change that file in git, and Crucible picks it up
+  on the next sync.
+
+Either way the last admin can't be removed, and every grant and removal is audited.
 
 ## The first admin
 
-A new Crucible has nobody in `admins.yaml`. Whoever installs it sets a bootstrap admin email (the
-`CRUCIBLE_BOOTSTRAP_ADMIN` setting). On the very first start, and only if `admins.yaml` names no admin yet, the
-Crucible bot writes that email into `admins.yaml`. After that, git is in charge: changing the setting does nothing,
-and a restart never puts back an admin you removed.
+A new Crucible has no admins at all. Whoever installs it sets a bootstrap admin email (the
+`CRUCIBLE_BOOTSTRAP_ADMIN` setting). On the very first start, and only while no admin exists yet, Crucible records
+that email as the first admin — as a row in its database, or, in the git case, as a commit the bot makes to
+`admins.yaml`. After that the setting does nothing: a restart never puts back an admin you removed.
 
-That person still signs in through the company identity provider, with a verified email, like everyone else.
+That person still signs in through the company identity provider, with a verified email, like everyone else. They
+configure everything else from the app.
 
 ## The audit log
 

@@ -63,7 +63,9 @@ func setup(t *testing.T) *fx {
 	t.Helper()
 	content := bareFrom(t, "../../examples/forge-101", nil)
 	remote := bareFrom(t, "../../examples/platform", map[string]string{
-		"trainings.yaml": "trainings:\n  forge-101: {repo: " + content + "}\n  forge-201: {repo: " + content + "}\n"})
+		// forge-103 is registered because examples/platform now enrols the forge team in it; a program whose
+		// training is missing from the registry fails the whole platform load.
+		"trainings.yaml": "trainings:\n  forge-101: {repo: " + content + "}\n  forge-201: {repo: " + content + "}\n  forge-103: {repo: " + content + "}\n"})
 	syncer := gitsync.New(t.TempDir(), remote, "main", slog.Default())
 	if err := syncer.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)

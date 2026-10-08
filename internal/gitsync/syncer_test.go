@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"crucible/internal/apperr"
+	"crucible/internal/config"
 	"crucible/internal/content"
 )
 
@@ -60,11 +61,17 @@ func setup(t *testing.T) (*Syncer, string, string) {
 		"teams/a/team.yaml":        "name: A\nleader: l@x\ntrainees: [u@x]\n",
 		"teams/a/programs/t1.yaml": "enrolled: [u@x]\n",
 	})
-	s := New(t.TempDir(), platformRepo, "main", slog.Default())
+	s := New(t.TempDir(), fromDir(platformRepo), slog.Default())
 	if err := s.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	return s, platformRepo, trainingRepo
+}
+
+// fromDir reads the configuration from a directory of platform YAML, as the seed does; the tests change it by
+// committing to that directory.
+func fromDir(dir string) func(context.Context) (*config.Platform, error) {
+	return func(context.Context) (*config.Platform, error) { return config.Load(dir) }
 }
 
 func TestSyncLoadsHead(t *testing.T) {
@@ -94,14 +101,14 @@ func TestBadHeadKeepsLastGood(t *testing.T) {
 
 func TestBadPlatformKeepsState(t *testing.T) {
 	s, platformRepo, _ := setup(t)
-	before := s.Current().PlatformSHA
+	before := s.Current().Platform
 	commit(t, platformRepo, map[string]string{"platform.yaml": "default_theme: forge\nbogus: 1\n"})
 	if err := s.SyncOnce(context.Background()); err == nil {
 		t.Fatal("expected error for bad platform config")
 	}
 	st := s.Current()
-	if st.PlatformSHA != before || st.Platform == nil || st.PlatformErr == "" {
-		t.Fatalf("state not kept: sha %s err %q", st.PlatformSHA, st.PlatformErr)
+	if st.Platform != before || st.PlatformErr == "" {
+		t.Fatalf("state not kept: %v err %q", st.Platform, st.PlatformErr)
 	}
 }
 
@@ -158,7 +165,7 @@ func TestVersionLoadsAnOldSHAAfterARestart(t *testing.T) {
 	s, platformRepo, trainingRepo := setup(t)
 	_, old := s.Current().ProgramTraining("a", "t1")
 	commit(t, trainingRepo, map[string]string{"training.yaml": "id: t1\ntitle: T1 v2\nmodules: [m1]\n"})
-	fresh := New(t.TempDir(), platformRepo, "main", slog.Default()) // the restarted API
+	fresh := New(t.TempDir(), fromDir(platformRepo), slog.Default()) // the restarted API
 	if err := fresh.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -258,5 +265,26 @@ func TestChangesFlagsTruncationAndReportsGitFailures(t *testing.T) {
 	}
 	if err := s.CheckPin(cctx, "t1", first); !errors.Is(err, apperr.Unavailable) {
 		t.Fatalf("a cancelled git must be Unavailable: %v", err)
+	}
+}
+
+func TestConfigFuncSuppliesThePlatform(t *testing.T) {
+	trainingRepo := newRepo(t, training)
+	plat := &config.Platform{Admins: []string{"a@x"}, Trainings: map[string]config.TrainingRef{"t1": {Repo: trainingRepo, Branch: "main"}},
+		Teams: map[string]*config.Team{"a": {Programs: map[string]*config.Program{"t1": {}}}}}
+	s := New(t.TempDir(), func(context.Context) (*config.Platform, error) { return plat, nil }, slog.Default())
+	if err := s.SyncOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := s.Current()
+	if st.Platform != plat {
+		t.Fatalf("platform should come from Config: %v", st.Platform)
+	}
+	if tr, _ := st.ProgramTraining("a", "t1"); tr == nil || tr.Title != "T1" {
+		t.Fatalf("content should still sync from git: %+v", st.Problems)
+	}
+	s.Config = func(context.Context) (*config.Platform, error) { return nil, errors.New("db down") }
+	if err := s.SyncOnce(context.Background()); err == nil || s.Current().Platform != plat || s.Current().PlatformErr == "" {
+		t.Fatalf("a failing store keeps the last good platform: %v", err)
 	}
 }

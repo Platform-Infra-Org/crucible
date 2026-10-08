@@ -460,6 +460,17 @@ func TestLabDirDotIsNotALabDir(t *testing.T) {
 	}
 }
 
+func TestExtTransportIsRefusedEvenWithFileAllowed(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, err := git(context.Background(), "", "clone", "-q", "--", "ext::sh -c 'touch "+marker+"'", filepath.Join(t.TempDir(), "c"))
+	if err == nil {
+		t.Fatal("ext:: remotes must be refused")
+	}
+	if _, serr := os.Stat(marker); serr == nil {
+		t.Fatal("ext:: command ran")
+	}
+}
+
 func TestPushEditRenameDeleteAndModes(t *testing.T) {
 	ctx := context.Background()
 	files := trainingFiles()

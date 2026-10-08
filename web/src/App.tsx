@@ -21,10 +21,11 @@ import { ApprovalsPage } from './pages/Approvals'
 import { LedgerPage } from './pages/Ledger'
 import { AnvilDetailPage, AnvilPage } from './pages/Anvil'
 import { ForgeStatusPage } from './pages/ForgeStatus'
+import { AdminSettingsPage } from './pages/AdminSettings'
 import { JourneyPage } from './pages/Journey'
 import { MentorPage } from './pages/Mentor'
-import { ProgramSettingsPage } from './pages/ProgramSettings'
 import { TrainingsPage } from './pages/Trainings'
+import { ManageTrainingsPage } from './pages/ManageTrainings'
 import { LabsPage } from './pages/Labs'
 import { EditsPage } from './pages/Edits'
 import { NewDraftPage } from './pages/NewDraft'
@@ -65,8 +66,12 @@ export default function App() {
     setMe({ ...me, user: { ...me.user, theme, calm_motion: calm } })
     applyTheme(theme, calm)
   }
+  const setAvatar = async (avatar: string) => {
+    await api('/api/me/avatar', { method: 'PUT', json: { avatar } })
+    setMe({ ...me, user: { ...me.user, avatar } })
+  }
   return wrap(
-    <MeContext.Provider value={{ me, setPrefs }}>
+    <MeContext.Provider value={{ me, setPrefs, setAvatar }}>
         <Nav />
         <Routes>
           <Route path="/" element={<Hearth />} />
@@ -75,12 +80,13 @@ export default function App() {
           <Route path="/p/:team/:training/m/:module/quiz" element={<QuizPage />} />
           <Route path="/p/:team/:training/m/:module/lab" element={<LabPage />} />
           <Route path="/trainings" element={<TrainingsPage />} />
+          <Route path="/trainings/manage" element={<ManageTrainingsPage />} />
+          <Route path="/trainings/manage/:training" element={<ManageTrainingsPage />} />
           <Route path="/labs" element={<LabsPage />} />
           <Route path="/connect" element={<ConnectPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/teams" element={<TeamsIndex />} />
           <Route path="/teams/:team" element={<TeamPage />} />
-          <Route path="/teams/:team/programs/:training" element={<ProgramSettingsPage />} />
           <Route path="/teams/:team/journey" element={<JourneyPage />} />
           <Route path="/mentor" element={<MentorPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
@@ -92,6 +98,7 @@ export default function App() {
           <Route path="/edits/drafts/:id" element={<Suspense fallback={<Loader label="Heating the editor…" />}><Ide /></Suspense>} />
           <Route path="/edits/:id" element={<EditReviewPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />
+          <Route path="/admin/settings" element={<AdminSettingsPage />} />
           <Route path="/docs/*" element={<DocsPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>

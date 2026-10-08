@@ -620,3 +620,29 @@ func TestWorkspaceKeepsAPutOnARenamedPath(t *testing.T) {
 		}
 	}
 }
+
+// People allowed to edit a training keep editing and reviewing it while enrolled in it (an admin or leader taking their
+// own training). Being enrolled gives nobody else a way in: a plain trainee stays out.
+func TestEnrolledEditorsKeepEditing(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	p := f.s.State().Platform.Teams["forge"].Programs["t1"]
+	p.Enrolled = append(p.Enrolled, "leader@crucible.local", "admin@crucible.local", "senior@crucible.local")
+	if _, _, err := f.s.Files(f.leader, "t1"); err != nil {
+		t.Fatalf("an enrolled leader still reads the files to edit them: %v", err)
+	}
+	e, err := f.propose(t, f.admin, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nEnrolled and editing.\n"})
+	if err != nil {
+		t.Fatalf("an enrolled admin proposes: %v", err)
+	}
+	got, err := f.s.Get(ctx, f.senior, e.ID)
+	if err != nil || !got.CanReview {
+		t.Fatalf("an enrolled maintainer still reviews: %+v %v", got, err)
+	}
+	if list, _ := f.s.List(ctx, f.trainee); len(list) != 0 {
+		t.Fatal("a plain enrolled trainee still sees no edits")
+	}
+	if _, _, err := f.s.Files(f.trainee, "t1"); !errors.Is(err, apperr.Forbidden) {
+		t.Fatalf("a plain enrolled trainee still reads nothing: %v", err)
+	}
+}

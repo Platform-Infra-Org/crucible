@@ -37,7 +37,6 @@ variables {
   data_bucket          = "crucible-123456789012-data"
   domain               = "crucible.example.com"
   acme_email           = "ops@example.com"
-  platform_repo        = "https://git.example.com/crucible/platform.git"
   oidc_issuer          = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"
   oidc_client_id       = "client123"
   cognito_user_pool_id = "eu-west-1_abc"

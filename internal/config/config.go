@@ -1,4 +1,5 @@
-// Package config loads the platform repo: teams, roles, programs, trainings registry.
+// Package config holds the configuration types (settings, teams, roles, programs, the trainings registry) and Load,
+// which reads them from a platform directory in YAML: the seed format (CRUCIBLE_SEED_DIR, examples/platform).
 package config
 
 import (
@@ -42,6 +43,17 @@ type CostTiers struct {
 	Tier1USD       float64 `yaml:"tier1_usd" json:"tier1_usd"`
 	Tier2USD       float64 `yaml:"tier2_usd" json:"tier2_usd"`
 }
+
+// Validate checks the tier ordering.
+func (t *CostTiers) Validate() error {
+	if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
+		return errors.New("cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0")
+	}
+	return nil
+}
+
+// Fill applies the rank defaults to unset thresholds and checks their order.
+func (r *RankThresholds) Fill() error { return r.fill() }
 
 // RankThresholds are the % of enrolled training completed at which each forge rank is earned (spec §7). Ore is 0.
 type RankThresholds struct {
@@ -98,6 +110,25 @@ type TeamNotifications struct {
 type Budget struct {
 	MonthlyUSD float64 `yaml:"monthly_usd" json:"monthly_usd"`
 	HardCapUSD float64 `yaml:"hard_cap_usd" json:"hard_cap_usd"` // defaults to monthly_usd; 0 = no cap
+	Version    int64   `yaml:"-" json:"-"`
+}
+
+// Validate resolves an unset hard cap to the monthly budget, then checks 0 <= monthly_usd <= hard_cap_usd and that
+// both are finite. It is the one budget rule, shared by config.Load and the Postgres write path.
+func (b *Budget) Validate() error {
+	if math.IsNaN(b.MonthlyUSD) || math.IsInf(b.MonthlyUSD, 0) || math.IsNaN(b.HardCapUSD) || math.IsInf(b.HardCapUSD, 0) {
+		return errors.New("budget amounts must be finite numbers")
+	}
+	if b.HardCapUSD == 0 {
+		b.HardCapUSD = b.MonthlyUSD
+	}
+	if b.MonthlyUSD < 0 || b.HardCapUSD < 0 {
+		return errors.New("budget amounts cannot be negative")
+	}
+	if b.HardCapUSD < b.MonthlyUSD {
+		return fmt.Errorf("the hard cap ($%g) is below the monthly budget ($%g); need 0 <= monthly_usd <= hard_cap_usd", b.HardCapUSD, b.MonthlyUSD)
+	}
+	return nil
 }
 
 type TrainingRef struct {
@@ -107,6 +138,7 @@ type TrainingRef struct {
 
 type Team struct {
 	ID       string              `yaml:"-"`
+	Version  int64               `yaml:"-"`
 	Name     string              `yaml:"name"`
 	Leader   string              `yaml:"leader"`
 	Seniors  []string            `yaml:"seniors"`
@@ -115,12 +147,13 @@ type Team struct {
 	Mentors  map[string]string   `yaml:"mentors"` // trainee email → mentor email
 	Programs map[string]*Program `yaml:"-"`       // by training id
 
-	Notifications TeamNotifications `yaml:"notifications"`
-	Budget        Budget            `yaml:"-"` // from budget.yaml
+	Notifications TeamNotifications `yaml:"notifications" json:"-"` // webhook URLs are secrets: never marshalled
+	Budget        Budget            `yaml:"-"`                      // from budget.yaml
 }
 
 type Program struct {
 	Training    string      `yaml:"training"`
+	Version     int64       `yaml:"-"`
 	PinnedRef   string      `yaml:"pinned_ref"`
 	Roles       Roles       `yaml:"roles"`
 	Enrolled    []string    `yaml:"enrolled"`
@@ -166,9 +199,9 @@ func (p *Platform) ProgramSchedule(team, training string) *Schedule {
 }
 
 type Roles struct {
-	Manager   []string `yaml:"manager"`
-	Scorers   []string `yaml:"scorers"`
-	Approvers []string `yaml:"approvers"`
+	Manager   []string `yaml:"manager" json:"manager"`
+	Scorers   []string `yaml:"scorers" json:"scorers"`
+	Approvers []string `yaml:"approvers" json:"approvers"`
 }
 
 type LabDefaults struct {
@@ -193,6 +226,11 @@ func (t *Team) RoleOf(email string) string {
 	return ""
 }
 
+// ValidTrainingID reports whether id can name a training: it becomes a directory name in the content mirror.
+func ValidTrainingID(id string) bool {
+	return id != "" && filepath.IsLocal(id) && !strings.ContainsAny(id, `/\`)
+}
+
 func Load(dir string) (*Platform, error) {
 	p := &Platform{Trainings: map[string]TrainingRef{}, Teams: map[string]*Team{}}
 	var errs []error
@@ -207,8 +245,8 @@ func Load(dir string) (*Platform, error) {
 	}
 	if t := p.Settings.CostTiers; t == nil {
 		errs = append(errs, errors.New("platform.yaml: cost_tiers is required (auto_approve_usd, tier1_usd, tier2_usd); Crucible has no built-in defaults"))
-	} else if t.AutoApproveUSD < 0 || t.Tier1USD <= 0 || t.Tier1USD < t.AutoApproveUSD || t.Tier2USD < t.Tier1USD {
-		errs = append(errs, errors.New("platform.yaml: cost_tiers must satisfy 0 <= auto_approve_usd <= tier1_usd <= tier2_usd and tier1_usd > 0"))
+	} else if err := t.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("platform.yaml: %w", err))
 	}
 	if r := p.Settings.ClusterUSDPerHour; r != nil && (*r < 0 || math.IsNaN(*r) || math.IsInf(*r, 0)) {
 		errs = append(errs, errors.New("platform.yaml: cluster_usd_per_hour must be a number >= 0"))
@@ -255,7 +293,7 @@ func Load(dir string) (*Platform, error) {
 		errs = append(errs, err)
 	}
 	for id, ref := range reg.Trainings {
-		if id == "" || !filepath.IsLocal(id) || strings.ContainsAny(id, `/\`) { // ids become directory names
+		if !ValidTrainingID(id) {
 			errs = append(errs, fmt.Errorf("trainings.yaml: invalid training id %q", id))
 			continue
 		}
@@ -317,11 +355,8 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 	if err := yamlx.ReadFile(filepath.Join(dir, "budget.yaml"), &t.Budget, false); err != nil {
 		bad("%v", err)
 	}
-	if t.Budget.HardCapUSD == 0 {
-		t.Budget.HardCapUSD = t.Budget.MonthlyUSD
-	}
-	if t.Budget.MonthlyUSD < 0 || t.Budget.HardCapUSD < t.Budget.MonthlyUSD {
-		bad("budget.yaml: need 0 <= monthly_usd <= hard_cap_usd")
+	if err := t.Budget.Validate(); err != nil {
+		bad("budget.yaml: %v", err)
 	}
 
 	if t.Leader == "" {

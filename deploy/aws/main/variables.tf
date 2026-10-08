@@ -59,19 +59,11 @@ variable "backup_cron" {
   default     = "15 19 * * *"
   description = "Kubernetes cron (node timezone = schedule_timezone); keep it before sleep_cron"
 }
-variable "platform_repo" {
-  type      = string
-  sensitive = true
-}
-variable "platform_branch" {
-  type    = string
-  default = "main"
-}
 variable "git_credentials" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com. The token needs push (write) access to the platform repo: the UI commits config changes."
+  description = "Lines for git's credential store, e.g. https://bot:TOKEN@git.example.com. The token needs push (write) access to the training repos: the bot merges reviewed content edits."
 }
 variable "git_bot_name" {
   type    = string
@@ -118,7 +110,7 @@ variable "infracost_api_key" {
 variable "bootstrap_admin" {
   type        = string
   default     = ""
-  description = "Email of the first admin. Seeds admins.yaml once, only while it lists no admin; after that admins are edited in git. Invite the same email in Cognito first."
+  description = "Email of the first admin, seeded once into an empty admins table; they configure everything else in the UI. Invite the same email in Cognito first."
   validation {
     condition     = var.bootstrap_admin == "" || can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$", var.bootstrap_admin))
     error_message = "bootstrap_admin must be empty or a plain email address (letters, digits and . _ % + - only)."

@@ -28,6 +28,7 @@ import (
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/org"
 	"crucible/internal/rbac"
 	"crucible/internal/scoring"
 )
@@ -43,6 +44,8 @@ type Deps struct {
 	Config     *configapi.Service
 	Journey    *journey.Service
 	Edits      *edits.Service
+	Org        *org.Store // nil in tests that do not need the /api/admin config routes
+	OrgAPI     org.APIDeps
 	Authoring  *authoring.Service
 	Docs       *docs.Service
 	Hub        *agenthub.Hub
@@ -100,11 +103,11 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme, teams, canApprove, scorer, canSpend, mentor := false, "forge", []string{}, false, false, false, false
+			admin, theme, teams, canApprove, scorer, canSpend, mentor, manage := false, "forge", []string{}, false, false, false, false, false
 			if st := state(d); st != nil && st.Platform != nil {
 				c := rbac.Checker{P: st.Platform}
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
-				canApprove, scorer = admin, canScore(st.Platform, u.Email)
+				canApprove, scorer, manage = admin, canScore(st.Platform, u.Email), admin
 				canSpend = len(c.SpendTeams(u.Email)) > 0
 				mentor = isMentor(st.Platform, u.Email)
 				for id, t := range st.Platform.Teams {
@@ -112,14 +115,30 @@ func NewRouter(d Deps) chi.Router {
 						teams = append(teams, id)
 					}
 					canApprove = canApprove || t.Leader == u.Email
+					manage = manage || t.Leader == u.Email // a leader starts programs for the team
 					for _, p := range t.Programs {
 						canApprove = canApprove || slices.Contains(p.Roles.Approvers, u.Email)
+						manage = manage || slices.Contains(p.Roles.Manager, u.Email)
 					}
 				}
 				sort.Strings(teams)
 			}
 			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor,
-				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email)})
+				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email), "can_manage_trainings": manage})
+		})
+		r.Put("/api/me/avatar", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Avatar string `json:"avatar"`
+			}
+			if err := httpx.Read(r, &body); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			if err := d.Auth.SetAvatar(r.Context(), auth.UserFrom(r.Context()).ID, body.Avatar); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		})
 		r.Put("/api/me/prefs", func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
@@ -192,6 +211,9 @@ func NewRouter(d Deps) chi.Router {
 		}
 		if d.Config != nil {
 			d.Config.Routes(r)
+		}
+		if d.Org != nil {
+			d.Org.Routes(r, d.OrgAPI)
 		}
 		if d.Journey != nil {
 			d.Journey.Routes(r)

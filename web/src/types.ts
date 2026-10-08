@@ -1,18 +1,26 @@
-export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean }
+export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean; avatar: string }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
 export type ProgramConfig = {
-  training: string; title: string; enrolled: string[]; roles: Roles; schedule: string; inline_schedule?: string
+  training: string; title: string; version: number; inline_schedule?: object; enrolled: string[]; roles: Roles; effective_roles?: Roles; schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string
 }
+// The trainings page (/api/org/trainings): every training, with the caller's teams that run it.
+export type TeamRoster = {
+  id: string; name: string; version: number; leader: string; seniors: string[]; members: string[]; trainees: string[]
+  mentors: Record<string, string>; can_edit_team: boolean
+}
+export type TeamProgram = ProgramConfig & { team: string }
+export type ManagedTraining = { id: string; title: string; available: boolean; repo?: string; branch?: string; programs: TeamProgram[] }
+export type TrainingsAdmin = { is_admin: boolean; schedules: string[]; teams: TeamRoster[]; trainings: ManagedTraining[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
 export type TeamView = {
   id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; budget?: { monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
-  available_trainings: { id: string; title: string }[]; schedules: string[]; platform_sha: string
+  mentors: Record<string, string>; budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
+  available_trainings: { id: string; title: string }[]; schedules: string[]; version: number
   can_edit_team: boolean; is_admin: boolean
 }
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }
@@ -60,7 +68,7 @@ export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: s
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
 export type TrainingStatus = { id: string; repo: string; branch: string; head: string; problems: string[] }
 export type PlatformView = {
-  platform_sha: string; platform_error?: string; synced_at: string
+  platform_error?: string; synced_at: string
   cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
   pending_edits: number; attention: AttentionLab[]; programs: ProgramPin[]
@@ -108,7 +116,7 @@ export type Forge = { percent: number; level: number; rank: string; ladder: { na
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
-export type JourneyRow = { email: string; name: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
+export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
 export type Mentee = {
   email: string; name: string; team: string; rank: string; programs: JourneyRow[]
   pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
@@ -125,6 +133,12 @@ export type ContentEdit = {
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
+export type AdminSettings = {
+  version: number; default_theme: string; cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
+  cluster_usd_per_hour: number | null; escalation_hours: number
+  ranks: { ingot: number; tempered: number; blade: number; sword: number; masterwork: number }
+}
+export type Schedule = { timezone: string; windows: { days: string[]; start: string; end: string }[] }
 
 export type DraftState = 'editing' | 'in_review' | 'returned' | 'merged'
 export type DraftInfo = { id: number; training: string; title: string; base_sha: string; head_sha: string; ops: EditOp[]; updated_at: string; edit_id?: number; state: DraftState }

@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { enroll } from './helpers'
 
 let agent: ChildProcess | undefined
 test.afterAll(() => {
@@ -27,13 +28,7 @@ async function typeIn(page: Page, tab: string, command: string) {
 test('a scorer grades a free-text answer and a lab submission; the trainee sees the feedback', async ({ browser }) => {
   // The leader enrolls the trainee in Forge 301; seniors become its scorers by default.
   const leader = await login(browser, 'leader')
-  await leader.getByRole('link', { name: 'Team', exact: true }).click()
-  await leader.getByLabel('Training to enroll').selectOption('forge-301')
-  await leader.getByRole('button', { name: 'Enroll the team' }).click()
-  await expect(leader.getByRole('heading', { name: /Program settings/ })).toBeVisible()
-  await leader.getByRole('checkbox', { name: 'trainee@crucible.local' }).check()
-  await leader.getByRole('button', { name: 'Save program' }).click()
-  await expect(leader.getByRole('status').filter({ hasText: /Saved to git/ })).toBeVisible()
+  await enroll(leader, 'forge-301', 'trainee@crucible.local')
 
   // The trainee answers the choice question, writes an answer and attaches a screenshot. Module 2 stays locked.
   const trainee = await login(browser, 'trainee')

@@ -180,22 +180,16 @@ func head(st *gitsync.State, training string) (*content.Training, string) {
 	return st.Training(training, sha), sha
 }
 
-// enrolled: anyone enrolled in the training (any team) could read its answer keys through this API, so they get none.
-func enrolled(p *config.Platform, training, email string) bool {
-	return rbac.Checker{P: p}.Enrolled(email, training)
-}
-
 func maintainer(t *content.Training, email string) bool {
 	return t != nil && slices.ContainsFunc(t.Maintainers, func(m string) bool { return strings.EqualFold(m, email) })
 }
 
-// canPropose: admins, the training's maintainers, and leaders and seniors of teams with a program for the training;
-// never anyone enrolled in it. Proposing means reading the raw files (answer keys, check scripts).
+// canPropose: admins, the training's maintainers, and leaders and seniors of teams with a program for the training,
+// whether or not they are also enrolled in it (the owner's call, 2026-10-08: those who run a training may edit it while
+// taking it). Proposing means reading the raw files, answer keys and check scripts included, so nobody else gets in:
+// being enrolled grants nothing. Scoring stays closed to the enrolled (rbac.Score).
 func canPropose(p *config.Platform, t *content.Training, email string) bool {
 	email = strings.ToLower(email)
-	if enrolled(p, t.ID, email) {
-		return false
-	}
 	if (rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email) {
 		return true
 	}
@@ -207,11 +201,11 @@ func canPropose(p *config.Platform, t *content.Training, email string) bool {
 	return false
 }
 
-// canReview: admins and the head version's maintainers (spec §5.3), never the author, never someone enrolled. t is nil
+// canReview: admins and the head version's maintainers (spec §5.3), never the author; enrolled or not. t is nil
 // when the training has no valid head (or left the platform): then only admins can still decide its edits.
 func canReview(p *config.Platform, training string, t *content.Training, email, author string) bool {
 	email = strings.ToLower(email)
-	return email != author && !enrolled(p, training, email) && ((rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email))
+	return email != author && ((rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email))
 }
 
 func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Training, string, error) {
@@ -510,12 +504,9 @@ func scan(row pgx.Row) (*Edit, error) {
 	return &e, err
 }
 
-// visible: the author and anyone who may review it; nobody enrolled in the training. Sets CanReview / CanWithdraw.
+// visible: the author and anyone who may review it. Sets CanReview / CanWithdraw.
 func visible(st *gitsync.State, u *auth.User, e *Edit) bool {
 	me := strings.ToLower(u.Email)
-	if enrolled(st.Platform, e.Training, me) {
-		return false
-	}
 	t, _ := head(st, e.Training)
 	e.CanReview = e.Status == "pending" && canReview(st.Platform, e.Training, t, me, e.Author)
 	e.CanWithdraw = e.Status == "pending" && e.Author == me

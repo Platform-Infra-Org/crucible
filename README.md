@@ -23,6 +23,19 @@ browser cannot infer answers from them. Set it to a random value in every real d
 restarts (changing it only reshuffles quizzes that are open at that moment). If it is unset the API logs a warning and
 uses a fixed development value; the local compose stack sets a dev value.
 
+## Where configuration lives
+
+Training content is in git. Configuration and org data (settings, the trainings registry, teams, programs, roles,
+enrollments, budgets) are in Postgres, changed in the app: **Administrator → Forge settings**, the team pages, and
+**Manage trainings**. A fresh instance needs only `DATABASE_URL` and `CRUCIBLE_BOOTSTRAP_ADMIN` (the first admin's
+email); that admin configures everything else.
+
+`CRUCIBLE_SEED_DIR` imports a platform directory in the YAML layout of `examples/platform` into an empty database, once.
+The local stack, the end-to-end tests and `crucible preview` start this way. A server that still has
+`CRUCIBLE_PLATFORM_REPO` set refuses to start and says what to do instead.
+
+Export/import of an instance is not built yet.
+
 ## Local labs and your laptop
 
 `runtime: local` labs run in Docker on the trainee's laptop. Their compose file is checked against an allowlist (no privileged mode, host namespaces, published ports, writable binds, secrets), but the containers can still reach the internet and `host.docker.internal`. Use `runtime: cluster` labs when you need stricter isolation.

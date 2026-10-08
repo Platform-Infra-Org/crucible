@@ -50,9 +50,6 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
             - { name: DATABASE_URL, value: "postgres://crucible:$(POSTGRES_PASSWORD)@postgres:5432/crucible?sslmode=disable" }
-            - name: CRUCIBLE_PLATFORM_REPO
-              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_PLATFORM_REPO } }
-            - { name: CRUCIBLE_PLATFORM_BRANCH, value: {{ .Values.platformBranch | quote }} }
             - { name: CRUCIBLE_PUBLIC_URL, value: {{ .Values.publicURL | quote }} }
             - { name: CRUCIBLE_SYNC_INTERVAL, value: {{ .Values.syncInterval | quote }} }
             - { name: CRUCIBLE_GIT_BOT_NAME, value: {{ .Values.gitBot.name | quote }} }

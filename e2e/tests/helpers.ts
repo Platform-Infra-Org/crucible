@@ -11,6 +11,41 @@ export async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
+// contentEdits opens a training on Manage trainings, the way a person gets there, and returns its Content edits panel:
+// where an edit starts and where drafts and edits waiting for review are listed.
+export async function contentEdits(page: Page, training: string) {
+  await page.getByRole('link', { name: 'Trainings', exact: true }).click()
+  await page.getByRole('link', { name: 'Manage trainings' }).click()
+  await page.getByRole('navigation', { name: 'Trainings' }).getByRole('link', { name: new RegExp(`\\b${training}\\b`) }).click()
+  await expect(page).toHaveURL(new RegExp(`/trainings/manage/${training}$`))
+  const panel = page.getByRole('region', { name: 'Content edits' })
+  await expect(panel).toBeVisible()
+  return panel
+}
+
+// enroll does what a leader does on Manage trainings: start the training for The Forge if the team doesn't run it yet,
+// then enroll email. Idempotent, so it runs again on a KEEP=1 stack.
+export async function enroll(page: Page, training: string, email: string) {
+  await page.getByRole('link', { name: 'Trainings', exact: true }).click()
+  await page.getByRole('link', { name: 'Manage trainings' }).click()
+  await page.getByRole('navigation', { name: 'Trainings' }).getByRole('link', { name: new RegExp(`\\b${training}\\b`) }).click()
+  // The page opens on the first training: wait for the one asked for, or the checks below read the wrong one.
+  await expect(page).toHaveURL(new RegExp(`/trainings/manage/${training}$`))
+  await expect(page.locator('.manage-detail > p code')).toHaveText(training)
+  const panel = page.locator('#team-forge')
+  if (!(await panel.count())) {
+    await page.getByLabel('Team to start it for').selectOption('forge')
+    await page.getByRole('button', { name: 'Start for this team' }).click()
+    await expect(panel).toBeVisible()
+  }
+  const enrolled = panel.getByRole('button', { name: `Remove ${email} from enrolled` })
+  if (!(await enrolled.count())) {
+    await panel.getByLabel('Enroll someone in The Forge').fill(email)
+    await panel.getByRole('button', { name: 'Enroll', exact: true }).click()
+  }
+  await expect(enrolled).toBeVisible()
+}
+
 // setEditorText replaces the open file's text in Monaco: select all, then one multi-character input (Monaco applies no
 // auto-indent or auto-close to it). Callers check the result through the preview or the saved draft.
 export async function setEditorText(page: Page, text: string) {

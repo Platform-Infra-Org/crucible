@@ -1,8 +1,8 @@
 # Copy to deploy/aws/main/crucible.tfvars (git-ignored) and fill in.
 domain             = "crucible.example.com"
 acme_email         = "ops@example.com"
-platform_repo      = "https://git.example.com/crucible/platform.git"
-git_credentials    = "https://crucible-bot:TOKEN@git.example.com"
+bootstrap_admin    = "you@example.com"                        # first start: the one admin who configures the rest in the UI
+git_credentials    = "https://crucible-bot:TOKEN@git.example.com"   # read the training repos, push merged content edits
 # Sign-in (Cognito issuer, client id and secret) is wired automatically from the persistent stack.
 # route53_zone_id  = "Z0123456789"   # optional: manage the A record
 # instance_type    = "t3a.large"     # cheaper if you only use local labs

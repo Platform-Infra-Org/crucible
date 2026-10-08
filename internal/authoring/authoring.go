@@ -1,6 +1,6 @@
 // Package authoring serves the content editor (spec docs-and-editor §3, §5, §6, §8): schema, validation, drafts and
-// block inserts. Everything is gated by edits.Service.Authorize: only people allowed to propose edits to a training,
-// never anyone enrolled in it.
+// block inserts. Everything is gated by edits.Service.Authorize: only people allowed to propose edits to a training
+// (enrolled in it or not).
 package authoring
 
 import (

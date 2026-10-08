@@ -57,9 +57,8 @@ export function ForgeStatusPage() {
 
       <h2>Sync</h2>
       <dl className="facts">
-        <dt>Platform commit</dt><dd><code>{p.platform_sha.slice(0, 12)}</code></dd>
         <dt>Last sync</dt><dd>{new Date(p.synced_at).toLocaleString()}</dd>
-        {p.platform_error && (<><dt>Platform error</dt><dd className="error">{p.platform_error}</dd></>)}
+        {p.platform_error && (<><dt>Configuration error</dt><dd className="error">{p.platform_error}</dd></>)}
       </dl>
       <div className="table-wrap"><table className="grid">
         <thead><tr><th>Training</th><th>Repo</th><th>Head</th><th>Problems</th></tr></thead>
@@ -73,8 +72,8 @@ export function ForgeStatusPage() {
         </tbody>
       </table></div>
 
-      <h2>Platform settings</h2>
-      <p className="muted">These live in the platform repo (platform.yaml, admins.yaml). Change them there; Crucible picks them up on the next sync.</p>
+      <h2>Forge settings</h2>
+      <p className="muted">Change these under <Link to="/admin/settings">Forge settings</Link>; they take effect at once.</p>
       <dl className="facts">
         <dt>Cost tiers</dt>
         <dd>{p.cost_tiers ? `auto ≤ ${usd(p.cost_tiers.auto_approve_usd)} · approver ≤ ${usd(p.cost_tiers.tier1_usd)} · leader ≤ ${usd(p.cost_tiers.tier2_usd)} · admin above` : 'not set'}</dd>

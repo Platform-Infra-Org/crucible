@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import type { Me } from './types'
 
-export type MeCtx = { me: Me; setPrefs: (theme: string, calm: boolean) => Promise<void> }
+export type MeCtx = { me: Me; setPrefs: (theme: string, calm: boolean) => Promise<void>; setAvatar: (avatar: string) => Promise<void> }
 export const MeContext = createContext<MeCtx | null>(null)
 
 export function useMe(): MeCtx {

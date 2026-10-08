@@ -8,10 +8,20 @@ order: 40
 
 ## The Journey
 
-Open your team and choose **Journey**. You see one row per person and program you may follow: the leader and seniors
-see everyone, managers and scorers their programs, mentors their mentees.
+Open your team and choose **Journey**. You see the people and programs you may follow: the leader and seniors see
+everyone, managers and scorers their programs, mentors their mentees.
 
-Each module is a cell:
+At the top are four numbers: how many people, how many trainings, how much is forged on average, and how many need a
+look. Then choose how to read it:
+
+- **By person**: one panel for each person, with every training they take.
+- **By training**: one panel for each training, with everyone taking it.
+
+To narrow it down, pick a **Person**, a **Training**, or tick **Only those who need a look**. The four numbers follow
+what you picked, and **Clear filters** brings everyone back. The page's address keeps your choices, so you can bookmark
+a view or send it to someone.
+
+Each line in a panel has a molten bar showing how much of that training is forged, and a cell for each module:
 
 - **·** cold: not started;
 - **◐** glowing: in progress, or a lab running in it;

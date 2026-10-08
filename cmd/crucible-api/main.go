@@ -18,6 +18,7 @@ import (
 	"time"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -26,6 +27,7 @@ import (
 	"crucible/internal/authoring"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
+	"crucible/internal/config"
 	"crucible/internal/configapi"
 	"crucible/internal/content"
 	"crucible/internal/db"
@@ -39,6 +41,7 @@ import (
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/org"
 	"crucible/internal/scoring"
 )
 
@@ -72,6 +75,53 @@ func previewGuard(getenv func(string) string) error {
 	return auth.PreviewAllowed(public, token)
 }
 
+// configSource checks the environment for the configuration store. Configuration lives in Postgres only; an old
+// git-mode deployment that still sets CRUCIBLE_PLATFORM_REPO would otherwise start on an empty database without a
+// word, so it is refused with what to do instead.
+func configSource(getenv func(string) string) error {
+	if strings.TrimSpace(getenv("CRUCIBLE_PLATFORM_REPO")) != "" {
+		return errors.New("CRUCIBLE_PLATFORM_REPO is no longer read: configuration lives in Postgres. Remove it, start with " +
+			"CRUCIBLE_BOOTSTRAP_ADMIN set and configure the instance in the UI, or import a platform directory once with CRUCIBLE_SEED_DIR")
+	}
+	return nil
+}
+
+// seed imports CRUCIBLE_SEED_DIR (a platform directory in the YAML layout, e.g. examples/platform) into an empty
+// database, once; see org.Store.Seed. A seed that does not load or does not validate stops the server: it is set on
+// purpose, and half an instance is worse than none.
+func seed(ctx context.Context, s *org.Store, dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	p, err := config.Load(dir)
+	if err != nil {
+		return fmt.Errorf("CRUCIBLE_SEED_DIR: %w", err)
+	}
+	ok, err := s.Seed(ctx, p)
+	if err != nil {
+		return fmt.Errorf("CRUCIBLE_SEED_DIR: %w", err)
+	}
+	if ok {
+		slog.Info("seeded the configuration", "dir", dir, "teams", len(p.Teams), "trainings", len(p.Trainings))
+	} else {
+		slog.Info("CRUCIBLE_SEED_DIR is set but this database is already configured or was seeded before; leaving it alone", "dir", dir)
+	}
+	return nil
+}
+
+// seedBootstrapAdmin seeds the first admin before the first sync, so the first snapshot names them.
+func seedBootstrapAdmin(ctx context.Context, pool *pgxpool.Pool, email string) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return
+	}
+	if ok, err := configapi.BootstrapAdmin(ctx, pool, email); err != nil {
+		slog.Warn("seeding the bootstrap admin failed; add an admin from the admin page", "err", err)
+	} else if ok {
+		slog.Info("seeded the bootstrap admin", "email", email)
+	}
+}
+
 func run(ctx context.Context) error {
 	pool, err := db.Open(ctx, must("DATABASE_URL"))
 	if err != nil {
@@ -80,24 +130,18 @@ func run(ctx context.Context) error {
 	defer pool.Close()
 
 	gitsync.AllowFileTransport = gitsync.AllowFileFromEnv(os.Getenv)
-	syncer := gitsync.New(env("CRUCIBLE_DATA_DIR", "/data"), must("CRUCIBLE_PLATFORM_REPO"), env("CRUCIBLE_PLATFORM_BRANCH", "main"), slog.Default())
-	if err := syncer.SyncOnce(ctx); err != nil {
-		slog.Warn("initial git sync failed; retrying in the background", "err", err)
+	if err := configSource(os.Getenv); err != nil {
+		return err
 	}
-	writer := &gitsync.Writer{URL: must("CRUCIBLE_PLATFORM_REPO"), Branch: env("CRUCIBLE_PLATFORM_BRANCH", "main"),
-		Dir:  filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "writer"),
-		Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
-	if email := strings.ToLower(strings.TrimSpace(os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))); email != "" {
-		// Once per deployment, only while admins.yaml names no admin; sign-in still needs the IdP to verify this email.
-		// In the background (bounded by its own git timeout) so a slow remote never keeps the server from listening.
-		go func() {
-			if ok, err := configapi.BootstrapAdmin(ctx, pool, writer, email); err != nil {
-				slog.Warn("seeding the bootstrap admin failed; add them to admins.yaml in git", "err", err)
-			} else if ok {
-				slog.Info("seeded admins.yaml with the bootstrap admin", "email", email)
-				_ = syncer.SyncOnce(ctx)
-			}
-		}()
+	orgStore := &org.Store{DB: pool}
+	if err := seed(ctx, orgStore, os.Getenv("CRUCIBLE_SEED_DIR")); err != nil {
+		return err
+	}
+	seedBootstrapAdmin(ctx, pool, os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
+	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
+	syncer := gitsync.New(dataDir, orgStore.Platform, slog.Default())
+	if err := syncer.SyncOnce(ctx); err != nil {
+		slog.Warn("initial sync failed; retrying in the background", "err", err)
 	}
 	every, err := time.ParseDuration(env("CRUCIBLE_SYNC_INTERVAL", "60s"))
 	if err != nil {
@@ -135,8 +179,24 @@ func run(ctx context.Context) error {
 		slog.Warn("CRUCIBLE_QUIZ_SECRET is not set; using a fixed development value. Set it in production so learners cannot predict quiz choice ids")
 		quizSecret = "crucible-dev-quiz-secret"
 	}
-	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Writer: writer, Resync: syncer.SyncOnce,
-		Changes: syncer.Changes, CheckPin: syncer.CheckPin}
+	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Changes: syncer.Changes}
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
+		if st := syncer.Current(); st != nil {
+			return st.Platform
+		}
+		return nil
+	}, Content: func(team, training string) (title, running, head string) {
+		title = training
+		if st := syncer.Current(); st != nil {
+			if t, _ := st.ProgramTraining(team, training); t != nil {
+				title = t.Title
+			} else if t := st.Training(training, st.Heads[training]); t != nil {
+				title = t.Title
+			}
+			running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
+		}
+		return
+	}}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),
@@ -265,7 +325,7 @@ func run(ctx context.Context) error {
 			defer repoMu.Unlock()
 			if repos[key] == nil {
 				repos[key] = &gitsync.ContentRepo{URL: ref.Repo, Branch: ref.Branch, Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "edits", key),
-					Name: writer.Name, Email: writer.Email}
+					Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 			}
 			return repos[key]
 		}}
@@ -281,6 +341,7 @@ func run(ctx context.Context) error {
 		Addr: env("CRUCIBLE_ADDR", ":8080"),
 		Handler: httpapi.NewRouter(httpapi.Deps{Auth: store, OIDC: oidcH, Sync: syncer, Learn: learnSvc, Labs: labSvc, Scoring: scoreSvc, Notify: notifySvc, Config: cfgSvc, Hub: hub,
 			Journey: &journey.Service{DB: pool, Learn: learnSvc, Now: time.Now}, Edits: editsSvc, Authoring: authoringSvc, Docs: docs.New(docPages),
+			Org: orgStore, OrgAPI: orgAPI,
 			PublicURL: public, HookSecret: os.Getenv("CRUCIBLE_GIT_HOOK_SECRET"), WebDir: env("CRUCIBLE_WEB_DIR", "web/dist"), PreviewToken: previewToken}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

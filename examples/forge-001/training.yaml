@@ -1,0 +1,6 @@
+id: forge-001
+title: "Forge 001: Striking the Spark"
+description: A short first training that no team runs yet. Register it on Manage trainings to try the whole flow.
+maintainers: [senior@crucible.local]
+progression: linear
+modules: [01-spark]

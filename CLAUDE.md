@@ -3,7 +3,7 @@
 A self-hosted training platform: git-sourced trainings (readings, quizzes, labs), hands-on labs that run on the
 trainee's laptop (Docker), in Kubernetes, or in a shared AWS account, human scoring, cost approvals and budgets,
 forge ranks, and mentoring. One Go API serves a React SPA. Git is the source of truth for config and content; the UI
-writes back to git as a bot.
+writes content edits back to git as a bot. Configuration and people live in Postgres.
 
 - Spec: `docs/superpowers/specs/2026-10-05-crucible-design.md` (the authority on behaviour)
 - Roadmap, coverage table (spec section → proving test), accepted deviations, decisions to revisit:
@@ -36,7 +36,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |
-| Fresh local stack without tests | `make build && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` |
+| Fresh local stack without tests | `make build && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` (the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
 
 Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App at http://localhost:8080.
 
@@ -45,11 +45,12 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
 - `internal/` — one package per domain: `labs` (runners: local/cluster/aws, approvals, budgets, sweep, reaper,
   ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
-  write-back, content edit branches), `configapi`, `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
+  write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
   (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
 - `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`
-- `examples/` — platform config + training repos used by every e2e (seeded into `.local/git` by `scripts/seed-git.sh`)
+- `examples/` — training repos (seeded into `.local/git` by `scripts/seed-git.sh`) and `platform`, the configuration
+  seed every e2e starts from (imported into Postgres by `CRUCIBLE_SEED_DIR`)
 - `deploy/compose` (local), `deploy/helm` (k3s), `deploy/aws/{persistent,main,labs}` (Terraform)
 
 ## Hard rules
@@ -70,10 +71,16 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 ## Invariants worth knowing before changing code
 
-- Anyone enrolled in a training never sees its answer keys: rubrics (`json:"-"`, only via `ScorerView`), raw files,
-  edit diffs, Anvil data, peers' uploads. Enrolled users never score their own training (admins included).
-- Git is the source of truth. UI saves go through the bot Writer with `base_sha`, a permission re-check at the tip,
-  validation before push, and an audit row. Content edits use per-edit branches merged by the bot after review,
+- Anyone enrolled in a training never sees its answer keys (rubrics — `json:"-"`, only via `ScorerView` — raw files,
+  edit diffs, Anvil data, peers' uploads), **unless they may edit it**: admins, its maintainers, and leaders/seniors of
+  teams running it keep editing and reviewing while enrolled (owner's ruling, 2026-10-08; `TestEnrolledEditorsKeepEditing`).
+  Enrolled users never score their own training (admins included).
+- Git is the source of truth for **training content**. Configuration and org data (settings, tiers, schedules, quotes,
+  admins, the training registry, teams, membership, mentors, webhooks, budgets, programs, roles, enrollments, pins)
+  live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes, and nowhere else (no
+  git platform repo; a set `CRUCIBLE_PLATFORM_REPO` stops the server). A fresh instance needs only `DATABASE_URL` and
+  `CRUCIBLE_BOOTSTRAP_ADMIN`; `CRUCIBLE_SEED_DIR` imports a YAML platform directory into an empty database once (dev,
+  e2e, preview) through the same store writes. Content edits use per-edit branches merged by the bot after review,
   limited to `training.yaml` and `modules/<id>/…`. All git calls go through `gitsync.git` (isolated config,
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.

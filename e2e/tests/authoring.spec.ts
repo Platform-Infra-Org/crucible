@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { login, setEditorText, watchCsp } from './helpers'
+import { contentEdits, login, setEditorText, watchCsp } from './helpers'
 
 // Idempotent on a KEEP=1 stack: every name carries a run id; the reading renamed and the hint deleted are whichever
 // exist now, and a fresh hint file is left for the next run. The other tests discard their drafts.
@@ -11,15 +11,24 @@ const run = Date.now().toString(36)
 
 // startEdit opens a fresh draft of training in the editor and returns its id.
 async function startEdit(page: Page, training: string): Promise<number> {
-  await page.getByRole('link', { name: 'Edits', exact: true }).click()
-  await page.getByRole('combobox', { name: 'Training' }).selectOption(training) // not the Hearth's "Training forged" bar
-  await page.getByRole('button', { name: 'Start an edit' }).click()
+  await (await contentEdits(page, training)).getByRole('link', { name: 'Edit content' }).click()
   await expect(page.getByRole('region', { name: 'Explorer' })).toBeVisible()
   return Number(/\/edits\/drafts\/(\d+)/.exec(page.url())![1])
 }
 
 // savedOps is the draft as the server has it: what autosave wrote.
 const savedOps = async (page: Page, id: number) => JSON.stringify((await (await page.request.get(`/api/authoring/drafts/${id}`)).json()).ops)
+
+// shareWithContainer makes a seeded repo writable by the api container, which runs as its own uid. On a Linux host
+// that container already owns the objects it pushed, and only root may chmod those, so fall back to a throwaway root
+// container. Docker Desktop and rootless Podman map its writes back to us, where the plain chmod is enough.
+function shareWithContainer(bare: string) {
+  try {
+    execFileSync('chmod', ['-R', 'a+rwX', bare], { stdio: 'pipe' }) // quiet: failing here is expected on Linux
+  } catch {
+    execFileSync('docker', ['run', '--rm', '-v', `${bare}:/git:z`, 'alpine:3.22', 'chmod', '-R', 'a+rwX', '/git'])
+  }
+}
 
 // pushUpstream commits a change to a seeded content repo, as a maintainer would in git, and returns the new head. The
 // API picks it up on its next sync (10 s in compose).
@@ -28,11 +37,12 @@ function pushUpstream(training: string, file: string, change: (text: string) => 
   const work = mkdtempSync(join(tmpdir(), 'crucible-e2e-'))
   const git = (...args: string[]) => execFileSync('git', ['-C', work, '-c', 'user.name=crucible', '-c', 'user.email=crucible@local', ...args], { encoding: 'utf8' }).trim()
   try {
+    shareWithContainer(bare) // earlier tests merged through the api container, which owns the objects it wrote
     execFileSync('git', ['clone', '-q', bare, work])
     writeFileSync(join(work, file), change(readFileSync(join(work, file), 'utf8')))
     git('commit', '-qam', `upstream change ${run}`)
     git('push', '-q', 'origin', 'HEAD:main')
-    execFileSync('chmod', ['-R', 'a+rwX', bare]) // the api container (another uid) pushes merges here too
+    shareWithContainer(bare) // and it pushes merges here after us
     return git('rev-parse', 'HEAD')
   } finally {
     rmSync(work, { recursive: true, force: true })
@@ -119,8 +129,7 @@ test('a leader shapes Forge 103 in the editor, a maintainer merges it, the train
   expect(csp, csp.join('\n')).toEqual([])
 
   const senior = await login(browser, 'senior')
-  await senior.getByRole('link', { name: 'Edits', exact: true }).click()
-  await senior.getByRole('link', { name: `Shape the smithy ${run}` }).click()
+  await (await contentEdits(senior, 'forge-103')).getByRole('link', { name: `Shape the smithy ${run}` }).click()
   await senior.getByRole('button', { name: 'Approve and merge' }).click()
   await expect(senior.getByTestId('edit-status')).toHaveText('merged', { timeout: 30_000 })
 

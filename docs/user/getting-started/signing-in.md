@@ -23,7 +23,15 @@ Your teams, trainings and roles all hang off that email address, so use the acco
 A session lasts 12 hours. When it runs out, the next thing you do sends you back to the sign-in page, and you return
 to the Hearth once you are through. Work you had saved stays saved; an answer you were still typing may not.
 
+## Your user card
+
+Your icon and name sit at the right end of the top bar. Choose them to open your user card: your name, your email,
+and the teams you are on with your role in each. Choose a team's name to open its page.
+
+**Your icon** is what the card and the top bar show for you: your initials, or one of the forge's icons — a hammer,
+an anvil, a flame, a sword, a shield, tongs, a helm or an ingot. Choose one and it is kept for you on every device.
+
 ## Logging out
 
-**Log out**, at the right end of the top bar, ends your Crucible session and takes you to the sign-in page. If your
+**Log out**, at the bottom of your user card, ends your Crucible session and takes you to the sign-in page. If your
 company sign-in is still active in this browser, signing in again may need no password.

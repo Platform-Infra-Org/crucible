@@ -11,7 +11,7 @@ laptop goes missing, revoke their pairing.
 
 ## How
 
-1. Open **Team** and choose the person's team.
+1. Open **Teams** and choose the person's team.
 2. Under **Laptop agents**, find their email and choose **Revoke agent**. Crucible asks you to confirm.
 
 Their token stops working and their agent is disconnected at once. The revocation is recorded in the audit log under

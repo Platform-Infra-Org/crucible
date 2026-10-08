@@ -68,9 +68,144 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--s
 .toolbar.fit label { flex: 0 1 auto; }
 .toolbar.fit input, .toolbar.fit select { width: auto; max-width: 100%; }
 
+/* Manage trainings: a list of trainings beside the chosen one; each team's program is a panel of chips and controls. */
+.manage-grid { display: grid; grid-template-columns: minmax(12rem, 16rem) 1fr; gap: 1.5rem; align-items: start; }
+@media (max-width: 760px) { .manage-grid { grid-template-columns: 1fr; } }
+.manage-list ul { list-style: none; padding: 0; margin: 0 0 0.75rem; display: grid; gap: 0.25rem; }
+.manage-list a { display: block; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid transparent; color: var(--text); text-decoration: none; }
+.manage-list a:hover { background: var(--surface); }
+.manage-list a.active { border-color: var(--accent); background: var(--surface); }
+.manage-list small { display: block; color: var(--muted); }
+.manage-list .new-training { color: var(--accent); }
+.manage-detail > h2 { margin-top: 0; }
+.panel { padding: 1rem 1.25rem; margin: 0 0 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.panel h3, .panel h4 { margin: 0 0 0.5rem; }
+.panel h5 { margin: 1rem 0 0.25rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.panel-head { margin: 0; }
+.panel-head h4 { margin: 0; }
+.panel h2 { margin: 0 0 0.75rem; font-size: 1.25rem; }
+.panel-head h2 { margin: 0; }
+.panel .grid { margin-bottom: 0; }
+.grid td.actions { text-align: right; white-space: nowrap; }
+
+/* Teams: cards to pick a team; a team is a header, a strip of numbers, then one panel per concern. */
+.team-card h2 { margin: 0 0 0.35rem; }
+.team-card p { margin: 0; }
+.cards + .panel, .cards + .stack.panel { margin-top: 1.5rem; }
+.danger-zone { border-color: var(--danger); }
+button.danger-text { color: var(--danger); border-color: var(--danger); }
+.card.new-card { font: inherit; text-align: center; border-style: dashed; color: var(--accent); cursor: pointer; min-height: 5.5rem; }
+.card.new-card span { font-size: 1.4rem; vertical-align: -0.1rem; margin-right: 0.25rem; }
+.team-head { align-items: flex-start; }
+.team-head h1 { margin-bottom: 0.25rem; }
+.team-head .lede { margin-top: 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.75rem; list-style: none; padding: 0; margin: 0 0 1rem; }
+.stats li { padding: 0.75rem 1rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--muted); }
+.stats strong { display: block; font-size: 1.6rem; line-height: 1.2; color: var(--text); }
+.stack.roster-form { max-width: none; grid-template-columns: 1fr 1fr; margin: 0; }
+.stack.roster-form > :not(label) { grid-column: 1 / -1; }
+@media (max-width: 640px) { .stack.roster-form { grid-template-columns: 1fr; } }
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; list-style: none; padding: 0; margin: 0.25rem 0 0.5rem; }
+.chip { display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.15rem 0.7rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.chip:has(button) { padding-right: 0.2rem; }
+.chip button { padding: 0 0.45rem; border: 0; border-radius: 999px; background: transparent; color: var(--muted); line-height: 1.4; }
+.chip button:hover:not(:disabled) { color: var(--danger); background: var(--surface); }
+.enroll { margin: 0.25rem 0 0; }
+.enroll input { min-width: min(18rem, 100%); }
+.enroll [role='alert'] { flex-basis: 100%; margin: 0; }
+.role-row { display: grid; grid-template-columns: 7rem 1fr; gap: 0.5rem; align-items: baseline; margin: 0.35rem 0; }
+.role-name { color: var(--muted); }
+.role-default { margin: 0.2rem 0 0.4rem; }
+.lab-settings { margin-top: 1rem; }
+.lab-settings summary { cursor: pointer; color: var(--accent); }
+.lab-settings[open] summary { margin-bottom: 0.75rem; }
+a.button-link { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; }
+a.button-link:hover { border-color: var(--accent); }
+
 .nav { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.6rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .nav a { color: var(--muted); text-decoration: none; }
 .nav a.active, .nav a:hover { color: var(--text); }
+.admin-menu { position: relative; }
+
+/* The user card. A person's icon sits in a crucible: a ring of molten metal turning slowly around a dark, ember-lit
+   well. The card opens under a band of the same churning metal as button.primary, and the icons are poured metal:
+   in the picker the ones not chosen have cooled to iron and heat up under the pointer. Calm and reduced motion stop
+   every animation here through the global rules. */
+@property --pour { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.avatar { position: relative; display: inline-grid; place-items: center; width: 2rem; height: 2rem; flex: none; border-radius: 50%;
+  font-size: 1.15rem; isolation: isolate;
+  background: radial-gradient(circle at 50% 70%, color-mix(in srgb, var(--accent) 22%, var(--surface-2)), var(--surface-2) 70%) padding-box,
+    conic-gradient(from var(--pour), var(--accent), var(--accent-2), var(--spark), var(--accent-2), var(--accent)) border-box;
+  border: 2px solid transparent; box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent); animation: pour 7s linear infinite; }
+@keyframes pour { to { --pour: 360deg; } }
+.avatar-initials { font-weight: 800; font-size: 0.7rem; letter-spacing: 0.03em;
+  background: linear-gradient(180deg, var(--accent-2), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.avatar.large { width: 4.25rem; height: 4.25rem; font-size: 2.7rem; border-width: 3px;
+  box-shadow: 0 0 0 4px var(--surface), 0 0 24px color-mix(in srgb, var(--accent) 60%, transparent); }
+.avatar.large .avatar-initials { font-size: 1.35rem; }
+.forge-icon { overflow: visible; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 55%, transparent)); }
+.forge-icon-core { fill: var(--spark); opacity: 0.8; mix-blend-mode: screen; }
+
+.user-menu { position: relative; }
+.user-button { display: inline-flex; align-items: center; gap: 0.5rem; background: none; border: 1px solid transparent; border-radius: 999px;
+  padding: 0.15rem 0.75rem 0.15rem 0.15rem; font: inherit; color: var(--muted); cursor: pointer; }
+.user-button:hover, .user-button[aria-expanded="true"] { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.user-card { position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 20; width: min(21rem, 92vw); padding: 0 1.1rem 1rem; overflow: hidden;
+  border: 1px solid transparent; border-radius: 14px; color: var(--text);
+  background: linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(165deg, var(--accent-2), var(--border) 35%, var(--border) 70%, var(--accent)) border-box;
+  box-shadow: var(--glow), 0 18px 40px rgba(0, 0, 0, 0.35); animation: card-cast 0.22s ease-out; }
+@keyframes card-cast { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
+/* the pour: the primary button's molten churn, cooling into the card where the avatar sits */
+.user-card-band { height: 4.25rem; margin: 0 -1.1rem; position: relative;
+  background:
+    radial-gradient(ellipse 45% 90% at 50% 50%, var(--accent-2), transparent 70%) 0 50% / 220% 200%,
+    radial-gradient(ellipse 40% 80% at 50% 50%, var(--accent), transparent 70%) 100% 50% / 240% 220%,
+    linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 25%, var(--accent) 50%, var(--accent-2) 75%, var(--accent) 100%) 0 0 / 200% 100%;
+  animation: molten-flow 9s ease-in-out infinite; }
+/* Motes of light (UserMenu MOTES), each on its own path: a constant drift across the band in the metal's direction that
+   wraps round, a bob and a twinkle of its own. --x is a plain number of band widths in hundredths: left turns it into %
+   of the band and the drift into cqw (the band's width), since a % inside translate would measure the mote itself. */
+.user-card-band { container-type: inline-size; overflow: hidden; }
+.mote { position: absolute; left: calc(var(--x) * 1%); top: var(--y); width: var(--s); height: var(--s); margin: calc(var(--s) / -2); border-radius: 50%;
+  background: radial-gradient(circle, var(--spark) 0 32%, color-mix(in srgb, var(--accent-2) 70%, transparent) 55%, transparent 72%);
+  box-shadow: 0 0 calc(var(--s) * 1.5) color-mix(in srgb, var(--spark) 60%, transparent);
+  animation: mote-drift var(--d) linear var(--delay) infinite, mote-bob var(--b) ease-in-out infinite alternate, mote-glint var(--t) ease-in-out infinite alternate; }
+@keyframes mote-drift { from { translate: calc((104 - var(--x)) * 1cqw) 0; } to { translate: calc((-4 - var(--x)) * 1cqw) 0; } }
+@keyframes mote-bob { from { transform: translateY(var(--amp)); } to { transform: translateY(calc(var(--amp) * -1)); } }
+@keyframes mote-glint { from { opacity: 0.35; } to { opacity: 1; } }
+.user-card-band::after { content: ''; position: absolute; inset: auto 0 0; height: 1.4rem;
+  background: linear-gradient(to bottom, transparent, var(--surface)); }
+.user-card-head { display: flex; gap: 0.9rem; align-items: flex-end; margin-top: -2.4rem; position: relative; }
+.user-card-head > div { display: grid; gap: 0.1rem; min-width: 0; padding-bottom: 0.15rem; }
+.user-card-head strong { font-family: Cinzel, Georgia, serif; font-size: 1.1rem; letter-spacing: 0.02em; }
+.user-card-head strong, .user-card-head .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-card-head .badge { justify-self: start; color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.user-card h3 { margin: 1.1rem 0 0.5rem; padding-bottom: 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+  font-family: inherit; border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--accent), var(--accent-2) 30%, transparent 80%) 1; }
+.user-card-teams { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.35rem; }
+.user-card-teams li { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem;
+  border-radius: 8px; background: var(--surface-2); border-left: 3px solid var(--accent); }
+.user-card-teams li:hover { border-left-color: var(--accent-2); box-shadow: -4px 0 12px -4px var(--accent); }
+.user-card-teams a { color: var(--text); text-decoration: none; font-weight: 600; }
+.user-card-teams a:hover, .user-card-teams a:focus-visible { color: var(--accent-2); }
+.icon-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.45rem; }
+.icon-picker button { display: grid; place-items: center; aspect-ratio: 1; padding: 0; font-size: 2rem; border-radius: 10px; cursor: pointer;
+  background: radial-gradient(circle at 50% 80%, color-mix(in srgb, var(--accent) 10%, var(--surface-2)), var(--surface-2) 70%);
+  border: 1px solid var(--border); transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s; }
+/* cooled iron until chosen or touched */
+.icon-picker button > * { filter: grayscale(1) brightness(0.8); opacity: 0.75; transition: filter 0.3s, opacity 0.3s; }
+.icon-picker button:hover:not(:disabled), .icon-picker button:focus-visible { border-color: var(--accent); transform: translateY(-2px); }
+.icon-picker button:hover:not(:disabled) > *, .icon-picker button:focus-visible > *, .icon-picker button[aria-pressed="true"] > * { filter: none; opacity: 1; }
+.icon-picker button[aria-pressed="true"] { border-color: var(--accent-2); box-shadow: var(--glow), inset 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+.user-card-foot { margin-top: 1.1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+.admin-menu-button { background: none; border: 1px solid transparent; border-radius: 8px; padding: 0.2rem 0.6rem; font: inherit; color: var(--muted); cursor: pointer; }
+.admin-menu-button:hover, .admin-menu-button[aria-expanded="true"], .admin-menu-button.active { color: var(--text); border-color: var(--border); }
+.admin-menu-list { position: absolute; right: 0; top: calc(100% + 0.4rem); z-index: 20; display: flex; flex-direction: column; min-width: 12rem; padding: 0.4rem; gap: 0.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--glow); }
+.admin-menu-list a { padding: 0.35rem 0.6rem; border-radius: 6px; }
+.admin-menu-list a:hover, .admin-menu-list a:focus-visible, .admin-menu-list a.active { background: var(--surface-2); color: var(--text); }
+
 .brand { font-family: Cinzel, serif; font-size: 1.2rem; color: var(--text) !important; }
 .brand-mark { color: var(--accent); text-shadow: var(--glow); }
 
@@ -79,6 +214,10 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--s
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
 .card { display: block; padding: 1.25rem; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); color: var(--text); text-decoration: none; transition: transform 0.2s, box-shadow 0.2s; }
 .card:hover { transform: translateY(-3px); box-shadow: var(--glow); }
+.card-link { position: relative; }
+.card-link h2 a { color: inherit; text-decoration: none; }
+.card-link h2 a::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.card-link a:not(h2 a) { position: relative; z-index: 1; }
 
 .molten-bar { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; margin: 0.75rem 0 0.25rem; }
 .molten-bar .fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: var(--glow); }
@@ -185,6 +324,8 @@ pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px
 .tasks[hidden] { display: none; }
 
 .stack { display: grid; gap: 0.6rem; max-width: 44rem; border: 0; padding: 0; margin: 0 0 1.5rem; }
+.stack.panel { max-width: none; padding: 1rem 1.25rem; border: 1px solid var(--border); margin: 0 0 1rem; } /* .stack would strip the panel's frame */
+.stack.panel > h2 + p { margin-top: 0; }
 .stack label { display: grid; gap: 0.25rem; }
 .stack label:has(> input[type='checkbox']) { display: flex; gap: 0.5rem; align-items: center; }
 
@@ -255,6 +396,33 @@ meter { width: 8rem; vertical-align: middle; }
 .heat-summary { margin: 0; }
 .flags { list-style: none; padding: 0; margin: 0; }
 .flags .warn { color: var(--text); }
+
+/* the team Journey: grouped by person or by training, one panel each, a molten bar per training a person takes */
+.journey-bar { align-items: center; margin: 0 0 1rem; }
+.journey-filters { align-items: center; margin: 0 0 0.75rem; }
+.toolbar label.check { flex-direction: row; align-items: center; gap: 0.5rem; flex: 0 1 auto; max-width: none; font-size: 0.9rem; font-weight: 400;
+  letter-spacing: normal; text-transform: none; color: var(--text); align-self: flex-end; min-height: 2.5rem; }
+.toolbar label.check input { width: auto; height: auto; }
+.journey-showing { margin: 0 0 0.75rem; }
+.journey-bar .legend { margin: 0; }
+.segmented { display: inline-flex; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.segmented button { border: 0; border-radius: 999px; padding: 0.35rem 1rem; background: transparent; color: var(--muted); }
+.segmented button:hover { color: var(--text); }
+.segmented button[aria-pressed="true"] { background: linear-gradient(110deg, var(--accent), var(--accent-2)); color: var(--on-accent); font-weight: 600; box-shadow: var(--glow); }
+.stats li.stat-warn strong { color: var(--accent-2); }
+.journey-group { padding-bottom: 0.4rem; }
+.journey-group-head { display: flex; align-items: center; gap: 0.75rem; padding-bottom: 0.6rem; }
+.journey-group-head h2 { margin: 0; font-size: 1.15rem; }
+.journey-group-head .avatar { width: 2.6rem; height: 2.6rem; font-size: 1.5rem; }
+.journey-mark { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; flex: none; border-radius: 10px; font-size: 1.3rem; color: var(--on-accent);
+  background: linear-gradient(160deg, var(--accent-2), var(--accent)); box-shadow: var(--glow); }
+.journey-percent { font-family: Cinzel, Georgia, serif; font-size: 1.5rem; font-weight: 700; color: var(--accent-2); }
+.journey-line { padding: 0.75rem 0; border-top: 1px solid var(--border); }
+.journey-line-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.25rem 1rem; }
+.journey-progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0.75rem; }
+.journey-progress .molten-bar { margin: 0.45rem 0; }
+.journey-progress > span { font-variant-numeric: tabular-nums; color: var(--muted); }
+.journey-line .heat-cells { margin: 0.35rem 0 0.25rem; }
 .legend { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; }
 
 .diff { background: var(--term-bg); color: var(--term-fg); padding: 0.75rem; border-radius: 8px; overflow: auto; font-size: 0.85rem; }

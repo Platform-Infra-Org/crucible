@@ -26,9 +26,10 @@ enforcing the budgets meanwhile.
 A program runs one version of its training. Labs always run on the exact version they started with.
 
 By default a program follows the training's branch: new content reaches trainees as soon as it is merged. Program
-managers can pin it instead, under **Content version** in the program settings:
+managers can pin it instead, under **Content version** in the program's panel on
+[Manage trainings](/docs/leaders/manage-trainings):
 
-- When the program is behind, **Show changes** lists the new commits and the files they change. Read them, then
+- When the program is behind, **Show what changed** lists the new commits and the files they change. Read them, then
   **Pin to** the new version.
 - **Follow the branch head** unpins it again.
 

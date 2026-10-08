@@ -3,11 +3,13 @@ package auth
 
 import (
 	"context"
+	"crucible/internal/apperr"
 	"crucible/internal/audit"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,15 +24,19 @@ type User struct {
 	Name       string `json:"name"`
 	Theme      string `json:"theme"`
 	CalmMotion bool   `json:"calm_motion"`
+	Avatar     string `json:"avatar"` // one of Avatars, or "" for the person's initials
 }
+
+// Avatars are the forge icons a person may pick for their user card (web/src/components/Avatar.tsx draws them).
+var Avatars = []string{"hammer", "anvil", "flame", "sword", "shield", "tongs", "helm", "ingot"}
 
 type Store struct{ DB *pgxpool.Pool }
 
-const userCols = "u.id, u.sub, u.email, u.name, u.theme, u.calm_motion"
+const userCols = "u.id, u.sub, u.email, u.name, u.theme, u.calm_motion, u.avatar"
 
 func scanUser(row pgx.Row) (*User, error) {
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.Theme, &u.CalmMotion)
+	err := row.Scan(&u.ID, &u.Sub, &u.Email, &u.Name, &u.Theme, &u.CalmMotion, &u.Avatar)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -51,7 +57,14 @@ func hash(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// UpsertUser records a login. The first login of someone brought in by an import (org.Store.Import, sub
+// "import:<email>") takes that row over, so their history follows them to the new identity provider; the email was
+// verified by the provider (idClaims.problem).
 func (s Store) UpsertUser(ctx context.Context, sub, email, name string) (*User, error) {
+	if _, err := s.DB.Exec(ctx, `UPDATE users SET sub = $1 WHERE sub = 'import:' || lower($2)
+		AND NOT EXISTS (SELECT 1 FROM users WHERE sub = $1)`, sub, email); err != nil {
+		return nil, err
+	}
 	return scanUser(s.DB.QueryRow(ctx, `
 		INSERT INTO users AS u (sub, email, name) VALUES ($1, lower($2), $3)
 		ON CONFLICT (sub) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
@@ -77,6 +90,15 @@ func (s Store) DeleteSession(ctx context.Context, token string) error {
 
 func (s Store) SetPrefs(ctx context.Context, userID int64, theme string, calm bool) error {
 	_, err := s.DB.Exec(ctx, `UPDATE users SET theme = $2, calm_motion = $3 WHERE id = $1`, userID, theme, calm)
+	return err
+}
+
+// SetAvatar records the icon a person picked; "" goes back to their initials.
+func (s Store) SetAvatar(ctx context.Context, userID int64, avatar string) error {
+	if avatar != "" && !slices.Contains(Avatars, avatar) {
+		return apperr.Wrap(apperr.Invalid, "unknown icon")
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE users SET avatar = $2 WHERE id = $1`, userID, avatar)
 	return err
 }
 

@@ -11,18 +11,25 @@ becomes an *edit*: Crucible pushes it to its own branch, a maintainer reviews it
 
 ## Who can edit
 
-**Edits** shows in the top bar when you may edit at least one training. You may propose edits to a training if you are:
+Editing is part of managing a training: each training's page on **Trainings → Manage trainings** has a **Content
+edits** panel, with an **Edit content** button when you may edit it. You may propose edits to a training if you are:
 
 - an admin,
 - one of the training's maintainers (listed in its `training.yaml`), or
 - a leader or senior of a team that runs the training.
 
-Never if you are enrolled in it, whatever your role: editing means seeing the answer keys.
+Being enrolled in the training doesn't change this: if you run it, you may edit it while you take it. Editing shows
+you the answer keys, rubrics and check scripts, so keep that in mind about your own scores. Being enrolled never lets
+anyone else edit, and nobody scores a training they are enrolled in.
 
 ## Starting an edit
 
-Open **Edits**, choose the training and choose **Start an edit**. Crucible lays out a fresh draft and opens the
-editor. Your drafts are listed under **My drafts** on the same page, so you can come back to one later.
+Open **Trainings**, choose **Manage trainings**, pick the training and choose **Edit content**. Crucible lays out a
+fresh draft and opens the editor. Your drafts of that training are listed under **My drafts** in the same panel, so
+you can come back to one later.
+
+If you maintain a training but are on no team, **Manage trainings** takes you to the **Edits** list instead: choose
+the training there and **Start an edit**.
 
 ## The layout
 

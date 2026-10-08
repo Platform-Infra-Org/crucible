@@ -1,5 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { enroll } from './helpers'
 
 let agent: ChildProcess | undefined
 test.afterAll(() => {
@@ -18,19 +19,15 @@ async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
-test('a leader enrolls a trainee via git, approves a paid lab, and an admin pauses all labs', async ({ browser }) => {
-  // The leader enrolls the team in Forge 201 and the trainee in it: two bot commits to the platform repo.
+test('a leader enrolls a trainee on Manage trainings, approves a paid lab, and an admin pauses all labs', async ({ browser }) => {
+  // The leader starts Forge 201 for the team and enrolls the trainee in it.
   const leader = await login(browser, 'leader')
-  await leader.getByRole('link', { name: 'Team', exact: true }).click()
+  await leader.getByRole('link', { name: 'Teams', exact: true }).click()
   await expect(leader.getByRole('heading', { name: 'The Forge' })).toBeVisible()
-  await leader.getByLabel('Training to enroll').selectOption('forge-201')
-  await leader.getByRole('button', { name: 'Enroll the team' }).click()
-  await expect(leader.getByRole('heading', { name: /Program settings/ })).toBeVisible()
-  await leader.getByRole('checkbox', { name: 'trainee@crucible.local' }).check()
-  await leader.getByRole('button', { name: 'Save program' }).click()
-  await expect(leader.getByRole('status').filter({ hasText: /Saved to git/ })).toBeVisible()
+  await expect(leader.getByRole('link', { name: 'Start a training for this team' })).toBeVisible()
+  await enroll(leader, 'forge-201', 'trainee@crucible.local')
 
-  // The trainee now sees Forge 201 (sync picked up the commit), pairs the laptop and asks for the paid lab.
+  // The trainee now sees Forge 201, pairs the laptop and asks for the paid lab.
   const trainee = await login(browser, 'trainee')
   await expect(trainee.getByRole('link', { name: /Forge 201/ })).toBeVisible()
   await trainee.getByRole('link', { name: 'Connect your laptop' }).click()
@@ -54,7 +51,8 @@ test('a leader enrolls a trainee via git, approves a paid lab, and an admin paus
 
   // An admin pulls the kill switch: the lab dies and new requests are blocked.
   const admin = await login(browser, 'admin')
-  await admin.getByRole('link', { name: 'Forge Status' }).click()
+  await admin.getByRole('button', { name: /Administrator/ }).click()
+  await admin.getByRole('menuitem', { name: 'Forge Status' }).click()
   await admin.getByRole('button', { name: 'Pause all labs' }).click()
   await expect(admin.getByTestId('kill-switch-status')).toContainText('Labs are paused')
   await expect(trainee.getByText('An admin paused all labs.')).toBeVisible({ timeout: 60_000 })

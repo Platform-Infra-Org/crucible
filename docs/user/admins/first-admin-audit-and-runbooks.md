@@ -8,22 +8,22 @@ order: 30
 
 ## Who is an admin
 
-Admins are listed in `admins.yaml` in the platform repo. To add or remove one, change that file in git. Crucible
-picks it up on the next sync.
+Add and remove admins under **Administrator → Forge settings**. See [Forge settings](/docs/admins/settings-and-registry).
+The last admin can't be removed, and every grant and removal is audited.
 
 ## The first admin
 
-A new Crucible has nobody in `admins.yaml`. Whoever installs it sets a bootstrap admin email (the
-`CRUCIBLE_BOOTSTRAP_ADMIN` setting). On the very first start, and only if `admins.yaml` names no admin yet, the
-Crucible bot writes that email into `admins.yaml`. After that, git is in charge: changing the setting does nothing,
-and a restart never puts back an admin you removed.
+A new Crucible has no admins at all. Whoever installs it sets a bootstrap admin email (the
+`CRUCIBLE_BOOTSTRAP_ADMIN` setting). On the very first start, and only while no admin exists yet, Crucible records
+that email as the first admin. After that the setting does nothing: a restart never puts back an admin you removed.
 
-That person still signs in through the company identity provider, with a verified email, like everyone else.
+That person still signs in through the company identity provider, with a verified email, like everyone else. They
+configure everything else from the app.
 
 ## The audit log
 
-Crucible records every privileged action: who did it, when, what it touched and, for changes saved to git, the
-commit. That includes approvals and rejections, budget-cap overrides, scores, returns and sign-offs, score
+Crucible records every privileged action: who did it, when, what it touched, and for configuration changes the values
+before and after. That includes approvals and rejections, budget-cap overrides, scores, returns and sign-offs, score
 overrides and resets, content edit decisions, roster and program changes, the kill switch, and revoked laptop
 agents. The latest entries are under **Recent privileged actions** on Forge Status.
 

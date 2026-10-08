@@ -10,6 +10,8 @@ writes content edits back to git as a bot. Configuration and people live in Post
   `docs/superpowers/plans/2026-10-05-crucible-roadmap.md`
 - Per-milestone plans: `docs/superpowers/plans/`; rulings made during the build: `docs/superpowers/rulings-m3-m7.md`
 - Operator guides: `docs/runbooks/aws.md`, `docs/runbooks/cognito.md`
+- AWS for newcomers: `docs/aws-guide.html` — every AWS component, an architecture diagram, deploying step by step, and
+  how AWS labs use Terraform and IAM. Update it when `deploy/aws` or the AWS lab path changes.
 - Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
   from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 

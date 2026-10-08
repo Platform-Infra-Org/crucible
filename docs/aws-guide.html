@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crucible on AWS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column with a sticky index; diagrams break out to the full width.
+   Palette: Crucible's own themes. Light is Anvil (steel, iron blue) with an ember accent; dark is Forge (charcoal, molten metal).
+   The lab account is drawn in the second accent so the two AWS accounts never blur together. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e4e9ef; --text: #1c232b; --muted: #55616e; --border: #cbd3dc;
+  --accent: #b4500e; --accent-2: #a86a08; --iron: #2f5d8a; --ok: #276b2b; --danger: #b3261e; --on-accent: #ffffff;
+  --glow: 0 0 0 transparent; --wash: rgba(180, 80, 14, 0.07); --wash-2: rgba(47, 93, 138, 0.08);
+  --display: 'Cinzel', Georgia, 'Times New Roman', serif;
+  --body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --border: #3a302a;
+  --accent: #ff7a1a; --accent-2: #ffc24b; --iron: #8fb4dc; --ok: #7bd88f; --danger: #ff6b5e; --on-accent: #1a0f05;
+  --glow: 0 0 22px rgba(255, 122, 26, 0.35); --wash: rgba(255, 122, 26, 0.08); --wash-2: rgba(143, 180, 220, 0.08); color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --border: #3a302a;
+  --accent: #ff7a1a; --accent-2: #ffc24b; --iron: #8fb4dc; --ok: #7bd88f; --danger: #ff6b5e; --on-accent: #1a0f05;
+  --glow: 0 0 22px rgba(255, 122, 26, 0.35); --wash: rgba(255, 122, 26, 0.08); --wash-2: rgba(143, 180, 220, 0.08); color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 var(--body); padding-inline: 16px; padding-block: 0 4rem; }
+h1, h2, h3 { font-family: var(--display); letter-spacing: 0.02em; line-height: 1.2; text-wrap: balance; margin: 0; }
+h4 { margin: 0; font-size: 1rem; }
+a { color: var(--accent); text-underline-offset: 0.18em; }
+code, pre { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--surface-2); padding: 0.05em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+p { margin: 0 0 0.85rem; }
+
+.wrap { max-width: 1180px; margin: 0 auto; }
+.hero { padding-block: 2.5rem 1.5rem; display: grid; gap: 0.9rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+.eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.hero h1 { font-size: clamp(2rem, 5vw, 3rem); }
+.hero p { max-width: 70ch; color: var(--muted); margin: 0; font-size: 1.05rem; }
+.facts { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.facts span { font-size: 0.85rem; padding: 0.2rem 0.7rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); }
+
+.layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } .toc { position: static; } }
+.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1rem); font-size: 0.9rem; }
+.toc h2 { font-family: var(--body); font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.5rem; }
+.toc ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.1rem; }
+.toc a { display: block; padding: 0.25rem 0.55rem; border-radius: 6px; color: var(--text); text-decoration: none; border-left: 2px solid transparent; }
+.toc a:hover { background: var(--surface-2); border-left-color: var(--accent); }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3.5rem; min-width: 0; }
+main > section, figure { min-width: 0; }
+section > h2 { font-size: clamp(1.4rem, 3vw, 1.9rem); margin-bottom: 0.9rem; }
+section > h2::after { content: ''; display: block; width: 2.5rem; height: 3px; margin-top: 0.45rem; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+section h3 { font-size: 1.15rem; margin: 1.75rem 0 0.6rem; }
+.prose { max-width: 72ch; }
+.lede { color: var(--muted); font-size: 1.02rem; max-width: 72ch; }
+
+figure { margin: 1rem 0 0; }
+.diagram { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 0.75rem; }
+.diagram svg { display: block; min-width: 860px; width: 100%; height: auto; }
+figcaption { color: var(--muted); font-size: 0.88rem; margin-top: 0.5rem; max-width: 80ch; }
+/* diagram parts, all from tokens so both themes read */
+svg text { fill: var(--text); font-family: var(--body); font-size: 13px; }
+svg .t-sm { font-size: 11.5px; fill: var(--muted); }
+svg .t-h { font-family: var(--display); font-size: 15px; font-weight: 700; }
+svg .t-acct { font-family: var(--body); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; }
+svg .acct { fill: var(--wash); stroke: var(--accent); stroke-width: 1.5; }
+svg .acct-lab { fill: var(--wash-2); stroke: var(--iron); stroke-width: 1.5; }
+svg .zone { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+svg .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.2; }
+svg .box-hot { fill: var(--surface); stroke: var(--accent); stroke-width: 1.6; }
+svg .box-iron { fill: var(--surface); stroke: var(--iron); stroke-width: 1.6; }
+svg .box-out { fill: var(--surface-2); stroke: var(--border); stroke-width: 1.2; }
+svg .ar { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+svg .ar-hot { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+svg .ar-iron { fill: none; stroke: var(--iron); stroke-width: 1.8; }
+svg .head { fill: var(--muted); }
+svg .head-hot { fill: var(--accent); }
+svg .head-iron { fill: var(--iron); }
+svg .label-bg { fill: var(--surface); }
+svg .t-acc { fill: var(--accent); font-weight: 600; }
+svg .t-iron { fill: var(--iron); font-weight: 600; }
+svg .venn-a { fill: var(--accent); fill-opacity: 0.14; stroke: var(--accent); stroke-width: 1.6; }
+svg .venn-b { fill: var(--iron); fill-opacity: 0.14; stroke: var(--iron); stroke-width: 1.6; }
+
+.glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.85rem; }
+.term { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.85rem 1rem; min-width: 0; }
+.term h4 { font-family: var(--display); font-size: 1rem; }
+.term p { margin: 0.3rem 0 0; font-size: 0.93rem; }
+.term .use { color: var(--muted); font-size: 0.86rem; }
+.term .use b { color: var(--text); font-weight: 600; }
+
+.table-wrap { overflow-x: auto; margin: 0.75rem 0 1.25rem; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; white-space: nowrap; }
+td:first-child { white-space: nowrap; font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total td { font-weight: 700; }
+
+.steps { list-style: none; padding: 0; margin: 1rem 0; counter-reset: s; display: grid; gap: 0; }
+.steps > li { position: relative; display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0 1rem; padding-bottom: 1.25rem; counter-increment: s; }
+.steps > li::before { content: counter(s); grid-row: span 3; width: 2.2rem; height: 2.2rem; display: grid; place-items: center; border-radius: 50%; font-family: var(--display); font-weight: 700;
+  color: var(--on-accent); background: linear-gradient(160deg, var(--accent-2), var(--accent)); box-shadow: var(--glow); position: relative; z-index: 1; }
+.steps > li:not(:last-child)::after { content: ''; position: absolute; left: 1.08rem; top: 2.2rem; bottom: 0; width: 2px; background: linear-gradient(var(--accent), var(--border)); }
+.steps h4 { margin-top: 0.3rem; font-size: 1rem; }
+.steps p { color: var(--muted); max-width: 72ch; margin: 0.25rem 0 0; }
+.steps .cmd { margin-top: 0.5rem; }
+.cmd { position: relative; margin: 0.5rem 0; min-width: 0; }
+.cmd pre { margin: 0; padding: 0.65rem 4.6rem 0.65rem 0.85rem; background: var(--surface-2); border-radius: 8px; overflow-x: auto; white-space: pre; line-height: 1.5; color: var(--text); }
+.cmd button { position: absolute; top: 0.35rem; right: 0.35rem; font: inherit; font-size: 0.78rem; padding: 0.2rem 0.55rem; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.cmd button:hover { border-color: var(--accent); }
+
+.note { border-left: 3px solid var(--iron); background: var(--surface); padding: 0.75rem 1rem; border-radius: 0 10px 10px 0; margin: 1rem 0; max-width: 76ch; }
+.note.warn { border-left-color: var(--danger); }
+.note.hot { border-left-color: var(--accent); }
+.note p:last-child { margin: 0; }
+.note strong:first-child { display: block; margin-bottom: 0.15rem; }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; min-width: 0; }
+.card h4 { font-family: var(--display); margin-bottom: 0.4rem; }
+.card ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.3rem; font-size: 0.93rem; }
+.deny { color: var(--danger); font-weight: 600; }
+.allow { color: var(--ok); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <span class="eyebrow">For people new to AWS</span>
+    <h1>Crucible on AWS</h1>
+    <p>How Crucible runs in Amazon Web Services, how to deploy it, and how its AWS labs build real cloud resources with
+      Terraform while IAM keeps each lab inside its own fence. Every AWS service Crucible touches is named and explained here.</p>
+    <div class="facts"><span>One EC2 server running Kubernetes (k3s)</span><span>Two AWS accounts: Crucible's and the labs'</span><span>About $50 a month in working hours</span><span>Built with Terraform</span></div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ol>
+        <li><a href="#picture">The whole picture</a></li>
+        <li><a href="#basics">AWS in ten minutes</a></li>
+        <li><a href="#components">Every component</a></li>
+        <li><a href="#deploy">Deploy it</a></li>
+        <li><a href="#running">Running it day to day</a></li>
+        <li><a href="#labs">How AWS labs work</a></li>
+        <li><a href="#iam">The IAM fence, in detail</a></li>
+        <li><a href="#lab-setup">Turn AWS labs on</a></li>
+        <li><a href="#limits">Limits and good habits</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <!-- ───────────────── the picture ───────────────── -->
+      <section id="picture">
+        <h2>The whole picture</h2>
+        <p class="lede">Crucible is one program (the <i>API</i>) that serves the website, talks to its database and runs labs. On AWS
+          it lives on a single virtual server. Everything else in the diagram exists to let people sign in, to keep data safe,
+          to ship new versions, and to run AWS labs in a separate, fenced-off account.</p>
+        <figure>
+          <div class="diagram" role="img" aria-labelledby="arch-cap">
+            <svg viewBox="0 0 1160 810" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+                <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-hot" d="M0,0 L10,5 L0,10 z"/></marker>
+                <marker id="mi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-iron" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+
+              <!-- outside world -->
+              <text x="20" y="30" class="t-acct t-sm">OUTSIDE AWS</text>
+              <rect class="box-out" x="20" y="45" width="170" height="62" rx="10"/>
+              <text x="35" y="70">People's browsers</text><text x="35" y="90" class="t-sm">trainees, leaders, admins</text>
+              <rect class="box-out" x="20" y="175" width="170" height="62" rx="10"/>
+              <text x="35" y="200">Trainee laptop</text><text x="35" y="220" class="t-sm">crucible-agent (laptop labs)</text>
+              <rect class="box-out" x="20" y="305" width="170" height="62" rx="10"/>
+              <text x="35" y="330">Git host</text><text x="35" y="350" class="t-sm">training repos</text>
+              <rect class="box-out" x="20" y="435" width="170" height="62" rx="10"/>
+              <text x="35" y="460">Let's Encrypt</text><text x="35" y="480" class="t-sm">free HTTPS certificates</text>
+              <rect class="box-out" x="20" y="640" width="170" height="80" rx="10"/>
+              <text x="35" y="665">Your computer</text><text x="35" y="685" class="t-sm">crucible aws …, Terraform,</text><text x="35" y="702" class="t-sm">Docker (builds releases)</text>
+
+              <!-- Crucible account -->
+              <rect class="acct" x="225" y="15" width="610" height="780" rx="16"/>
+              <text x="245" y="42" class="t-acct t-acc">CRUCIBLE'S AWS ACCOUNT · one region (e.g. eu-west-1)</text>
+
+              <rect class="box" x="245" y="60" width="160" height="58" rx="10"/>
+              <text x="258" y="84">Amazon Cognito</text><text x="258" y="103" class="t-sm">sign-in, user accounts</text>
+              <rect class="box" x="420" y="60" width="160" height="58" rx="10"/>
+              <text x="433" y="84">Route 53 (optional)</text><text x="433" y="103" class="t-sm">DNS name → IP</text>
+              <rect class="box" x="595" y="60" width="220" height="58" rx="10"/>
+              <text x="608" y="84">EventBridge Scheduler</text><text x="608" y="103" class="t-sm">wakes 07:30, sleeps 19:30 Mon–Fri</text>
+
+              <!-- VPC -->
+              <rect class="zone" x="245" y="140" width="570" height="455" rx="12"/>
+              <text x="260" y="160" class="t-sm">Default VPC · public subnet (the network)</text>
+              <rect class="zone" x="262" y="190" width="536" height="390" rx="10"/>
+              <text x="276" y="208" class="t-sm">Security group "crucible-web": only ports 80 and 443 come in</text>
+              <rect class="box-hot" x="280" y="218" width="150" height="34" rx="17"/>
+              <text x="296" y="240">Elastic IP</text><text x="365" y="240" class="t-sm">fixed</text>
+
+              <rect class="box-hot" x="280" y="265" width="500" height="300" rx="12"/>
+              <text x="296" y="289" class="t-h">EC2 node</text>
+              <text x="390" y="289" class="t-sm">t3a.xlarge · Ubuntu 24.04 · encrypted 60 GiB EBS disk</text>
+              <rect class="zone" x="296" y="300" width="468" height="252" rx="10"/>
+              <text x="310" y="318" class="t-sm">k3s (a small Kubernetes) on the node</text>
+
+              <rect class="box" x="310" y="328" width="130" height="54" rx="9"/>
+              <text x="322" y="350">Traefik</text><text x="322" y="368" class="t-sm">HTTPS front door</text>
+              <rect class="box-hot" x="455" y="328" width="150" height="54" rx="9"/>
+              <text x="467" y="350">Crucible API</text><text x="467" y="368" class="t-sm">web app + lab engine</text>
+              <rect class="box" x="620" y="328" width="130" height="54" rx="9"/>
+              <text x="632" y="350">Postgres</text><text x="632" y="368" class="t-sm">all data, on the disk</text>
+              <rect class="box" x="620" y="392" width="130" height="54" rx="9"/>
+              <text x="632" y="414">Backup job</text><text x="632" y="432" class="t-sm">nightly pg_dump</text>
+              <rect class="box" x="310" y="392" width="295" height="54" rx="9"/>
+              <text x="322" y="414">Cluster lab namespaces</text><text x="322" y="432" class="t-sm">one per lab, Docker inside sysbox</text>
+              <rect class="box-iron" x="310" y="456" width="440" height="84" rx="9"/>
+              <text x="322" y="478" class="t-iron">AWS lab namespace (one per AWS lab)</text>
+              <text x="322" y="498" class="t-sm">tf-apply pod: runs terraform apply / destroy</text>
+              <text x="322" y="516" class="t-sm">workspace pod: the trainee's terminals (aws cli, terraform, kubectl)</text>
+              <text x="322" y="533" class="t-sm">both use one-hour credentials for the lab role</text>
+
+              <!-- control and storage, bottom rows -->
+              <rect class="box" x="245" y="608" width="570" height="62" rx="10"/>
+              <text x="258" y="632">IAM</text><text x="290" y="632" class="t-sm">roles crucible-node (the server's identity) and the scheduler's role. No keys on the server:</text>
+              <text x="290" y="650" class="t-sm">it gets short-lived credentials from its role through the metadata service (IMDSv2).</text>
+              <rect class="box" x="245" y="690" width="180" height="70" rx="10"/>
+              <text x="258" y="714">S3 data bucket</text><text x="258" y="732" class="t-sm">releases, nightly snapshots,</text><text x="258" y="748" class="t-sm">uploads, transcripts</text>
+              <rect class="box" x="440" y="690" width="175" height="70" rx="10"/>
+              <text x="453" y="714">S3 state bucket</text><text x="453" y="732" class="t-sm">Terraform's memory of</text><text x="453" y="748" class="t-sm">the main stack</text>
+              <rect class="box" x="630" y="690" width="185" height="70" rx="10"/>
+              <text x="643" y="714">Systems Manager</text><text x="643" y="732" class="t-sm">Parameter Store (settings,</text><text x="643" y="748" class="t-sm">secrets), remote commands</text>
+
+              <!-- lab account -->
+              <rect class="acct-lab" x="870" y="15" width="275" height="780" rx="16"/>
+              <text x="888" y="42" class="t-acct t-iron">LAB ACCOUNT · a sandbox</text>
+              <rect class="box-iron" x="888" y="60" width="240" height="78" rx="10"/>
+              <text x="900" y="84">IAM role "crucible-lab"</text><text x="900" y="102" class="t-sm">assumed by Crucible per lab, 1 hour</text><text x="900" y="119" class="t-sm">+ permission boundary (ceiling)</text>
+              <rect class="box" x="888" y="155" width="240" height="62" rx="10"/>
+              <text x="900" y="179">IAM role "crucible-lab-ops"</text><text x="900" y="198" class="t-sm">read-only: tags, costs, audit</text>
+              <rect class="box" x="888" y="235" width="240" height="62" rx="10"/>
+              <text x="900" y="259">S3 lab state bucket</text><text x="900" y="278" class="t-sm">one Terraform state per lab</text>
+              <rect class="box-iron" x="888" y="318" width="240" height="120" rx="10"/>
+              <text x="900" y="342">Lab resources</text><text x="900" y="361" class="t-sm">EC2 instances, EBS volumes,</text><text x="900" y="378" class="t-sm">security groups, S3 buckets</text>
+              <text x="900" y="400" class="t-sm">every one tagged</text><text x="900" y="418" class="t-iron">crucible:lab-id=&lt;id&gt;</text>
+              <rect class="box" x="888" y="460" width="240" height="56" rx="10"/>
+              <text x="900" y="484">Cost Explorer</text><text x="900" y="502" class="t-sm">the real bill, per lab tag</text>
+              <rect class="box" x="888" y="530" width="240" height="56" rx="10"/>
+              <text x="900" y="554">CloudTrail</text><text x="900" y="572" class="t-sm">who created what (audit log)</text>
+              <rect class="box" x="888" y="600" width="240" height="56" rx="10"/>
+              <text x="900" y="624">Resource Groups Tagging API</text><text x="900" y="642" class="t-sm">find everything with a tag</text>
+              <text x="888" y="700" class="t-sm">It can be the same account as Crucible's,</text>
+              <text x="888" y="717" class="t-sm">but a separate one is much safer.</text>
+
+              <!-- arrows: people in -->
+              <path class="ar-hot" d="M190 76 C 235 76, 240 235, 278 235" marker-end="url(#mh)"/>
+              <rect class="label-bg" x="196" y="128" width="40" height="16"/><text x="198" y="140" class="t-sm">HTTPS</text>
+              <path class="ar" d="M190 62 C 215 62, 225 89, 243 89" marker-end="url(#m)"/>
+              <path class="ar" d="M190 206 C 240 206, 250 250, 278 248" marker-end="url(#m)"/>
+              <rect class="label-bg" x="196" y="182" width="62" height="16"/><text x="198" y="194" class="t-sm">WebSocket</text>
+              <path class="ar" d="M308 355 C 210 355, 230 336, 192 336" marker-end="url(#m)"/>
+              <rect class="label-bg" x="200" y="300" width="96" height="16"/><text x="202" y="312" class="t-sm">clone, push edits</text>
+              <path class="ar" d="M308 370 C 230 370, 230 466, 192 466" marker-end="url(#m)"/>
+              <rect class="label-bg" x="202" y="402" width="70" height="16"/><text x="204" y="414" class="t-sm">certificate</text>
+              <!-- your computer → buckets, SSM (along the account's foot) -->
+              <path class="ar" d="M190 700 L 243 718" marker-end="url(#m)"/>
+              <path class="ar" d="M190 712 L 215 712 L 215 778 L 527 778 L 527 762" marker-end="url(#m)"/>
+              <path class="ar" d="M215 778 L 722 778 L 722 762" marker-end="url(#m)"/>
+              <rect class="label-bg" x="232" y="770" width="128" height="16"/><text x="234" y="782" class="t-sm">deploy, state, commands</text>
+              <!-- scheduler → node -->
+              <path class="ar" d="M705 118 C 705 180, 760 215, 760 263" marker-end="url(#m)"/>
+              <rect class="label-bg" x="715" y="150" width="70" height="16"/><text x="717" y="162" class="t-sm">start / stop</text>
+              <!-- backup → data bucket, around the lab box -->
+              <path class="ar" d="M750 419 L 826 419 L 826 680 L 335 680 L 335 688" marker-end="url(#m)"/>
+              <rect class="label-bg" x="560" y="672" width="92" height="16"/><text x="562" y="684" class="t-sm">nightly snapshot</text>
+              <!-- the node assumes the lab and ops roles (blue: lab traffic) -->
+              <path class="ar-iron" d="M780 300 C 840 300, 840 99, 886 99" marker-end="url(#mi)"/>
+              <path class="ar" d="M780 318 C 850 318, 850 186, 886 186" marker-end="url(#m)"/>
+              <!-- lab pods → lab state and lab resources -->
+              <path class="ar-iron" d="M750 470 C 845 470, 845 266, 886 266" marker-end="url(#mi)"/>
+              <path class="ar-iron" d="M750 500 C 850 500, 850 378, 886 378" marker-end="url(#mi)"/>
+            </svg>
+          </div>
+          <figcaption id="arch-cap">Crucible's account holds the server and everything it needs; the lab account holds the roles labs
+            use and the resources labs create. Orange arrows are people's traffic, blue arrows are AWS lab traffic, grey arrows
+            are operations.</figcaption>
+        </figure>
+      </section>
+
+      <!-- ───────────────── basics ───────────────── -->
+      <section id="basics">
+        <h2>AWS in ten minutes</h2>
+        <p class="lede">The words this page uses, in plain terms, and where Crucible uses each one.</p>
+        <div class="glossary">
+          <div class="term"><h4>Account</h4><p>Your own private area of AWS, with its own bill and its own users. Nothing in one account can touch another unless you allow it.</p><p class="use"><b>Crucible:</b> one account for Crucible, ideally a second, throwaway "sandbox" account for labs.</p></div>
+          <div class="term"><h4>Region</h4><p>A group of data centres in one place, such as <code>eu-west-1</code> (Ireland). Most things you create live in one region.</p><p class="use"><b>Crucible:</b> everything in the region you choose; labs only in the regions you allow.</p></div>
+          <div class="term"><h4>IAM</h4><p>Identity and Access Management: who may do what. Permissions are written as JSON <i>policies</i> of Allow and Deny rules. A Deny always wins.</p><p class="use"><b>Crucible:</b> the heart of lab safety. See <a href="#iam">the IAM fence</a>.</p></div>
+          <div class="term"><h4>Role</h4><p>An identity with permissions but no password. Someone or something allowed by the role's <i>trust policy</i> can "assume" it and get temporary credentials.</p><p class="use"><b>Crucible:</b> the server is the role <code>crucible-node</code>; labs act as <code>crucible-lab</code>.</p></div>
+          <div class="term"><h4>STS and AssumeRole</h4><p>The Security Token Service hands out short-lived credentials (here, one hour) when someone assumes a role. They expire on their own.</p><p class="use"><b>Crucible:</b> assumes the lab role once per lab, and again every hour while it runs.</p></div>
+          <div class="term"><h4>Permission boundary</h4><p>A ceiling on a role: even if the role's own policy allows something, the boundary can forbid it. What the role can really do is the overlap of the two.</p><p class="use"><b>Crucible:</b> the lab role's ceiling: EC2 and S3 only, small sizes, chosen regions.</p></div>
+          <div class="term"><h4>Tags</h4><p>Labels (key = value) you attach to resources. IAM can require them and check them: "you may delete only what carries your tag".</p><p class="use"><b>Crucible:</b> every lab resource carries <code>crucible:lab-id</code>; that tag decides who may touch it and what gets cleaned up.</p></div>
+          <div class="term"><h4>EC2, AMI, EBS</h4><p>EC2 is a virtual server. It starts from an AMI (a disk image) and keeps its files on EBS (a network disk).</p><p class="use"><b>Crucible:</b> one EC2 server from the Ubuntu 24.04 AMI with an encrypted 60 GiB EBS disk; labs may start tiny EC2s.</p></div>
+          <div class="term"><h4>VPC, subnet, security group</h4><p>A VPC is your private network; a subnet is a slice of it; a security group is a firewall on a server.</p><p class="use"><b>Crucible:</b> the default VPC's public subnet, and a security group that lets in only web traffic.</p></div>
+          <div class="term"><h4>Elastic IP</h4><p>A fixed public IP address you keep even when the server stops.</p><p class="use"><b>Crucible:</b> your domain points at it.</p></div>
+          <div class="term"><h4>Instance profile and IMDS</h4><p>How a server gets a role: AWS gives it short-lived credentials through the instance metadata service at <code>169.254.169.254</code>. IMDSv2 requires a token for that.</p><p class="use"><b>Crucible:</b> the server uses it; lab pods are blocked from it, so they can never borrow the server's role.</p></div>
+          <div class="term"><h4>S3</h4><p>Simple Storage Service: files ("objects") in "buckets". Cheap, durable, private by default.</p><p class="use"><b>Crucible:</b> releases, nightly database snapshots, uploads, and Terraform state.</p></div>
+          <div class="term"><h4>Systems Manager (SSM)</h4><p>Parameter Store keeps settings and secrets (encrypted); Session Manager gives you a shell on a server without opening SSH; Run Command runs scripts remotely.</p><p class="use"><b>Crucible:</b> holds its settings and secrets; <code>crucible aws deploy</code> rolls out through it.</p></div>
+          <div class="term"><h4>Cognito</h4><p>A managed sign-in service: user accounts, passwords, email verification, a hosted login page. Free up to 10,000 monthly users.</p><p class="use"><b>Crucible:</b> people sign in through it; Crucible trusts its verified emails.</p></div>
+          <div class="term"><h4>EventBridge Scheduler</h4><p>Runs AWS actions on a timetable, like a cron job in the cloud.</p><p class="use"><b>Crucible:</b> starts the server in the morning and stops it at night on weekdays.</p></div>
+          <div class="term"><h4>Route 53</h4><p>AWS's DNS service: turns a name into an IP address.</p><p class="use"><b>Crucible:</b> optional; you can point your domain at the Elastic IP with any DNS provider.</p></div>
+          <div class="term"><h4>Cost Explorer and cost-allocation tags</h4><p>Cost Explorer shows what you spent. Once a tag is activated as a cost-allocation tag, spend can be grouped by it.</p><p class="use"><b>Crucible:</b> reads each lab's real bill by its <code>crucible:lab-id</code> tag.</p></div>
+          <div class="term"><h4>CloudTrail</h4><p>The audit log of API calls: who created, changed or deleted what, and when. 90 days of history are free.</p><p class="use"><b>Crucible:</b> checks no lab created anything without its tag.</p></div>
+          <div class="term"><h4>Terraform and state</h4><p>Terraform creates infrastructure from text files. It remembers what it made in a <i>state</i> file, so it can change or destroy exactly that later.</p><p class="use"><b>Crucible:</b> builds its own infrastructure, and runs every AWS lab, with Terraform.</p></div>
+          <div class="term"><h4>k3s, Helm, Traefik</h4><p>k3s is a small Kubernetes that runs on one server; Helm installs apps into it; Traefik is the web front door that also fetches HTTPS certificates from Let's Encrypt.</p><p class="use"><b>Crucible:</b> runs as a Helm release on k3s, behind Traefik.</p></div>
+        </div>
+      </section>
+
+      <!-- ───────────────── components ───────────────── -->
+      <section id="components">
+        <h2>Every component</h2>
+        <p class="lede">Crucible's infrastructure is three Terraform "stacks" in <code>deploy/aws/</code>. Each is created by one
+          <code>crucible aws</code> command, and each has a different lifetime.</p>
+
+        <h3>1 · Persistent stack (<code>deploy/aws/persistent</code>): made once, never destroyed</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Component</th><th>AWS service</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td>State bucket</td><td>S3 (versioned, private)</td><td>Terraform's memory of the main stack. Versioning keeps every older state.</td></tr>
+            <tr><td>Data bucket</td><td>S3 (versioned, encrypted, private, lifecycle rule)</td><td>Release packages, nightly database snapshots (kept 30 days; the newest is always kept), uploads and terminal transcripts.</td></tr>
+            <tr><td>User pool</td><td>Cognito</td><td>Everyone's sign-in account. Email is the identity Crucible trusts.</td></tr>
+            <tr><td>Login domain and branding</td><td>Cognito managed login</td><td>The hosted sign-in page people see.</td></tr>
+            <tr><td>App client</td><td>Cognito</td><td>Lets Crucible use the pool to sign people in (OpenID Connect).</td></tr>
+          </tbody>
+        </table></div>
+        <p class="prose">Its own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. Back it up somewhere safe.</p>
+
+        <h3>2 · Main stack (<code>deploy/aws/main</code>): the server; can be torn down and rebuilt</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Component</th><th>AWS service</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td>The node</td><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB. Runs k3s with Crucible, Postgres, Traefik and cluster labs. Starts from Ubuntu 24.04.</td></tr>
+            <tr><td>Disk</td><td>EBS gp3, 60 GiB, encrypted</td><td>The database and everything on the server.</td></tr>
+            <tr><td>Public address</td><td>Elastic IP</td><td>A fixed IP your domain points at.</td></tr>
+            <tr><td>Firewall</td><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, redirect) and 443 (HTTPS). No SSH port at all.</td></tr>
+            <tr><td>Network</td><td>Default VPC and subnet</td><td>Already exists in every account. No NAT gateway or load balancer, which keeps it cheap.</td></tr>
+            <tr><td>Server identity</td><td>IAM role <code>crucible-node</code> + instance profile</td><td>May read and write only its own parts of the data bucket, read its own settings in Parameter Store, use Session Manager, and (when labs are on) assume the two lab roles.</td></tr>
+            <tr><td>Metadata settings</td><td>EC2 IMDSv2, hop limit 2</td><td>The server's credentials need a token; the backup pod can still reach them.</td></tr>
+            <tr><td>Settings and secrets</td><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), Helm values, and an encrypted secret holding the database password, quiz secret, git webhook secret and sign-in client secret, all generated by Terraform.</td></tr>
+            <tr><td>Wake and sleep</td><td>EventBridge Scheduler + its IAM role</td><td>Starts the server at 07:30 and stops it at 19:30, Monday to Friday, in your time zone.</td></tr>
+            <tr><td>DNS record</td><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if your domain is in Route 53.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>3 · Labs stack (<code>deploy/aws/labs</code>): in the lab account, made once</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Component</th><th>AWS service</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td>Lab role</td><td>IAM role <code>crucible-lab</code></td><td>The identity every AWS lab acts as. Sessions last at most an hour. Only Crucible's server may assume it, and only with a lab id tag.</td></tr>
+            <tr><td>Permission boundary</td><td>IAM managed policy</td><td>The lab role's ceiling: EC2 and S3 only, small instance types, small volumes, allowed regions.</td></tr>
+            <tr><td>Ops role</td><td>IAM role <code>crucible-lab-ops</code></td><td>Read-only, for the reaper and the Ledger: list tagged resources and buckets, read Cost Explorer, look up CloudTrail.</td></tr>
+            <tr><td>Lab state bucket</td><td>S3 (versioned, encrypted, private, HTTPS only)</td><td>One Terraform state file per lab, <code>labs/&lt;id&gt;.tfstate</code>.</td></tr>
+            <tr><td>Block Public Access</td><td>S3, account-wide</td><td>No bucket in the lab account can ever be made public.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>What it costs</h3>
+        <p class="prose">From the design's estimate for <code>eu-west-1</code>. AWS prices change; check the current ones.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Item</th><th>Note</th><th class="num">Working hours</th><th class="num">24/7</th></tr></thead>
+          <tbody>
+            <tr><td>EC2 node</td><td>t3a.xlarge on demand; 11 h × 22 days when scheduled</td><td class="num">~$40</td><td class="num">~$119</td></tr>
+            <tr><td>EBS disk</td><td>60 GiB gp3</td><td class="num">~$5.30</td><td class="num">~$5.30</td></tr>
+            <tr><td>Elastic IP</td><td>public IPv4 is billed by the hour</td><td class="num">~$3.70</td><td class="num">~$3.70</td></tr>
+            <tr><td>S3</td><td>snapshots, releases, uploads</td><td class="num">&lt; $1</td><td class="num">&lt; $1</td></tr>
+            <tr><td>Cognito, Scheduler, SSM</td><td>free tiers at this size</td><td class="num">~$0</td><td class="num">~$0</td></tr>
+            <tr class="total"><td>Total</td><td>plus whatever labs spend</td><td class="num">~$50/month</td><td class="num">~$130/month</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note"><p><strong>Two cost notes.</strong>The <code>t3a</code> family bills extra if the CPU stays busy above its baseline for long (about $0.05 per vCPU-hour of surplus). While the server sleeps, only the disk, the IP and S3 cost money, roughly $10 a month.</p></div>
+      </section>
+
+      <!-- ───────────────── deploy ───────────────── -->
+      <section id="deploy">
+        <h2>Deploy it</h2>
+        <p class="lede">Everything runs from the repo root on your computer. You need an AWS account, a domain name you control, and
+          a terminal logged in to AWS (<code>aws configure</code> or SSO) with administrator rights in that account.</p>
+        <ol class="steps">
+          <li><h4>Install the tools</h4>
+            <p>Terraform 1.10 or later, AWS CLI v2, Docker with buildx, Helm 3, Go 1.26. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
+          <li><h4>Create the persistent stack</h4>
+            <p>Makes the state and data buckets and the Cognito sign-in. Nothing it creates is ever deleted by Crucible.</p>
+            <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div></li>
+          <li><h4>Back up its state</h4>
+            <p>This file is the only record of what <code>init</code> created. Copy it to a safe place, and again after every <code>init</code>.</p>
+            <div class="cmd"><pre><code>aws s3 cp deploy/aws/persistent/terraform.tfstate s3://&lt;state_bucket&gt;/persistent.tfstate</code></pre></div></li>
+          <li><h4>Fill in your settings</h4>
+            <p>Copy the example and edit it. <code>domain</code> must match the one you gave <code>init</code>. Set <code>bootstrap_admin</code> to your email: that person becomes the first admin.</p>
+            <div class="cmd"><pre><code>cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars</code></pre></div></li>
+          <li><h4>Build the server</h4>
+            <p><code>up</code> runs Terraform on the main stack, waits for the server to come up, then deploys the current release. Right after the apply it prints <code>Point an A record &lt;domain&gt; → &lt;ip&gt;</code>: create that DNS record while it waits (skip this if you gave a Route 53 zone).</p>
+            <div class="cmd"><pre><code>crucible aws up</code></pre></div></li>
+          <li><h4>Wait for HTTPS</h4>
+            <p>The first visit can take about a minute while Let's Encrypt issues the certificate. If <code>up</code> ends with "isn't answering yet", DNS is still settling: wait and check.</p>
+            <div class="cmd"><pre><code>crucible aws status</code></pre></div></li>
+          <li><h4>Invite yourself and sign in</h4>
+            <p>Invite your <code>bootstrap_admin</code> email in Cognito (see <code>docs/runbooks/cognito.md</code>), sign in, and set up Crucible under <b>Administrator → Forge settings</b>: cost tiers, cluster lab rate, schedules, more admins. Then create teams and register trainings.</p></li>
+          <li><h4>Give the bot access to your training repos</h4>
+            <p>Set <code>git_credentials</code> (read, and push for content edits) and <code>git_bot_email</code> in your settings, and point your git host's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code> with the secret from Parameter Store.</p></li>
+        </ol>
+
+        <h3>What happens when the server boots</h3>
+        <p class="prose">The server configures itself from a startup script ("user data") the first time it starts:</p>
+        <ol class="steps">
+          <li><h4>Install</h4><p>Sysbox (so cluster labs can run Docker safely), k3s, Helm and the AWS CLI. Traefik is set up to get Let's Encrypt certificates and redirect HTTP to HTTPS.</p></li>
+          <li><h4>Read its settings</h4><p>From Parameter Store, using its role. No secret is baked into the image or the disk.</p></li>
+          <li><h4>Restore, if the database is empty</h4><p>On a rebuilt server, an init step loads the newest snapshot from the data bucket before Crucible starts.</p></li>
+          <li><h4>Deploy the current release</h4><p><code>/opt/crucible/deploy.sh</code> downloads the release named in <code>s3://…/current-release</code>, imports the image into k3s and installs the Helm chart.</p></li>
+        </ol>
+
+        <h3>How a new version reaches the server</h3>
+        <p class="prose">There is no container registry; releases travel through S3. <code>crucible aws deploy</code>:</p>
+        <ol class="steps">
+          <li><h4>Builds on your computer</h4><p>A Linux image of the current git commit with Docker buildx, saved and compressed, plus the packaged Helm chart.</p></li>
+          <li><h4>Uploads to the data bucket</h4><p>Under <code>releases/&lt;commit&gt;/</code>, then updates <code>current-release</code>.</p></li>
+          <li><h4>Rolls out through Systems Manager</h4><p>Runs <code>deploy.sh</code> on the server, which imports the image and upgrades the Helm release, then checks <code>/healthz</code>.</p></li>
+        </ol>
+      </section>
+
+      <!-- ───────────────── running ───────────────── -->
+      <section id="running">
+        <h2>Running it day to day</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>You want to</th><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>Ship the current commit</td><td><code>crucible aws deploy</code></td><td>Build, upload to S3, roll out over SSM.</td></tr>
+            <tr><td>Take a backup now</td><td><code>crucible aws snapshot</code></td><td>Runs the backup job: <code>pg_dump</code> to the data bucket.</td></tr>
+            <tr><td>Stop paying for compute</td><td><code>crucible aws sleep</code></td><td>Snapshot, then stop the server.</td></tr>
+            <tr><td>Start before the schedule</td><td><code>crucible aws wake</code></td><td>Start the server and wait until it is healthy.</td></tr>
+            <tr><td>See if it is up</td><td><code>crucible aws status</code></td><td>Server state and <code>healthz</code>.</td></tr>
+            <tr><td>Get a shell on the server</td><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>Session Manager: no SSH key, no open port.</td></tr>
+            <tr><td>Change settings</td><td>edit <code>crucible.tfvars</code>, then <code>crucible aws up</code></td><td>Snapshots first, applies, redeploys.</td></tr>
+            <tr><td>Remove the server</td><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito and the labs stack stay.</td></tr>
+            <tr><td>Bring it back</td><td><code>crucible aws up</code></td><td>A new server restores the newest snapshot. The Elastic IP changes: update DNS.</td></tr>
+          </tbody>
+        </table></div>
+        <div class="note hot"><p><strong>Backups.</strong>The backup job runs at 19:15 every day, before the server sleeps at 19:30. Dated snapshots expire after 30 days, but the newest one is always kept, so a long teardown can still be restored.</p></div>
+      </section>
+
+      <!-- ───────────────── labs ───────────────── -->
+      <section id="labs">
+        <h2>How AWS labs work</h2>
+        <p class="lede">An AWS lab is a folder in a training repo: a <code>lab.yaml</code>, task instructions, check scripts, and a
+          Terraform module that builds what the trainee will work on. Crucible runs that module for each trainee, in the lab
+          account, with credentials that can only touch that one lab.</p>
+        <div class="two">
+          <div class="card"><h4>lab.yaml (Forge 401, "Cloud Heat")</h4>
+            <div class="cmd"><pre><code>id: cloud-heat
+runtime: aws
+ttl: 1h
+idle_timeout: 30m
+terminals:
+  - { name: workspace, service: workspace }
+tasks:
+  - id: t2-bucket
+    instructions: tasks/02-bucket.md
+    check: { script: checks/02-bucket.sh, run_in: workspace }
+    points: 2
+aws:
+  region: eu-west-1
+  max_hourly_usd: 0.05</code></pre></div></div>
+          <div class="card"><h4>terraform/main.tf</h4>
+            <div class="cmd"><pre><code># Crucible adds the provider (region,
+# crucible:* default tags) and the state
+# backend. The module never declares them.
+resource "aws_s3_bucket" "forge" {
+  bucket        = "crucible-lab-${var.crucible_lab_id}"
+  force_destroy = true
+}</code></pre></div>
+            <p style="margin-top:0.6rem;color:var(--muted);font-size:0.92rem">Next to the module Crucible writes <code>crucible.tf</code>: an S3 backend for <code>labs/&lt;id&gt;.tfstate</code>, the AWS provider with the lab's region, and default tags <code>crucible:lab-id</code>, <code>crucible:team</code>, <code>crucible:training</code> on everything the module creates. A lab id is passed in as <code>var.crucible_lab_id</code>.</p></div>
+        </div>
+
+        <h3>One lab, from request to bill</h3>
+        <ol class="steps">
+          <li><h4>The trainee asks</h4><p>Crucible prices the module with infracost (an hourly price from the Terraform) × the lab's time limit, and refuses a lab above its own <code>max_hourly_usd</code> or in a region you haven't allowed.</p></li>
+          <li><h4>A person approves</h4><p>AWS labs are never approved automatically. The price decides who: program approver, team leader, or admin. A request that would pass a budget cap needs an admin.</p></li>
+          <li><h4>Crucible gets credentials for this lab</h4><p>The server's role calls STS <code>AssumeRole</code> on <code>crucible-lab</code>, with the session tag <code>crucible:lab-id=&lt;id&gt;</code>. AWS returns credentials valid for one hour. Crucible writes them into the lab's Kubernetes namespace and renews them every hour while the lab runs.</p></li>
+          <li><h4>Terraform builds the lab</h4><p>A <code>tf-apply</code> pod unpacks the module, runs <code>terraform init</code> (state in the lab state bucket) and <code>terraform apply</code>. Every resource gets the lab's tags; IAM rejects any that would not.</p></li>
+          <li><h4>The trainee works</h4><p>A workspace pod with the AWS CLI, Terraform and kubectl backs the browser terminals. Check scripts and setup scripts run there too, with the same lab credentials. The pods are blocked from the server's metadata service.</p></li>
+          <li><h4>It ends and is destroyed</h4><p>At the time limit, after idling, when the schedule closes, at a budget cap, on <b>End lab</b>, or with the kill switch: a pod runs <code>terraform destroy</code>.</p></li>
+          <li><h4>The sweep catches leftovers</h4><p>Anything else carrying the lab's tag (say, a volume the trainee made by hand) is found with the Tagging API and deleted with the lab's credentials, including instances with termination protection and untagged buckets named <code>crucible-lab-&lt;id&gt;…</code>.</p></li>
+          <li><h4>The reaper checks every hour</h4><p>Using the read-only ops role, it deletes leftovers of labs that ended over an hour ago, and reports to admins anything tagged with a lab it doesn't know, or created untagged (seen in CloudTrail).</p></li>
+          <li><h4>The real bill arrives</h4><p>Every six hours Crucible reads Cost Explorer grouped by <code>crucible:lab-id</code>. The Ledger shows the estimate first, then the real cost once AWS settles it, usually after 24–48 hours.</p></li>
+        </ol>
+      </section>
+
+      <!-- ───────────────── iam ───────────────── -->
+      <section id="iam">
+        <h2>The IAM fence, in detail</h2>
+        <p class="lede">Three IAM pieces keep labs apart: a trust policy that decides who can become the lab role, a permission
+          boundary that caps what the role can ever do, and the role's own policy that limits each session to its own lab.
+          A lab may do only what both the boundary <i>and</i> the role policy allow.</p>
+        <figure>
+          <div class="diagram" role="img" aria-labelledby="iam-cap">
+            <svg viewBox="0 0 1230 390" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <marker id="mi2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-iron" d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <rect class="box-hot" x="20" y="140" width="180" height="110" rx="12"/>
+              <text x="36" y="168" class="t-h">Crucible API</text>
+              <text x="36" y="192" class="t-sm">on the EC2 node, as role</text>
+              <text x="36" y="210">crucible-node</text>
+              <text x="36" y="232" class="t-sm">in Crucible's account</text>
+
+              <path class="ar-iron" d="M202 195 L 418 195" marker-end="url(#mi2)"/>
+              <text x="214" y="170" class="t-sm t-iron">sts:AssumeRole + sts:TagSession</text>
+              <text x="214" y="220" class="t-sm">session tag</text>
+              <text x="214" y="237" class="t-sm">crucible:lab-id = 3f9c2a7b1d04</text>
+
+              <rect class="box-iron" x="420" y="110" width="215" height="170" rx="12"/>
+              <text x="436" y="138" class="t-h">Lab session</text>
+              <text x="436" y="162" class="t-sm">role crucible-lab, 1 hour</text>
+              <text x="436" y="186" class="t-sm">The trust policy lets in only</text>
+              <text x="436" y="203" class="t-sm">crucible-node, and only with</text>
+              <text x="436" y="220" class="t-sm">a lab-id tag, which is stamped</text>
+              <text x="436" y="237" class="t-sm">on the session as</text>
+              <text x="436" y="259" class="t-iron" style="font-size:11.5px">aws:PrincipalTag/crucible:lab-id</text>
+
+              <ellipse class="venn-a" cx="840" cy="205" rx="185" ry="150"/>
+              <ellipse class="venn-b" cx="1050" cy="205" rx="165" ry="140"/>
+              <text x="672" y="38" class="t-acc">Permission boundary (the ceiling)</text>
+              <text x="975" y="52" class="t-iron">Role policy (own lab only)</text>
+              <text x="690" y="140" class="t-sm">EC2 and S3 only</text>
+              <text x="690" y="158" class="t-sm">allowed regions only</text>
+              <text x="690" y="176" class="t-sm">nano and micro sizes</text>
+              <text x="690" y="194" class="t-sm">gp2/gp3, up to 50 GiB</text>
+              <text x="690" y="212" class="t-sm">shared tenancy</text>
+              <text x="690" y="230" class="t-sm">no Marketplace images</text>
+              <text x="690" y="248" class="t-sm">no bucket locks</text>
+              <text x="1045" y="150" class="t-sm">create only with</text>
+              <text x="1045" y="168" class="t-sm">the session's tag;</text>
+              <text x="1045" y="186" class="t-sm">change and delete</text>
+              <text x="1045" y="204" class="t-sm">only what has it;</text>
+              <text x="1045" y="222" class="t-sm">buckets named</text>
+              <text x="1045" y="240" class="t-sm">crucible-lab-&lt;id&gt;…</text>
+              <text x="955" y="198" text-anchor="middle" style="font-weight:700">What the lab</text>
+              <text x="955" y="217" text-anchor="middle" style="font-weight:700">can really do</text>
+            </svg>
+          </div>
+          <figcaption id="iam-cap">The server assumes the lab role with the lab's id as a session tag. The session can do only what lies in
+            the overlap: inside the boundary's limits, and only to resources carrying its own lab id.</figcaption>
+        </figure>
+
+        <div class="two" style="margin-top:1.25rem">
+          <div class="card"><h4>The permission boundary</h4>
+            <ul>
+              <li><span class="allow">Ceiling</span>: <code>ec2:*</code>, <code>s3:*</code>, reading one's own identity and tags. Nothing else, ever: no IAM, no other services.</li>
+              <li><span class="deny">OnlyLabRegions</span>: every call outside the allowed regions.</li>
+              <li><span class="deny">SmallInstancesOnly</span>: anything but <code>t3.nano/micro</code>, <code>t3a.nano/micro</code>, <code>t4g.nano/micro</code> (configurable).</li>
+              <li><span class="deny">SharedTenancyOnly</span>, <span class="deny">NoMarketplaceImages</span>.</li>
+              <li><span class="deny">SmallVolumesOnly</span>, <span class="deny">GeneralPurposeVolumesOnly</span>, <span class="deny">BaselineIops/ThroughputOnly</span>: volumes up to 50 GiB of gp2/gp3.</li>
+              <li><span class="deny">NoBucketLocks</span>: no object lock, bucket policies or ACLs that could stop the cleanup.</li>
+            </ul></div>
+          <div class="card"><h4>The lab role's policy (attribute-based access)</h4>
+            <ul>
+              <li><span class="allow">CreateTagged</span>: launch instances, create volumes and security groups only if the request carries <code>crucible:lab-id</code> equal to the session's.</li>
+              <li><span class="allow">ManageOwn</span>: change and delete only resources carrying the session's lab id.</li>
+              <li><span class="deny">OwnSecurityGroupsOnly</span>, <span class="deny">NotOtherLabsNetwork</span>: no launching into the shared default group or another lab's group.</li>
+              <li><span class="deny">KeepCrucibleTags</span>, <span class="deny">NoBlankDeleteTags</span>: lab tags can't be changed or stripped.</li>
+              <li><span class="allow">OwnBuckets</span>, <span class="allow">OwnState</span>: S3 buckets named <code>crucible-lab-&lt;id&gt;…</code> and only its own state file.</li>
+              <li><span class="allow">Read</span>: <code>Describe*</code> calls, needed by Terraform (these are account-wide).</li>
+            </ul></div>
+        </div>
+        <div class="note"><p><strong>Why tags and not separate accounts per lab?</strong>One shared lab account is quick and cheap to run. Tags plus IAM conditions give each lab its own fence inside it. The trade-off is that isolation is best effort: a trainee can <i>see</i> (not change) other labs' resources through <code>Describe</code> calls. That is why a dedicated sandbox account is recommended.</p></div>
+      </section>
+
+      <!-- ───────────────── lab setup ───────────────── -->
+      <section id="lab-setup">
+        <h2>Turn AWS labs on</h2>
+        <p class="lede">Do this after Crucible itself is deployed. Labs stay off until all four steps are done.</p>
+        <ol class="steps">
+          <li><h4>Create the labs stack in the lab account</h4>
+            <p>With credentials for the lab account. Add <code>--crucible-account &lt;id&gt;</code> when it is not Crucible's own account. Back up <code>deploy/aws/labs/terraform.tfstate</code> afterwards.</p>
+            <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1</code></pre></div></li>
+          <li><h4>Turn on cost data</h4>
+            <p>In the payer (management) account: Billing → Cost allocation tags → activate <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. They appear after the first lab has run, and take up to 24 hours. Open Cost Explorer once in the lab account. It charges $0.01 per API call; Crucible makes 4–8 a day.</p></li>
+          <li><h4>Add an infracost key</h4>
+            <p>Free. Put it in <code>crucible.tfvars</code> as <code>infracost_api_key</code>. Without it, AWS labs can't be priced, so they can't be requested.</p>
+            <div class="cmd"><pre><code>infracost auth login</code></pre></div></li>
+          <li><h4>Wire it in</h4>
+            <p>Run on the computer that holds the labs state. <code>up</code> reads the labs stack's outputs (role names, state bucket, allowed regions) and switches AWS labs on.</p>
+            <div class="cmd"><pre><code>crucible aws up</code></pre></div></li>
+        </ol>
+        <div class="note warn"><p><strong>Then test it by hand.</strong>Nothing in the automated suites touches real AWS. <code>docs/runbooks/aws.md</code> lists every check: the lab identity, both tasks passing, a list of calls that must be refused, the sweep, the reaper, credential renewal after an hour, CloudTrail, tags on root volumes and the real bill. <code>docs/test-guide.html</code> has the same steps as a checklist.</p></div>
+      </section>
+
+      <!-- ───────────────── limits ───────────────── -->
+      <section id="limits">
+        <h2>Limits and good habits</h2>
+        <div class="two">
+          <div class="card"><h4>Keep in mind</h4>
+            <ul>
+              <li>Trainees can read their own lab's Terraform state. Never put passwords, keys or tokens in lab state or outputs.</li>
+              <li>A credential leaked from a workspace stays valid up to an hour after the lab ends; leftovers it makes are reaped within about two hours.</li>
+              <li>An instance launched with a detached network interface (<code>DeleteOnTermination=false</code>) can leave an untagged interface behind. Check now and then: <code>aws ec2 describe-network-interfaces --filters Name=status,Values=available</code>.</li>
+              <li>The sweep and the reaper only look in allowed regions. End every lab in a region before removing it.</li>
+            </ul></div>
+          <div class="card"><h4>Good habits</h4>
+            <ul>
+              <li>Use a separate sandbox account for labs, with a budget alert of its own in AWS Budgets.</li>
+              <li>Run one Crucible per lab account: the reaper reports, but never deletes, labs it doesn't know.</li>
+              <li>Keep backups of the three local state files: persistent, labs, and your <code>crucible.tfvars</code>.</li>
+              <li>Try a new lab in dry-run mode on your machine first (<code>make cluster-check</code>), where a fake account stands in for AWS.</li>
+            </ul></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+<script>
+// Copy buttons on every command block; fall back to selecting the text where the clipboard is refused.
+document.querySelectorAll('.cmd').forEach(function (box) {
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Copy';
+  btn.addEventListener('click', function () {
+    var code = box.querySelector('code');
+    var shown = function (t) { btn.textContent = t; setTimeout(function () { btn.textContent = 'Copy'; }, 1600); };
+    var select = function () {
+      var r = document.createRange(); r.selectNodeContents(code);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      shown('Selected');
+    };
+    try { navigator.clipboard.writeText(code.textContent).then(function () { shown('Copied'); }, select); } catch (e) { select(); }
+  });
+  box.appendChild(btn);
+});
+</script>
+</body>
+</html>

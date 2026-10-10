@@ -651,8 +651,15 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .forge-head-core { fill: var(--spark); opacity: 0.55; }
 .forge-head-face { fill: color-mix(in srgb, var(--accent-2) 55%, var(--muted)); }
 .forge-collar { fill: url(#forge-hot); }
-.forge-swoosh { fill: none; stroke: var(--accent-2); stroke-width: 14; stroke-linecap: round; opacity: 0; filter: blur(2px); animation: swoosh 1.8s linear; }
-@keyframes swoosh { 0%, 52% { opacity: 0; } 64% { opacity: 0.28; } 72%, 100% { opacity: 0; } }
+.forge-hammer, .forge-echo { transform-box: view-box; transform-origin: 420px 173px; transform: rotate(48deg); }
+/* the motion smear: each echo runs the hammer's own swing, delayed a little more, and is only visible while it falls */
+.forge-echo { fill: color-mix(in srgb, var(--accent-2) 55%, var(--spark)); opacity: 0; filter: blur(1.2px);
+  animation: hammer-swing 1.8s linear, echo 1.8s linear; }
+.forge-echo.e1 { --echo: 0.34; animation-delay: 0.03s; }
+.forge-echo.e2 { --echo: 0.24; animation-delay: 0.06s; }
+.forge-echo.e3 { --echo: 0.15; animation-delay: 0.09s; }
+.forge-echo.e4 { --echo: 0.08; animation-delay: 0.12s; }
+@keyframes echo { 0%, 46% { opacity: 0; } 58% { opacity: var(--echo); } 68% { opacity: var(--echo); } 72%, 100% { opacity: 0; } }
 /* the sword's steel: a fuller down the blade, a bright edge; the masterwork's sheen glides along it and the tip twinkles */
 .forge-fuller { fill: none; stroke: color-mix(in srgb, var(--muted) 70%, var(--anvil)); stroke-width: 1.4; stroke-linecap: round; opacity: 0.7; }
 .forge-edge { fill: none; stroke: var(--spark); stroke-width: 0.9; stroke-linejoin: round; opacity: 0.55; }

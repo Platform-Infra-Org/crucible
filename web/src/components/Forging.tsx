@@ -3,6 +3,8 @@ import { CYCLE, HOLD, IMPACT, LAST, RESET, STAGES, next, sparks } from '../lib/f
 
 const SPARKS = sparks()
 const BLADE = 'M176 210 L180 202 L330 201 L354 206 L330 210 Z' // the sword's blade, also the masterwork sheen's clip
+const HEAD = 'M231 152 Q231 146 234 141 L242 127 Q248 120 254 127 L262 141 Q265 146 265 152 L267 182 Q267 189 260 189 H236 Q229 189 229 182 Z'
+const ECHOES = [1, 2, 3, 4] // the motion smear: copies of the head that follow the swing a little later each
 
 // Gradients for the metal, all from theme tokens, so every theme forges in its own colours.
 function Defs() {
@@ -112,14 +114,17 @@ export function Forging({ calm }: { calm: boolean }) {
           </g>
         )}
         {/* the hammer: its handle pivots at the right; at rest it is raised */}
-        {/* a faint arc on the downswing, so the strike reads as fast */}
-        {!calm && swing > 0 && <path className="forge-swoosh" key={`a${swing}`} d="M298 51 A173 173 0 0 0 251 140" />}
+        {/* the motion smear: echoes of the head swing the same arc a moment behind it and show only on the way down, so
+            the fall leaves a fading trail that closes up as the hammer lands */}
+        {!calm && swing > 0 && ECHOES.map((n) => (
+          <g key={`e${swing}-${n}`} className={`forge-echo e${n}`}><path d={HEAD} /></g>
+        ))}
         <g className={!calm && swing > 0 ? 'forge-hammer swinging' : 'forge-hammer'} key={`w${swing}`}>
           {/* drawn like the hammer among the user icons: rounded, poured metal with a white-hot highlight */}
           <path className="forge-handle" d="M266 167.5 H423 A6 6 0 0 1 423 179.5 H266 Z" />
           <path className="forge-grip-bands" d="M386 168 V179 M394 168 V179 M402 168 V179 M410 168 V179" />
           <circle className="forge-cap" cx="424" cy="173.5" r="6.5" />
-          <path className="forge-head" d="M231 152 Q231 146 234 141 L242 127 Q248 120 254 127 L262 141 Q265 146 265 152 L267 182 Q267 189 260 189 H236 Q229 189 229 182 Z" />
+          <path className="forge-head" d={HEAD} />
           <rect className="forge-head-core" x="235.5" y="143" width="4" height="40" rx="2" />
           <path className="forge-head-face" d="M229.5 184 H266.5 Q267 189 260 189 H236 Q229 189 229.5 184 Z" />
           <rect className="forge-collar" x="263" y="165.5" width="9" height="16" rx="2.5" />

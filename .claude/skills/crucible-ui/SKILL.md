@@ -97,6 +97,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   `transform-box: fill-box; transform-origin: center` (or `view-box` with an explicit origin, like the gate's hammer pivot).
 - A gleam or sheen is light on a surface, never a shape on top of it: clip a soft gradient band to the surface's own
   path and move the band (the masterwork's sheen, `forge-blade-clip`), then mark the end with a small accent (its tip twinkle).
+- Fast motion leaves a smear on its own path: faint copies of the moving part run the same animation, each delayed a
+  little more, visible only while it moves fast (the gate hammer's `forge-echo`). Never a separate shape that fades in and out.
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import { CYCLE, HOLD, IMPACT, LAST, RESET, STAGES, next, sparks } from '../lib/forging'
 
 const SPARKS = sparks()
+const BLADE = 'M176 210 L180 202 L330 201 L354 206 L330 210 Z' // the sword's blade, also the masterwork sheen's clip
 
 // Gradients for the metal, all from theme tokens, so every theme forges in its own colours.
 function Defs() {
@@ -12,6 +13,12 @@ function Defs() {
       <linearGradient id="forge-temper" x1="0" y1="0" x2="1" y2="0">{stop('0', 'var(--accent)')}{stop('0.5', 'var(--accent-2)')}{stop('1', 'var(--spark)')}</linearGradient>
       <linearGradient id="forge-steel" x1="0" y1="0" x2="0" y2="1">{stop('0', 'var(--text)')}{stop('1', 'var(--muted)')}</linearGradient>
       <linearGradient id="forge-iron" x1="0" y1="0" x2="0" y2="1">{stop('0', 'var(--anvil)')}{stop('1', 'color-mix(in srgb, var(--anvil) 60%, var(--bg))')}</linearGradient>
+      <linearGradient id="forge-hammer-steel" x1="0" y1="0" x2="1" y2="0">{stop('0', 'var(--text)')}{stop('0.45', 'color-mix(in srgb, var(--text) 55%, var(--muted))')}{stop('1', 'color-mix(in srgb, var(--muted) 70%, var(--anvil))')}</linearGradient>
+      <linearGradient id="forge-wood" x1="0" y1="0" x2="0" y2="1">{stop('0', 'color-mix(in srgb, var(--accent) 55%, var(--anvil))')}{stop('1', 'color-mix(in srgb, var(--accent) 30%, var(--anvil))')}</linearGradient>
+      <linearGradient id="forge-sheen" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" style={{ stopColor: 'var(--spark)', stopOpacity: 0 }} /><stop offset="0.5" style={{ stopColor: 'var(--spark)', stopOpacity: 0.95 }} /><stop offset="1" style={{ stopColor: 'var(--spark)', stopOpacity: 0 }} />
+      </linearGradient>
+      <clipPath id="forge-blade-clip"><path d={BLADE} /></clipPath>
       <radialGradient id="forge-glow">{stop('0', 'var(--accent-2)')}<stop offset="1" style={{ stopColor: 'var(--accent)', stopOpacity: 0 }} /></radialGradient>
       <radialGradient id="forge-flash">{stop('0', 'var(--spark)')}<stop offset="1" style={{ stopColor: 'var(--accent-2)', stopOpacity: 0 }} /></radialGradient>
     </defs>
@@ -43,11 +50,19 @@ function Piece({ stage }: { stage: number }) {
     default: // sword (4) and masterwork (5): cooled steel, a guard, a grip and a pommel
       return (
         <g className={stage === LAST ? 'forge-master' : undefined}>
-          <path fill="url(#forge-steel)" d="M176 210 L180 202 L330 201 L354 206 L330 210 Z" />
+          <path fill="url(#forge-steel)" d={BLADE} />
+          <path className="forge-fuller" d="M186 206.3 L322 205.7" />
+          <path className="forge-edge" d="M180 202 L330 201 L354 206" />
           <rect className="forge-guard" x="168" y="193" width="9" height="22" rx="2" />
           <rect className="forge-grip" x="141" y="202" width="28" height="7" rx="3" />
           <circle className="forge-guard" cx="136" cy="205.5" r="6" />
-          {stage === LAST && <rect className="forge-gleam" x="180" y="199" width="16" height="12" rx="3" />}
+          {stage === LAST && (
+            <>
+              {/* a band of light glides along the blade, clipped to its shape, and the tip twinkles as it arrives */}
+              <g clipPath="url(#forge-blade-clip)"><path className="forge-sheen" d="M150 188 L176 188 L162 224 L136 224 Z" fill="url(#forge-sheen)" /></g>
+              <path className="forge-twinkle" d="M354 196 L356 204 L364 206 L356 208 L354 216 L352 208 L344 206 L352 204 Z" />
+            </>
+          )}
         </g>
       )
   }
@@ -97,10 +112,17 @@ export function Forging({ calm }: { calm: boolean }) {
           </g>
         )}
         {/* the hammer: its handle pivots at the right; at rest it is raised */}
+        {/* a faint arc on the downswing, so the strike reads as fast */}
+        {!calm && swing > 0 && <path className="forge-swoosh" key={`a${swing}`} d="M298 51 A173 173 0 0 0 251 140" />}
         <g className={!calm && swing > 0 ? 'forge-hammer swinging' : 'forge-hammer'} key={`w${swing}`}>
-          <rect className="forge-handle" x="262" y="169" width="160" height="9" rx="4.5" />
-          <path className="forge-head" d="M232 138 L264 138 L267 145 L267 181 L271 188 L225 188 L229 181 L229 145 Z" />
-          <rect className="forge-head-face" x="225" y="183" width="46" height="5" rx="1.5" />
+          {/* drawn like the hammer among the user icons: rounded, poured metal with a white-hot highlight */}
+          <path className="forge-handle" d="M266 167.5 H423 A6 6 0 0 1 423 179.5 H266 Z" />
+          <path className="forge-grip-bands" d="M386 168 V179 M394 168 V179 M402 168 V179 M410 168 V179" />
+          <circle className="forge-cap" cx="424" cy="173.5" r="6.5" />
+          <path className="forge-head" d="M231 152 Q231 146 234 141 L242 127 Q248 120 254 127 L262 141 Q265 146 265 152 L267 182 Q267 189 260 189 H236 Q229 189 229 182 Z" />
+          <rect className="forge-head-core" x="235.5" y="143" width="4" height="40" rx="2" />
+          <path className="forge-head-face" d="M229.5 184 H266.5 Q267 189 260 189 H236 Q229 189 229.5 184 Z" />
+          <rect className="forge-collar" x="263" y="165.5" width="9" height="16" rx="2.5" />
         </g>
       </svg>
       <ol className="forge-ranks" aria-hidden="true">

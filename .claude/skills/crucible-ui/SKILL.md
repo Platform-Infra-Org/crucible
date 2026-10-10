@@ -95,6 +95,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - To animate a custom property (an angle, a radius), register it with `@property` (see `--pour`, `--strike-r`).
 - CSS transforms on SVG elements scale and rotate around the drawing's top-left corner unless told otherwise: set
   `transform-box: fill-box; transform-origin: center` (or `view-box` with an explicit origin, like the gate's hammer pivot).
+- A gleam or sheen is light on a surface, never a shape on top of it: clip a soft gradient band to the surface's own
+  path and move the band (the masterwork's sheen, `forge-blade-clip`), then mark the end with a small accent (its tip twinkle).
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.

@@ -626,8 +626,6 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .forge-guard { fill: var(--accent-2); stroke: color-mix(in srgb, var(--accent) 60%, var(--border)); }
 .forge-grip { fill: var(--accent); }
 .forge-master { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-2) 70%, transparent)); }
-.forge-gleam { fill: var(--spark); opacity: 0; transform-box: view-box; animation: gleam 1.8s ease-in-out 0.4s infinite; }
-@keyframes gleam { 0% { transform: translateX(0); opacity: 0; } 15%, 70% { opacity: 0.9; } 100% { transform: translateX(150px); opacity: 0; } }
 .forge-piece { transform-box: view-box; transform-origin: 250px 210px; animation: piece-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes piece-in { 0% { transform: scale(1.16, 0.7); } 55% { transform: scale(0.97, 1.06); } 100% { transform: none; } }
 .forge-flash { fill: url(#forge-flash); opacity: 0; transform-box: fill-box; transform-origin: center; animation: forge-flash 0.45s ease-out; }
@@ -644,9 +642,25 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
   76% { transform: rotate(7deg); animation-timing-function: ease-in-out; } /* rebound */
   100% { transform: rotate(48deg); }
 }
-.forge-handle { fill: color-mix(in srgb, var(--accent) 35%, var(--surface-2)); stroke: var(--border); }
-.forge-head { fill: url(#forge-steel); stroke: var(--border); }
-.forge-head-face { fill: var(--muted); }
+/* the hammer, in the user icons' style: steel head with a white-hot highlight, ember collar, wood handle, soft shadow */
+.forge-hammer { filter: drop-shadow(0 4px 5px color-mix(in srgb, var(--anvil) 55%, transparent)); }
+.forge-handle { fill: url(#forge-wood); }
+.forge-grip-bands { fill: none; stroke: color-mix(in srgb, var(--anvil) 60%, transparent); stroke-width: 1.6; }
+.forge-cap { fill: url(#forge-hot); }
+.forge-head { fill: url(#forge-hammer-steel); }
+.forge-head-core { fill: var(--spark); opacity: 0.55; }
+.forge-head-face { fill: color-mix(in srgb, var(--accent-2) 55%, var(--muted)); }
+.forge-collar { fill: url(#forge-hot); }
+.forge-swoosh { fill: none; stroke: var(--accent-2); stroke-width: 14; stroke-linecap: round; opacity: 0; filter: blur(2px); animation: swoosh 1.8s linear; }
+@keyframes swoosh { 0%, 52% { opacity: 0; } 64% { opacity: 0.28; } 72%, 100% { opacity: 0; } }
+/* the sword's steel: a fuller down the blade, a bright edge; the masterwork's sheen glides along it and the tip twinkles */
+.forge-fuller { fill: none; stroke: color-mix(in srgb, var(--muted) 70%, var(--anvil)); stroke-width: 1.4; stroke-linecap: round; opacity: 0.7; }
+.forge-edge { fill: none; stroke: var(--spark); stroke-width: 0.9; stroke-linejoin: round; opacity: 0.55; }
+.forge-sheen { animation: sheen 2.4s ease-in-out 0.25s infinite backwards; }
+@keyframes sheen { 0% { transform: translateX(0); } 55%, 100% { transform: translateX(235px); } }
+.forge-twinkle { fill: var(--spark); opacity: 0; transform-box: fill-box; transform-origin: center; filter: drop-shadow(0 0 4px var(--accent-2));
+  animation: twinkle 2.4s ease-out 0.25s infinite; }
+@keyframes twinkle { 0%, 44% { opacity: 0; transform: scale(0.2) rotate(0deg); } 54% { opacity: 1; transform: scale(1) rotate(45deg); } 72%, 100% { opacity: 0; transform: scale(0.3) rotate(90deg); } }
 .forge-ranks { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 0.3rem 0.9rem; padding: 0; margin: 0;
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
 .forge-ranks li { position: relative; padding-top: 0.6rem; transition: color 0.3s; }

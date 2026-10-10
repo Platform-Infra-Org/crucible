@@ -21,3 +21,10 @@ test('under calm motion the masterwork rests on the anvil, nothing moves', () =>
   expect(h).not.toContain('forge-spark')
   expect(h).not.toContain('class="embers"')
 })
+
+test('two animations to choose from; the anvil when nothing is remembered', () => {
+  const h = renderToStaticMarkup(<ForgeGate calm={false} />)
+  expect(h).toContain('role="group" aria-label="Animation"')
+  expect(h).toContain('aria-pressed="true">Anvil')
+  expect(h).toContain('aria-pressed="false">Crucible')
+})

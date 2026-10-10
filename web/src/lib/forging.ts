@@ -18,6 +18,10 @@ export const IMPACT = 1260
 export const HOLD = 2800
 export const RESET = 900
 
+// POUR is how long each rank lasts in the crucible animation (ms): ore falls in, it is poured and cast, quenched, the
+// blade lifts free, the hilt goes on, and the hammer's strike makes the masterwork, which then gleams before it starts again.
+export const POUR = [2000, 2600, 2000, 1600, 1300, 4400] as const
+
 // next is what follows a stage in the loop: the next rank, and after the Masterwork the ore again.
 export const next = (stage: number) => (stage >= LAST ? 0 : stage + 1)
 

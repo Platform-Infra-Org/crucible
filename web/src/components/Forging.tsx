@@ -6,8 +6,8 @@ const BLADE = 'M176 210 L180 202 L330 201 L354 206 L330 210 Z' // the sword's bl
 const HEAD = 'M231 152 Q231 146 234 141 L242 127 Q248 120 254 127 L262 141 Q265 146 265 152 L267 182 Q267 189 260 189 H236 Q229 189 229 182 Z'
 const ECHOES = [1, 2, 3, 4] // the motion smear: copies of the head that follow the swing a little later each
 
-// Gradients for the metal, all from theme tokens, so every theme forges in its own colours.
-function Defs() {
+// Gradients for the metal, all from theme tokens, so every theme forges in its own colours. Shared by the gate's animations.
+export function Defs() {
   const stop = (offset: string, color: string) => <stop offset={offset} style={{ stopColor: color }} />
   return (
     <defs>
@@ -120,23 +120,42 @@ export function Forging({ calm }: { calm: boolean }) {
           <g key={`e${swing}-${n}`} className={`forge-echo e${n}`}><path d={HEAD} /></g>
         ))}
         <g className={!calm && swing > 0 ? 'forge-hammer swinging' : 'forge-hammer'} key={`w${swing}`}>
-          {/* drawn like the hammer among the user icons: rounded, poured metal with a white-hot highlight */}
-          <path className="forge-handle" d="M266 167.5 H423 A6 6 0 0 1 423 179.5 H266 Z" />
-          <path className="forge-grip-bands" d="M386 168 V179 M394 168 V179 M402 168 V179 M410 168 V179" />
-          <circle className="forge-cap" cx="424" cy="173.5" r="6.5" />
-          <path className="forge-head" d={HEAD} />
-          <rect className="forge-head-core" x="235.5" y="143" width="4" height="40" rx="2" />
-          <path className="forge-head-face" d="M229.5 184 H266.5 Q267 189 260 189 H236 Q229 189 229.5 184 Z" />
-          <rect className="forge-collar" x="263" y="165.5" width="9" height="16" rx="2.5" />
+          <HammerShape />
         </g>
       </svg>
+      <RankTrack stage={stage} said="An animation of a hammer forging ore into an ingot, a tempered bar, a blade, a sword and a masterwork: the forge's six ranks." />
+    </div>
+  )
+}
+
+// HammerShape is the hammer, drawn like the hammer among the user icons: rounded, poured metal with a white-hot
+// highlight. Head face at (229–267, 189), handle pivot at (424, 173.5). Shared by the gate's animations.
+export function HammerShape() {
+  return (
+    <>
+      <path className="forge-handle" d="M266 167.5 H423 A6 6 0 0 1 423 179.5 H266 Z" />
+      <path className="forge-grip-bands" d="M386 168 V179 M394 168 V179 M402 168 V179 M410 168 V179" />
+      <circle className="forge-cap" cx="424" cy="173.5" r="6.5" />
+      <path className="forge-head" d={HEAD} />
+      <rect className="forge-head-core" x="235.5" y="143" width="4" height="40" rx="2" />
+      <path className="forge-head-face" d="M229.5 184 H266.5 Q267 189 260 189 H236 Q229 189 229.5 184 Z" />
+      <rect className="forge-collar" x="263" y="165.5" width="9" height="16" rx="2.5" />
+    </>
+  )
+}
+
+// RankTrack is the line of the six ranks under a gate animation, the current one lit, with its line below. Sighted
+// people follow the animation; `said` tells a screen reader what it shows, once.
+export function RankTrack({ stage, said }: { stage: number; said: string }) {
+  return (
+    <>
       <ol className="forge-ranks" aria-hidden="true">
         {STAGES.map((s, i) => (
           <li key={s.rank} className={i === stage ? 'now' : i < stage ? 'done' : undefined}>{s.rank}</li>
         ))}
       </ol>
       <p className="forge-line" aria-hidden="true" key={`l${stage}`}>{STAGES[stage].line}</p>
-      <p className="sr-only">An animation of a hammer forging ore into an ingot, a tempered bar, a blade, a sword and a masterwork: the forge's six ranks.</p>
-    </div>
+      <p className="sr-only">{said}</p>
+    </>
   )
 }

@@ -85,7 +85,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Identity | `Avatar` (an icon from `lib/avatars.ts` drawn as poured metal, or initials) in a turning crucible ring. New icons: add to `AVATARS` and to `auth.Avatars` in Go (a test checks they match). |
 | Heat | Journey heat cells: glyph + text carry the meaning (`·` cold, `◐` glowing, `●` forged); colour only reinforces it. |
 | Ambient | `Embers` and `SparkBurst` for moments (Hearth, a passed check); never as constant decoration on working pages. |
-| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. Its one orchestrated moment is `Forging`: an SVG hammer striking ore through the six ranks (stages and timings in `lib/forging.ts`; the hammer's keyframe impact at 70% must equal `IMPACT / CYCLE`). Calm shows the masterwork at rest. |
+| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. Its one orchestrated moment is one of two animations of the six ranks, picked by the switch under the button (remembered in `localStorage`): `Forging`, an SVG hammer striking ore on an anvil (the hammer's keyframe impact at 70% must equal `IMPACT / CYCLE`), or `Pour`, a crucible pouring a blade that is quenched, freed, hilted and struck (stage classes `s0`–`s5`, durations `POUR`). Both share `Defs`, `HammerShape` and `RankTrack`; stages and timings live in `lib/forging.ts`. Calm shows the masterwork at rest. |
 
 ## Motion
 
@@ -99,6 +99,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   path and move the band (the masterwork's sheen, `forge-blade-clip`), then mark the end with a small accent (its tip twinkle).
 - Fast motion leaves a smear on its own path: faint copies of the moving part run the same animation, each delayed a
   little more, visible only while it moves fast (the gate hammer's `forge-echo`). Never a separate shape that fades in and out.
+- A multi-stage scene puts its stage on the drawing as a class (`.pour.s3`): plain rules say where everything rests in
+  that stage, so calm motion still shows the right picture, and `.sN` entrance animations carry each part there.
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.

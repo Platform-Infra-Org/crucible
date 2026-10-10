@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { CYCLE, IMPACT, LAST, STAGES, next, sparks } from './forging'
+import { CYCLE, IMPACT, LAST, POUR, STAGES, next, sparks } from './forging'
 
 test('the stages are the forge ranks, in order, and the loop returns to ore after the masterwork', () => {
   expect(STAGES.map((s) => s.rank)).toEqual(['Ore', 'Ingot', 'Tempered', 'Blade', 'Sword', 'Masterwork'])
@@ -18,4 +18,9 @@ test('sparks fly up and out on both sides of the strike', () => {
   expect(s.filter((p) => p.dx < 0).length).toBeGreaterThan(3)
   expect(s.filter((p) => p.dx > 0).length).toBeGreaterThan(3)
   expect(sparks()).toEqual(s) // the same every render
+})
+
+test('the pour has a duration for every rank, the masterwork longest so it can gleam', () => {
+  expect(POUR).toHaveLength(STAGES.length)
+  expect(Math.max(...POUR)).toBe(POUR[LAST])
 })

@@ -1,20 +1,20 @@
 import { useState } from 'react'
 import { Embers } from './Embers'
 import { Forging } from './Forging'
-import { Pour } from './Pour'
+import { RuneForge } from './RuneForge'
 
-const LOOKS = [{ id: 'anvil', label: 'Anvil' }, { id: 'crucible', label: 'Crucible' }] as const
+const LOOKS = [{ id: 'anvil', label: 'Anvil' }, { id: 'runes', label: 'Rune forge' }] as const
 type Look = (typeof LOOKS)[number]['id']
 const KEY = 'crucible-gate-animation'
 
 // The gate's animation, remembered in this browser only; the anvil when nothing (or nothing readable) is stored.
 function storedLook(): Look {
-  try { return localStorage.getItem(KEY) === 'crucible' ? 'crucible' : 'anvil' } catch { return 'anvil' }
+  try { return localStorage.getItem(KEY) === 'runes' ? 'runes' : 'anvil' } catch { return 'anvil' }
 }
 
 // ForgeGate is what someone who isn't signed in sees: the forge at work, and the way in. Signing in itself happens at
 // the company's identity provider (Keycloak or Cognito); Enter the forge goes there and comes back to the Hearth.
-// Two animations tell the ranks, the anvil's hammer or the crucible's pour; the switch at the bottom picks one, for now.
+// Two animations tell the ranks, the anvil's hammer or the rune forge; the switch at the bottom picks one, for now.
 export function ForgeGate({ calm }: { calm: boolean }) {
   const [going, setGoing] = useState(false)
   const [look, setLook] = useState<Look>(storedLook)
@@ -28,7 +28,7 @@ export function ForgeGate({ calm }: { calm: boolean }) {
       <div className="gate-inner">
         <p className="gate-brand"><span className="brand-mark" aria-hidden="true">⚒</span> Crucible</p>
         <p className="gate-motto">The crucible doesn't break the metal. It reveals it.</p>
-        {look === 'crucible' ? <Pour calm={calm} /> : <Forging calm={calm} />}
+        {look === 'runes' ? <RuneForge calm={calm} /> : <Forging calm={calm} />}
         <button type="button" className="primary big" disabled={going} onClick={() => { setGoing(true); window.location.assign('/auth/login') }}>
           {going ? 'Opening the gate…' : 'Enter the forge'}
         </button>

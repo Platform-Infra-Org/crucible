@@ -18,9 +18,10 @@ export const IMPACT = 1260
 export const HOLD = 2800
 export const RESET = 900
 
-// POUR is how long each rank lasts in the crucible animation (ms): ore drops in, the sword mould is poured, the
-// sword cools, its edge is drawn, it rises free, and the masterwork gleams before the forge starts again.
-export const POUR = [1800, 2800, 1800, 1500, 1300, 4200] as const
+// RUNE_STEP is how long each rank lasts in the rune forge before the next rune lights (ms): long enough for the rune
+// to wake, its beam to strike the centre and the piece to change. The masterwork has none: once the circle is
+// complete the enchanted sword stays.
+export const RUNE_STEP = [1500, 1700, 1700, 1700, 1700] as const
 
 // next is what follows a stage in the loop: the next rank, and after the Masterwork the ore again.
 export const next = (stage: number) => (stage >= LAST ? 0 : stage + 1)
@@ -33,4 +34,17 @@ export function sparks(n = 12): { dx: number; dy: number; r: number }[] {
     const d = 70 + ((i * 37) % 70)
     return { dx: Math.round(Math.cos(a) * d), dy: Math.round(Math.sin(a) * d), r: i % 3 === 0 ? 3.4 : 2.4 }
   })
+}
+
+// bolt is a closed, jagged loop around the rune forge's upright blade (an ellipse about 240,142 whose radius jumps in
+// and out), for lightning that runs round the masterwork. `seed` picks the jitter; deterministic, so a render test sees
+// the same markup every time.
+export function bolt(seed: number): string {
+  const n = 40
+  const pts = Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * 2 * Math.PI
+    const j = ((i * seed) % 7) - 3 // -3 … 3, so the loop zigzags in and out by up to ~9
+    return `${(240 + (44 + j * 2.5) * Math.cos(a)).toFixed(1)} ${(142 + (84 + j * 3) * Math.sin(a)).toFixed(1)}`
+  })
+  return `M${pts.join(' L')} Z`
 }

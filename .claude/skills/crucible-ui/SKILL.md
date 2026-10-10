@@ -49,6 +49,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   letter-spacing 0.06–0.1em, `var(--muted)`, weight 600.
 - `--glow` is the theme's soft halo (none in High Contrast). `--spark` is white-hot (motes, icon cores, the avatar ring).
   `--anvil` is dark iron that stays dark in every theme (the gate's anvil), for drawings that must read on light backgrounds too.
+  `--rune-1`…`--rune-6` (ember to violet) and `--arc`/`--arc-2` (blue-violet) belong to the gate's rune sword; keep them for magic, not for UI state.
 - Radii: 6px inputs, 8px buttons, 12px panels, 14px cards, 999px pills and chips.
 
 ## Page anatomy
@@ -85,7 +86,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Identity | `Avatar` (an icon from `lib/avatars.ts` drawn as poured metal, or initials) in a turning crucible ring. New icons: add to `AVATARS` and to `auth.Avatars` in Go (a test checks they match). |
 | Heat | Journey heat cells: glyph + text carry the meaning (`·` cold, `◐` glowing, `●` forged); colour only reinforces it. |
 | Ambient | `Embers` and `SparkBurst` for moments (Hearth, a passed check); never as constant decoration on working pages. |
-| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. Its one orchestrated moment is one of two animations of the six ranks, picked by the switch under the button (remembered in `localStorage`): `Forging`, an SVG hammer striking ore on an anvil (the hammer's keyframe impact at 70% must equal `IMPACT / CYCLE`), or `RuneForge`, a stone ring of runestones on a plinth in which each rank lights a rune whose beam changes the piece in the centre, and the completed circle leaves the masterwork enchanted (stage classes `s0`–`s5`, prefix `rf-`, durations `RUNE_STEP`; it stops on the masterwork rather than looping). Both share `Defs` and `RankTrack` (`HammerShape` is the anvil's hammer); stages and timings live in `lib/forging.ts`. Calm shows the masterwork at rest. |
+| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. Its one orchestrated moment is one of two animations of the six ranks, picked by the switch under the button (remembered in `localStorage`): `Forging`, an SVG hammer striking ore on an anvil (the hammer's keyframe impact at 70% must equal `IMPACT / CYCLE`), or `RuneSword`, a horizontal runic sword whose six engraved runes light one per rank, each in its own colour (`--rune-1`…`--rune-6`, passed to each rune as `--c`), and which stays enchanted in `--arc`/`--arc-2` once all six are lit (stage classes `s0`–`s5`, prefix `rs-`, durations `RUNE_STEP`; it stops on the masterwork rather than looping). Both share `Defs` and `RankTrack` (`HammerShape` is the anvil's hammer); stages and timings live in `lib/forging.ts`. Calm shows the masterwork at rest. |
 
 ## Motion
 
@@ -99,15 +100,15 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   path and move the band (the masterwork's sheen, `forge-blade-clip`), then mark the end with a small accent (its tip twinkle).
 - Fast motion leaves a smear on its own path: faint copies of the moving part run the same animation, each delayed a
   little more, visible only while it moves fast (the gate hammer's `forge-echo`). Never a separate shape that fades in and out.
-- A multi-stage scene puts its stage on the drawing as a class (`.rune-forge.s3`): plain rules say where everything rests in
+- A multi-stage scene puts its stage on the drawing as a class (`.rune-sword.s3`): plain rules say where everything rests in
   that stage, so calm motion still shows the right picture, and `.sN` entrance animations carry each part there.
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.
-- An orbit (the rune forge's motes): an outer group swings `translateX` and the dot inside swings `translateY` (plus
+- An orbit (the rune sword's motes): an outer group swings `translateX` and the dot inside swings `translateY` (plus
   scale and opacity for depth), both `alternate` with the same duration, a quarter lap apart; spread the starting
   delays round the lap so they never bunch.
-- Lightning that runs round something: a closed jagged path (`bolt()` in `lib/forging.ts`) with `pathLength="100"`, a
+- Lightning that runs round something: a closed jagged path (`bolt(seed, cx, cy, rx, ry)` in `lib/forging.ts`) with `pathLength="100"`, a
   dash pattern that divides 100, and `stroke-dashoffset` animated by -100, so the loop has no seam; flicker opacity on top.
 - A `both`-filled animation with a delay holds its first keyframe during the delay: start a flash or a ring at
   opacity 0, or it shows early.

@@ -25,11 +25,13 @@ test('the rune forge times every rank before the masterwork, which stays', () =>
   expect(RUNE_STEP.every((ms) => ms > 1000)).toBe(true) // long enough for a rune, its beam and the change
 })
 
-test('a bolt is a closed jagged loop around the blade, the same every render', () => {
-  const b = bolt(3)
+test('a bolt is a closed jagged loop round a centre, within its radii and jitter, the same every render', () => {
+  const b = bolt(3, 245, 150, 220, 50)
   expect(b.startsWith('M')).toBe(true)
   expect(b.endsWith('Z')).toBe(true)
-  expect(b.split('L')).toHaveLength(40)
-  expect(bolt(3)).toBe(b)
-  expect(bolt(5)).not.toBe(b)
+  const pts = b.slice(1, -2).split(' L').map((p) => p.split(' ').map(Number))
+  expect(pts).toHaveLength(64)
+  for (const [x, y] of pts) expect(((x - 245) / 230) ** 2 + ((y - 150) / 60) ** 2).toBeLessThanOrEqual(1)
+  expect(bolt(3, 245, 150, 220, 50)).toBe(b)
+  expect(bolt(5, 245, 150, 220, 50)).not.toBe(b)
 })

@@ -18,10 +18,9 @@ export const IMPACT = 1260
 export const HOLD = 2800
 export const RESET = 900
 
-// RUNE_STEP is how long each rank lasts in the rune forge before the next rune lights (ms): long enough for the rune
-// to wake, its beam to strike the centre and the piece to change. The masterwork has none: once the circle is
-// complete the enchanted sword stays.
-export const RUNE_STEP = [1500, 1700, 1700, 1700, 1700] as const
+// RUNE_STEP is how long each rank lasts on the rune sword before the next rune lights (ms): long enough for a rune to
+// ignite and settle. The masterwork has none: once all six are lit the enchanted sword stays.
+export const RUNE_STEP = [1400, 1400, 1400, 1400, 1400] as const
 
 // next is what follows a stage in the loop: the next rank, and after the Masterwork the ore again.
 export const next = (stage: number) => (stage >= LAST ? 0 : stage + 1)
@@ -36,15 +35,15 @@ export function sparks(n = 12): { dx: number; dy: number; r: number }[] {
   })
 }
 
-// bolt is a closed, jagged loop around the rune forge's upright blade (an ellipse about 240,142 whose radius jumps in
-// and out), for lightning that runs round the masterwork. `seed` picks the jitter; deterministic, so a render test sees
+// bolt is a closed, jagged loop round (cx, cy): an ellipse whose radii jump in and out by up to 9 at each of its 64
+// points, for lightning that runs round the rune sword. `seed` picks the jitter; deterministic, so a render test sees
 // the same markup every time.
-export function bolt(seed: number): string {
-  const n = 40
+export function bolt(seed: number, cx: number, cy: number, rx: number, ry: number): string {
+  const n = 64
   const pts = Array.from({ length: n }, (_, i) => {
     const a = (i / n) * 2 * Math.PI
-    const j = ((i * seed) % 7) - 3 // -3 … 3, so the loop zigzags in and out by up to ~9
-    return `${(240 + (44 + j * 2.5) * Math.cos(a)).toFixed(1)} ${(142 + (84 + j * 3) * Math.sin(a)).toFixed(1)}`
+    const j = (((i * seed) % 7) - 3) * 3 // -9 … 9
+    return `${(cx + (rx + j) * Math.cos(a)).toFixed(1)} ${(cy + (ry + j) * Math.sin(a)).toFixed(1)}`
   })
   return `M${pts.join(' L')} Z`
 }

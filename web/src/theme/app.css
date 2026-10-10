@@ -678,91 +678,72 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .forge-ranks li.now::before { background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); }
 .forge-line { margin: 0; min-height: 1.5em; color: var(--muted); font-size: 0.9rem; animation: gate-in 0.4s ease-out backwards; }
 
-/* ── The rune forge: the gate's second animation (components/RuneForge.tsx) ──────────────────────────────────────────
-   A ring of stone blocks between iron rims, six runestones set in it, on a stepped plinth. One stage class on the
-   drawing at a time (s0 Ore … s5 Masterwork; RUNE_STEP in lib/forging.ts): each rank lights a rune whose beam strikes
-   the centre, where the piece changes. At the masterwork the circle closes and the sword stays enchanted. Plain rules
+/* ── The rune sword: the gate's second animation (components/RuneSword.tsx) ────────────────────────────────────────
+   A legendary sword lying horizontal, six runes engraved along its fuller. One stage class on the drawing at a time
+   (s0 Ore … s5 Masterwork; RUNE_STEP in lib/forging.ts): each rank lights the next rune in its own colour (--c, set
+   per rune from --rune-1 … --rune-6). With all six the sword awakens and stays enchanted in --arc/--arc-2. Plain rules
    say what each stage shows, so Calm forge (which stops every animation) still shows the right picture. */
-.rune-forge { animation: rf-in 0.6s ease-out; }
-@keyframes rf-in { from { opacity: 0; } }
-/* the structure */
-.rf-plinth { fill: url(#rf-plinth); stroke: color-mix(in srgb, var(--muted) 35%, transparent); stroke-width: 1; stroke-linejoin: round; }
-.rf-seam { fill: none; stroke: color-mix(in srgb, var(--accent) 40%, var(--anvil)); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 7 4 2 4; }
-.rf-floor { fill: color-mix(in srgb, var(--anvil) 45%, transparent); }
-.rf-aura { fill: url(#forge-glow); opacity: 0.1; }
-.rf-star { fill: none; stroke: color-mix(in srgb, var(--accent) 30%, var(--muted)); stroke-width: 1; stroke-linejoin: round; opacity: 0.4; }
-.rf-glyph-ring { fill: none; stroke: color-mix(in srgb, var(--accent) 45%, var(--muted)); stroke-width: 1.2; stroke-dasharray: 2 5 7 5;
-  transform-box: fill-box; transform-origin: center; animation: rf-turn 60s linear infinite; }
-@keyframes rf-turn { to { transform: rotate(360deg); } }
-.rf-stone { fill: none; stroke: url(#rf-stone); stroke-width: 26; }
-.rf-joints { fill: none; stroke: color-mix(in srgb, var(--bg) 70%, transparent); stroke-width: 1.4; }
-.rf-iron { fill: none; stroke: color-mix(in srgb, var(--anvil) 50%, var(--muted)); stroke-width: 3; }
-.rf-iron.outer { stroke-width: 2.4; }
-.rf-rivets { fill: color-mix(in srgb, var(--muted) 70%, var(--anvil)); }
-.rf-key { fill: url(#rf-stone); stroke: color-mix(in srgb, var(--muted) 55%, var(--anvil)); stroke-width: 1.3; stroke-linejoin: round; transition: stroke 0.4s; }
-.rf-key.lit { stroke: color-mix(in srgb, var(--accent) 70%, var(--anvil)); }
-.rf-rune { fill: none; stroke: color-mix(in srgb, var(--spark) 30%, var(--anvil)); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
+.rune-sword { animation: rs-in 0.6s ease-out; }
+@keyframes rs-in { from { opacity: 0; } }
+/* the sword */
+.rs-gilt { fill: url(#rs-gold); stroke: color-mix(in srgb, var(--anvil) 70%, transparent); stroke-width: 1; stroke-linejoin: round; }
+.rs-grip { fill: color-mix(in srgb, var(--anvil) 75%, var(--accent)); stroke: color-mix(in srgb, var(--anvil) 70%, transparent); stroke-width: 1; }
+.rs-wraps { fill: none; stroke: color-mix(in srgb, var(--rune-2) 45%, var(--anvil)); stroke-width: 1.6; stroke-linecap: round; }
+.rs-gem { fill: color-mix(in srgb, var(--arc-2) 35%, var(--anvil)); stroke: color-mix(in srgb, var(--spark) 40%, transparent); stroke-width: 0.8; }
+.rs-edge { fill: none; stroke: color-mix(in srgb, var(--anvil) 70%, transparent); stroke-width: 1; stroke-linejoin: round; }
+.rs-fuller { fill: color-mix(in srgb, var(--anvil) 88%, var(--bg)); stroke: color-mix(in srgb, var(--anvil) 60%, var(--muted)); stroke-width: 0.8; }
+.rs-fuller-glow { opacity: 0; }
+/* the runes: engraved and dark until lit, then their own colour, pooling light in the fuller */
+.rs-rune { fill: none; stroke: color-mix(in srgb, var(--spark) 25%, var(--anvil)); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
   transform-box: fill-box; transform-origin: center; }
-.rf-rune.lit { stroke: var(--spark); filter: drop-shadow(0 0 2px var(--accent-2)) drop-shadow(0 0 6px var(--accent)); }
-.rf-rune.now { animation: rf-wake 0.9s ease-out both; }
-@keyframes rf-wake { 0% { transform: scale(1.6); opacity: 0.3; filter: drop-shadow(0 0 14px var(--accent-2)); } }
-/* the piece: one per rank, only the current one shown; a rune's strike dissolves the old and forms the new */
-.rf-piece { opacity: 0; transform-box: fill-box; transform-origin: center; }
-.rune-forge.s0 .rf-p0, .rune-forge.s1 .rf-p1, .rune-forge.s2 .rf-p2, .rune-forge.s3 .rf-p3, .rune-forge:is(.s4, .s5) .rf-p4 { opacity: 1; }
-.rune-forge.s0 .rf-p0, .rune-forge.s1 .rf-p1, .rune-forge.s2 .rf-p2, .rune-forge.s3 .rf-p3, .rune-forge.s4 .rf-p4 {
-  animation: rf-form 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.45s both; }
-.rune-forge.s1 .rf-p0, .rune-forge.s2 .rf-p1, .rune-forge.s3 .rf-p2, .rune-forge.s4 .rf-p3 { animation: rf-dissolve 0.45s ease-in 0.3s both; }
-@keyframes rf-form { from { opacity: 0; transform: scale(1.15); filter: drop-shadow(0 0 12px var(--spark)); } }
-@keyframes rf-dissolve { from { opacity: 1; } to { opacity: 0; transform: scale(0.85); } }
-.rf-fuller { fill: none; stroke: color-mix(in srgb, var(--muted) 70%, var(--anvil)); stroke-width: 1.3; stroke-linecap: round; opacity: 0.7; }
-.rf-edge { fill: none; stroke: var(--spark); stroke-width: 0.9; stroke-linejoin: round; opacity: 0.6; }
-.rf-gem { fill: var(--accent-2); opacity: 0; }
-/* the strike: a beam from the rune to the centre, then a flash where it lands */
-.rf-beam { fill: none; stroke: var(--spark); stroke-width: 2.5; stroke-dasharray: 0.3 1; stroke-dashoffset: 0.3;
-  filter: drop-shadow(0 0 4px var(--accent-2)); animation: rf-beam 0.5s ease-in both; }
-@keyframes rf-beam { to { stroke-dashoffset: -1; } }
-.rf-flash { fill: url(#forge-flash); opacity: 0; transform-box: fill-box; transform-origin: center; animation: rf-flash 0.7s ease-out 0.4s both; }
-@keyframes rf-flash { 0% { opacity: 0; transform: scale(0.4); } 25% { opacity: 0.9; } 100% { opacity: 0; transform: scale(1.4); } }
-/* Masterwork: the circle closes. Both rims ignite round from the first rune, every rune strikes the sword at once, a
-   shockwave rolls out, the stones and the star light, and the sword stays enchanted */
-.rf-close { fill: none; stroke: var(--accent-2); stroke-width: 3; stroke-dasharray: 1 1; filter: drop-shadow(0 0 5px var(--accent)); }
-.rf-close.outer { stroke-width: 2.4; }
-.rune-forge.s5 .rf-close { animation: rf-close 1.1s ease-in-out 0.4s both; }
-@keyframes rf-close { from { stroke-dashoffset: 1; } }
-.rune-forge.s5 .rf-beam.all { animation-delay: 1.5s; }
-.rune-forge.s5 .rf-flash.big { animation-delay: 1.8s; }
-.rf-burst { fill: none; stroke: var(--spark); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center;
-  filter: drop-shadow(0 0 6px var(--accent-2)); animation: rf-burst 1s ease-out 1.9s both; }
-@keyframes rf-burst { 0% { opacity: 0; transform: scale(0.3); } 8% { opacity: 1; } 100% { opacity: 0; transform: scale(3.6); } }
-.rune-forge.s5 .rf-key { stroke: var(--accent); filter: drop-shadow(0 0 4px var(--accent)); animation: rf-kindle 0.8s ease-out 1.6s both; }
-.rune-forge.s5 :is(.rf-star, .rf-seam) { stroke: var(--accent-2); opacity: 0.8; filter: drop-shadow(0 0 4px var(--accent)); animation: rf-kindle 1s ease-out 1.9s both; }
-@keyframes rf-kindle { from { filter: none; } }
-.rune-forge.s5 .rf-aura { opacity: 0.3; animation: rf-pulse 3s ease-in-out 2s infinite; }
-@keyframes rf-pulse { 50% { opacity: 0.18; } }
-.rune-forge.s5 .rf-p4 { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-2) 70%, transparent)); }
-.rune-forge.s5 .rf-gem { opacity: 1; filter: drop-shadow(0 0 4px var(--accent-2)); }
-.rf-enchant { animation: rf-enchant 0.9s ease-out 2s both; }
-@keyframes rf-enchant { from { opacity: 0; } }
-.rf-sword-aura { fill: url(#forge-glow); opacity: 0.4; }
-/* lightning: a jagged loop round the blade, dashed so a few bolts show; the dashes run round it and flicker */
-.rf-bolt { fill: none; stroke: var(--spark); stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; stroke-dasharray: 13 37;
-  filter: drop-shadow(0 0 2px var(--spark)) drop-shadow(0 0 6px var(--accent-2)) drop-shadow(0 0 10px var(--accent));
-  animation: rf-bolt 1.4s linear infinite, rf-flicker 0.24s steps(2, jump-none) infinite; }
-.rf-bolt.b2 { stroke-dasharray: 9 24.33; animation-duration: 1.9s, 0.3s; animation-direction: reverse, normal; }
-@keyframes rf-bolt { to { stroke-dashoffset: -100; } }
-@keyframes rf-flicker { from { opacity: 1; } to { opacity: 0.4; } }
-/* motes: each orbits the blade on its own ellipse (x and y swing a quarter turn apart), larger and brighter in front */
-.rf-mote { animation: rf-orbit-x var(--t) ease-in-out var(--d) infinite alternate; }
-.rf-mote circle { fill: var(--spark); filter: drop-shadow(0 0 3px var(--accent-2)); transform-box: fill-box; transform-origin: center;
-  animation: rf-orbit-y var(--t) ease-in-out calc(var(--d) - var(--t) / 2) infinite alternate; }
-@keyframes rf-orbit-x { from { transform: translateX(calc(var(--rx) * -1)); } to { transform: translateX(var(--rx)); } }
-@keyframes rf-orbit-y { from { transform: translateY(calc(var(--ry) * -1)) scale(0.5); opacity: 0.3; } to { transform: translateY(var(--ry)) scale(1.1); opacity: 1; } }
-/* a sheen down the steel and a twinkle at the point */
-.rf-sheen, .rf-twinkle { opacity: 0; }
-.rune-forge.s5 .rf-sheen { animation: rf-sheen 2.6s ease-in-out 2.2s infinite; }
-@keyframes rf-sheen { 0% { opacity: 1; transform: none; } 60%, 100% { opacity: 1; transform: translateY(176px); } }
-.rf-twinkle { fill: var(--spark); transform-box: fill-box; transform-origin: center; filter: drop-shadow(0 0 4px var(--accent-2)); }
-.rune-forge.s5 .rf-twinkle { animation: twinkle 2.6s ease-out 2.2s infinite; }
+.rs-rune.lit { stroke: color-mix(in srgb, var(--c) 55%, var(--spark)); filter: drop-shadow(0 0 2px var(--c)) drop-shadow(0 0 6px var(--c)); }
+.rs-rune.now { animation: rs-ignite 1s ease-out both; }
+@keyframes rs-ignite { 0% { transform: scale(2); opacity: 0; } 30% { opacity: 1; filter: drop-shadow(0 0 4px var(--spark)) drop-shadow(0 0 16px var(--c)); } }
+.rs-pool { opacity: 0; transition: opacity 0.6s; }
+.rs-pool.lit { opacity: 0.55; }
+.rs-flare { fill: none; stroke: var(--c); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center;
+  filter: drop-shadow(0 0 5px var(--c)); animation: rs-flare 0.9s ease-out both; }
+@keyframes rs-flare { 0% { opacity: 0; transform: scale(0.3); } 15% { opacity: 1; } 100% { opacity: 0; transform: scale(2.6); } }
+/* Masterwork: light surges down the fuller, a shockwave rolls out, and the sword stays enchanted */
+.rs-surge { opacity: 0; }
+.rune-sword.s5 .rs-surge { animation: rs-surge 0.9s ease-in 0.7s both; }
+@keyframes rs-surge { 0% { opacity: 1; transform: none; } 100% { opacity: 1; transform: translateX(320px); } }
+.rs-shock { fill: none; stroke: var(--arc-2); stroke-width: 3; opacity: 0; transform-box: fill-box; transform-origin: center;
+  filter: drop-shadow(0 0 6px var(--arc)); animation: rs-shock 1.1s ease-out 1.4s both; }
+@keyframes rs-shock { 0% { opacity: 0; transform: scale(0.2, 0.3); } 10% { opacity: 1; } 100% { opacity: 0; transform: scale(1.15); } }
+.rune-sword.s5 .rs-fuller-glow { opacity: 0.45; animation: rs-awaken 1s ease-out 1.4s both; }
+.rune-sword.s5 .rs-sword { filter: drop-shadow(0 0 4px var(--arc)) drop-shadow(0 0 12px var(--arc-2)); animation: rs-kindle 1.2s ease-out 1.4s both; }
+@keyframes rs-kindle { from { filter: none; } }
+@keyframes rs-awaken { from { opacity: 0; } }
+.rune-sword.s5 .rs-gem { fill: var(--arc-2); filter: drop-shadow(0 0 4px var(--arc-2)); }
+.rune-sword.s5 .rs-rune.lit:not(.now) { animation: rs-pulse 2.4s ease-in-out 2s infinite; }
+@keyframes rs-pulse { 50% { opacity: 0.6; } }
+.rs-enchant { animation: rs-awaken 1s ease-out 1.6s both; }
+.rs-aura { fill: url(#rs-aura-fill); transform-box: fill-box; transform-origin: center; animation: rs-breathe 3.2s ease-in-out 2.6s infinite; }
+@keyframes rs-breathe { 50% { opacity: 0.6; transform: scale(0.96); } }
+/* lightning: jagged loops round the sword, dashed so a few bolts show; the dashes run round and flicker */
+.rs-bolt { fill: none; stroke: color-mix(in srgb, var(--arc) 45%, var(--spark)); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round;
+  stroke-dasharray: 11 39; filter: drop-shadow(0 0 2px var(--arc)) drop-shadow(0 0 7px var(--arc));
+  animation: rs-bolt 2.2s linear infinite, rs-flicker 0.22s steps(2, jump-none) infinite; }
+.rs-bolt.b2 { stroke: color-mix(in srgb, var(--arc-2) 50%, var(--spark)); stroke-dasharray: 8 25.33;
+  filter: drop-shadow(0 0 2px var(--arc-2)) drop-shadow(0 0 7px var(--arc-2)); animation-duration: 3s, 0.3s; animation-direction: reverse, normal; }
+@keyframes rs-bolt { to { stroke-dashoffset: -100; } }
+@keyframes rs-flicker { from { opacity: 1; } to { opacity: 0.35; } }
+/* motes: each circles the sword on its own ellipse (x and y swing a quarter lap apart), larger and brighter in front */
+.rs-mote { animation: rs-orbit-x var(--t) ease-in-out var(--d) infinite alternate; }
+.rs-mote circle { fill: var(--spark); transform-box: fill-box; transform-origin: center;
+  animation: rs-orbit-y var(--t) ease-in-out calc(var(--d) - var(--t) / 2) infinite alternate; }
+.rs-mote .tone0 { filter: drop-shadow(0 0 3px var(--spark)); }
+.rs-mote .tone1 { fill: color-mix(in srgb, var(--arc) 50%, var(--spark)); filter: drop-shadow(0 0 3px var(--arc)); }
+.rs-mote .tone2 { fill: color-mix(in srgb, var(--arc-2) 50%, var(--spark)); filter: drop-shadow(0 0 3px var(--arc-2)); }
+@keyframes rs-orbit-x { from { transform: translateX(calc(var(--rx) * -1)); } to { transform: translateX(var(--rx)); } }
+@keyframes rs-orbit-y { from { transform: translateY(calc(var(--ry) * -1)) scale(0.45); opacity: 0.25; } to { transform: translateY(var(--ry)) scale(1.15); opacity: 1; } }
+/* a sheen along the steel and a twinkle at the point */
+.rs-sheen, .rs-twinkle { opacity: 0; }
+.rune-sword.s5 .rs-sheen { animation: rs-sheen 3s ease-in-out 2.2s infinite; }
+@keyframes rs-sheen { 0% { opacity: 1; transform: none; } 55%, 100% { opacity: 1; transform: translateX(370px); } }
+.rs-twinkle { fill: var(--spark); transform-box: fill-box; transform-origin: center; filter: drop-shadow(0 0 4px var(--arc-2)); }
+.rune-sword.s5 .rs-twinkle { animation: twinkle 3s ease-out 2.2s infinite; }
 
 /* the gate's choice of animation, for now */
 .gate-switch { margin-top: 0.75rem; font-size: 0.8rem; }

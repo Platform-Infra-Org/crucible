@@ -26,5 +26,5 @@ test('two animations to choose from; the anvil when nothing is remembered', () =
   const h = renderToStaticMarkup(<ForgeGate calm={false} />)
   expect(h).toContain('role="group" aria-label="Animation"')
   expect(h).toContain('aria-pressed="true">Anvil')
-  expect(h).toContain('aria-pressed="false">Rune forge')
+  expect(h).toContain('aria-pressed="false">Rune sword')
 })

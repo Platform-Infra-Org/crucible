@@ -29,6 +29,7 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
 
   // SSO login through Keycloak
   await page.goto('/')
+  await page.getByRole('button', { name: 'Enter the forge' }).click() // the gate, then the identity provider
   await page.locator('#username').fill('trainee')
   await page.locator('#password').fill('trainee')
   await page.locator('#kc-login').click()

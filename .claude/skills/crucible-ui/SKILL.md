@@ -48,6 +48,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - Section labels (panel `h5`, toolbar captions, table headers, card eyebrows): ~0.72–0.85rem, uppercase,
   letter-spacing 0.06–0.1em, `var(--muted)`, weight 600.
 - `--glow` is the theme's soft halo (none in High Contrast). `--spark` is white-hot (motes, icon cores, the avatar ring).
+  `--anvil` is dark iron that stays dark in every theme (the gate's anvil), for drawings that must read on light backgrounds too.
 - Radii: 6px inputs, 8px buttons, 12px panels, 14px cards, 999px pills and chips.
 
 ## Page anatomy
@@ -84,6 +85,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Identity | `Avatar` (an icon from `lib/avatars.ts` drawn as poured metal, or initials) in a turning crucible ring. New icons: add to `AVATARS` and to `auth.Avatars` in Go (a test checks they match). |
 | Heat | Journey heat cells: glyph + text carry the meaning (`·` cold, `◐` glowing, `●` forged); colour only reinforces it. |
 | Ambient | `Embers` and `SparkBurst` for moments (Hearth, a passed check); never as constant decoration on working pages. |
+| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. Its one orchestrated moment is `Forging`: an SVG hammer striking ore through the six ranks (stages and timings in `lib/forging.ts`; the hammer's keyframe impact at 70% must equal `IMPACT / CYCLE`). Calm shows the masterwork at rest. |
 
 ## Motion
 
@@ -91,6 +93,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   6–9s for ambient loops (the molten churn, `bar-flow`, motes).
 - Loops must be seamless: a gradient that rolls must repeat at the distance it moves (see `bar-flow`, `molten-flow`).
 - To animate a custom property (an angle, a radius), register it with `@property` (see `--pour`, `--strike-r`).
+- CSS transforms on SVG elements scale and rotate around the drawing's top-left corner unless told otherwise: set
+  `transform-box: fill-box; transform-origin: center` (or `view-box` with an explicit origin, like the gate's hammer pivot).
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.

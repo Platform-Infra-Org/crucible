@@ -11,8 +11,10 @@ provider (Keycloak or AWS Cognito, depending on how Crucible was set up).
 
 ## How it works
 
-1. Open Crucible. If you are not signed in, it sends you to your company sign-in page.
-2. Sign in there. You come back to the Hearth.
+1. Open Crucible. If you are not signed in, you see the forge's gate: a hammer forging ore into a masterwork, through
+   the six forge ranks. (With Calm forge or your system's reduced motion, the masterwork rests on the anvil instead.)
+2. Choose **Enter the forge**. Crucible sends you to your company sign-in page.
+3. Sign in there. You come back to the Hearth.
 3. Crucible knows you by your email address. Your identity provider must have verified it; if it hasn't, Crucible
    tells you so and does not let you in.
 
@@ -33,5 +35,5 @@ an anvil, a flame, a sword, a shield, tongs, a helm or an ingot. Choose one and 
 
 ## Logging out
 
-**Log out**, at the bottom of your user card, ends your Crucible session and takes you to the sign-in page. If your
-company sign-in is still active in this browser, signing in again may need no password.
+**Log out**, at the bottom of your user card, ends your Crucible session and takes you back to the gate. If your
+company sign-in is still active in this browser, **Enter the forge** may let you straight back in without a password.

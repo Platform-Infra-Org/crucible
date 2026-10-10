@@ -11,6 +11,7 @@ async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
   page.on('dialog', (d) => d.accept()) // "End lab" confirm
   await page.goto('/')
+  await page.getByRole('button', { name: 'Enter the forge' }).click() // the gate, then the identity provider
   await page.locator('#username').fill(user)
   await page.locator('#password').fill(user)
   await page.locator('#kc-login').click()

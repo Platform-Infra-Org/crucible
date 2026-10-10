@@ -49,7 +49,7 @@ export function UserMenu() {
   }
   const logout = async () => {
     await fetch('/auth/logout', { method: 'POST' })
-    window.location.href = '/auth/login'
+    window.location.href = '/' // back to the forge's gate
   }
 
   return (

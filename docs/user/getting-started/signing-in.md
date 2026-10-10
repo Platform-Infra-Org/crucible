@@ -12,8 +12,8 @@ provider (Keycloak or AWS Cognito, depending on how Crucible was set up).
 ## How it works
 
 1. Open Crucible. If you are not signed in, you see the forge's gate, with an animation of the six forge ranks. Choose
-   it with the switch at the bottom: **Anvil**, a hammer forging ore into a masterwork, or **Crucible**, ore melted and
-   poured into a blade mould, quenched, given a hilt and struck into a masterwork. Your browser remembers the choice.
+   it with the switch at the bottom: **Anvil**, a hammer forging ore into a masterwork, or **Crucible**, a crucible pouring
+   molten metal into a sword mould, the sword cooling, coming free and gleaming as a masterwork. Your browser remembers the choice.
    (With your system's reduced motion, the finished masterwork rests instead.)
 2. Choose **Enter the forge**. Crucible sends you to your company sign-in page.
 3. Sign in there. You come back to the Hearth.

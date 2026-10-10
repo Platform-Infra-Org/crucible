@@ -13,7 +13,7 @@ provider (Keycloak or AWS Cognito, depending on how Crucible was set up).
 
 1. Open Crucible. If you are not signed in, you see the forge's gate, with an animation of the six forge ranks. Choose
    it with the switch at the bottom: **Anvil**, a hammer forging ore into a masterwork, or **Crucible**, a rune forge in
-   which a floating crucible pours an upright sword mould inside an arcane circle, one rune lighting for each rank,
+   which a floating crucible tilts and pours molten metal into an upright sword mould set in a carved rune circle, one rune lighting for each rank,
    until the sword rises and gleams as a masterwork. Your browser remembers the choice.
    (With your system's reduced motion, the finished masterwork rests instead.)
 2. Choose **Enter the forge**. Crucible sends you to your company sign-in page.

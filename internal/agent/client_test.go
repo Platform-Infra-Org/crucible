@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"crucible/internal/agent"
 	"crucible/internal/agenthub"
 	ap "crucible/internal/agentproto"
+	"github.com/coder/websocket"
 )
 
 type echo struct {
@@ -314,5 +316,52 @@ func TestClusterProvisionReachesTheClusterExecutor(t *testing.T) {
 	defer fx.mu.Unlock()
 	if len(fx.clusterSpecs) != 1 || fx.clusterSpecs[0].Context != "kind-dev" || len(fx.provisioned) != 0 {
 		t.Fatalf("cluster %+v, compose %v", fx.clusterSpecs, fx.provisioned)
+	}
+}
+
+// The hello carries a snapshot of the contexts; a contexts message sent before it would be overwritten by that older
+// snapshot. With a change already pending at connect, hello must still be the first message, every time.
+func TestHelloComesBeforeAnyContextsMessage(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kc, []byte("clusters: [{name: c, cluster: {server: 'https://127.0.0.1:6443'}}]\nusers: [{name: u, user: {}}]\ncontexts: [{name: one, context: {cluster: c, user: u}}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		w := &agent.Watcher{Kubeconfig: kc, Every: time.Hour}
+		wctx, stopW := context.WithCancel(context.Background())
+		go w.Run(wctx)
+		for j := 0; j < 200 && len(w.Current()) == 0; j++ {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(5 * time.Millisecond) // the first list is now pending on Changes
+		first := make(chan string, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			ws, err := websocket.Accept(rw, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.CloseNow()
+			_, data, _ := ws.Read(r.Context())
+			var m ap.Msg
+			_ = json.Unmarshal(data, &m)
+			select {
+			case first <- m.Type:
+			default:
+			}
+		}))
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: &fakeExec{provisioned: map[string]string{}}, Log: slog.Default(), Kube: w}).Run(ctx)
+			close(done)
+		}()
+		got := <-first
+		cancel()
+		<-done
+		srv.Close()
+		stopW()
+		if got != ap.THello {
+			t.Fatalf("run %d: first message %q, want hello", i, got)
+		}
 	}
 }

@@ -81,6 +81,9 @@ func (c *Client) runOnce(ctx context.Context) error {
 	hello := ap.Msg{Type: ap.THello, Data: live}
 	if c.Kube != nil {
 		hello.Contexts = c.Kube.Current()
+	}
+	s.send(ctx, hello) // before any contexts message: a later hello's older snapshot would overwrite a newer list
+	if c.Kube != nil {
 		wctx, stop := context.WithCancel(ctx)
 		defer stop() // the goroutine ends with this connection, not only with the agent
 		go func() {  // while connected, every change of the kubeconfig's contexts reaches Crucible
@@ -94,7 +97,6 @@ func (c *Client) runOnce(ctx context.Context) error {
 			}
 		}()
 	}
-	s.send(ctx, hello)
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {

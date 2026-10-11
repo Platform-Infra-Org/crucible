@@ -240,7 +240,7 @@ func TestAnswerChecksEnrolmentBeforeReadingTheBody(t *testing.T) {
 	}
 }
 
-// An admin reset lowers the item, reopens the score and keeps the forge rank (spec §7: ranks are never lost).
+// An admin reset lowers the item, reopens the score and keeps the sword rank (spec §7: ranks are never lost).
 func TestAdminResetRecomputesProgressAndKeepsRank(t *testing.T) {
 	ctx := context.Background()
 	s, sc, u, senior := fixture301(t)

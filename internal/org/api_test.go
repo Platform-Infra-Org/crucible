@@ -2,7 +2,6 @@ package org
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
 	"crucible/internal/config"
+	"crucible/internal/smith"
 )
 
 type apiFixture struct {

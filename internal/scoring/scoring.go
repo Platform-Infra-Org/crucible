@@ -5,7 +5,6 @@ package scoring
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -31,6 +30,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 const (

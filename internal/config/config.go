@@ -37,7 +37,7 @@ type Settings struct {
 	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
 	Schedules       map[string]*Schedule `yaml:"schedules"`
 	Smith           SmithThresholds      `yaml:"smith"` // smith rank experience thresholds; missing keys take DefaultSmith
-	Ranks           RankThresholds       `yaml:"ranks"` // forge rank thresholds; missing keys take DefaultRanks
+	Ranks           RankThresholds       `yaml:"ranks"` // sword rank thresholds; missing keys take DefaultRanks
 	Quotes          []string             `yaml:"-"`
 }
 
@@ -59,7 +59,7 @@ func (t *CostTiers) Validate() error {
 // Fill applies the rank defaults to unset thresholds and checks their order.
 func (r *RankThresholds) Fill() error { return r.fill() }
 
-// RankThresholds are the % of enrolled training completed at which each forge rank is earned (spec §7). Ore is 0.
+// RankThresholds are the % of a training completed at which each sword rank is earned (spec §7). Ore is 0.
 type RankThresholds struct {
 	Ingot      float64 `yaml:"ingot" json:"ingot"`
 	Tempered   float64 `yaml:"tempered" json:"tempered"`

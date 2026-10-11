@@ -80,7 +80,7 @@ training makes a Journeyman.
 - `smiths (user_id PRIMARY KEY, xp, level, earned_at, seen)` — `xp` high-water, `level` raised only.
 - The old `ranks` table is dropped (the migration's Down recreates it empty).
 - `GET /api/me/forge` returns `{smith: {xp, level, title, next: {title, at} | null}, swords: [{training, title, level,
-  rank, percent, next: {rank, at} | null}], badges, sword_ladder, smith_ladder, rank_up: {smith: {level, title} | null,
+  rank, percent, next: {name, at} | null}], badges, sword_ladder, smith_ladder, rank_up: {smith: {level, title} | null,
   swords: [{training, level, rank}]}}`.
 - Payloads that name a person (team members, Journey rows, Anvil, approvals, edits, the people picker) carry
   `smith: {level, title}`, filled by one batched lookup per response. Journey rows also carry `sword: {level, rank}` when

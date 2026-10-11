@@ -2,8 +2,10 @@ default_theme: forge
 # Lab requests are routed by estimated cost in USD (spec §9.1). Crucible has no defaults: set these at install.
 cost_tiers: { auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25 }
 escalation_hours: 4   # business hours, counted inside the program's schedule
-# Forge rank thresholds: % of enrolled training completed. Ore is 0; masterwork must be 100. These are the defaults.
+# Sword rank thresholds: % of a training completed, per training. Ore is 0; masterwork must be 100. These are the defaults.
 ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 }
+# Smith rank thresholds: experience across Crucible. Bellows Hand is 0; each must be higher than the one before.
+# smith: { apprentice: 150, journeyman: 500, smith: 1200, master_smith: 2500, grandmaster: 5000 }
 schedules:
   business-hours:
     timezone: Europe/Bucharest

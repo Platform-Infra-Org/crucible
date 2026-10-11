@@ -5,7 +5,6 @@ package journey
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"maps"
 	"slices"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"crucible/internal/learn"
 	"crucible/internal/rbac"
 	"crucible/internal/ready"
+	"crucible/internal/smith"
 )
 
 type Service struct {

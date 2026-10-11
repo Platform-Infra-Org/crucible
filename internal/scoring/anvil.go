@@ -2,7 +2,6 @@ package scoring
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 type Filter struct{ Training, Trainee, Type string }
@@ -325,7 +325,7 @@ func (s *Service) resetCheck(u *auth.User, in ResetInput) (string, error) {
 
 // Reset is the admin escape hatch for "scores are final" (spec §7): it clears the trainee's instant quiz attempts for
 // the submission's module and/or reopens the scored submission for scoring, audited in the same transaction, and
-// tells the trainee. Forge ranks are never lowered: UpdateForge only raises them.
+// tells the trainee. Sword and smith ranks are never lowered: UpdateForge only raises them.
 func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInput) (*Submission, error) {
 	reason, err := s.resetCheck(u, in)
 	if err != nil {

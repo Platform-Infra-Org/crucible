@@ -1,7 +1,6 @@
 package org
 
 import (
-	"crucible/internal/smith"
 	"fmt"
 	"maps"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"crucible/internal/config"
 	"crucible/internal/httpx"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 	"crucible/internal/yamlx"
 )
 

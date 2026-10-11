@@ -2,7 +2,6 @@ package labs
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"fmt"
 	"slices"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 // Spend is month-to-date lab spend for a team or one program: estimates, with Cost Explorer actuals swapped in for

@@ -4,7 +4,6 @@ package edits
 
 import (
 	"context"
-	"crucible/internal/smith"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,6 +27,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 type Notifier interface {

@@ -48,3 +48,11 @@ test('filters come from the address: one person, the numbers follow, and a way b
   expect(page('?look=1&training=f101')).not.toContain('aria-label="Uma"') // Uma has nothing to look at
   expect(page()).not.toContain('Clear filters')
 })
+
+test('a running cluster lab names its context and each release health in words', () => {
+  rows[0].cluster_labs = [{ module: 'm2', context: 'kind-dev', health: { releases: [{ name: 'forge', status: 'failing', unready: ['deployment/forge: 1 of 2 updated'] }] } }]
+  const h = page()
+  rows[0].cluster_labs = undefined
+  expect(h).toContain('Lab running in Embers on <code>kind-dev</code>')
+  expect(h).toMatch(/forge <span class="badge failing">Failing<\/span>/)
+})

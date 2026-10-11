@@ -5,7 +5,7 @@ import { useFetch } from '../useFetch'
 import type { Heat, JourneyRow, TeamSummary } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
-import { Cells, Flags, Legend } from '../components/HeatMap'
+import { Cells, ClusterLabs, Flags, Legend } from '../components/HeatMap'
 import { Avatar } from '../components/Avatar'
 import { average, group, options, pick, type By, type Group } from '../lib/journey'
 import { toast } from '../lib/alerts'
@@ -133,6 +133,7 @@ function JourneyLine({ r, label }: { r: JourneyRow; label: string }) {
         <span>{r.percent}%</span>
       </div>
       <Cells r={r} />
+      <ClusterLabs r={r} />
       <Flags flags={r.flags} />
     </div>
   )

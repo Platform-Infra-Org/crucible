@@ -183,3 +183,17 @@ func rollout(updated, ready, want int32) string {
 	}
 	return fmt.Sprintf("%d of %d ready", ready, want)
 }
+
+// Lists gives a report empty lists where it has none: reports are self-reported (maybe hand-made), and a page must
+// never get null.
+func (r Report) Lists() Report {
+	if r.Releases == nil {
+		r.Releases = []Release{}
+	}
+	for i := range r.Releases {
+		if r.Releases[i].Unready == nil {
+			r.Releases[i].Unready = []string{}
+		}
+	}
+	return r
+}

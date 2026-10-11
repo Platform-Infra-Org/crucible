@@ -359,3 +359,29 @@ func TestTeamScopedToCaller(t *testing.T) {
 		t.Fatal("unknown team is an error")
 	}
 }
+
+// Spec 2026-10-11 §3/§4: a leader sees a running cluster lab's context and its releases' health on the Journey.
+func TestRunningClusterLabShowsContextAndHealth(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	db := f.s.DB
+	insertLab(t, db, "cccccccccccc", f.trainee.ID, "03-cluster-heat", "ready", f.now.Add(-time.Minute))
+	insertLab(t, db, "dddddddddddd", f.trainee.ID, "03-cluster-heat", "destroyed", f.now.Add(-time.Hour))
+	if _, err := db.Exec(ctx, `UPDATE lab_instances SET runtime = 'cluster', cluster_context = 'kind-dev'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{`{"releases":[{"name":"forge","status":"progressing","unready":["x"]}]}`, `{"releases":[{"name":"forge","status":"failing"}]}`} {
+		if _, err := db.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail) VALUES ('cccccccccccc', 'health', $1)`, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	cl := rows[0].ClusterLabs
+	if len(cl) != 1 || cl[0].Module != "03-cluster-heat" || cl[0].Context != "kind-dev" || cl[0].Health == nil ||
+		cl[0].Health.Releases[0].Status != "failing" || cl[0].Health.Releases[0].Unready == nil {
+		t.Fatalf("cluster labs %+v", cl)
+	}
+}

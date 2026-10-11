@@ -80,7 +80,7 @@ export type PlatformView = {
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
   pending_edits: number; attention: AttentionLab[]; programs: ProgramPin[]
 }
-export type AttentionLab = { id: string; trainee: string; team: string; training: string; module: string; state: string; error?: string; since: string }
+export type AttentionLab = { id: string; trainee: string; team: string; training: string; module: string; state: string; error?: string; since: string; cluster_context?: string }
 export type ProgramPin = { team: string; training: string; running: string; head: string; pinned_ref?: string }
 
 export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review' | 'self_reported'
@@ -123,7 +123,8 @@ export type Forge = { percent: number; level: number; rank: string; ladder: { na
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
-export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
+export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string
+  cluster_labs?: { module: string; context: string; health?: Health }[] }
 export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
 export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
 export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'

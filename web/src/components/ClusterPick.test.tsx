@@ -21,4 +21,9 @@ describe('cluster labs', () => {
     expect(h).toContain('Starting')
     expect(h).toContain('deployment/forge: 1 of 2 ready')
   })
+  test('a failing release gets the danger badge, a starting one does not', () => {
+    const h = renderToStaticMarkup(<ReleaseHealth health={{ releases: [{ name: 'a', status: 'failing', unready: [] }, { name: 'b', status: 'progressing', unready: [] }] }} />)
+    expect(h).toContain('<span class="badge failing">Failing</span>')
+    expect(h).toContain('<span class="badge in_progress">Starting</span>')
+  })
 })

@@ -260,6 +260,7 @@ a.button-link:hover { border-color: var(--accent); }
 .badge.complete { color: var(--ok); }
 .badge.in_progress { color: var(--accent-2); }
 .badge.warn { color: var(--accent-2); }
+.badge.failing { color: var(--danger); }
 
 .prose { max-width: 72ch; }
 .prose pre { background: var(--surface-2); padding: 0.75rem; border-radius: 8px; overflow: auto; }
@@ -433,6 +434,7 @@ meter { width: 8rem; vertical-align: middle; }
 .heat-cells.calm .heat-forged { box-shadow: none; }
 .heat-summary { margin: 0; }
 .flags { list-style: none; padding: 0; margin: 0; }
+.cluster-labs { list-style: none; padding: 0; margin: 0.25rem 0; }
 .flags .warn { color: var(--text); }
 
 /* the team Journey: grouped by person or by training, one panel each, a molten bar per training a person takes */

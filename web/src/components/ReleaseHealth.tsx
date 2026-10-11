@@ -1,6 +1,7 @@
 import type { Health, ReleaseStatus } from '../types'
 
-const words: Record<ReleaseStatus, string> = { healthy: 'Ready', progressing: 'Starting', failing: 'Failing' }
+export const releaseWords: Record<ReleaseStatus, string> = { healthy: 'Ready', progressing: 'Starting', failing: 'Failing' }
+export const releaseBadge: Record<ReleaseStatus, string> = { healthy: 'complete', progressing: 'in_progress', failing: 'failing' }
 
 // ReleaseHealth: each Helm release of a cluster lab and what is not ready yet, as of the last check.
 export function ReleaseHealth({ health }: { health: Health }) {
@@ -10,7 +11,7 @@ export function ReleaseHealth({ health }: { health: Health }) {
       <ul className="facts-list">
         {health.releases.map((r) => (
           <li key={r.name}>
-            <strong>{r.name}</strong> <span className={`badge ${r.status === 'healthy' ? 'complete' : r.status === 'failing' ? 'warn' : 'in_progress'}`}>{words[r.status]}</span>
+            <strong>{r.name}</strong> <span className={`badge ${releaseBadge[r.status]}`}>{releaseWords[r.status]}</span>
             {r.unready.length > 0 && <ul className="muted">{r.unready.map((u) => <li key={u}><code>{u}</code></li>)}</ul>}
           </li>
         ))}

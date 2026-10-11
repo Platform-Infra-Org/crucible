@@ -119,7 +119,16 @@ export type Ledger = {
   accuracy: Accuracy; findings?: Finding[]
 }
 
-export type Forge = { percent: number; level: number; rank: string; ladder: { name: string; at: number }[]; badges: { training: string; title: string; earned_at: string }[]; rank_up: boolean }
+export type SmithRef = { level: number; title: string }
+export type Sword = { training: string; title: string; level: number; rank: string; percent: number; next: { name: string; at: number } | null }
+export type Forge = {
+  smith: { xp: number; level: number; title: string; next: { title: string; at: number } | null }
+  swords: Sword[]
+  badges: { training: string; title: string; earned_at: string }[]
+  sword_ladder: { name: string; at: number }[]
+  smith_ladder: { title: string; at: number }[]
+  rank_up: { smith: SmithRef | null; swords: { training: string; title: string; level: number; rank: string }[] }
+}
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }

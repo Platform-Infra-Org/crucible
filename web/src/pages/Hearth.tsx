@@ -7,27 +7,34 @@ import { randomQuote } from '../lib/quotes'
 import { Embers } from '../components/Embers'
 import { Loader } from '../components/Loader'
 import { MoltenBar } from '../components/MoltenBar'
-import { RankCard, RankUp, RankUpSlot } from '../components/RankCard'
+import { CraftCard, SwordList, RankUp, RankUpSlot } from '../components/RankCard'
 
 export function Hearth() {
   const { me } = useMe()
   const { data, error } = useFetch<ProgramCard[]>('/api/programs')
   const forge = useFetch<Forge>('/api/me/forge') // an error shows nothing; the cards still render
-  const [dismissed, setDismissed] = useState(false)
+  const [done, setDone] = useState<string[]>([]) // banners dismissed this visit
   const h1 = useRef<HTMLHeadingElement>(null)
   const quote = useMemo(randomQuote, [])
   const first = (me.user.name || me.user.email).split(/[ @]/)[0]
+  // One banner at a time: the smith rise first, then each sword's, in order; dismissing shows the next.
+  const up = forge.data?.rank_up
+  const finish = (k: string) => () => { setDone((d) => [...d, k]); h1.current?.focus() }
+  const sword = up?.swords.find((w) => !done.includes(`sword:${w.training}`))
+  const banner = up?.smith && !done.includes('smith')
+    ? <RankUp kind="smith" title={up.smith.title} level={up.smith.level} onDone={finish('smith')} />
+    : sword && <RankUp key={sword.training} kind="sword" training={{ id: sword.training, title: sword.title }} title={sword.rank} level={sword.level} onDone={finish(`sword:${sword.training}`)} />
   return (
     <section className="page">
       <Embers count={12} />
       <h1 ref={h1} tabIndex={-1}>Hearth</h1>
       <RankUpSlot>
-        {forge.data?.rank_up && !dismissed && <RankUp rank={forge.data.rank} level={forge.data.level} onDone={() => { setDismissed(true); h1.current?.focus() }} />}
+        {banner}
       </RankUpSlot>
       <p className="lede">
         Welcome back, {first}. <em>“{quote}”</em>
       </p>
-      <div className="forge-slot">{forge.data && <RankCard forge={forge.data} />}</div>
+      <div className="forge-slot">{forge.data && <><CraftCard forge={forge.data} /><SwordList forge={forge.data} /></>}</div>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <Loader label="Gathering your trainings…" />}
       {data && data.length === 0 && <p className="muted">You're not taking any training yet. The people who run a training make you a participant.</p>}

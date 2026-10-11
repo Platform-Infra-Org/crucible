@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router'
 import { useFetch } from '../useFetch'
-import type { ItemView, Outline } from '../types'
+import type { Forge, ItemView, Outline } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { MoltenBar } from '../components/MoltenBar'
@@ -14,14 +14,17 @@ function itemPath(base: string, module: string, it: ItemView) {
 export function TrainingPage() {
   const { team, training } = useParams()
   const { data, error } = useFetch<Outline>(`/api/programs/${team}/${training}`)
+  const forge = useFetch<Forge>('/api/me/forge') // an error shows nothing
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Unrolling the blueprint…" />
+  const sword = forge.data?.swords.find((w) => w.training === training)
   const base = `/p/${team}/${training}/m`
   return (
     <section className="page">
       <Link to="/">← Hearth</Link>
       <h1>{data.title}</h1>
       <p className="lede">{data.description}</p>
+      {sword && <p className="sword-line">Your sword: <strong>{sword.rank}</strong> · {sword.percent}% · {sword.next ? `next ${sword.next.name} at ${sword.next.at}%` : 'finished'}</p>}
       <MoltenBar percent={data.percent} />
       <ol className="modules">
         {data.modules.map((m) => (

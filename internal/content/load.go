@@ -1426,6 +1426,10 @@ func (l *loader) links(dir string) {
 var releaseName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$`)
 var exactVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$`)
 var kindLine = regexp.MustCompile(`(?m)^kind:\s*["']?([A-Za-z]+)`)
+var safePath = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// maxChartTimeouts bounds a lab's install inside the server's 15m provisioning budget, with room for the rest.
+const maxChartTimeouts = 12 * time.Minute
 
 // clusterLab checks a runtime: cluster lab's charts (spec 2026-10-11 §1).
 func (l *loader) clusterLab(dir, lf string, lab *Lab) {
@@ -1437,6 +1441,12 @@ func (l *loader) clusterLab(dir, lf string, lab *Lab) {
 		return
 	}
 	seen := map[string]bool{}
+	var total time.Duration
+	defer func() {
+		if total > maxChartTimeouts {
+			l.add(lf, "the charts' timeouts add up to %s; keep them within %s (a lab has 15m to start)", total, maxChartTimeouts)
+		}
+	}()
 	for i := range lab.Cluster.Charts {
 		c := &lab.Cluster.Charts[i]
 		if !releaseName.MatchString(c.Name) {
@@ -1449,8 +1459,14 @@ func (l *loader) clusterLab(dir, lf string, lab *Lab) {
 		if c.Timeout == 0 {
 			c.Timeout = yamlx.Duration(5 * time.Minute)
 		}
-		if c.Timeout < 0 {
-			l.add(lf, "chart %q: timeout must be positive", c.Name)
+		if c.Timeout < yamlx.Duration(time.Second) { // the agent takes whole seconds
+			l.add(lf, "chart %q: timeout must be at least 1s", c.Name)
+		}
+		total += time.Duration(c.Timeout)
+		for _, p := range []string{c.Path, c.Values} { // the agent puts these in a shell command and refuses anything else
+			if p != "" && !safePath.MatchString(p) {
+				l.add(lf, "chart %q: %q may use only letters, digits, '.', '_', '-' and '/'", c.Name, p)
+			}
 		}
 		if c.Values != "" {
 			l.file(dir, c.Values, lf)

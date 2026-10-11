@@ -31,6 +31,8 @@ tasks:
     check: { ready: [shop] }  # or ready: all
 ```
 
+- **Paths and timeouts.** Chart paths and values files use only letters, digits, `.`, `_`, `-` and `/`. A timeout is at
+  least `1s`, and a lab's timeouts add up to at most `12m` (three charts at the default 5m are too many: shorten them).
 - **The namespace.** Each lab gets its own, `lab-<id>`. Charts use `.Release.Namespace` as usual.
 - **The toolbox.** Terminals, setup scripts and checks run in a container with `kubectl`, `helm`, `k9s`, `jq` and
   `crucible-ready`, pointed at the trainee's cluster, with `LAB_NAMESPACE`, `LAB_ID` and `LAB_RELEASES` set. There

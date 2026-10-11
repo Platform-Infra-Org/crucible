@@ -325,6 +325,13 @@ func TestClusterLabRules(t *testing.T) {
 		"absolute file dep": {map[string]string{"modules/m1/lab/charts/shop/Chart.yaml": "apiVersion: v2\nname: shop\nversion: 0.1.0\ndependencies:\n  - {name: lib, version: 0.1.0, repository: \"file:///etc\"}\n"},
 			"file:// must stay inside the lab"},
 		"crds folder": {map[string]string{"modules/m1/lab/charts/shop/crds/x.yaml": "kind: CustomResourceDefinition\n"}, "crds/ installs cluster-wide"},
+		"path with a space": {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: charts/my shop}\n", ""),
+			"modules/m1/lab/charts/my shop/Chart.yaml": "apiVersion: v2\nname: shop\nversion: 0.1.0\n"}, "letters, digits"},
+		"values with a quote": {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: charts/shop, values: \"v'.yaml\"}\n", ""),
+			"modules/m1/lab/v'.yaml": "x: 1\n"}, "letters, digits"},
+		"sub-second timeout": {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: charts/shop, timeout: 500ms}\n", "")}, "at least 1s"},
+		"timeouts over 12m": {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: a, path: charts/shop}\n    - {name: b, path: charts/shop}\n    - {name: c, path: charts/shop}\n", "")},
+			"add up to 15m0s"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, probs := Load(clusterTree(t, c.files))

@@ -1653,11 +1653,25 @@ func parseHealth(out string) (ready.Report, bool) {
 	for i := len(lines) - 1; i >= 0; i-- {
 		var rep ready.Report
 		if l := strings.TrimSpace(lines[i]); strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &rep) == nil {
-			return rep, true
+			return noNulls(rep), true
 		}
 	}
 	var rep ready.Report
-	return rep, json.Unmarshal([]byte(out), &rep) == nil
+	err := json.Unmarshal([]byte(out), &rep)
+	return noNulls(rep), err == nil
+}
+
+// noNulls gives a self-reported (maybe hand-made) report empty lists where it has none, so the lab page never gets null.
+func noNulls(rep ready.Report) ready.Report {
+	if rep.Releases == nil {
+		rep.Releases = []ready.Release{}
+	}
+	for i := range rep.Releases {
+		if rep.Releases[i].Unready == nil {
+			rep.Releases[i].Unready = []string{}
+		}
+	}
+	return rep
 }
 
 // recordHealth runs crucible-ready over every release and keeps the report as the lab's latest health event.
@@ -1687,5 +1701,6 @@ func (s *Service) health(ctx context.Context, labID string) *ready.Report {
 	if json.Unmarshal([]byte(detail), &rep) != nil {
 		return nil
 	}
+	rep = noNulls(rep)
 	return &rep
 }

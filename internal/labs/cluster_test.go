@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	ap "crucible/internal/agentproto"
@@ -443,5 +444,29 @@ func TestClusterDestroyDoesNotHoldUpTheCaller(t *testing.T) {
 	f.waitState(t, f.u, v.ID, Destroyed)
 	if destroyTimeout("cluster") < 7*time.Minute {
 		t.Fatal("the server gives up before the agent's helm uninstall and namespace delete (5m) can finish")
+	}
+}
+
+// The report is self-reported: a hand-made one with no releases or no unready list must still render (as [], not null).
+func TestHealthReportsNeverCarryNullLists(t *testing.T) {
+	for _, out := range []string{`{}`, `{"releases":null}`, `{"releases":[{"name":"x","status":"failing"}]}`, `{"releases":[{"name":"x","status":"healthy","unready":null}]}`} {
+		rep, ok := parseHealth(out)
+		b, _ := json.Marshal(rep)
+		if !ok || strings.Contains(string(b), "null") {
+			t.Errorf("%s: %s %v", out, b, ok)
+		}
+	}
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+		Runtime: "cluster", State: Ready, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+	if err := f.s.insert(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	f.s.event(ctx, in.ID, "health", `{"releases":[{"name":"x","status":"failing","unready":null}]}`) // stored before this fix
+	b, _ := json.Marshal(f.s.health(ctx, in.ID))
+	if strings.Contains(string(b), "null") {
+		t.Fatalf("stored: %s", b)
 	}
 }

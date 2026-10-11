@@ -17,10 +17,10 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 
 | What | Where |
 |---|---|
-| Theme tokens, four themes | `web/src/theme/tokens.css` (`forge`, `anvil`, `quench`, `contrast`) |
+| Theme tokens, eight themes | `web/src/theme/tokens.css` (dark: `forge`, `quench`, `damascus`, `verdigris`, `starmetal`; light: `anvil`, `parchment`; `contrast`) |
 | All component styles | `web/src/theme/app.css` (plain CSS, no framework; the last section, *The forge finish*, is the global polish layer) |
 | Fonts, self-hosted | `web/src/theme/fonts.css`, `web/src/theme/fonts/` (Cinzel, Inter, JetBrains Mono) |
-| Theme list for Settings | `web/src/theme/theme.ts` (`THEMES`) |
+| Theme list for Settings | `web/src/theme/theme.ts` (`THEMES`; `light: true` marks a light theme for the editor). A new theme is a token block with every token, an entry here and in Go's `config.Themes` (a test checks they match); the contrast test and the editor pick it up from `THEMES`. |
 | Shared components | `web/src/components/` (Loader, ErrorBox, Conflict, MoltenBar, Embers, SparkBurst, Avatar, UserMenu, HeatMap, Toaster, Timer …) |
 | Small UI logic, testable | `web/src/lib/` (pure functions with `*.test.ts`) |
 
@@ -29,9 +29,9 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 1. **Colours come from tokens only.** `--bg --surface --surface-2 --text --muted --border --accent --accent-2 --ok
    --danger --on-accent --glow --spark`, plus terminal and diff tokens. Never write a hex, `rgb()` or `hsl()` in a
    `color:` or `background:` declaration in `app.css`: `web/src/lib/contrast.test.ts` fails the build. Derive shades with
-   `color-mix(in srgb, var(--accent) 30%, var(--border))`. A new colour need means a new token in all four themes.
-2. **Every theme, every time.** Check Forge, Anvil (light), Quench and High Contrast. Text pairs are contrast-checked per
-   theme in `contrast.test.ts`; High Contrast must meet WCAG AAA. Add a pair there when you introduce a new text/background combination.
+   `color-mix(in srgb, var(--accent) 30%, var(--border))`. A new colour need means a new token in every theme.
+2. **Every theme, every time.** Check at least one dark theme (Forge), both light ones (Anvil, Parchment) and High Contrast.
+   Text pairs are contrast-checked for every theme in `THEMES` in `contrast.test.ts`; High Contrast must meet WCAG AAA. Add a pair there when you introduce a new text/background combination.
 3. **Motion is optional.** Every animation must stop under the global rules `[data-calm='true']` (the Calm forge setting)
    and `@media (prefers-reduced-motion: reduce)`. Those rules already kill `animation` and `transition`; don't defeat
    them with `!important` or JS-driven motion that ignores `useCalm()`.
@@ -84,6 +84,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Identity | `Avatar` (an icon from `lib/avatars.ts` drawn as poured metal, or initials) in a turning crucible ring. New icons: add to `AVATARS` and to `auth.Avatars` in Go (a test checks they match). |
 | Heat | Journey heat cells: glyph + text carry the meaning (`·` cold, `◐` glowing, `●` forged); colour only reinforces it. |
 | Ambient | `Embers` and `SparkBurst` for moments (Hearth, a passed check); never as constant decoration on working pages. |
+| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. The Crucible title holds the centre of the screen (`.gate-inner` is a `1fr auto 1fr` grid, the title group in the middle row), the way in sits under it, and `Embers` drift behind (none under calm motion). It wears the look last used in this browser (`rememberLook`/`lastLook` in `theme/theme.ts`; the account stays the source of truth), else the instance default. |
 
 ## Motion
 
@@ -91,9 +92,19 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
   6–9s for ambient loops (the molten churn, `bar-flow`, motes).
 - Loops must be seamless: a gradient that rolls must repeat at the distance it moves (see `bar-flow`, `molten-flow`).
 - To animate a custom property (an angle, a radius), register it with `@property` (see `--pour`, `--strike-r`).
+- CSS transforms on SVG elements scale and rotate around the drawing's top-left corner unless told otherwise: set
+  `transform-box: fill-box; transform-origin: center` (or `view-box` with an explicit origin for a pivot).
+- A gleam or sheen is light on a surface, never a shape on top of it: clip a soft gradient band to the surface's own
+  path and move the band, then mark the end with a small accent (a twinkle).
+- Fast motion leaves a smear on its own path: faint copies of the moving part run the same animation, each delayed a
+  little more, visible only while it moves fast. Never a separate shape that fades in and out.
+- A multi-stage scene puts its stage on the drawing as a class (`.scene.s3`): plain rules say where everything rests in
+  that stage, so calm motion still shows the right picture, and `.sN` entrance animations carry each part there.
 - Prefer `transform`/`opacity`. Don't leave a `transform` filled on a container that may hold `position: fixed`
   descendants (modals): use `backwards` fill or none.
 - Things that move independently (the user card's motes) get their own elements and timings; a shared layer moves together.
+- A `both`-filled animation with a delay holds its first keyframe during the delay: start a flash or a ring at
+  opacity 0, or it shows early.
 
 ## Accessibility
 
@@ -111,7 +122,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
    (`renderToStaticMarkup`, mocking `../useFetch` and `../me` as the existing `*.test.tsx` files do).
 3. Look at it. Run the dev server against the running stack and screenshot it with Playwright:
    `cd web && npx vite --port 5199 --strictPort` (it proxies `/api` and `/auth` to `localhost:8080`), sign in on
-   `localhost:8080` in the same browser context, then open `localhost:5199/…`. Check all four themes
+   `localhost:8080` in the same browser context, then open `localhost:5199/…`. Check the themes
    (`document.documentElement.setAttribute('data-theme', t)`), phone width, and Calm forge.
 4. Run `npm test`, `npx tsc -b`, `npm run lint`, `npm run build` in `web/`; for capability changes also
    `go test ./internal/docs` and the relevant e2e journey.

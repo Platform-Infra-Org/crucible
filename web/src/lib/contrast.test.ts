@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import { contrast } from './contrast'
+import { THEMES } from '../theme/theme'
 
 const css = readFileSync(new URL('../theme/tokens.css', import.meta.url), 'utf8')
 function tokens(theme: string): Record<string, string> {
@@ -21,7 +22,11 @@ const textPairs = [
 const uiPairs = [...['accent', 'accent-2', 'ok', 'danger'].flatMap((fg) => onSurfaces.map((bg) => [fg, bg]))] // focus ring, state borders
 
 describe('theme contrast (spec §12: contrast checked per theme; High Contrast = WCAG AAA)', () => {
-  for (const theme of ['forge', 'anvil', 'quench', 'contrast']) {
+  test('every theme in Settings has its own token block, with every token', () => {
+    const want = Object.keys(tokens('forge'))
+    for (const { id } of THEMES) expect(Object.keys(tokens(id)).sort(), id).toEqual([...want].sort())
+  })
+  for (const theme of THEMES.map((t) => t.id)) {
     const t = tokens(theme)
     const min = theme === 'contrast' ? 7 : 4.5
     for (const [fg, bg] of textPairs) {

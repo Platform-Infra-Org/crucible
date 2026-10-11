@@ -19,6 +19,34 @@
   --on-accent: #1a0f05; --diff-add: #7fe3c5; --diff-del: #ff6b81; --diff-hunk: #7fe3c5;
   --spark: #eafcff; /* white-hot: motes, icon cores, the crucible ring */
 }
+[data-theme='damascus'] { /* folded steel: gunmetal grey, the blued steel and straw gold of a tempered edge */
+  --bg: #121416; --surface: #1a1d21; --surface-2: #23272c; --text: #e6e8eb; --muted: #a3aab3;
+  --accent: #6fa8dc; --accent-2: #e0b860; --danger: #ff6b6b; --ok: #7fd18b; --border: #31363d;
+  --glow: 0 0 22px rgba(111, 168, 220, 0.35); --term-bg: #0b0c0e; --term-fg: #e6e8eb;
+  --on-accent: #0b0f14; --diff-add: #7fd18b; --diff-del: #ff6b6b; --diff-hunk: #e0b860;
+  --spark: #f2f6ff; /* white-hot: motes, icon cores, the crucible ring */
+}
+[data-theme='verdigris'] { /* old bronze: a dark patina, bronze and the green-blue of verdigris */
+  --bg: #0f1311; --surface: #161c19; --surface-2: #1e2622; --text: #e8efe6; --muted: #a2b0a5;
+  --accent: #d08a45; --accent-2: #5fd1ad; --danger: #ff6b5e; --ok: #9ad66b; --border: #2b3530;
+  --glow: 0 0 22px rgba(95, 209, 173, 0.3); --term-bg: #0a0d0b; --term-fg: #e8efe6;
+  --on-accent: #120a03; --diff-add: #9ad66b; --diff-del: #ff6b5e; --diff-hunk: #5fd1ad;
+  --spark: #fff1dc; /* white-hot: motes, icon cores, the crucible ring */
+}
+[data-theme='starmetal'] { /* meteoric iron: a deep night sky, lilac and starlight gold */
+  --bg: #0e0d18; --surface: #161427; --surface-2: #1f1c35; --text: #ece9ff; --muted: #a9a3c9;
+  --accent: #b39dff; --accent-2: #ffd27a; --danger: #ff6b8b; --ok: #7ee0b0; --border: #2c2848;
+  --glow: 0 0 24px rgba(179, 157, 255, 0.4); --term-bg: #0a0914; --term-fg: #ece9ff;
+  --on-accent: #120c26; --diff-add: #7ee0b0; --diff-del: #ff6b8b; --diff-hunk: #ffd27a;
+  --spark: #f6f3ff; /* white-hot: motes, icon cores, the crucible ring */
+}
+[data-theme='parchment'] { /* the smith's ledger, light: warm vellum, oxblood ink and brass */
+  --bg: #f3ead8; --surface: #fbf6ea; --surface-2: #ebdfc6; --text: #2a1f14; --muted: #5e4f3e;
+  --accent: #8a3b12; --accent-2: #6e540c; --danger: #a3261b; --ok: #2f6b28; --border: #d6c6a5;
+  --glow: 0 0 18px rgba(138, 59, 18, 0.22); --term-bg: #2a1f14; --term-fg: #f3ead8;
+  --on-accent: #ffffff; --diff-add: #8fce7f; --diff-del: #f0a090; --diff-hunk: #e8c27a;
+  --spark: #fffaf0; /* white-hot: motes, icon cores, the crucible ring */
+}
 [data-theme='contrast'] {
   --bg: #000; --surface: #000; --surface-2: #111; --text: #fff; --muted: #e6e6e6;
   --accent: #ffd400; --accent-2: #00e5ff; --danger: #ff8080; --ok: #5dff7a; --border: #fff;

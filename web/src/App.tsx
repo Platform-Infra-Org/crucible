@@ -1,12 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link, Route, Routes } from 'react-router'
 import { MotionConfig } from 'motion/react'
-import { api } from './api'
+import { api, whoAmI } from './api'
 import { CalmContext, MeContext, osCalm, useMe } from './me'
 import type { Me } from './types'
-import { applyTheme } from './theme/theme'
+import { applyTheme, lastLook, rememberLook } from './theme/theme'
 import { addQuotes } from './lib/quotes'
 import { Loader } from './components/Loader'
+import { ForgeGate } from './components/ForgeGate'
 import { Nav } from './components/Nav'
 import { Toaster } from './components/Toaster'
 import { Hearth } from './pages/Hearth'
@@ -39,17 +40,27 @@ const Ide = lazy(() => import('./pages/editor/Ide')) // Monaco stays out of the 
 export default function App() {
   const [me, setMe] = useState<Me>()
   const [error, setError] = useState<string>()
+  const [signedOut, setSignedOut] = useState(false)
   useEffect(() => {
-    api<Me>('/api/me')
+    const meta = api<{ quotes: string[]; default_theme?: string }>('/api/meta')
+    meta.then((m) => addQuotes(m.quotes ?? [])).catch(() => {})
+    whoAmI()
       .then((m) => {
+        if (!m) { // nobody signed in: the gate, in the look last used in this browser, else the forge's default theme
+          setSignedOut(true)
+          const last = lastLook()
+          if (last) applyTheme(last.theme, last.calm)
+          else meta.then((x) => applyTheme(x.default_theme || 'forge', false)).catch(() => {})
+          return
+        }
         setMe(m)
         applyTheme(m.user.theme || m.default_theme, m.user.calm_motion)
+        rememberLook(m.user.theme || m.default_theme, m.user.calm_motion)
       })
       .catch((e: Error) => setError(e.message))
-    api<{ quotes: string[] }>('/api/meta').then((m) => addQuotes(m.quotes ?? [])).catch(() => {})
   }, [])
 
-  const calm = !!me?.user.calm_motion || osCalm()
+  const calm = (me ? me.user.calm_motion : !!lastLook()?.calm) || osCalm()
   const wrap = (children: React.ReactNode) => (
     <CalmContext.Provider value={calm}>
       <MotionConfig reducedMotion={calm ? 'always' : 'never'} transition={calm ? { duration: 0 } : undefined}>
@@ -59,12 +70,14 @@ export default function App() {
   )
 
   if (error) return wrap(<div className="center"><p className="error">{error}</p></div>)
+  if (signedOut) return wrap(<ForgeGate calm={calm} />)
   if (!me) return wrap(<Loader label="Stoking the forge…" />)
 
   const setPrefs = async (theme: string, calm: boolean) => {
     await api('/api/me/prefs', { method: 'PUT', json: { theme, calm_motion: calm } })
     setMe({ ...me, user: { ...me.user, theme, calm_motion: calm } })
     applyTheme(theme, calm)
+    rememberLook(theme, calm)
   }
   const setAvatar = async (avatar: string) => {
     await api('/api/me/avatar', { method: 'PUT', json: { avatar } })

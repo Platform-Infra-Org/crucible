@@ -598,6 +598,24 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
   .ide-main[data-view='files'] > :not(.ide-side), .ide-main[data-view='editor'] > :not(.ide-editor), .ide-main[data-view='preview'] > :not(.ide-preview) { display: none; }
 }
 
+/* ── The gate ───────────────────────────────────────────────────────────────────────────────────────────────────────
+   What someone who isn't signed in sees (components/ForgeGate.tsx): the Crucible title holding the centre of the
+   screen (a 1fr auto 1fr grid), the way in under it, embers drifting behind. */
+.gate { position: relative; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; overflow: hidden; padding: 2rem 16px;
+  background: radial-gradient(ellipse 60% 45% at 50% 80%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
+    radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--accent-2) 7%, transparent), transparent 70%), var(--bg); }
+.gate-inner { position: relative; z-index: 1; width: min(560px, 100%); min-height: calc(100dvh - 4rem); display: grid; grid-template-rows: 1fr auto 1fr;
+  justify-items: center; gap: 1.5rem; text-align: center; animation: gate-in 0.6s ease-out backwards; }
+@keyframes gate-in { from { opacity: 0; transform: translateY(10px); } }
+.gate-title, .gate-way { display: grid; justify-items: center; gap: 0.6rem; }
+.gate-title { grid-row: 2; }
+.gate-way { grid-row: 3; align-self: start; }
+.gate-brand { margin: 0; font-family: Cinzel, Georgia, serif; font-weight: 700; font-size: clamp(3rem, 11vw, 5.5rem); letter-spacing: 0.06em; line-height: 1.1; }
+.gate-brand .brand-mark { color: var(--accent); text-shadow: var(--glow); }
+.gate-motto { margin: 0; color: var(--muted); font-style: italic; }
+.gate-note { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.gate button.primary.big { margin-top: 0.4rem; min-width: 14rem; }
+
 /* ── The forge finish ──────────────────────────────────────────────────────────────────────────────────────────────
    One look for every page, in the user card's spirit and kept quiet: surfaces whose edges run warm at two corners, a
    faint ember glow over the page, a molten underline under the nav item you are on, a short molten rule under each

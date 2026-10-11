@@ -1,4 +1,5 @@
 import type { EditOp } from '../../types'
+import { THEMES, isLight } from '../../theme/theme'
 
 // DraftOps is a draft's changes in normal form: base paths renamed (current path → base path), base paths deleted, and
 // the text of every new or changed file at its current path. toOps emits renames, deletes, puts: the order
@@ -120,7 +121,7 @@ export const languageOf = (path: string) =>
   path.endsWith('.md') ? 'markdown' : path.endsWith('.sh') ? 'shell' : /\.ya?ml$/.test(path) ? 'yaml' : 'plaintext'
 
 // monacoTheme names the editor's Monaco theme for an app theme; monaco.ts defines it from monacoThemeData.
-export const monacoTheme = (theme: string | undefined) => `crucible-${theme === 'anvil' || theme === 'quench' || theme === 'contrast' ? theme : 'forge'}`
+export const monacoTheme = (theme: string | undefined) => `crucible-${THEMES.some((t) => t.id === theme) ? theme : 'forge'}`
 
 // toHex turns a CSS colour as getComputedStyle gives it (#rgb[a], #rrggbb[aa], rgb()/rgba()) into the #rrggbb[aa] Monaco
 // needs; anything else is undefined.
@@ -138,7 +139,7 @@ export function toHex(css: string): string | undefined {
 type ThemeData = { base: 'vs' | 'vs-dark' | 'hc-black'; inherit: true; colors: Record<string, string>; rules: { token: string; foreground: string; fontStyle?: string }[] }
 
 // monacoThemeData builds the Monaco theme for an app theme from its CSS tokens (tok reads one, e.g. '--accent'), so
-// tokens.css stays the one place colours live. Anvil is light, High Contrast keeps Monaco's high-contrast base.
+// tokens.css stays the one place colours live. Light themes get Monaco's light base, High Contrast its high-contrast one.
 export function monacoThemeData(theme: string | undefined, tok: (name: string) => string): ThemeData {
   const c = (name: string, alpha = '') => { const h = toHex(tok(name)); return h && (h.length === 7 ? h + alpha : h) }
   const colors: Record<string, string | undefined> = {
@@ -173,7 +174,7 @@ export function monacoThemeData(theme: string | undefined, tok: (name: string) =
     ['keyword', fg('--accent')], ['keyword.flow', fg('--accent')], ['number', fg('--accent')], ['number.hex', fg('--accent')],
   ] as const).flatMap(([token, foreground, fontStyle]) => (foreground ? [fontStyle ? { token, foreground, fontStyle } : { token, foreground }] : []))
   return {
-    base: theme === 'anvil' ? 'vs' : theme === 'contrast' ? 'hc-black' : 'vs-dark', inherit: true, rules,
+    base: isLight(theme) ? 'vs' : theme === 'contrast' ? 'hc-black' : 'vs-dark', inherit: true, rules,
     colors: Object.fromEntries(Object.entries(colors).filter((e): e is [string, string] => !!e[1])),
   }
 }

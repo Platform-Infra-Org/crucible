@@ -12,6 +12,7 @@ const labAPI = '/api/programs/forge/forge-101/modules/03-cluster-heat/lab'
 test('Forge 101 cluster lab: terminals over exec, checks run by the server', async ({ page }) => {
   page.on('dialog', (d) => d.accept())
   await page.goto('/')
+  await page.getByRole('button', { name: 'Enter the forge' }).click() // the gate, then the identity provider
   await page.locator('#username').fill('trainee')
   await page.locator('#password').fill('trainee')
   await page.locator('#kc-login').click()

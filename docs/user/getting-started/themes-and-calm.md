@@ -13,9 +13,14 @@ order: 30
 - **Forge**: dark charcoal and molten ember.
 - **Anvil**: light steel and iron blue.
 - **Quench**: deep navy and cool cyan.
+- **Damascus**: folded gunmetal with the blued steel and straw gold of a tempered edge.
+- **Verdigris**: old bronze gone green with patina.
+- **Starmetal**: meteoric iron under a night sky, lilac and starlight gold.
+- **Parchment**: light, like the smith's ledger: warm vellum, oxblood ink and brass.
 - **High Contrast**: maximum legibility.
 
-Until you pick one, you get the theme your admins chose for this Crucible.
+Until you pick one, you get the theme your admins chose for this Crucible. Your browser also remembers the last theme
+and calm setting used there, so the sign-in page wears them too.
 
 ## Calm forge
 

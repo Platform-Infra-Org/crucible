@@ -326,3 +326,90 @@ func TestForgeHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestNewTrainingSwordRiseIsAnnounced(t *testing.T) {
+	ctx := context.Background()
+	s, u, _ := fixture(t)
+	if _, err := s.UpdateForge(ctx, u.ID); err != nil { // the person's first computation is behind them
+		t.Fatal(err)
+	}
+	enrolExtra(s, 2)
+	if err := s.SetItem(ctx, u.ID, "forge", "extra", "x1", "lab", "complete", 1); err != nil { // runs UpdateForge
+		t.Fatal(err)
+	}
+	v, err := s.UpdateForge(ctx, u.ID)
+	if err != nil || len(v.RankUp.Swords) != 1 || v.RankUp.Swords[0].Training != "extra" || v.RankUp.Swords[0].Rank != "Masterwork" {
+		t.Fatalf("a new training's first rise is shown: %+v %v", v.RankUp, err)
+	}
+}
+
+func TestSmithRisesNameTheirOwnLevel(t *testing.T) {
+	ctx := context.Background()
+	s, u, _ := fixture(t)
+	notes := &fakeNotify{}
+	s.Notify = notes
+	if _, err := s.UpdateForge(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	completeAll(t, s, u.ID, "01-welcome", "02-first-lab")
+	v, _ := s.UpdateForge(ctx, u.ID)
+	xp := v.Smith.XP
+	notes.evs = nil
+	set := func(a, j, sm, m, g int) {
+		s.State().Platform.Settings.Smith = config.SmithThresholds{Apprentice: a, Journeyman: j, Smith: sm, MasterSmith: m, Grandmaster: g}
+	}
+	set(1, 2, 100000, 200000, 300000)
+	_, _ = s.UpdateForge(ctx, u.ID)
+	set(1, 2, xp, 200000, 300000)
+	_, _ = s.UpdateForge(ctx, u.ID)
+	ups := notes.kind(notify.RankUp)
+	if len(ups) != 2 || !strings.Contains(ups[0].Subject, "a Journeyman") || !strings.Contains(ups[1].Subject, "a Smith") {
+		t.Fatalf("each raise names the level it set, once: %+v", ups)
+	}
+}
+
+func TestMilestonesOfADroppedTrainingStillCount(t *testing.T) {
+	ctx := context.Background()
+	s, u, _ := fixture(t)
+	completeAll(t, s, u.ID, "01-welcome", "02-first-lab")
+	v, err := s.UpdateForge(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fl := sword(v, "forge-101").Level
+	s.State().Platform.Teams["forge"].Programs["forge-101"].Enrolled = nil
+	enrolExtra(s, 5)
+	if err := s.SetItem(ctx, u.ID, "forge", "extra", "x1", "lab", "complete", 1); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = s.UpdateForge(ctx, u.ID); err != nil || v.Smith.XP != 50+smith.MilestoneXP(5)+smith.MilestoneXP(fl) {
+		t.Fatalf("forge-101's milestones are kept (level %d): %+v %v", fl, v.Smith, err)
+	}
+}
+
+func TestSeenOnOneSwordLeavesTheOther(t *testing.T) {
+	ctx := context.Background()
+	s, u, _ := fixture(t)
+	if _, err := s.UpdateForge(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	enrolExtra(s, 2)
+	completeAll(t, s, u.ID, "01-welcome", "02-first-lab")
+	if err := s.SetItem(ctx, u.ID, "forge", "extra", "x1", "lab", "complete", 1); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.UpdateForge(ctx, u.ID)
+	if len(v.RankUp.Swords) != 2 || v.RankUp.Swords[0].Training != "extra" {
+		t.Fatalf("two banners, in training order: %+v", v.RankUp.Swords)
+	}
+	if err := s.SeenRankUp(ctx, u.ID, "sword", "extra", v.RankUp.Swords[0].Level); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ = s.UpdateForge(ctx, u.ID); len(v.RankUp.Swords) != 1 || v.RankUp.Swords[0].Training != "forge-101" {
+		t.Fatalf("the other banner stays: %+v", v.RankUp.Swords)
+	}
+	got, err := s.SwordRanks(ctx, []int64{u.ID})
+	if err != nil || got[u.ID]["extra"] != 5 || got[u.ID]["forge-101"] < 1 {
+		t.Fatalf("SwordRanks: %v %v", got, err)
+	}
+}

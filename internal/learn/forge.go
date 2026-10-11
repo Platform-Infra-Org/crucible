@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"crucible/internal/apperr"
 	"crucible/internal/config"
@@ -98,21 +97,6 @@ type ForgeView struct {
 	RankUp      RankUps      `json:"rank_up"`
 }
 
-// raise stores level for a key the first time silently (seen) and afterwards raises it only, unseen. It reports
-// whether this caller raised it: only that caller announces the rise, so it is announced once.
-func raise(ctx context.Context, db *pgxpool.Pool, insert, update string, args ...any) (bool, error) {
-	tag, err := db.Exec(ctx, insert, args...)
-	if err != nil || tag.RowsAffected() > 0 {
-		return false, err
-	}
-	var lvl int
-	err = db.QueryRow(ctx, update, args...).Scan(&lvl)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
 // UpdateForge recomputes the user's swords, badges and experience and raises what they reached. Nothing is lowered.
 func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, error) {
 	st, err := s.state()
@@ -125,6 +109,11 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	}
 	v := &ForgeView{SwordLadder: Ladder(st.Platform.Settings.Ranks), SmithLadder: smith.Ladder(st.Platform.Settings.Smith),
 		Swords: []Sword{}, Badges: []Badge{}, RankUp: RankUps{Swords: []SwordUp{}}}
+	// No smiths row yet: this is the person's first computation, and it is silent.
+	var first bool
+	if err := s.DB.QueryRow(ctx, `SELECT NOT EXISTS (SELECT 1 FROM smiths WHERE user_id = $1)`, userID).Scan(&first); err != nil {
+		return nil, err
+	}
 	titles := map[string]string{}
 	work := 0.0
 	for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(email) {
@@ -139,10 +128,11 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 		titles[id] = sd.Training.Title
 		work += sd.Done * smith.PerPoint
 		pct := forgePercent(sd.Done, sd.Total)
-		if _, err := raise(ctx, s.DB,
-			`INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`,
-			`UPDATE sword_ranks SET level = $3, earned_at = now(), seen = false WHERE user_id = $1 AND training = $2 AND level < $3 RETURNING level`,
-			userID, id, RankFor(pct, v.SwordLadder)); err != nil {
+		// A new row is shown unless it is the first computation or only Ore; an existing one is raised, never lowered.
+		lvl := RankFor(pct, v.SwordLadder)
+		if _, err := s.DB.Exec(ctx, `INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, $2, $3, $4)
+			ON CONFLICT (user_id, training) DO UPDATE SET level = EXCLUDED.level, earned_at = now(), seen = false
+			WHERE sword_ranks.level < EXCLUDED.level`, userID, id, lvl, first || lvl == 0); err != nil {
 			return nil, err
 		}
 		v.Swords = append(v.Swords, Sword{Training: id, Title: sd.Training.Title, Percent: pct})
@@ -154,7 +144,7 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 		}
 	}
 	// Stored swords, the ones of trainings no longer taken included: their milestones are kept.
-	rows, err := s.DB.Query(ctx, `SELECT training, level, NOT seen FROM sword_ranks WHERE user_id = $1`, userID)
+	rows, err := s.DB.Query(ctx, `SELECT training, level, NOT seen FROM sword_ranks WHERE user_id = $1 ORDER BY training`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +153,7 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	var lvl int
 	var unseen bool
 	if _, err := pgx.ForEachRow(rows, []any{&tr, &lvl, &unseen}, func() error {
+		lvl = min(lvl, len(v.SwordLadder)-1)
 		stored[tr], milestones = lvl, milestones+smith.MilestoneXP(lvl)
 		if unseen && titles[tr] != "" {
 			v.RankUp.Swords = append(v.RankUp.Swords, SwordUp{Training: tr, Title: titles[tr], Level: lvl, Rank: v.SwordLadder[lvl].Name})
@@ -173,7 +164,7 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	}
 	for i := range v.Swords {
 		sw := &v.Swords[i]
-		sw.Level = stored[sw.Training]
+		sw.Level = stored[sw.Training] // clamped above
 		sw.Rank = v.SwordLadder[sw.Level].Name
 		if sw.Level+1 < len(v.SwordLadder) {
 			sw.Next = &v.SwordLadder[sw.Level+1]
@@ -181,7 +172,7 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	}
 	xp := int(math.Round(work)) + milestones
 	if _, err := s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, $2, $3, true)
-		ON CONFLICT (user_id) DO UPDATE SET xp = GREATEST(smiths.xp, EXCLUDED.xp)`, userID, xp, smith.LevelFor(xp, v.SmithLadder)); err != nil {
+		ON CONFLICT (user_id) DO UPDATE SET xp = EXCLUDED.xp WHERE smiths.xp < EXCLUDED.xp`, userID, xp, smith.LevelFor(xp, v.SmithLadder)); err != nil {
 		return nil, err
 	}
 	if err := s.DB.QueryRow(ctx, `SELECT xp FROM smiths WHERE user_id = $1`, userID).Scan(&v.Smith.XP); err != nil {
@@ -208,7 +199,7 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 		v.RankUp.Smith = &ref
 	}
 	if raised {
-		s.rankUp(ctx, email, name, ref.Title)
+		s.rankUp(ctx, email, name, smith.RefFor(raisedTo).Title)
 	}
 	rows, err = s.DB.Query(ctx, `SELECT training, earned_at FROM badges WHERE user_id = $1 ORDER BY earned_at`, userID)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	ap "crucible/internal/agentproto"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	"crucible/internal/learn"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/ready"
 	"crucible/internal/scoring"
 )
 
@@ -117,6 +119,7 @@ type View struct {
 	CanExtend        bool               `json:"can_extend"`
 	ExtensionPending bool               `json:"extension_pending"`
 	SelfReported     bool               `json:"self_reported"`
+	Health           *ready.Report      `json:"health,omitempty"`
 	LabReview        *scoring.Feedback  `json:"lab_review,omitempty"` // a scorer's review of the whole self-reported lab
 	Complete         bool               `json:"complete"`
 	Score            float64            `json:"score"`
@@ -404,7 +407,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
-		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SelfReported: inst.Runtime == "local", Complete: true,
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SelfReported: selfReported(inst.Runtime), Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -445,6 +448,9 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		v.IdleDeadline = &dl
 		v.ExtensionPending = inst.ExtUntil != nil
 		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
+	}
+	if inst.Runtime == "cluster" && inst.State == Ready {
+		v.Health = s.health(ctx, inst.ID)
 	}
 	return v, nil
 }
@@ -673,6 +679,11 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	if r == nil {
 		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime))
 	}
+	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
+		return nil, err
+	} else if inst != nil && (inst.State == PendingApproval || inst.State == Provisioning || inst.State == Ready) {
+		return s.view(ctx, inst)
+	}
 	cr, isCluster := r.(contextRunner)
 	switch {
 	case isCluster:
@@ -681,11 +692,6 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 		}
 	case opt.Context != "":
 		return nil, apperr.Wrap(apperr.Invalid, "only cluster labs run on a cluster you pick")
-	}
-	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
-		return nil, err
-	} else if inst != nil && (inst.State == PendingApproval || inst.State == Provisioning || inst.State == Ready) {
-		return s.view(ctx, inst)
 	}
 	q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab)
 	if err != nil {
@@ -803,6 +809,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		s.failProvision(ctx, inst, cleanText(s.runnerErr(err).Error()), cleanText(err.Error()))
 		return
 	}
+	if inst.Runtime == "cluster" {
+		s.recordHealth(ctx, inst)
+	}
 	// Apply and setup may have used up ctx: the rest runs on a fresh one, or a lab with live resources would sit in
 	// 'provisioning' until the hung sweep destroys it.
 	wctx, wcancel := finalCtx(ctx)
@@ -865,7 +874,7 @@ func (s *Service) failProvision(ctx context.Context, inst *Instance, errText, de
 }
 
 func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.Lab, sc *content.Script, env map[string]string) (ScriptResult, error) {
-	body, err := os.ReadFile(filepath.Join(lab.Dir, sc.Script))
+	body, err := scriptBody(lab, sc)
 	if err != nil {
 		return ScriptResult{}, err
 	}
@@ -1080,8 +1089,11 @@ func (s *Service) Check(ctx context.Context, u *auth.User, labID, taskID, answer
 		return nil, s.runnerErr(err)
 	}
 	if _, err := s.DB.Exec(ctx, `INSERT INTO check_runs (lab_id, task, exit_code, output, answer, self_reported)
-		VALUES ($1, $2, $3, $4, $5, $6)`, inst.ID, taskID, res.ExitCode, res.Output, answer, inst.Runtime == "local"); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6)`, inst.ID, taskID, res.ExitCode, res.Output, answer, selfReported(inst.Runtime)); err != nil {
 		return nil, err
+	}
+	if inst.Runtime == "cluster" {
+		s.recordHealth(ctx, inst)
 	}
 	s.Touch(ctx, inst.ID)
 	out := &CheckResult{Passed: res.ExitCode == 0, Output: res.Output, TimedOut: res.TimedOut}
@@ -1582,7 +1594,7 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 		live[id] = true
 	}
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
-		WHERE user_id = $1 AND runtime = 'local' AND state IN ('provisioning', 'ready')`, userID)
+		WHERE user_id = $1 AND runtime IN ('local', 'cluster') AND state IN ('provisioning', 'ready')`, userID)
 	if err != nil {
 		s.Log.Error("agent reconcile query failed", "user", userID, "err", err)
 		return
@@ -1605,11 +1617,67 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 	}
 	for id := range live {
 		if !active[id] {
+			runtime := "local"
+			_ = s.DB.QueryRow(ctx, `SELECT runtime FROM lab_instances WHERE id = $1`, id).Scan(&runtime)
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: "local"}); err != nil {
+			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: runtime}); err != nil {
 				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
 			}
 			cancel()
 		}
 	}
+}
+
+// selfReported: results come from the trainee's machine (laptop labs, and cluster labs through the agent).
+func selfReported(runtime string) bool { return runtime == "local" || runtime == "cluster" }
+
+// scriptBody is what a script step runs: a ready: check runs crucible-ready in the toolbox, anything else its file.
+func scriptBody(lab *content.Lab, sc *content.Script) ([]byte, error) {
+	if len(sc.Ready) > 0 {
+		return []byte("exec crucible-ready " + strings.Join(sc.Ready, " ") + "\n"), nil
+	}
+	return os.ReadFile(filepath.Join(lab.Dir, sc.Script))
+}
+
+// parseHealth reads crucible-ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
+func parseHealth(out string) (ready.Report, bool) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var rep ready.Report
+		if l := strings.TrimSpace(lines[i]); strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &rep) == nil {
+			return rep, true
+		}
+	}
+	var rep ready.Report
+	return rep, json.Unmarshal([]byte(out), &rep) == nil
+}
+
+// recordHealth runs crucible-ready over every release and keeps the report as the lab's latest health event.
+func (s *Service) recordHealth(ctx context.Context, inst *Instance) {
+	r, err := s.runner(inst.Runtime)
+	if err != nil {
+		return
+	}
+	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible-ready --json all\n"), Timeout: 30 * time.Second})
+	if err != nil {
+		return
+	}
+	rep, ok := parseHealth(res.Output)
+	if !ok {
+		return
+	}
+	b, _ := json.Marshal(rep)
+	s.event(ctx, inst.ID, "health", string(b))
+}
+
+func (s *Service) health(ctx context.Context, labID string) *ready.Report {
+	var detail string
+	if err := s.DB.QueryRow(ctx, `SELECT detail FROM lab_events WHERE lab_id = $1 AND kind = 'health' ORDER BY id DESC LIMIT 1`, labID).Scan(&detail); err != nil {
+		return nil
+	}
+	var rep ready.Report
+	if json.Unmarshal([]byte(detail), &rep) != nil {
+		return nil
+	}
+	return &rep
 }

@@ -80,3 +80,16 @@ func tarNames(t *testing.T, b []byte) string {
 		names = append(names, h.Name)
 	}
 }
+
+func TestReadyCheckRunsCrucibleReady(t *testing.T) {
+	b, err := scriptBody(&content.Lab{}, &content.Script{Ready: []string{"shop", "db"}})
+	if err != nil || string(b) != "exec crucible-ready shop db\n" {
+		t.Fatalf("%q %v", b, err)
+	}
+	if b, _ := scriptBody(&content.Lab{}, &content.Script{Ready: []string{"all"}}); string(b) != "exec crucible-ready all\n" {
+		t.Fatalf("all: %q", b)
+	}
+	if !selfReported("cluster") || !selfReported("local") || selfReported("aws") {
+		t.Fatal("cluster and laptop labs are self-reported")
+	}
+}

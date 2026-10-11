@@ -383,4 +383,44 @@ func TestClusterLabStartsOnAPickedContextForFree(t *testing.T) {
 	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{Context: "kind-dev"}); err == nil {
 		t.Fatal("a laptop lab must refuse a context")
 	}
+	// starting again while it is active returns the same lab, even with no (or a stale) context
+	again, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{})
+	if err != nil || again.ID != v.ID {
+		t.Fatalf("restart of an active lab: %+v %v", again, err)
+	}
+}
+
+func TestClusterLabHealthAfterProvisionAndChecks(t *testing.T) {
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	ctx := context.Background()
+	var scripts []string
+	f.s.Runners["cluster"] = AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return []ap.KubeContext{{Name: "k"}} },
+		online: func(int64) bool { return true },
+		call: func(_ context.Context, _ int64, m ap.Msg) (ap.Msg, error) {
+			if m.Type == ap.TRunScript {
+				scripts = append(scripts, string(m.Data))
+				if strings.Contains(string(m.Data), "--json") {
+					return ap.Msg{Data: []byte(`{"releases":[{"name":"forge","status":"progressing","unready":["deployment/forge: 1 of 2 ready"]}]}`)}, nil
+				}
+			}
+			return ap.Msg{}, nil
+		}}
+	f.s.Estimators["cluster"] = FixedRates{}
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && v.State != Ready; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if v, err = f.s.Get(ctx, f.u, v.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v.Health == nil || v.Health.Releases[0].Status != "progressing" || !v.SelfReported {
+		t.Fatalf("health after provision: %+v self-reported %v", v.Health, v.SelfReported)
+	}
+	if !slices.ContainsFunc(scripts, func(s string) bool { return strings.Contains(s, "crucible-ready --json all") }) {
+		t.Fatalf("no health run: %q", scripts)
+	}
 }

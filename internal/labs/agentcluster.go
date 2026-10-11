@@ -103,7 +103,11 @@ func (a AgentClusterRunner) Destroy(ctx context.Context, inst *Instance) error {
 }
 
 func (a AgentClusterRunner) RunScript(ctx context.Context, inst *Instance, s ScriptSpec) (ScriptResult, error) {
-	return a.local().RunScript(ctx, inst, s)
+	if a.call == nil {
+		return a.local().RunScript(ctx, inst, s)
+	}
+	res, err := a.call(ctx, inst.UserID, ap.Msg{Type: ap.TRunScript, LabID: inst.ID, Service: s.Service, Data: s.Script, Env: s.Env, TimeoutMS: s.Timeout.Milliseconds()})
+	return ScriptResult{ExitCode: res.ExitCode, Output: cleanText(string(res.Data)), TimedOut: res.TimedOut}, err
 }
 
 func (a AgentClusterRunner) OpenPTY(ctx context.Context, inst *Instance, service string, cols, rows int) (PTY, error) {

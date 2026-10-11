@@ -56,19 +56,22 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
     }
   }
   return (
-    <li className="card">
-      <h2><code>{repo.url}</code></h2>
-      <p>
-        <span className={s.cls}>{s.text}</span>{' '}
+    <li className="card repo">
+      <div className="row repo-head">
+        <h2><code>{repo.url}</code></h2>
+        <span className="spacer" />
+        <span className={s.cls}>{s.text}</span>
         <span className="badge">{repo.auth === 'token' ? 'Token' : 'No credential'}</span>
-      </p>
+      </div>
       {repo.last_error && <p className="error">{repo.last_error}</p>}
-      <dl className="facts">
-        <dt>Trainings</dt>
-        <dd>{repo.trainings.length > 0 ? repo.trainings.join(', ') : <span className="muted">none yet</span>}</dd>
-        {repo.checked_at && <><dt>Checked</dt><dd>{new Date(repo.checked_at).toLocaleString()}</dd></>}
-      </dl>
-      <p className="row">
+      <p className="repo-trainings">
+        <span className="eyebrow">Trainings</span>
+        {repo.trainings.length > 0
+          ? <span className="chips">{repo.trainings.map((t) => <span key={t} className="chip">{t}</span>)}</span>
+          : <span className="muted">none yet</span>}
+      </p>
+      {repo.checked_at && <p className="hint">Last checked {new Date(repo.checked_at).toLocaleString()}</p>}
+      <div className="row repo-actions">
         <button type="button" className="ghost small" disabled={busy}
           onClick={() => act(() => api(`/api/admin/repos/${repo.id}/check`, { method: 'POST', json: {} }), `Checked ${repo.url}.`)}>Test connection</button>
         {takesToken && (
@@ -76,10 +79,11 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
             {repo.has_secret ? 'Replace credential' : 'Add a credential'}
           </button>
         )}
+        <span className="spacer" />
         <button type="button" className="ghost small danger-text" disabled={busy}
           onClick={() => window.confirm(`Disconnect ${repo.url}? Crucible stops reading from it. The repository itself is not touched.`)
             && act(() => api(`/api/admin/repos/${repo.id}`, { method: 'DELETE' }), `${repo.url} is disconnected.`)}>Disconnect</button>
-      </p>
+      </div>
       {open && <Credential repo={repo} canKeepSecrets={canKeepSecrets} onDone={() => { setOpen(false); onChange() }} />}
     </li>
   )

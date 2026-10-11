@@ -755,8 +755,14 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .docs-nav h2:not(.docs-search-title) { font-family: inherit; font-size: 0.72rem; letter-spacing: 0.1em; margin: 1.2rem 0 0.4rem; }
 
 /* Repositories: a connection is a long URL and a few actions, so one per row — in a 280px tile the URL breaks
-   mid-word and the buttons wrap onto three lines. */
-.repos { grid-template-columns: 1fr; }
-.repos h2 { font-size: 1rem; margin: 0 0 0.5rem; overflow-wrap: anywhere; }
-.repos .facts { margin: 0.5rem 0 0; }
-.repos .row { margin: 0.75rem 0 0; }
+   mid-word and the buttons wrap onto three lines. The URL leads, its state sits opposite it, and the one
+   destructive action is pushed to the far right, away from the two that are safe to press. */
+.repos { grid-template-columns: 1fr; gap: 0.75rem; }
+.repo-head { margin: 0; gap: 0.5rem; }
+.repo-head h2 { font-size: 0.95rem; margin: 0; overflow-wrap: anywhere; letter-spacing: 0; }
+.repo-head h2 code { background: none; padding: 0; color: var(--text); }
+.repo-trainings { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.75rem 0 0; }
+.repo-trainings .eyebrow { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.repo-trainings .chips { margin: 0; }
+.repo .hint { margin: 0.4rem 0 0; }
+.repo-actions { margin: 0.9rem 0 0; }

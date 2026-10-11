@@ -21,7 +21,10 @@ about their craft:
 | 4 | Master Smith | 2,500 |
 | 5 | Grandmaster | 5,000 |
 
-The ladder and the numbers below live in code (changed by release, not by admins).
+Admins change the experience each smith rank needs in Settings, as they change the sword thresholds (the table gives
+the defaults; each must be higher than the one before, and Bellows Hand is always 0). The titles, the experience per
+point and the milestone bonuses below live in code. Lowering a threshold can raise people's smith rank (announced as
+any rank-up); raising one never lowers a rank already reached.
 
 ## Experience
 
@@ -80,11 +83,15 @@ training makes a Journeyman.
   `smith: {level, title}`, filled by one batched lookup per response. Journey rows also carry `sword: {level, rank}` when
   the viewer may see it.
 - Org export and import carry `sword_ranks` and `smiths`; an older file's `ranks` is accepted and ignored.
-- Admin Settings keeps the threshold form, renamed "Sword ranks".
+- Admin Settings has two threshold forms: "Sword ranks" (the existing % form) and "Smith ranks" (experience for
+  Apprentice, Journeyman, Smith, Master Smith, Grandmaster). They are stored in `settings` (new columns
+  `smith_apprentice` … `smith_grandmaster`, defaults as above), validated, audited and versioned like the sword
+  thresholds, and exported with the other settings.
 
 ## Testing
 
-- Go: sword and smith ladder boundaries; experience arithmetic; experience and ranks never drop (admin reset, a
+- Go: sword and smith ladder boundaries; smith thresholds from Settings (defaults, validation, audit, a lowered
+  threshold raising a rank, a raised one never lowering it); experience arithmetic; experience and ranks never drop (admin reset, a
   training removed); each milestone counted once; silent backfill; a smith rank-up notifies exactly once under
   concurrent saves and a two-level jump announces the top; a sword rank-up never emails; `seen` clears only the named
   banner; sword ranks only reach Journey viewers who follow the training; every person payload above carries `smith`;

@@ -55,26 +55,36 @@ var Fields = map[string]Field{
 	"Question.rubric":         {Description: "text and upload: what the scorer looks for. Never shown to trainees."},
 
 	"Lab.id":           {Required: true, Description: "The lab's id."},
-	"Lab.runtime":      {Required: true, Enum: []string{"local", "cluster", "aws"}, Description: "local: Docker on the trainee's laptop. cluster: Crucible's Kubernetes cluster. aws: a shared AWS account, after cost approval."},
+	"Lab.runtime":      {Required: true, Enum: []string{"local", "cluster", "aws"}, Description: "local: Docker on the trainee's laptop. cluster: Helm charts installed on a Kubernetes cluster the trainee picks, through their laptop agent. aws: a shared AWS account, after cost approval."},
 	"Lab.ttl":          {Description: "How long the lab may run, e.g. 1h; unset uses the program's default."},
 	"Lab.idle_timeout": {Description: "Stop the lab after this long without terminal activity."},
 	"Lab.idle_warning": {Default: "5m", Description: "Warn the trainee this long before the idle stop (default 5m); shorter than idle_timeout."},
 	"Lab.task_order":   {Enum: []string{"linear", "free"}, Default: "linear", Description: "linear: tasks unlock in order. free: any order."},
 	"Lab.hint_cost":    {Min: num(0), Description: "Points a hint costs unless the hint sets its own cost."},
-	"Lab.compose":      {Default: "compose.yaml", Description: "local and cluster: the Docker Compose file, relative to the lab folder."},
+	"Lab.compose":      {Default: "compose.yaml", Description: "local labs: the Docker Compose file, relative to the lab folder."},
 	"Lab.terminals":    {Required: true, Description: "The terminals the trainee gets, each attached to a service."},
 	"Lab.setup":        {Description: "A script run once when the lab starts."},
 	"Lab.tasks":        {Required: true, Description: "The lab's tasks."},
 	"Lab.aws":          {Description: "runtime: aws only: the region and the hourly cost ceiling."},
+	"Lab.cluster":      {Description: "runtime: cluster only: the Helm charts installed, in order, into the lab's namespace."},
+
+	"ClusterLab.charts":       {Required: true, Description: "The charts to install, in order. Each becomes a Helm release in the lab's namespace."},
+	"ClusterLab.cluster_wide": {Description: "Allow the charts to create cluster-wide resources (CRDs, ClusterRoles, Namespaces and the like). Default: refused."},
+
+	"ClusterChart.name":    {Required: true, Description: "The release name: lowercase letters, digits and dashes, at most 53 characters. Ready checks name it."},
+	"ClusterChart.path":    {Required: true, Description: "The chart folder, relative to the lab folder; it needs a Chart.yaml."},
+	"ClusterChart.values":  {Description: "A values file, relative to the lab folder."},
+	"ClusterChart.timeout": {Default: "5m", Description: "How long to wait for the release to be ready (default 5m)."},
 
 	"AWSConfig.region":         {Required: true, Description: "AWS region for the lab's resources, e.g. eu-west-1."},
 	"AWSConfig.max_hourly_usd": {Required: true, Min: num(0), Description: "The most the lab's resources may cost per hour, in US dollars; above 0."},
 
 	"Terminal.name":    {Required: true, Description: "The terminal tab's label; unique within the lab."},
-	"Terminal.service": {Required: true, Description: "The compose service (workspace for aws labs) the terminal opens in."},
+	"Terminal.service": {Description: "The compose service (workspace for aws labs) the terminal opens in. Cluster labs: leave it out; terminals open in the toolbox."},
 
-	"Script.script":  {Required: true, Description: "The script's path, relative to the lab folder. It must be executable."},
-	"Script.run_in":  {Required: true, Description: "The service the script runs in."},
+	"Script.script":  {Description: "The script's path, relative to the lab folder. It must be executable. Required, except for a cluster lab's ready check."},
+	"Script.run_in":  {Description: "The service the script runs in. Required, except in cluster labs, where scripts run in the toolbox."},
+	"Script.ready":   {Description: "Cluster labs, checks only, instead of script: release names that must be ready, or [all]."},
 	"Script.timeout": {Description: "Longest run time (default 30s for checks, 60s for setup)."},
 
 	"Task.id":           {Required: true, Description: "Unique within the lab."},

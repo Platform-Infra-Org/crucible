@@ -23,6 +23,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 	"gopkg.in/yaml.v3"
 
+	"crucible/internal/agentproto"
 	"crucible/internal/yamlx"
 )
 
@@ -355,13 +356,13 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 	if lab.HintCost < 0 {
 		l.add(lf, "hint_cost must not be negative")
 	}
-	if lab.Compose == "" {
+	if lab.Compose == "" && lab.Runtime != "cluster" {
 		lab.Compose = "compose.yaml"
 	}
 
 	services := map[string]bool{}
 	switch lab.Runtime {
-	case "local", "cluster":
+	case "local":
 		if p, ok := l.file(dir, lab.Compose, lf); ok {
 			var c struct {
 				Services map[string]yaml.Node `yaml:"services"`
@@ -372,28 +373,55 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			for name := range c.Services {
 				services[name] = true
 			}
-			if lab.Runtime == "local" {
-				l.localCompose(p)
-			}
+			l.localCompose(p)
 		}
+	case "cluster":
+		services[ToolboxService] = true
+		l.clusterLab(dir, lf, lab)
 	case "aws":
 		services["workspace"] = true // AWS labs get one workspace container (spec §8.2)
 		l.awsModule(dir, lf, lab)
 	default:
 		l.add(lf, "runtime must be cluster, local or aws")
 	}
+	if lab.AWS != nil && lab.Runtime != "aws" {
+		l.add(lf, "aws: is only for runtime: aws")
+	}
 
 	if len(lab.Terminals) == 0 {
 		l.add(lf, "at least one terminal is required")
 	}
 	names := map[string]bool{}
-	for _, term := range lab.Terminals {
+	for i := range lab.Terminals {
+		term := &lab.Terminals[i]
 		if names[term.Name] {
 			l.add(lf, "duplicate terminal name %q", term.Name)
 		}
 		names[term.Name] = true
+		if lab.Runtime == "cluster" {
+			if term.Service != "" {
+				l.add(lf, "terminal %q: cluster lab terminals open in the toolbox; drop service", term.Name)
+			}
+			term.Service = ToolboxService
+		}
 		if !services[term.Service] {
 			l.add(lf, "terminal %q: service %q is not defined in the lab", term.Name, term.Service)
+		}
+	}
+	if lab.Runtime == "cluster" {
+		toolbox := func(what string, s *Script) {
+			if s == nil {
+				return
+			}
+			if s.RunIn != "" && s.RunIn != ToolboxService {
+				l.add(lf, "%s: cluster lab scripts run in the toolbox; drop run_in", what)
+			}
+			s.RunIn = ToolboxService
+		}
+		toolbox("lab setup", lab.Setup)
+		for _, t := range lab.Tasks {
+			toolbox("task "+t.ID+" check", t.Check)
+			toolbox("task "+t.ID+" setup", t.Setup)
 		}
 	}
 	if lab.Setup != nil {
@@ -433,6 +461,7 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			l.add(lf, "%s: rubric is only read for human_review tasks", where)
 		}
 		if t.Check != nil {
+			l.readyCheck(lf, where, lab, t.Check)
 			l.script(dir, lf, where+" check", t.Check, services, 30*time.Second)
 		}
 		if t.Setup != nil {
@@ -479,6 +508,12 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 }
 
 func (l *loader) script(dir, lf, what string, s *Script, services map[string]bool, def time.Duration) {
+	if s.Script == "" && len(s.Ready) > 0 { // a ready check: Crucible runs crucible-ready (readyCheck checked the names)
+		if s.Timeout == 0 {
+			s.Timeout = yamlx.Duration(def)
+		}
+		return
+	}
 	if s.Script == "" {
 		l.add(lf, "%s: script is required", what)
 		return
@@ -1386,4 +1421,134 @@ func (l *loader) links(dir string) {
 		}
 		return nil
 	})
+}
+
+var releaseName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$`)
+var exactVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$`)
+var kindLine = regexp.MustCompile(`(?m)^kind:\s*["']?([A-Za-z]+)`)
+
+// clusterLab checks a runtime: cluster lab's charts (spec 2026-10-11 §1).
+func (l *loader) clusterLab(dir, lf string, lab *Lab) {
+	if lab.Compose != "" {
+		l.add(lf, "cluster labs now install Helm charts; compose files are for laptop labs")
+	}
+	if lab.Cluster == nil || len(lab.Cluster.Charts) == 0 {
+		l.add(lf, "cluster labs now install Helm charts: add cluster.charts (compose files are for laptop labs)")
+		return
+	}
+	seen := map[string]bool{}
+	for i := range lab.Cluster.Charts {
+		c := &lab.Cluster.Charts[i]
+		if !releaseName.MatchString(c.Name) {
+			l.add(lf, "chart %q: the release name must be lowercase letters, digits and dashes, at most 53 characters", c.Name)
+		}
+		if seen[c.Name] {
+			l.add(lf, "duplicate release name %q", c.Name)
+		}
+		seen[c.Name] = true
+		if c.Timeout == 0 {
+			c.Timeout = yamlx.Duration(5 * time.Minute)
+		}
+		if c.Timeout < 0 {
+			l.add(lf, "chart %q: timeout must be positive", c.Name)
+		}
+		if c.Values != "" {
+			l.file(dir, c.Values, lf)
+		}
+		rel := filepath.FromSlash(c.Path)
+		if !filepath.IsLocal(rel) {
+			l.add(lf, "chart %q: path %q must stay inside the lab", c.Name, c.Path)
+			continue
+		}
+		chartDir := filepath.Join(dir, rel)
+		if _, err := os.Stat(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+			l.add(lf, "chart %q: no chart folder at %s (it needs a Chart.yaml)", c.Name, c.Path)
+			continue
+		}
+		l.chartDeps(dir, chartDir)
+		if !lab.Cluster.ClusterWide {
+			l.chartKinds(chartDir)
+		}
+	}
+}
+
+// chartDeps refuses dependencies that are not pinned to an exact version from https://, oci:// or a file:// path
+// inside the lab.
+func (l *loader) chartDeps(labDir, chartDir string) {
+	p := filepath.Join(chartDir, "Chart.yaml")
+	var c struct {
+		Dependencies []struct {
+			Name, Version, Repository string
+		} `yaml:"dependencies"`
+	}
+	if err := yamlx.ReadLoose(p, &c); err != nil {
+		l.add(p, "%v", err)
+		return
+	}
+	for _, d := range c.Dependencies {
+		switch {
+		case strings.HasPrefix(d.Repository, "file://"):
+			target, err := filepath.Rel(labDir, filepath.Join(chartDir, filepath.FromSlash(strings.TrimPrefix(d.Repository, "file://"))))
+			if err != nil || !filepath.IsLocal(target) {
+				l.add(p, "dependency %q: file:// must stay inside the lab", d.Name)
+			}
+		case strings.HasPrefix(d.Repository, "https://"), strings.HasPrefix(d.Repository, "oci://"):
+		default:
+			l.add(p, "dependency %q: the repository must be https://, oci:// or file://", d.Name)
+		}
+		if !exactVersion.MatchString(d.Version) {
+			l.add(p, "dependency %q: pin an exact version (like 18.0.1), not %q", d.Name, d.Version)
+		}
+	}
+}
+
+// chartKinds is lint's hint for undeclared cluster-wide resources; the agent enforces it on the rendered chart.
+func (l *loader) chartKinds(chartDir string) {
+	if entries, _ := os.ReadDir(filepath.Join(chartDir, "crds")); len(entries) > 0 {
+		l.add(filepath.Join(chartDir, "crds"), "crds/ installs cluster-wide resources: set cluster_wide: true")
+	}
+	_ = filepath.WalkDir(filepath.Join(chartDir, "templates"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		for _, m := range kindLine.FindAllStringSubmatch(string(b), -1) {
+			if agentproto.ClusterScopedKinds[m[1]] {
+				l.add(p, "%s is cluster-wide: set cluster_wide: true", m[1])
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+// readyCheck validates a ready: check: cluster labs only, either script or ready, names of this lab's releases.
+func (l *loader) readyCheck(lf, where string, lab *Lab, s *Script) {
+	if len(s.Ready) == 0 {
+		return
+	}
+	if lab.Runtime != "cluster" {
+		l.add(lf, "%s: ready: is for cluster labs", where)
+		return
+	}
+	if s.Script != "" {
+		l.add(lf, "%s: a check has either script or ready, not both", where)
+	}
+	if len(s.Ready) == 1 && s.Ready[0] == "all" {
+		return
+	}
+	names := map[string]bool{}
+	if lab.Cluster != nil {
+		for _, c := range lab.Cluster.Charts {
+			names[c.Name] = true
+		}
+	}
+	for _, r := range s.Ready {
+		if !names[r] {
+			l.add(lf, "%s: ready: %s is not a release of this lab", where, r)
+		}
+	}
 }

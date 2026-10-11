@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,12 +250,95 @@ func TestLocalComposeAllowsEscapedDollarAndTrailingEmptyDocument(t *testing.T) {
 	}
 }
 
-func TestClusterComposeMayUseHostAccess(t *testing.T) {
-	lab := strings.Replace(base["modules/m1/lab/lab.yaml"], "runtime: local", "runtime: cluster", 1)
-	_, probs := Load(tree(t, map[string]string{"modules/m1/lab/lab.yaml": lab,
-		"modules/m1/lab/compose.yaml": "services:\n  box:\n    image: alpine:3.22\n    privileged: true\n"}))
+// clusterTree is base with its lab turned into a cluster lab: one chart, scripts in the toolbox.
+func clusterTree(t *testing.T, override map[string]string) string {
+	t.Helper()
+	files := map[string]string{
+		"modules/m1/lab/lab.yaml": `id: l1
+runtime: cluster
+cluster:
+  charts:
+    - {name: shop, path: charts/shop, values: values/shop.yaml}
+terminals: [{name: shell}]
+tasks:
+  - id: t1
+    instructions: tasks/t1.md
+    check: {script: checks/t1.sh}
+  - id: t2
+    instructions: tasks/t2.md
+    setup: {script: setup/t2.sh}
+    check: {ready: [shop]}
+`,
+		"modules/m1/lab/compose.yaml":                      "<delete>",
+		"modules/m1/lab/hints/sol.md":                      "<delete>",
+		"modules/m1/lab/charts/shop/Chart.yaml":            "apiVersion: v2\nname: shop\nversion: 0.1.0\n",
+		"modules/m1/lab/charts/shop/templates/deploy.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: shop}\n",
+		"modules/m1/lab/values/shop.yaml":                  "replicas: 1\n",
+	}
+	maps.Copy(files, override)
+	return tree(t, files)
+}
+
+func TestClusterLabLoads(t *testing.T) {
+	tr, probs := Load(clusterTree(t, nil))
 	if len(probs) > 0 {
-		t.Fatalf("cluster runtime is not restricted here: %v", probs)
+		t.Fatal(probs)
+	}
+	lab := tr.Modules[0].Lab
+	if c := lab.Cluster.Charts[0]; c.Timeout.D() != 5*time.Minute || c.Values != "values/shop.yaml" {
+		t.Fatalf("chart defaults: %+v", c)
+	}
+	if lab.Terminals[0].Service != ToolboxService || lab.Tasks[0].Check.RunIn != ToolboxService || lab.Tasks[1].Setup.RunIn != ToolboxService {
+		t.Fatalf("everything runs in the toolbox: %+v %+v", lab.Terminals, lab.Tasks[0].Check)
+	}
+	if !slices.Equal(lab.Tasks[1].Check.Ready, []string{"shop"}) {
+		t.Fatalf("ready check: %+v", lab.Tasks[1].Check)
+	}
+}
+
+func TestClusterLabRules(t *testing.T) {
+	labWith := func(cluster, extra string) string {
+		return "id: l1\nruntime: cluster\n" + cluster + "terminals: [{name: shell}]\ntasks:\n  - id: t1\n    instructions: tasks/t1.md\n    check: {script: checks/t1.sh}\n" + extra
+	}
+	one := "cluster:\n  charts:\n    - {name: shop, path: charts/shop}\n"
+	for name, c := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"no cluster block": {map[string]string{"modules/m1/lab/lab.yaml": labWith("", "")}, "cluster labs now install Helm charts"},
+		"compose given":    {map[string]string{"modules/m1/lab/lab.yaml": labWith(one, "compose: compose.yaml\n")}, "compose files are for laptop labs"},
+		"no chart folder":  {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: charts/nope}\n", "")}, "no chart folder"},
+		"escaping path":    {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: ../../x}\n", "")}, "must stay inside"},
+		"bad release name": {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: Shop_1, path: charts/shop}\n", "")}, "release name"},
+		"duplicate name":   {map[string]string{"modules/m1/lab/lab.yaml": labWith("cluster:\n  charts:\n    - {name: shop, path: charts/shop}\n    - {name: shop, path: charts/shop}\n", "")}, "duplicate release"},
+		"terminal service": {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(labWith(one, ""), "{name: shell}", "{name: shell, service: web}", 1)}, "terminals open in the toolbox"},
+		"run_in":           {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(labWith(one, ""), "{script: checks/t1.sh}", "{script: checks/t1.sh, run_in: web}", 1)}, "scripts run in the toolbox"},
+		"aws block":        {map[string]string{"modules/m1/lab/lab.yaml": labWith(one, "aws: {region: eu-west-1, max_hourly_usd: 1}\n")}, "aws: is only for runtime: aws"},
+		"ready unknown":    {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(labWith(one, ""), "{script: checks/t1.sh}", "{ready: [nope]}", 1)}, "ready: nope is not a release"},
+		"ready and script": {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(labWith(one, ""), "{script: checks/t1.sh}", "{script: checks/t1.sh, ready: [shop]}", 1)}, "either script or ready"},
+		"floating dep": {map[string]string{"modules/m1/lab/charts/shop/Chart.yaml": "apiVersion: v2\nname: shop\nversion: 0.1.0\ndependencies:\n  - {name: redis, version: \"^18.0.0\", repository: https://charts.bitnami.com/bitnami}\n"},
+			"exact version"},
+		"http dep": {map[string]string{"modules/m1/lab/charts/shop/Chart.yaml": "apiVersion: v2\nname: shop\nversion: 0.1.0\ndependencies:\n  - {name: redis, version: 18.0.1, repository: http://charts.example.com}\n"},
+			"https://, oci:// or file://"},
+		"undeclared cluster-wide": {map[string]string{"modules/m1/lab/charts/shop/templates/role.yaml": "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata: {name: r}\n"},
+			"ClusterRole is cluster-wide: set cluster_wide: true"},
+		"crds folder": {map[string]string{"modules/m1/lab/charts/shop/crds/x.yaml": "kind: CustomResourceDefinition\n"}, "crds/ installs cluster-wide"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, probs := Load(clusterTree(t, c.files))
+			if !strings.Contains(fmt.Sprint(probs), c.want) {
+				t.Fatalf("want a problem containing %q, got %v", c.want, probs)
+			}
+		})
+	}
+	ok := clusterTree(t, map[string]string{
+		"modules/m1/lab/lab.yaml":                        labWith("cluster:\n  charts:\n    - {name: shop, path: charts/shop}\n  cluster_wide: true\n", ""),
+		"modules/m1/lab/charts/shop/templates/role.yaml": "kind: ClusterRole\nmetadata: {name: r}\n",
+		"modules/m1/lab/charts/shop/Chart.yaml":          "apiVersion: v2\nname: shop\nversion: 0.1.0\ndependencies:\n  - {name: redis, version: 18.0.1, repository: oci://registry-1.docker.io/bitnamicharts}\n  - {name: lib, version: 0.1.0, repository: \"file://../lib\"}\n",
+		"modules/m1/lab/charts/lib/Chart.yaml":           "apiVersion: v2\nname: lib\nversion: 0.1.0\n",
+	})
+	if _, probs := Load(ok); len(probs) > 0 {
+		t.Fatalf("declared cluster-wide, pinned deps: %v", probs)
 	}
 }
 

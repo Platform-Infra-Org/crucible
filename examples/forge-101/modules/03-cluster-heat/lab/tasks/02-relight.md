@@ -1,3 +1,4 @@
 # Relight the forge
 
-Someone moved nginx off port 80 while you were away. In the **web** terminal, put it back on port 80, reload nginx, then press **Check**.
+Someone changed the forge's image and its pods won't start. Find out why, put it right, and choose **Check** once
+every pod is ready again.

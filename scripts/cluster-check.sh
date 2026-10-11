@@ -104,7 +104,7 @@ echo "denied outside lab namespaces, allowed inside"
 echo "== cluster runner against kind (and an aws lab's workspace and terraform pod cannot reach IMDS)"
 CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_PROBE_IP="$probe_ip" CRUCIBLE_TEST_API_IP="$api_ip" \
   CRUCIBLE_TEST_NODE_IP="$node_ip" CRUCIBLE_TEST_DNS_POD="$dns_pod" CRUCIBLE_CLUSTER_PRIVILEGED=1 \
-  go test -tags cluster -run 'TestClusterLabOnKind|TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
+  go test -tags cluster -run 'TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
 
 echo "== browser: Forge 101 end to end, including the cluster lab"
 CLUSTER=1 ./scripts/local-check.sh

@@ -47,40 +47,6 @@ func TestClusterLabUnavailableWithoutRunner(t *testing.T) {
 	}
 }
 
-func TestClusterLabChecksAreNotSelfReported(t *testing.T) {
-	f := setup(t, true)
-	f.completeFirstLab(t)
-	f.s.Runners["cluster"], f.s.Estimators["cluster"] = f.run, f.rates
-	ctx := context.Background()
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 200 && v.State != Ready; i++ {
-		time.Sleep(10 * time.Millisecond)
-		if v, err = f.s.Get(ctx, f.u, v.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if v.State != Ready || v.Runtime != "cluster" || v.SelfReported {
-		t.Fatalf("cluster lab view: state %s runtime %s self_reported %v", v.State, v.Runtime, v.SelfReported)
-	}
-	res, err := f.s.Check(ctx, f.u, v.ID, "t1-cast", "")
-	if err != nil || !res.Passed {
-		t.Fatalf("check: %+v %v", res, err)
-	}
-	var self bool
-	if err := f.s.DB.QueryRow(ctx, `SELECT self_reported FROM check_runs WHERE lab_id = $1`, v.ID).Scan(&self); err != nil {
-		t.Fatal(err)
-	}
-	if self {
-		t.Fatal("cluster checks run server-side and must not be flagged self-reported")
-	}
-	if got := f.run.scripts[len(f.run.scripts)-1]; got.Service != "shell" || !strings.Contains(string(got.Script), "hello crucible") {
-		t.Fatalf("the check must run the t1 script in the shell service: %+v", got)
-	}
-}
-
 // onPodCreate lets a test decide what the "kubelet" reports for the lab pod.
 func onPodCreate(cs *fake.Clientset, mutate func(*corev1.Pod)) {
 	cs.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {

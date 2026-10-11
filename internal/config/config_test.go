@@ -223,3 +223,30 @@ func TestThemeListMatchesTheWebApp(t *testing.T) {
 		t.Errorf("web themes %v, server themes %v", web, Themes)
 	}
 }
+
+func TestCleanRefAndPath(t *testing.T) {
+	for in, want := range map[string]string{"": "main", " dev ": "dev", "v1.2.0": "v1.2.0", "release/2026": "release/2026",
+		"0123456789abcdef0123456789abcdef01234567": "0123456789abcdef0123456789abcdef01234567"} {
+		if got, err := CleanRef(in); err != nil || got != want {
+			t.Errorf("CleanRef(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"-x", "--upload-pack=x", "a..b", "main~1", "main^", "a b", "x:y", "HEAD@{1}", "a//b", "a/", "a.", "x.lock", "/a"} {
+		if _, err := CleanRef(bad); err == nil {
+			t.Errorf("CleanRef(%q) accepted", bad)
+		}
+	}
+	for in, want := range map[string]string{"": "", "/": "", ".": "", "trainings/forge-101": "trainings/forge-101", "/a/b/": "a/b"} {
+		if got, err := CleanPath(in); err != nil || got != want {
+			t.Errorf("CleanPath(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"..", "a/../b", "../x", "a//b", "a/./b", "-x", "a b", "a:b", "a\\b"} {
+		if _, err := CleanPath(bad); err == nil {
+			t.Errorf("CleanPath(%q) accepted", bad)
+		}
+	}
+}
+
+// Roles go to people and to groups: a team, a tag in a team, a tag in every team, everyone. They resolve against the
+// teams as they are, so a promotion changes who holds a role without touching the training.

@@ -6,8 +6,10 @@ order: 10
 ---
 # How a training repo is laid out
 
-A training lives in its own git repository. Crucible reads it from the branch your admins registered, so what is
-merged there is what trainees get (each program can also pin an older version).
+A training lives in a git repository, at its root or in a folder of its own (one repository can hold several).
+Crucible reads it from the branch, tag or commit your admins registered: on a branch, what is merged there is what
+trainees get (each program can also pin an older version); a tag or a commit stays on that version. The paths below
+are relative to the training's folder.
 
 ```text
 training.yaml              id, title, maintainers, progression, the module list

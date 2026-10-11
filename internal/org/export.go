@@ -171,7 +171,7 @@ func checkImported(p *config.Platform) error {
 		if !config.ValidTrainingID(id) {
 			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
 		}
-		if err := checkRepo(tr.Repo); err != nil {
+		if _, err := cleanTrainingRef(tr); err != nil {
 			return fmt.Errorf("training %s: %w", id, err)
 		}
 	}

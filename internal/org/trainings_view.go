@@ -34,9 +34,10 @@ type TeamProgram struct {
 type TrainingView struct {
 	ID        string        `json:"id"`
 	Title     string        `json:"title"`
-	Available bool          `json:"available"`        // its content has loaded at least once
-	Repo      string        `json:"repo,omitempty"`   // admins only, credentials masked
-	Branch    string        `json:"branch,omitempty"` // admins only
+	Available bool          `json:"available"`      // its content has loaded at least once
+	Repo      string        `json:"repo,omitempty"` // admins only, credentials masked
+	Ref       string        `json:"ref,omitempty"`  // admins only
+	Path      string        `json:"path,omitempty"` // admins only
 	Programs  []TeamProgram `json:"programs"`
 }
 
@@ -78,7 +79,8 @@ func (a *api) trainingsPage(w http.ResponseWriter, r *http.Request, actor string
 	for _, tr := range slices.Sorted(maps.Keys(c.P.Trainings)) {
 		tv := TrainingView{ID: tr, Title: tr, Programs: []TeamProgram{}}
 		if admin {
-			tv.Repo, tv.Branch = redactRepo(c.P.Trainings[tr].Repo), c.P.Trainings[tr].Branch
+			ref := c.P.Trainings[tr]
+			tv.Repo, tv.Ref, tv.Path = redactRepo(ref.Repo), ref.Ref, ref.Path
 		}
 		for _, team := range v.Teams {
 			title, running, head := tr, "", ""

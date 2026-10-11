@@ -114,7 +114,7 @@ crucible-platform/
   platform.yaml          # org settings: default theme, escalation hours, cost tiers, rank thresholds, notification webhooks, snapshot bucket
   admins.yaml            # global admins (by OIDC email/subject)
   quotes.yaml            # extra loading-screen quotes (built-ins always present)
-  trainings.yaml         # registry: training id → content repo URL + branch
+  trainings.yaml         # registry: training id → content repo URL + ref (branch, tag or commit) + folder (default: root)
   teams/
     <team-id>/
       team.yaml          # name, leader, seniors, members, trainees, mentor pairs
@@ -257,7 +257,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - On new commit: parse + validate (same validator as `crucible lint`). **Valid →** store as a new content version (by SHA). **Invalid →** keep previous active version, show errors on the admin *Forge Status* page, notify maintainers.
 - Programs pin a SHA. In-progress attempts finish on their pinned version; manager bumps via UI (diff summary shown first).
 - **Config writes (UI → platform repo):** bot commits directly with message `crucible: <action> by <user email>` and a `Crucible-Actor:` trailer. Optimistic concurrency: fetch → apply → push; on non-fast-forward, rebase and retry up to 3×; a true conflict returns an error to the user. DB caches config but git is authoritative — a manual git edit wins on next sync.
-- **Content edits from UI:** pushed to branch `crucible/edit/<edit-id>`; Crucible shows rendered preview + diff; a training maintainer other than the author approves → bot merges to the tracked branch (merge commit). Merge conflict → edit marked *stale*, author re-edits on fresh base.
+- **Content edits from UI:** pushed to branch `crucible/edit/<edit-id>`; Crucible shows rendered preview + diff; a training maintainer other than the author approves → bot merges to the tracked branch (merge commit); paths are relative to the training's folder. A training that follows a tag or a commit takes no edits from the UI. Merge conflict → edit marked *stale*, author re-edits on fresh base.
 - **`crucible lint <repo>`**: schema validation, broken links/assets, referenced scripts exist and are executable, check scripts `shellcheck`ed, quiz answers within option ranges, AWS labs pass infracost against `max_hourly_usd`.
 - **`crucible preview <repo>`**: runs the SPA + a local content server against the working tree (reading, quizzes, and `local`-runtime labs).
 

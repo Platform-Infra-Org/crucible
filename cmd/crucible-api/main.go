@@ -319,12 +319,16 @@ func run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			sum := sha256.Sum256([]byte(ref.Repo + "\x00" + ref.Branch))
+			name := ref.Repo + "\x00" + ref.Ref
+			if ref.Path != "" { // a training at the repo root keeps the clone it had before folders
+				name += "\x00" + ref.Path
+			}
+			sum := sha256.Sum256([]byte(name))
 			key := hex.EncodeToString(sum[:8])
 			repoMu.Lock()
 			defer repoMu.Unlock()
 			if repos[key] == nil {
-				repos[key] = &gitsync.ContentRepo{URL: ref.Repo, Branch: ref.Branch, Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "edits", key),
+				repos[key] = &gitsync.ContentRepo{URL: ref.Repo, Branch: ref.Ref, Root: ref.Path, Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "edits", key),
 					Name: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), Email: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost")}
 			}
 			return repos[key]

@@ -401,7 +401,7 @@ git -C .local/git/forge-501.git config core.sharedRepository world
 chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>a bare repo the API container can read and push edits into.</p></div></li>
           <li class="item" data-id="auth-register"><label><input type="checkbox" id="c-auth-register"><span class="t">Register it</span></label>
-            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch <code>main</code>.</p>
+            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch, tag or commit <code>main</code>, folder empty (the repository root).</p>
               <p class="expect"><b>Expect</b>it appears in the list, marked <i>content not loaded yet</i> until the next sync (about 10 seconds locally), then with its title. Local paths work here only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
           <li class="item" data-id="auth-refuse"><label><input type="checkbox" id="c-auth-refuse"><span class="t">Unsafe repository URLs are refused</span></label>
             <div class="body"><p>Try registering repo <code>--upload-pack=touch</code> and one with a space in it.</p>
@@ -413,8 +413,11 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>As trainee: Hearth → the new card; read, take the quiz.</p>
               <p class="expect"><b>Expect</b>with <code>progression: linear</code>, later modules stay locked until earlier ones are forged; the Trainings card offers <b>Open</b>.</p></div></li>
           <li class="item" data-id="auth-version"><label><input type="checkbox" id="c-auth-version"><span class="t">Content versions and pinning</span></label>
-            <div class="body"><p>Push a new commit to the bare repo. Then on the program: <b>Content version</b> → <b>Show what changed</b> → <b>Pin</b>; later <b>Follow the branch head</b>.</p>
+            <div class="body"><p>Push a new commit to the bare repo. Then on the program: <b>Content version</b> → <b>Show what changed</b> → <b>Pin</b>; later <b>Follow the source head</b>.</p>
               <p class="expect"><b>Expect</b>the commit list and diff stat; a pinned program keeps running the pinned version; labs always run at their exact content version.</p></div></li>
+          <li class="item" data-id="auth-ref-folder"><label><input type="checkbox" id="c-auth-ref-folder"><span class="t">Follow a tag, from a folder</span></label>
+            <div class="body"><ol class="how"><li>In a clone of the repo, move everything into <code>courses/forge-501/</code>, commit, tag it <code>v1</code> and push the commit and the tag.</li><li><b>Source</b> → <b>Change source</b>: repository URL empty, <b>Branch, tag or commit</b> <code>v1</code>, <b>Folder</b> <code>courses/forge-501</code>.</li><li>Push another commit to <code>main</code>.</li></ol>
+              <p class="expect"><b>Expect</b>the training loads from the folder and stays on <code>v1</code> after the new commit; Forge Status shows <code>v1</code> and the folder; <b>Edit content</b> is gone (a tag changes only in git). Back on <code>main</code> with the same folder, edits return and their diffs show paths inside the folder.</p></div></li>
           <li class="item" data-id="auth-delete"><label><input type="checkbox" id="c-auth-delete"><span class="t">Delete the training</span></label>
             <div class="body"><p><b>Source</b> → <b>Delete training</b>, then register it again and start it for the team.</p>
               <p class="expect"><b>Expect</b>it names the teams it stops for; the repo is untouched; progress comes back after re-registering.</p></div></li>

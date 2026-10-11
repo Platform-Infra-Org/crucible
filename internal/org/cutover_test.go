@@ -58,7 +58,7 @@ func TestStoreDrivesTheSnapshotWithoutGit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustExec(t, s.DB, `INSERT INTO trainings (id, repo, branch) VALUES ('t1', $1, 'main')`, repo) // AddTraining refuses local paths
+	mustExec(t, s.DB, `INSERT INTO trainings (id, repo, ref) VALUES ('t1', $1, 'main')`, repo) // AddTraining refuses local paths
 	must(s.CreateTeam(ctx, "boss@example.com", "a", TeamBody{Name: "A", Leader: "l@x.com", Trainees: []string{"u@x.com"}}))
 	must(s.Enroll(ctx, "boss@example.com", "a", "t1", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"u@x.com"}}))
 	must(sy.SyncOnce(ctx))

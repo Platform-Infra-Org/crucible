@@ -84,11 +84,12 @@ function NewTraining({ onDone }: { onDone: () => void }) {
   const navigate = useNavigate()
   const [id, setId] = useState('')
   const [repo, setRepo] = useState('')
-  const [branch, setBranch] = useState('main')
+  const [ref, setRef] = useState('main')
+  const [path, setPath] = useState('')
   const act = useAct(onDone)
   const save = async (e: FormEvent) => {
     e.preventDefault()
-    const ok = await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: id.trim(), repo: repo.trim(), branch: branch.trim() } }),
+    const ok = await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: id.trim(), repo: repo.trim(), ref: ref.trim(), path: path.trim() } }),
       `${id.trim()} is registered.`)
     if (ok) navigate(`/trainings/manage/${encodeURIComponent(id.trim())}`)
   }
@@ -99,7 +100,7 @@ function NewTraining({ onDone }: { onDone: () => void }) {
         Register the repository here; who takes the training and who runs it are kept in Crucible.</p>
       <label>Training id <input required value={id} placeholder="e.g. forge-501" onChange={(e) => setId(e.target.value)} /></label>
       <label>Repository URL <input required value={repo} placeholder="https://git.example.com/trainings/forge-501.git" onChange={(e) => setRepo(e.target.value)} /></label>
-      <label>Branch <input required value={branch} onChange={(e) => setBranch(e.target.value)} /></label>
+      <RefFields gitRef={ref} setRef={setRef} path={path} setPath={setPath} />
       {act.banner}
       <button className="primary" disabled={act.busy}>Register training</button>
     </form>
@@ -131,13 +132,14 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
   const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
   const [repo, setRepo] = useState('')
-  const [branch, setBranch] = useState(t.branch ?? 'main')
+  const [ref, setRef] = useState(t.ref ?? 'main')
+  const [path, setPath] = useState(t.path ?? '')
   const act = useAct(onChange)
-  const warn = repoWarning(t.repo, repo, t.programs.length)
+  const warn = repoWarning(t, repo, path, t.programs.length)
   const save = async (e: FormEvent) => {
     e.preventDefault()
     if (warn && !window.confirm(warn)) return
-    if (await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: t.id, repo: repo.trim(), branch: branch.trim() } }), `${t.id} now reads from the new source.`)) {
+    if (await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: t.id, repo: repo.trim(), ref: ref.trim(), path: path.trim() } }), `${t.id} now reads from the new source.`)) {
       setEditing(false)
     }
   }
@@ -153,19 +155,20 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
       <h3>Source</h3>
       <dl className="facts">
         <dt>Repository</dt><dd><code>{t.repo}</code></dd>
-        <dt>Branch</dt><dd>{t.branch}</dd>
+        <dt>Branch, tag or commit</dt><dd><code>{t.ref}</code></dd>
+        <dt>Folder</dt><dd>{t.path ? <code>{t.path}/</code> : 'the repository root'}</dd>
       </dl>
       {act.banner}
       {!editing && (
         <div className="row">
-          <button type="button" onClick={() => { setRepo(''); setBranch(t.branch ?? 'main'); setEditing(true) }}>Change source</button>
+          <button type="button" onClick={() => { setRepo(''); setRef(t.ref ?? 'main'); setPath(t.path ?? ''); setEditing(true) }}>Change source</button>
           <button type="button" className="ghost danger-text" disabled={act.busy} onClick={remove}>Delete training</button>
         </div>
       )}
       {editing && (
         <form className="stack" onSubmit={save}>
-          <label>New repository URL <input required value={repo} placeholder="the full URL, credentials included if it needs them" onChange={(e) => setRepo(e.target.value)} /></label>
-          <label>Branch <input required value={branch} onChange={(e) => setBranch(e.target.value)} /></label>
+          <label>New repository URL <input value={repo} placeholder="empty keeps the current one; a new URL with its credentials, if it needs them" onChange={(e) => setRepo(e.target.value)} /></label>
+          <RefFields gitRef={ref} setRef={setRef} path={path} setPath={setPath} />
           {warn && <p role="alert" className="warn">{warn}</p>}
           <div className="row">
             <button className="primary" disabled={act.busy}>{warn ? 'Change anyway' : 'Save source'}</button>
@@ -174,6 +177,17 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
         </form>
       )}
     </div>
+  )
+}
+
+// RefFields picks what a training follows inside its repository: a ref, and the folder that holds training.yaml.
+function RefFields({ gitRef, setRef, path, setPath }: { gitRef: string; setRef: (v: string) => void; path: string; setPath: (v: string) => void }) {
+  return (
+    <>
+      <label>Branch, tag or commit <input required value={gitRef} placeholder="main" onChange={(e) => setRef(e.target.value)} /></label>
+      <p className="muted">A branch follows its newest commit and takes content edits from Crucible. A tag or a commit stays on that version; change it in git.</p>
+      <label>Folder <input value={path} placeholder="empty for the repository root, or e.g. trainings/forge-501" onChange={(e) => setPath(e.target.value)} /></label>
+    </>
   )
 }
 
@@ -388,10 +402,10 @@ function ContentVersion({ team, p, onDone }: { team: string; p: TeamProgram; onD
     <details className="lab-settings">
       <summary>Content version</summary>
       {act.banner}
-      <p>Runs {p.running_sha ? <code>{p.running_sha.slice(0, 7)}</code> : 'the current version'} {p.pinned_ref ? '(pinned)' : '(follows the branch head)'}</p>
+      <p>Runs {p.running_sha ? <code>{p.running_sha.slice(0, 7)}</code> : 'the current version'} {p.pinned_ref ? '(pinned)' : '(follows the source head)'}</p>
       {p.running_sha !== p.head_sha && p.head_sha && <button type="button" disabled={act.busy} onClick={() => void show()}>Show what changed</button>}
       <div role="status">{body}</div>
-      {p.pinned_ref && <button type="button" className="ghost" disabled={act.busy} onClick={() => void pin('', 'Following the branch head again.')}>Follow the branch head</button>}
+      {p.pinned_ref && <button type="button" className="ghost" disabled={act.busy} onClick={() => void pin('', 'Following the source head again.')}>Follow the source head</button>}
     </details>
   )
 }

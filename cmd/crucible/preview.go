@@ -306,7 +306,7 @@ func writePlatform(dir, training string) error {
 	files := map[string]string{
 		"platform.yaml":           "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 1, tier2_usd: 2}\n",
 		"admins.yaml":             "admins: [preview@crucible.local]\n",
-		"trainings.yaml":          fmt.Sprintf("trainings:\n  %s: {repo: file:///git/content.git, branch: main}\n", training),
+		"trainings.yaml":          fmt.Sprintf("trainings:\n  %s: {repo: file:///git/content.git, ref: main}\n", training),
 		"teams/preview/team.yaml": "name: Preview\nleader: preview@crucible.local\n",
 		"teams/preview/programs/" + training + ".yaml": fmt.Sprintf("training: %s\nenrolled: [preview@crucible.local]\n", training),
 	}

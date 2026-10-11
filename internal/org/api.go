@@ -231,13 +231,14 @@ func (a *api) deleteAdmin(w http.ResponseWriter, r *http.Request, actor string, 
 
 func (a *api) getTrainings(w http.ResponseWriter, r *http.Request, _ string, c rbac.Checker) error {
 	type row struct {
-		ID     string `json:"id"`
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		ID   string `json:"id"`
+		Repo string `json:"repo"`
+		Ref  string `json:"ref"`
+		Path string `json:"path"`
 	}
 	out := []row{}
 	for id, t := range c.P.Trainings {
-		out = append(out, row{id, redactRepo(t.Repo), t.Branch}) // credentials in the stored URL never reach the screen
+		out = append(out, row{id, redactRepo(t.Repo), t.Ref, t.Path}) // credentials in the stored URL never reach the screen
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	httpx.JSON(w, http.StatusOK, map[string]any{"trainings": out})
@@ -246,14 +247,13 @@ func (a *api) getTrainings(w http.ResponseWriter, r *http.Request, _ string, c r
 
 func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
 	var b struct {
-		ID     string `json:"id"`
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		ID string `json:"id"`
+		config.TrainingRef
 	}
 	if err := httpx.Read(r, &b); err != nil {
 		return err
 	}
-	if err := a.s.AddTraining(r.Context(), actor, b.ID, b.Repo, b.Branch); err != nil {
+	if err := a.s.AddTraining(r.Context(), actor, b.ID, b.TrainingRef); err != nil {
 		return err
 	}
 	return a.done(w, r, 0)

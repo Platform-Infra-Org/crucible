@@ -100,8 +100,15 @@ func (m Mirror) Resolve(ctx context.Context, ref string) (string, error) {
 	return git(ctx, m.Dir, "rev-parse", "--verify", ref+"^{commit}")
 }
 
-// Export writes the tree at sha into dest once; exports are immutable and reused.
-func (m Mirror) Export(ctx context.Context, sha, dest string) error {
+// IsBranch reports whether ref names a branch of the mirrored repo (not a tag or a commit).
+func (m Mirror) IsBranch(ctx context.Context, ref string) bool {
+	_, err := git(ctx, m.Dir, "show-ref", "--verify", "--quiet", "refs/heads/"+ref)
+	return err == nil
+}
+
+// Export writes the folder root ("" is the whole repo) of the tree at sha into dest once; exports are immutable and
+// reused.
+func (m Mirror) Export(ctx context.Context, sha, root, dest string) error {
 	if _, err := os.Stat(dest); err == nil {
 		return nil
 	}
@@ -110,9 +117,18 @@ func (m Mirror) Export(ctx context.Context, sha, dest string) error {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return err
 	}
+	treeish := sha
+	if root != "" {
+		treeish = sha + ":" + root
+		// treeish starts with the commit id, so git can't read it as an option
+		if kind, err := git(ctx, m.Dir, "cat-file", "-t", treeish); err != nil || kind != "tree" {
+			_ = os.RemoveAll(tmp)
+			return fmt.Errorf("there is no folder %q at %.7s", root, sha)
+		}
+	}
 	tarPath := tmp + ".tar"
 	defer os.Remove(tarPath)
-	if _, err := git(ctx, m.Dir, "archive", "--format=tar", "-o", tarPath, "--end-of-options", sha); err != nil {
+	if _, err := git(ctx, m.Dir, "archive", "--format=tar", "-o", tarPath, "--end-of-options", treeish); err != nil {
 		return err
 	}
 	if out, err := exec.CommandContext(ctx, "tar", "-xf", tarPath, "-C", tmp).CombinedOutput(); err != nil {

@@ -48,7 +48,7 @@ func (s *Store) Seed(ctx context.Context, p *config.Platform) (bool, error) {
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(p.Trainings)) {
-		if err := s.AddTraining(ctx, actor, id, p.Trainings[id].Repo, p.Trainings[id].Branch); err != nil {
+		if err := s.AddTraining(ctx, actor, id, p.Trainings[id]); err != nil {
 			return false, fmt.Errorf("training %s: %w", id, err)
 		}
 	}

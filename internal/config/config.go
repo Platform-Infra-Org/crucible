@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -131,9 +133,45 @@ func (b *Budget) Validate() error {
 	return nil
 }
 
+// TrainingRef is where a training's content lives: a repo, the git ref it follows (a branch, a tag or a commit) and the
+// folder inside the repo that holds training.yaml ("" is the repo root).
 type TrainingRef struct {
-	Repo   string `yaml:"repo"`
-	Branch string `yaml:"branch"`
+	Repo string `json:"repo" yaml:"repo"`
+	Ref  string `json:"ref" yaml:"ref"`
+	Path string `json:"path" yaml:"path,omitempty"`
+}
+
+var (
+	refRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+	pathRE = regexp.MustCompile(`^[A-Za-z0-9._][A-Za-z0-9._/-]*$`)
+)
+
+// CleanRef checks a training's git ref ("" means main): a branch, tag or commit name git can never read as an option,
+// a revision expression or a path.
+func CleanRef(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "main", nil
+	}
+	if len(ref) > 200 || !refRE.MatchString(ref) || strings.Contains(ref, "..") || strings.Contains(ref, "//") ||
+		strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".") || strings.HasSuffix(ref, ".lock") {
+		return "", fmt.Errorf("invalid ref %q: use a branch, a tag or a commit id", ref)
+	}
+	return ref, nil
+}
+
+// CleanPath checks the folder inside the repo that holds a training ("" or "/" is the repo root): a relative path
+// that stays inside the repo, returned without leading or trailing slashes.
+func CleanPath(p string) (string, error) {
+	p = strings.Trim(strings.TrimSpace(p), "/")
+	if p == "" || p == "." {
+		return "", nil
+	}
+	c := path.Clean(p)
+	if len(p) > 200 || c != p || !filepath.IsLocal(c) || !pathRE.MatchString(c) {
+		return "", fmt.Errorf("invalid path %q: use a folder inside the repo, like trainings/forge-101", p)
+	}
+	return c, nil
 }
 
 type Team struct {
@@ -287,12 +325,16 @@ func Load(dir string) (*Platform, error) {
 	p.Admins = lower(admins.Admins)
 
 	var reg struct {
-		Trainings map[string]TrainingRef `yaml:"trainings"`
+		Trainings map[string]struct {
+			TrainingRef `yaml:",inline"`
+			Branch      string `yaml:"branch"` // before refs: a branch only
+		} `yaml:"trainings"`
 	}
 	if err := yamlx.ReadFile(filepath.Join(dir, "trainings.yaml"), &reg, false); err != nil {
 		errs = append(errs, err)
 	}
-	for id, ref := range reg.Trainings {
+	for id, r := range reg.Trainings {
+		ref := r.TrainingRef
 		if !ValidTrainingID(id) {
 			errs = append(errs, fmt.Errorf("trainings.yaml: invalid training id %q", id))
 			continue
@@ -301,8 +343,17 @@ func Load(dir string) (*Platform, error) {
 			errs = append(errs, fmt.Errorf("trainings.yaml: %s has no repo", id))
 			continue
 		}
-		if ref.Branch == "" {
-			ref.Branch = "main"
+		if ref.Ref == "" {
+			ref.Ref = r.Branch
+		}
+		var err error
+		if ref.Ref, err = CleanRef(ref.Ref); err != nil {
+			errs = append(errs, fmt.Errorf("trainings.yaml: %s: %w", id, err))
+			continue
+		}
+		if ref.Path, err = CleanPath(ref.Path); err != nil {
+			errs = append(errs, fmt.Errorf("trainings.yaml: %s: %w", id, err))
+			continue
 		}
 		p.Trainings[id] = ref
 	}

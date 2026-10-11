@@ -26,7 +26,7 @@ func mustTeam(t *testing.T, s *Store, id string, b TeamBody) {
 func mustTraining(t *testing.T, s *Store, id string) {
 	t.Helper()
 	t.Setenv("CRUCIBLE_GIT_ALLOW_FILE", "1")
-	if err := s.AddTraining(context.Background(), "admin@x", id, "https://git/"+id+".git", "main"); err != nil {
+	if err := s.AddTraining(context.Background(), "admin@x", id, config.TrainingRef{Repo: "https://git/" + id + ".git", Ref: "main"}); err != nil {
 		t.Fatalf("AddTraining: %v", err)
 	}
 }

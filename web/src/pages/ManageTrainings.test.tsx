@@ -29,11 +29,12 @@ const render = () => renderToStaticMarkup(<MemoryRouter><ManageTrainingsPage /><
 describe('manage trainings', () => {
   test('an admin sees the source, every team, who is enrolled and who holds each role', () => {
     page = { is_admin: true, schedules: ['nights'], teams: [roster('forge', true), roster('anvil', true)], trainings: [
-      { id: 'forge-101', title: 'Forge 101', available: true, repo: 'https://***@git.example/f.git', branch: 'main', programs: [prog()] },
-      { id: 'forge-201', title: 'Forge 201', available: false, repo: 'https://git.example/g.git', branch: 'main', programs: [] },
+      { id: 'forge-101', title: 'Forge 101', available: true, repo: 'https://***@git.example/f.git', ref: 'main', programs: [prog()] },
+      { id: 'forge-201', title: 'Forge 201', available: false, repo: 'https://git.example/g.git', ref: 'v1.0', path: 'courses/g', programs: [] },
     ] }
     const h = render()
     expect(h).toContain('https://***@git.example/f.git')
+    expect(h).toContain('<dt>Branch, tag or commit</dt><dd><code>main</code></dd><dt>Folder</dt><dd>the repository root</dd>')
     expect(h).toContain('forge-101 · 1 team · 1 enrolled')
     expect(h).toContain('aria-label="Remove a@x from enrolled"')
     expect(h).toContain('Default: l@x') // managers and approvers are unset: the leader by default

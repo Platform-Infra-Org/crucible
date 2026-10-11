@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"crucible/internal/config"
 )
 
 func (f *apiFixture) trainingsPage(user string) (TrainingsView, int) {
@@ -33,7 +35,7 @@ func teamIDs(v TrainingsView) []string {
 func TestTrainingsPageShowsEachCallerTheirOwnTeams(t *testing.T) {
 	f := newAPI(t)
 	ctx := context.Background()
-	if err := f.s.AddTraining(ctx, "admin@x", "forge-201", "https://bot:s3cret@git.example.com/f.git", "main"); err != nil {
+	if err := f.s.AddTraining(ctx, "admin@x", "forge-201", config.TrainingRef{Repo: "https://bot:s3cret@git.example.com/f.git", Ref: "main"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.Enroll(ctx, "admin@x", "other", "forge-201", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {

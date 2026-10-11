@@ -22,7 +22,8 @@ import (
 // own branch; once a maintainer approves it, the bot merges that branch into the tracked branch with a merge commit.
 // It needs nothing but plain git, so it works with any host.
 type ContentRepo struct {
-	URL, Branch string // the training's repo and tracked branch (trainings.yaml)
+	URL, Branch string // the training's repo and the branch it follows
+	Root        string // the folder inside the repo that holds the training ("" is the repo root)
 	Dir         string // working clone, owned by this value
 	Name, Email string // bot identity (committer)
 
@@ -67,6 +68,30 @@ func cleanMsg(msg string) (string, error) {
 		msg = "crucible: edit"
 	}
 	return msg, nil
+}
+
+// training is the training's folder in the working clone: edit paths are relative to it. A folder reached through a
+// symlink could point outside the clone, so it is refused.
+func (c *ContentRepo) training() (string, error) {
+	dir := filepath.Join(c.Dir, filepath.FromSlash(c.Root))
+	if c.Root == "" {
+		return dir, nil
+	}
+	if err := NoSymlinks(c.Dir, c.Root); err != nil {
+		return "", apperr.Wrap(apperr.Invalid, "the training's folder: "+err.Error())
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "", apperr.Wrap(apperr.Invalid, fmt.Sprintf("there is no folder %q in the training's repo", c.Root))
+	}
+	return dir, nil
+}
+
+// tree names the training's folder at HEAD for git.
+func (c *ContentRepo) tree() string {
+	if c.Root == "" {
+		return "HEAD"
+	}
+	return "HEAD:" + c.Root
 }
 
 func (c *ContentRepo) lock(ctx context.Context) (func(), error) {
@@ -121,10 +146,10 @@ func LabFolder(dir, module string) string {
 	return ""
 }
 
-// caseClash reports an edited path that differs only in case from an existing path (file or folder) at HEAD, or from
+// caseClash reports an edited path that differs only in case from an existing path (file or folder) in tree, or from
 // another edited path: those collide on macOS and Windows checkouts.
-func caseClash(ctx context.Context, dir string, paths []string) error {
-	out, err := git(ctx, dir, "ls-tree", "-r", "-t", "--name-only", "HEAD")
+func caseClash(ctx context.Context, dir, tree string, paths []string) error {
+	out, err := git(ctx, dir, "ls-tree", "-r", "-t", "--name-only", "--end-of-options", tree)
 	if err != nil {
 		return err
 	}
@@ -185,25 +210,29 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, ops []O
 	if _, err := git(ctx, c.Dir, "checkout", "-q", "--detach", base); err != nil {
 		return "", "", stale
 	}
-	if err := caseClash(ctx, c.Dir, Targets(ops)); err != nil {
+	tdir, err := c.training()
+	if err != nil {
 		return "", "", err
 	}
-	before, beforeErr := maintainers(c.Dir)
-	created, err := ApplyOps(c.Dir, ops)
+	if err := caseClash(ctx, c.Dir, c.tree(), Targets(ops)); err != nil {
+		return "", "", err
+	}
+	before, beforeErr := maintainers(tdir)
+	created, err := ApplyOps(tdir, ops)
 	if err != nil {
 		return "", "", err
 	}
 	for _, rel := range created {
 		mode := os.FileMode(0o644)
-		if lab := labDir(c.Dir, rel); lab != "" && strings.HasSuffix(rel, ".sh") && strings.HasPrefix(rel, lab) {
+		if lab := labDir(tdir, rel); lab != "" && strings.HasSuffix(rel, ".sh") && strings.HasPrefix(rel, lab) {
 			mode = 0o755
 		}
-		if err := os.Chmod(filepath.Join(c.Dir, filepath.FromSlash(rel)), mode); err != nil {
+		if err := os.Chmod(filepath.Join(tdir, filepath.FromSlash(rel)), mode); err != nil {
 			return "", "", err
 		}
 	}
 	if slices.Contains(Targets(ops), "training.yaml") {
-		after, err := maintainers(c.Dir)
+		after, err := maintainers(tdir)
 		if beforeErr != nil || err != nil || !slices.Equal(before, after) {
 			return "", "", apperr.Wrap(apperr.Invalid, "training.yaml: maintainers can only be changed in git")
 		}
@@ -218,7 +247,11 @@ func (c *ContentRepo) PushEdit(ctx context.Context, branch, base string, ops []O
 	if sha, err = git(ctx, c.Dir, "rev-parse", "HEAD"); err != nil {
 		return "", "", err
 	}
-	if diff, err = git(ctx, c.Dir, "diff", "--no-color", "-M", "--text", "--no-ext-diff", "--no-textconv", "--end-of-options", base, sha); err != nil {
+	diffArgs := []string{"diff", "--no-color", "-M", "--text", "--no-ext-diff", "--no-textconv"}
+	if c.Root != "" { // paths as the editor shows them, relative to the training's folder
+		diffArgs = append(diffArgs, "--relative="+c.Root+"/")
+	}
+	if diff, err = git(ctx, c.Dir, append(diffArgs, "--end-of-options", base, sha)...); err != nil {
 		return "", "", err
 	}
 	if len(diff) > maxDiff {
@@ -274,7 +307,11 @@ func (c *ContentRepo) tryMerge(ctx context.Context, branch, sha, msg, actor stri
 	} else if tip != sha {
 		return "", ErrEditMoved
 	}
-	before, beforeErr := maintainers(c.Dir)
+	tdir, err := c.training()
+	if err != nil {
+		return "", err
+	}
+	before, beforeErr := maintainers(tdir)
 	if _, err := git(ctx, c.Dir, "-c", "user.name="+c.Name, "-c", "user.email="+c.Email, "merge", "-q", "--no-ff", "--no-edit",
 		"-m", msg, "-m", "Crucible-Actor: "+actor, "--end-of-options", sha); err != nil {
 		unmerged, uerr := git(context.WithoutCancel(ctx), c.Dir, "diff", "--name-only", "--diff-filter=U")
@@ -284,14 +321,14 @@ func (c *ContentRepo) tryMerge(ctx context.Context, branch, sha, msg, actor stri
 		}
 		return "", fmt.Errorf("merging %s: %w", branch, err)
 	}
-	if _, probs := content.Load(c.Dir); len(probs) > 0 {
+	if _, probs := content.Load(tdir); len(probs) > 0 {
 		p := probs[0]
-		if rel, err := filepath.Rel(c.Dir, p.File); err == nil {
+		if rel, err := filepath.Rel(tdir, p.File); err == nil {
 			p.File = rel
 		}
 		return "", fmt.Errorf("%w: %s", ErrMergeInvalid, p)
 	}
-	if after, err := maintainers(c.Dir); beforeErr == nil && (err != nil || !slices.Equal(before, after)) {
+	if after, err := maintainers(tdir); beforeErr == nil && (err != nil || !slices.Equal(before, after)) {
 		return "", fmt.Errorf("%w: training.yaml: maintainers can only be changed in git", ErrMergeInvalid)
 	}
 	if _, err := git(ctx, c.Dir, "push", "-q", "origin", "HEAD:refs/heads/"+c.Branch); err != nil {

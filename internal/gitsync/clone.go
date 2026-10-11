@@ -38,7 +38,7 @@ func checkoutTip(ctx context.Context, url, branch, dir string) error {
 			return err
 		}
 	}
-	if _, err := git(ctx, dir, "fetch", "-q", "origin", branch); err != nil {
+	if _, err := git(ctx, dir, "fetch", "-q", "origin", "refs/heads/"+branch); err != nil { // a branch, never a tag or a commit
 		return err
 	}
 	if _, err := git(ctx, dir, "reset", "-q", "--hard", "FETCH_HEAD"); err != nil {

@@ -52,7 +52,7 @@ export function ForgeStatusPage() {
       <section className="panel">
       <h2>Program versions</h2>
       <div className="table-wrap"><table className="grid">
-        <thead><tr><th>Program</th><th>Runs</th><th>Branch head</th></tr></thead>
+        <thead><tr><th>Program</th><th>Runs</th><th>Head</th></tr></thead>
         <tbody>{p.programs.map((g) => (
           <tr key={g.team + g.training}><td>{g.team}/{g.training}</td><td><code>{g.running.slice(0, 7)}</code>{g.pinned_ref && <span className="badge"> pinned</span>}</td>
             <td><code>{g.head.slice(0, 7)}</code>{!g.pinned_ref && g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
@@ -70,7 +70,7 @@ export function ForgeStatusPage() {
         <tbody>
           {p.trainings.map((t) => (
             <tr key={t.id}>
-              <td>{t.id}</td><td><code>{t.repo}</code> ({t.branch})</td><td><code>{t.head.slice(0, 7)}</code></td>
+              <td>{t.id}</td><td><code>{t.repo}</code> ({t.ref}{t.path && <>, <code>{t.path}/</code></>})</td><td><code>{t.head.slice(0, 7)}</code></td>
               <td>{t.problems.length === 0 ? '✓' : <ul>{t.problems.map((m) => <li key={m} className="error">{m}</li>)}</ul>}</td>
             </tr>
           ))}

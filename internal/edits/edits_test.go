@@ -90,9 +90,9 @@ func setup(t *testing.T) *fx {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plat.Trainings["t1"] = config.TrainingRef{Repo: remote, Branch: "main"}
+	plat.Trainings["t1"] = config.TrainingRef{Repo: remote, Ref: "main"}
 	plat.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local"}}
-	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"t1@" + head: tr}, Heads: map[string]string{"t1": head}}
+	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"t1@" + head: tr}, Heads: map[string]string{"t1": head}, OnBranch: map[string]bool{"t1": true}}
 	repo := &gitsync.ContentRepo{URL: remote, Branch: "main", Dir: filepath.Join(t.TempDir(), "edits"), Name: "Crucible", Email: "bot@x"}
 	n := &notes{}
 	s := &Service{DB: dbtest.New(t), State: func() *gitsync.State { return st }, Notify: n,
@@ -644,5 +644,18 @@ func TestEnrolledEditorsKeepEditing(t *testing.T) {
 	}
 	if _, _, err := f.s.Files(f.trainee, "t1"); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("a plain enrolled trainee still reads nothing: %v", err)
+	}
+}
+
+// A training that follows a tag or a commit has no branch to merge into: it is not offered for edits and an edit to it
+// is refused.
+func TestNoEditsOffBranch(t *testing.T) {
+	f := setup(t)
+	f.s.State().OnBranch["t1"] = false
+	if _, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nHi.\n"}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "tag or a commit") {
+		t.Fatalf("an edit to a training on a tag: want Invalid, got %v", err)
+	}
+	if got := f.s.Trainings(f.leader); len(got) != 0 {
+		t.Fatalf("a training on a tag is offered for edits: %v", got)
 	}
 }

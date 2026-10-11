@@ -223,6 +223,9 @@ func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Tr
 	if !canPropose(st.Platform, t, u.Email) {
 		return nil, nil, "", apperr.Wrap(apperr.Forbidden, "you can't edit this training")
 	}
+	if !st.OnBranch[id] {
+		return nil, nil, "", apperr.Wrap(apperr.Invalid, "this training follows a tag or a commit, not a branch, so it changes only in git")
+	}
 	return st, t, sha, nil
 }
 
@@ -234,7 +237,7 @@ func (s *Service) Trainings(u *auth.User) []TrainingRef {
 		return out
 	}
 	for _, id := range slices.Sorted(maps.Keys(st.Platform.Trainings)) {
-		if t, _ := head(st, id); t != nil && canPropose(st.Platform, t, u.Email) {
+		if t, _ := head(st, id); t != nil && st.OnBranch[id] && canPropose(st.Platform, t, u.Email) {
 			out = append(out, TrainingRef{ID: id, Title: t.Title})
 		}
 	}

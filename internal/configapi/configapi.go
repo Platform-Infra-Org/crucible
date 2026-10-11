@@ -38,7 +38,8 @@ type TeamSummary struct {
 type TrainingStatus struct {
 	ID       string   `json:"id"`
 	Repo     string   `json:"repo"`
-	Branch   string   `json:"branch"`
+	Ref      string   `json:"ref"`
+	Path     string   `json:"path"`
 	Head     string   `json:"head"`
 	Problems []string `json:"problems"`
 }
@@ -153,7 +154,7 @@ func (s *Service) Platform(u *auth.User) (*PlatformView, error) {
 	}
 	for _, id := range slices.Sorted(maps.Keys(p.Trainings)) {
 		ref := p.Trainings[id]
-		ts := TrainingStatus{ID: id, Repo: ref.Repo, Branch: ref.Branch, Head: st.Heads[id], Problems: []string{}}
+		ts := TrainingStatus{ID: id, Repo: ref.Repo, Ref: ref.Ref, Path: ref.Path, Head: st.Heads[id], Problems: []string{}}
 		for _, key := range []string{id, id + "@" + st.Heads[id]} {
 			for _, pr := range st.Problems[key] {
 				ts.Problems = append(ts.Problems, pr.String())

@@ -16,10 +16,13 @@ export function tiersRequest(auto: string, t1: string, t2: string): { tiers: Tie
   return { tiers: { auto_approve_usd: a, tier1_usd: b, tier2_usd: c } }
 }
 
-// repoWarning is shown before a repoint is sent. A branch-only change, or a repo nobody is enrolled in, needs none.
-export function repoWarning(oldRepo: string | undefined, newRepo: string, programs: number): string {
-  if (oldRepo === undefined || oldRepo === newRepo.trim() || programs === 0) return ''
-  return `${programs} program${programs === 1 ? ' is' : 's are'} pinned to content from the old repository. Those pins may stop resolving once this training points somewhere else.`
+// repoWarning is shown before a repoint is sent: a new repo or folder holds other content than programs were pinned to.
+// A ref-only change, an empty repo (the stored one is kept) or a training no team runs needs none.
+export function repoWarning(old: { repo?: string; path?: string } | undefined, repo: string, path: string, programs: number): string {
+  const folder = (p?: string) => (p ?? '').trim().replace(/^\/+|\/+$/g, '')
+  if (!old || programs === 0) return ''
+  if ((repo.trim() === '' || repo.trim() === old.repo) && folder(path) === folder(old.path)) return ''
+  return `${programs} program${programs === 1 ? ' is' : 's are'} pinned to content from the old repository or folder. Those pins may stop resolving once this training points somewhere else.`
 }
 
 // windowsRequest reads lines like "mon,tue,wed 08:00-19:00" into schedule windows.

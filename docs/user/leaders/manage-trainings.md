@@ -28,13 +28,18 @@ An admin chooses **+ New training** and gives:
 - **Repository URL** — an `https://`, `http://`, `ssh://`, `git://` or `user@host:path` URL. Local paths are refused
   on an ordinary install. Credentials in the URL are stored so cloning works, but the page and the audit log show
   them as `***@`.
-- **Branch** — usually `main`.
+- **Branch, tag or commit** — what Crucible follows, usually `main`. A branch moves: what is merged there reaches
+  trainees, and the training takes content edits from Crucible. A tag or a commit id stays on that one version, and
+  changes only in git, so Crucible offers no **Edit content** for it.
+- **Folder** — where `training.yaml` sits in the repository, such as `trainings/forge-101`. Leave it empty when it
+  is at the root. One repository can hold several trainings this way, each in its own folder.
 
 Under **Source**, an admin sees where a training's content comes from:
 
-- **Change source** points it at another repository or branch, for a move between hosts, say. Crucible warns you
-  first and names how many teams run it, because the content versions they are pinned to belong to the repository you
-  are leaving.
+- **Change source** points it at another repository, ref or folder, for a move between hosts, say, or a release
+  tag. Leave the repository URL empty to keep the current one (with its credentials). When the repository or folder
+  changes, Crucible warns you first and names how many teams run it, because the versions they are pinned to hold
+  the content you are leaving.
 - **Delete training** removes the training from Crucible: its connection to the repository, and its program in every
   team that runs it (Crucible names those teams and asks first). The repository itself is not touched, and everyone's
   progress, scores and badges are kept. Register it again and start it for a team to bring it back.

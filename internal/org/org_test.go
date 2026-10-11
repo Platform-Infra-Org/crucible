@@ -57,7 +57,7 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 		('forge','leader@x','leader'), ('forge','senior@x','senior'), ('forge','trainee@x','trainee')`)
 	mustExec(t, pool, `INSERT INTO mentors (team, trainee, mentor) VALUES ('forge','trainee@x','senior@x')`)
 	mustExec(t, pool, `INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('forge', 200, 250)`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo, branch) VALUES ('forge-101','https://git/x.git','main')`)
+	mustExec(t, pool, `INSERT INTO trainings (id, repo, ref) VALUES ('forge-101','https://git/x.git','main')`)
 	mustExec(t, pool, `INSERT INTO schedules (name, timezone, windows) VALUES
 		('days','UTC','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, budget_usd_month, schedule_name, ttl) VALUES ('forge','forge-101', 100, 'days', '2h')`)

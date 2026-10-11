@@ -270,7 +270,7 @@ func TestChangesFlagsTruncationAndReportsGitFailures(t *testing.T) {
 
 func TestConfigFuncSuppliesThePlatform(t *testing.T) {
 	trainingRepo := newRepo(t, training)
-	plat := &config.Platform{Admins: []string{"a@x"}, Trainings: map[string]config.TrainingRef{"t1": {Repo: trainingRepo, Branch: "main"}},
+	plat := &config.Platform{Admins: []string{"a@x"}, Trainings: map[string]config.TrainingRef{"t1": {Repo: trainingRepo, Ref: "main"}},
 		Teams: map[string]*config.Team{"a": {Programs: map[string]*config.Program{"t1": {}}}}}
 	s := New(t.TempDir(), func(context.Context) (*config.Platform, error) { return plat, nil }, slog.Default())
 	if err := s.SyncOnce(context.Background()); err != nil {
@@ -286,5 +286,76 @@ func TestConfigFuncSuppliesThePlatform(t *testing.T) {
 	s.Config = func(context.Context) (*config.Platform, error) { return nil, errors.New("db down") }
 	if err := s.SyncOnce(context.Background()); err == nil || s.Current().Platform != plat || s.Current().PlatformErr == "" {
 		t.Fatalf("a failing store keeps the last good platform: %v", err)
+	}
+}
+
+// A training can follow a tag (or a commit) instead of a branch, from a folder inside its repo: it loads that folder
+// at that ref, edits are off (nothing can merge into a tag), change summaries cover only its folder, and moving it to
+// another folder drops the versions loaded from the old one.
+func TestTrainingAtRefAndFolder(t *testing.T) {
+	files := map[string]string{"README.md": "monorepo\n"}
+	for name, body := range training {
+		files["courses/t1/"+name] = body
+	}
+	repo := newRepo(t, files)
+	run(t, repo, "tag", "v1")
+	plat := t.TempDir()
+	if err := os.WriteFile(filepath.Join(plat, "platform.yaml"), []byte("default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := func(ref, path string) {
+		t.Helper()
+		body := "trainings:\n  t1: {repo: " + repo + ", ref: " + ref + ", path: " + path + "}\n"
+		if err := os.WriteFile(filepath.Join(plat, "trainings.yaml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg("v1", "/courses/t1/")
+	s := New(t.TempDir(), fromDir(plat), slog.Default())
+	ctx := context.Background()
+	sync := func() *State {
+		t.Helper()
+		if err := s.SyncOnce(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return s.Current()
+	}
+	st := sync()
+	v1 := st.Heads["t1"]
+	tr := st.Training("t1", v1)
+	if tr == nil || tr.Title != "T1" || st.OnBranch["t1"] {
+		t.Fatalf("t1 at v1 from courses/t1: training %v, on branch %v, problems %v", tr, st.OnBranch["t1"], st.Problems)
+	}
+	if _, err := os.Stat(filepath.Join(tr.Dir, "training.yaml")); err != nil {
+		t.Fatalf("export is not the training's folder: %v", err)
+	}
+
+	commit(t, repo, map[string]string{"courses/t1/training.yaml": "id: t1\ntitle: T2\nmodules: [m1]\n"})
+	commit(t, repo, map[string]string{"README.md": "elsewhere\n"})
+	if st = sync(); st.Heads["t1"] != v1 {
+		t.Fatalf("a tag must not follow main: head %s, want %s", st.Heads["t1"], v1)
+	}
+
+	reg("main", "courses/t1")
+	st = sync()
+	head := st.Heads["t1"]
+	if tr := st.Training("t1", head); tr == nil || tr.Title != "T2" || !st.OnBranch["t1"] {
+		t.Fatalf("t1 on main: %v, on branch %v", tr, st.OnBranch["t1"])
+	}
+	ch, err := s.Changes(ctx, "t1", v1, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ch.Commits) != 1 || !strings.Contains(ch.Stat, "training.yaml") || strings.Contains(ch.Stat, "courses/") || strings.Contains(ch.Stat, "README") {
+		t.Fatalf("changes should cover only the training's folder, relative to it: %+v", ch)
+	}
+
+	reg("main", "courses/nope")
+	st = sync()
+	if st.Training("t1", head) != nil || st.Training("t1", v1) != nil {
+		t.Fatal("versions from the old folder must not stay the training's content")
+	}
+	if p := fmt.Sprint(st.Problems["t1@"+head]); !strings.Contains(p, `no folder "courses/nope"`) {
+		t.Fatalf("missing folder problem = %s", p)
 	}
 }

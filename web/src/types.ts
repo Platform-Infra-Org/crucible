@@ -14,7 +14,7 @@ export type TeamRoster = {
   mentors: Record<string, string>; can_edit_team: boolean
 }
 export type TeamProgram = ProgramConfig & { team: string }
-export type ManagedTraining = { id: string; title: string; available: boolean; repo?: string; branch?: string; programs: TeamProgram[] }
+export type ManagedTraining = { id: string; title: string; available: boolean; repo?: string; ref?: string; path?: string; programs: TeamProgram[] }
 export type TrainingsAdmin = { is_admin: boolean; schedules: string[]; teams: TeamRoster[]; trainings: ManagedTraining[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
 export type TeamView = {
@@ -66,7 +66,7 @@ export type Approval = {
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
-export type TrainingStatus = { id: string; repo: string; branch: string; head: string; problems: string[] }
+export type TrainingStatus = { id: string; repo: string; ref: string; path: string; head: string; problems: string[] }
 export type PlatformView = {
   platform_error?: string; synced_at: string
   cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null

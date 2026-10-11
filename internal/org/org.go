@@ -128,7 +128,7 @@ func (s *Store) settings(ctx context.Context, st *config.Settings) error {
 }
 
 func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
-	rows, err := s.DB.Query(ctx, `SELECT id, repo, branch FROM trainings`)
+	rows, err := s.DB.Query(ctx, `SELECT id, repo, ref, path FROM trainings`)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
 	for rows.Next() {
 		var id string
 		var ref config.TrainingRef
-		if err := rows.Scan(&id, &ref.Repo, &ref.Branch); err != nil {
+		if err := rows.Scan(&id, &ref.Repo, &ref.Ref, &ref.Path); err != nil {
 			return err
 		}
 		p.Trainings[id] = ref

@@ -93,8 +93,8 @@ whenever the file changes, and reports `[{name, server_host}]` to Crucible, in t
 
 - It connects with client-go from the full kubeconfig, so exec credential plugins (`aws eks get-token`,
   `gke-gcloud-auth-plugin`), OIDC and token refresh work as they do for `kubectl` on the laptop.
-- It serves plain HTTP (the toolbox is on the same machine) with a random per-lab bearer token; requests without it
-  get 401. It passes through watches and upgraded connections (`exec`, `attach`, `port-forward`).
+- It serves TLS with its own self-signed certificate (kubectl and helm send a token only over https) and a random
+  per-lab bearer token; requests without it get 401. It passes through watches and upgraded connections (`exec`, `attach`, `port-forward`).
 - It listens where only local containers reach it: `127.0.0.1` on macOS and Windows (Docker Desktop maps it to
   `host.docker.internal`), the Docker bridge gateway address on Linux (the toolbox is started with
   `--add-host host.docker.internal:host-gateway`). Never `0.0.0.0`.
@@ -104,7 +104,7 @@ whenever the file changes, and reports `[{name, server_host}]` to Crucible, in t
 `cluster_wide`; context; toolbox image; the bundle carries the chart folders and values files):
 
 1. Unpack the bundle into the lab folder; write a kubeconfig for the toolbox: server
-   `http://host.docker.internal:<port>`, the per-lab token, default namespace `lab-<id>`, mode 0600. Start the proxy.
+   `https://host.docker.internal:<port>` with the proxy's certificate as `certificate-authority-data`, the per-lab token, default namespace `lab-<id>`, mode 0600. Start the proxy.
 2. Start the toolbox: `docker run -d --label crucible.lab=<id>` with the given image, as the agent's own uid and gid
    (so it can read the 0600 kubeconfig; `HOME=/tmp` for Helm's caches), the lab folder mounted read-only at `/lab`,
    `KUBECONFIG=/lab/kubeconfig`, `LAB_NAMESPACE`, `LAB_ID`, `LAB_RELEASES`.

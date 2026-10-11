@@ -109,13 +109,18 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 }
 
 // selfSigned makes the proxy's certificate: for host.docker.internal (the toolbox's name for this machine) and the
-// address it listens on, valid for the lab's lifetime at most (a proxy lives as long as its lab).
+// address it listens on, with a random serial. Valid for a fixed 7 days; each new proxy (a provision, or a destroy
+// after an agent restart) issues a new one.
 func selfSigned(bind string) (tls.Certificate, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, nil, err
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "crucible lab proxy"},
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	tmpl := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "crucible lab proxy"},
 		DNSNames: []string{"host.docker.internal"}, IPAddresses: []net.IP{net.ParseIP(bind)},
 		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(7 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}

@@ -335,3 +335,29 @@ func TestProxyPassesPathsAsTheyAre(t *testing.T) {
 		t.Fatalf("status %d (Location %q), upstream saw %v", res.StatusCode, res.Header.Get("Location"), seen)
 	}
 }
+
+// Each proxy's certificate has its own random serial: two certificates from one issuer name with the same serial is
+// what TLS clients treat as a forgery.
+func TestProxyCertificatesHaveRandomSerials(t *testing.T) {
+	srv, _ := upstream(t)
+	kc := kubeconfigFor(t, srv, "{token: real}")
+	serial := func() string {
+		p, err := StartProxy(context.Background(), kc, "lab", "127.0.0.1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		b, _ := pem.Decode(p.CA)
+		cert, err := x509.ParseCertificate(b.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cert.SerialNumber.BitLen() < 64 {
+			t.Fatalf("serial %v is not random", cert.SerialNumber)
+		}
+		return cert.SerialNumber.String()
+	}
+	if a, b := serial(), serial(); a == b {
+		t.Fatalf("same serial %s twice", a)
+	}
+}

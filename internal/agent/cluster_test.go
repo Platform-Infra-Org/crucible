@@ -113,7 +113,12 @@ func TestToolboxKubeconfigReachesTheClusterThroughTheProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.closeProxy(id)
-	kc := strings.Replace(readKubeconfig(t, c, id), "host.docker.internal", "127.0.0.1", 1) // what the name resolves to here
+	// Dial 127.0.0.1 (what the name resolves to here) but verify the certificate as the toolbox does, for
+	// host.docker.internal, against the kubeconfig's certificate-authority-data.
+	kc := strings.Replace(readKubeconfig(t, c, id), `{server: "https://host.docker.internal:`, `{tls-server-name: host.docker.internal, server: "https://127.0.0.1:`, 1)
+	if !strings.Contains(kc, "tls-server-name") || !strings.Contains(kc, "certificate-authority-data: ") {
+		t.Fatalf("kubeconfig: %s", kc)
+	}
 	rc, err := clientcmd.RESTConfigFromKubeConfig([]byte(kc))
 	if err != nil {
 		t.Fatal(err)

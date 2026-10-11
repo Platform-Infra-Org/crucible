@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { enroll } from './helpers'
+import { addParticipant } from './helpers'
 
 let agent: ChildProcess | undefined
 test.afterAll(() => {
@@ -20,13 +20,13 @@ async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
-test('a leader enrolls a trainee on Manage trainings, approves a paid lab, and an admin pauses all labs', async ({ browser }) => {
-  // The leader starts Forge 201 for the team and enrolls the trainee in it.
+test('a leader makes a trainee a participant on Manage trainings, approves a paid lab, and an admin pauses all labs', async ({ browser }) => {
+  // The Forge owns Forge 201; its leader makes the trainee a participant.
   const leader = await login(browser, 'leader')
   await leader.getByRole('link', { name: 'Teams', exact: true }).click()
   await expect(leader.getByRole('heading', { name: 'The Forge' })).toBeVisible()
-  await expect(leader.getByRole('link', { name: 'Start a training for this team' })).toBeVisible()
-  await enroll(leader, 'forge-201', 'trainee@crucible.local')
+  await expect(leader.getByRole('link', { name: 'Register a training' })).toBeVisible()
+  await addParticipant(leader, 'forge-201', 'trainee@crucible.local')
 
   // The trainee now sees Forge 201, pairs the laptop and asks for the paid lab.
   const trainee = await login(browser, 'trainee')

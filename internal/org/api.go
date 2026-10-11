@@ -40,7 +40,7 @@ type api struct {
 // Routes mounts the org routes inside an authenticated group. The caller's router supplies the Origin/Referer and
 // JSON-body guard; every body here is decoded with httpx.Read, which rejects unknown fields.
 //
-// /api/admin/... is admin-only. The two team-scoped routes (/api/org/...) check the caller against the snapshot.
+// /api/admin/... is admin-only. The /api/org/... routes check the caller against the snapshot.
 func (s *Store) Routes(r chi.Router, d APIDeps) {
 	a := &api{s, d}
 	r.Get("/api/admin/settings", a.admin(a.getSettings))
@@ -52,20 +52,21 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Post("/api/admin/admins", a.admin(a.postAdmin))
 	r.Delete("/api/admin/admins/{email}", a.admin(a.deleteAdmin))
 	r.Get("/api/admin/trainings", a.admin(a.getTrainings))
-	r.Post("/api/admin/trainings", a.admin(a.postTraining))
-	r.Delete("/api/admin/trainings/{id}", a.admin(a.deleteTraining))
+	r.Put("/api/admin/trainings/{id}/owner", a.admin(a.putOwner))
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
 	r.Delete("/api/admin/teams/{id}", a.admin(a.deleteTeam))
 	r.Put("/api/admin/teams/{id}/webhooks/{kind}", a.admin(a.putWebhook))
 	r.Get("/api/admin/export", a.admin(a.getExport))
 	r.Post("/api/admin/import", a.admin(a.postImport))
+	r.Get("/api/org/people", a.handle(a.getPeople))
 	r.Get("/api/org/trainings", a.handle(a.trainingsPage))
+	r.Post("/api/org/trainings", a.handle(a.postTraining))
+	r.Put("/api/org/trainings/{id}/source", a.handle(a.putSource))
+	r.Delete("/api/org/trainings/{id}", a.handle(a.deleteTraining))
 	r.Get("/api/org/teams/{id}", a.handle(a.getTeam))
 	r.Put("/api/org/teams/{id}/roster", a.handle(a.putRoster))
 	r.Put("/api/org/teams/{id}/budget", a.admin(a.putBudget))
 	r.Put("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(putProgram)))
-	r.Post("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(postProgram)))
-	r.Delete("/api/org/teams/{team}/programs/{training}", a.handle(a.programRoute(deleteProgram)))
 	r.Put("/api/org/teams/{team}/programs/{training}/pin", a.handle(a.putPin))
 }
 
@@ -231,36 +232,108 @@ func (a *api) deleteAdmin(w http.ResponseWriter, r *http.Request, actor string, 
 
 func (a *api) getTrainings(w http.ResponseWriter, r *http.Request, _ string, c rbac.Checker) error {
 	type row struct {
-		ID     string `json:"id"`
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		ID   string `json:"id"`
+		Repo string `json:"repo"`
+		Ref  string `json:"ref"`
+		Path string `json:"path"`
 	}
 	out := []row{}
 	for id, t := range c.P.Trainings {
-		out = append(out, row{id, redactRepo(t.Repo), t.Branch}) // credentials in the stored URL never reach the screen
+		out = append(out, row{id, redactRepo(t.Repo), t.Ref, t.Path}) // credentials in the stored URL never reach the screen
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	httpx.JSON(w, http.StatusOK, map[string]any{"trainings": out})
 	return nil
 }
 
-func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
+// postTraining registers a training. A leader, senior or junior registers it for their own team; an admin names the
+// team.
+func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
+	if !c.CanCreateTraining(actor) {
+		return apperr.Wrap(apperr.Forbidden, "only a team's leaders, seniors and juniors, or an admin, can register a training")
+	}
 	var b struct {
-		ID     string `json:"id"`
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		ID   string `json:"id"`
+		Team string `json:"team"`
+		config.TrainingRef
 	}
 	if err := httpx.Read(r, &b); err != nil {
 		return err
 	}
-	if err := a.s.AddTraining(r.Context(), actor, b.ID, b.Repo, b.Branch); err != nil {
+	team := strings.TrimSpace(b.Team)
+	if own := c.P.TeamOf(actor); !c.IsAdmin(actor) || team == "" {
+		if own == nil {
+			return apperr.Wrap(apperr.Invalid, "choose the team that will own this training")
+		}
+		if team != "" && team != own.ID {
+			return apperr.Wrap(apperr.Forbidden, "you can register a training only for your own team")
+		}
+		team = own.ID
+	}
+	if err := a.s.CreateTraining(r.Context(), actor, strings.TrimSpace(b.ID), b.TrainingRef, team); err != nil {
+		return err
+	}
+	return a.done(w, r, 1)
+}
+
+// manage checks that actor may manage training (its owning team's leaders, seniors and juniors, its admins, Crucible
+// admins); an admin may also manage a training no team owns.
+func manage(c rbac.Checker, actor, training string) error {
+	if _, ok := c.P.Trainings[training]; !ok {
+		return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no training %q", training))
+	}
+	if c.IsAdmin(actor) {
+		return nil
+	}
+	if t, _ := c.P.Owner(training); t != nil && c.Can(actor, rbac.ManageProgram, t.ID, training, "") {
+		return nil
+	}
+	return apperr.Wrap(apperr.Forbidden, "only the training's managers (its team's leaders, seniors and juniors, and its admins) can change it")
+}
+
+// putSource points a training at another repo, ref or folder. An empty repo keeps the stored one.
+func (a *api) putSource(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
+	id := chi.URLParam(r, "id")
+	if err := manage(c, actor, id); err != nil {
+		return err
+	}
+	var b config.TrainingRef
+	if err := httpx.Read(r, &b); err != nil {
+		return err
+	}
+	if err := a.s.AddTraining(r.Context(), actor, id, b); err != nil {
 		return err
 	}
 	return a.done(w, r, 0)
 }
 
-func (a *api) deleteTraining(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
-	if err := a.s.RemoveTraining(r.Context(), actor, chi.URLParam(r, "id")); err != nil {
+func (a *api) deleteTraining(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
+	id := chi.URLParam(r, "id")
+	if err := manage(c, actor, id); err != nil {
+		return err
+	}
+	if err := a.s.RemoveTraining(r.Context(), actor, id); err != nil {
+		return err
+	}
+	return a.done(w, r, 0)
+}
+
+// putOwner gives a training to another team (admins only); its run moves with it.
+func (a *api) putOwner(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
+	id := chi.URLParam(r, "id")
+	if _, ok := c.P.Trainings[id]; !ok {
+		return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no training %q", id))
+	}
+	var b struct {
+		Team string `json:"team"`
+	}
+	if err := httpx.Read(r, &b); err != nil {
+		return err
+	}
+	if c.P.Teams[b.Team] == nil {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("no team %q", b.Team))
+	}
+	if err := a.s.SetOwner(r.Context(), actor, id, b.Team); err != nil {
 		return err
 	}
 	return a.done(w, r, 0)
@@ -298,24 +371,15 @@ func (a *api) putWebhook(w http.ResponseWriter, r *http.Request, actor string, _
 	return a.done(w, r, 0)
 }
 
-func sortedEmails(in []string) []string {
-	out := make([]string, len(in))
-	for i, e := range in {
-		out[i] = em(e)
-	}
-	slices.Sort(out)
-	return slices.Compact(out) // a set: repeats are not a change
-}
-
-// putRoster is the leader's route. SetTeam trusts its whole body, so a non-admin may not change the leader, the
-// name or the seniors (that would let a leader promote themselves or demote the leader). The permission check runs
-// on the team snapshot at body.Version, and the store only writes when the stored version is still that one, so the
-// check and the write see the same team; a client on another version gets a Conflict before any check is trusted.
+// putRoster saves a team's members and tags. An admin may change anything: add people (moving them from another
+// team), remove them, rename the team. A leader only changes the tags of the people already on it (any tag, leader
+// included). The permission check runs on the team snapshot at body.Version, and the store only
+// writes when the stored version is still that one, so the check and the write see the same team.
 func (a *api) putRoster(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	id := chi.URLParam(r, "id")
 	admin := c.IsAdmin(actor)
 	if !admin && !c.Can(actor, rbac.EditTeam, id, "", "") {
-		return apperr.Wrap(apperr.Forbidden, "only the team leader or an admin can change the roster")
+		return apperr.Wrap(apperr.Forbidden, "only the team's leaders or an admin can change its tags")
 	}
 	t := c.P.Teams[id]
 	if t == nil {
@@ -329,14 +393,16 @@ func (a *api) putRoster(w http.ResponseWriter, r *http.Request, actor string, c 
 		return apperr.Wrap(apperr.Conflict, "someone changed this team, reload and try again")
 	}
 	if !admin {
-		const only = "only an admin can change the team's %s"
+		var people []string
+		for e := range b.Members {
+			people = append(people, em(e))
+		}
+		slices.Sort(people)
 		switch {
-		case em(b.Leader) != t.Leader:
-			return apperr.Wrap(apperr.Forbidden, fmt.Sprintf(only, "leader"))
+		case !slices.Equal(slices.Compact(people), t.People()):
+			return apperr.Wrap(apperr.Forbidden, "only an admin adds people to a team or takes them off it")
 		case strings.TrimSpace(b.Name) != t.Name:
-			return apperr.Wrap(apperr.Forbidden, fmt.Sprintf(only, "name"))
-		case !slices.Equal(sortedEmails(b.Seniors), sortedEmails(t.Seniors)):
-			return apperr.Wrap(apperr.Forbidden, fmt.Sprintf(only, "seniors"))
+			return apperr.Wrap(apperr.Forbidden, "only an admin can rename the team")
 		}
 	}
 	if err := a.s.SetTeam(r.Context(), actor, id, b); err != nil {
@@ -349,10 +415,10 @@ func (a *api) putRoster(w http.ResponseWriter, r *http.Request, actor string, c 
 func (a *api) putPin(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	team, training := chi.URLParam(r, "team"), chi.URLParam(r, "training")
 	if !c.Can(actor, rbac.ManageProgram, team, training, "") {
-		return apperr.Wrap(apperr.Forbidden, "only a program manager, the team leader or an admin can pin a version")
+		return apperr.Wrap(apperr.Forbidden, "only the training's managers or an admin can pin a version")
 	}
 	if t := c.P.Teams[team]; t == nil || t.Programs[training] == nil {
-		return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %s has no program %s", team, training))
+		return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %s does not own %s", team, training))
 	}
 	var b struct {
 		SHA string `json:"sha"`

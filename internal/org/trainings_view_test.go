@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"crucible/internal/config"
 )
 
 func (f *apiFixture) trainingsPage(user string) (TrainingsView, int) {
@@ -20,40 +22,36 @@ func (f *apiFixture) trainingsPage(user string) (TrainingsView, int) {
 	return v, w.Code
 }
 
-func teamIDs(v TrainingsView) []string {
-	var ids []string
-	for _, t := range v.Teams {
-		ids = append(ids, t.ID)
+func ids(v TrainingsView) []string {
+	var out []string
+	for _, t := range v.Trainings {
+		out = append(out, t.ID)
 	}
-	return ids
+	return out
 }
 
-// Everyone sees the trainings; each caller sees only the teams they belong to (an admin sees every team), and only
-// an admin sees where the content comes from.
-func TestTrainingsPageShowsEachCallerTheirOwnTeams(t *testing.T) {
+// The trainings page lists what the caller works on: everything for an admin; what their team owns for its leaders,
+// seniors and juniors; what they are an editor or admin of. Only managers see where the content comes from.
+func TestTrainingsPageShowsWhatEachCallerWorksOn(t *testing.T) {
 	f := newAPI(t)
 	ctx := context.Background()
-	if err := f.s.AddTraining(ctx, "admin@x", "forge-201", "https://bot:s3cret@git.example.com/f.git", "main"); err != nil {
+	if err := f.s.CreateTraining(ctx, "admin@x", "forge-201", config.TrainingRef{Repo: "https://bot:s3cret@git.example.com/f.git"}, "other"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.Enroll(ctx, "admin@x", "other", "forge-201", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
+	if err := f.s.SetProgram(ctx, "boss@x", "other", "forge-201", ProgramBody{Version: 1, BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ds@x"}}}); err != nil {
 		t.Fatal(err)
 	}
 	f.reload()
-	for who, want := range map[string][]string{"admin@x": {"other", "platform"}, "lead@x": {"platform"}, "new@x": {"platform"}, "boss@x": {"other"}} {
+	for who, want := range map[string][]string{"admin@x": {"forge-101", "forge-201"}, "lead@x": {"forge-101"}, "senior@x": {"forge-101"},
+		"boss@x": {"forge-201"}, "ds@x": {"forge-201"}} {
 		v, code := f.trainingsPage(who)
-		if code != 200 || !slices.Equal(teamIDs(v), want) || len(v.Trainings) != 2 {
-			t.Errorf("%s: %d teams %v, %d trainings", who, code, teamIDs(v), len(v.Trainings))
+		if code != 200 || !slices.Equal(ids(v), want) {
+			t.Errorf("%s: %d %v, want %v", who, code, ids(v), want)
 			continue
 		}
 		for _, tr := range v.Trainings {
-			if (tr.Repo != "") != (who == "admin@x") {
-				t.Errorf("%s sees repo %q for %s; only admins see the source", who, tr.Repo, tr.ID)
-			}
-			for _, p := range tr.Programs {
-				if !slices.Contains(want, p.Team) {
-					t.Errorf("%s sees team %s's program in %s", who, p.Team, tr.ID)
-				}
+			if (tr.Repo != "") != tr.CanManage {
+				t.Errorf("%s sees repo %q for %s; only managers see the source", who, tr.Repo, tr.ID)
 			}
 		}
 	}
@@ -61,18 +59,19 @@ func TestTrainingsPageShowsEachCallerTheirOwnTeams(t *testing.T) {
 	if strings.Contains(admin.Trainings[1].Repo, "s3cret") || !strings.Contains(admin.Trainings[1].Repo, "***@") {
 		t.Errorf("credentials in a repo URL must be masked: %q", admin.Trainings[1].Repo)
 	}
+	if len(admin.Teams) != 3 || !admin.IsAdmin {
+		t.Errorf("an admin picks among every team: %+v", admin.Teams)
+	}
 	lead, _ := f.trainingsPage("lead@x")
-	p := lead.Trainings[0].Programs
-	if len(p) != 1 || p[0].Team != "platform" || !p[0].CanManage || !lead.Teams[0].CanEditTeam ||
-		!slices.Equal(p[0].EffectiveRoles.Manager, []string{"lead@x"}) || len(p[0].Roles.Manager) != 0 {
-		t.Errorf("the leader manages their program; roles show stored (none) and effective (the leader): %+v %+v", p, lead.Teams)
+	if tr := lead.Trainings[0]; tr.Team != "platform" || !tr.CanManage || tr.Program == nil || !tr.Program.CanManage || !lead.CanCreate || lead.MyTeam != "platform" {
+		t.Errorf("the leader manages their team's training: %+v", lead)
 	}
-	trainee, _ := f.trainingsPage("new@x")
-	if trainee.Trainings[0].Programs[0].CanManage || trainee.Teams[0].CanEditTeam {
-		t.Errorf("a trainee reads but cannot manage: %+v", trainee)
+	editor, _ := f.trainingsPage("ds@x")
+	if tr := editor.Trainings[0]; tr.CanManage || tr.Program.CanManage || tr.Repo != "" {
+		t.Errorf("an editor reads but does not manage: %+v", tr)
 	}
-	if _, code := f.trainingsPage("nobody@x"); code != 403 {
-		t.Errorf("someone on no team = %d, want 403", code)
+	if v, code := f.trainingsPage("new@x"); code != 403 {
+		t.Errorf("a trainee who works on nothing = %d %+v, want 403", code, v)
 	}
 	if _, code := f.trainingsPage(""); code != 401 {
 		t.Errorf("signed out = %d, want 401", code)

@@ -534,3 +534,51 @@ func TestPushEditOpsRefusals(t *testing.T) {
 		t.Fatalf("nothing pushed: %q", out)
 	}
 }
+
+// A training in a folder of its repo is edited there: edit paths and the reviewer's diff are relative to the folder,
+// the merge validates the folder, and nothing outside it changes. A folder that is a symlink is refused.
+func TestEditTrainingInFolder(t *testing.T) {
+	ctx := context.Background()
+	files := map[string]string{"README.md": "monorepo\n"}
+	for rel, body := range trainingFiles() {
+		files["courses/t1/"+rel] = body
+	}
+	remote := bare(t, files)
+	base := gitOut(t, remote, "rev-parse", "main")
+	c := contentRepo(t, remote)
+	c.Root = "courses/t1"
+	sha, diff, err := c.PushEdit(ctx, "crucible/edit/1", base, PutOps(map[string]string{
+		"modules/m1/reading/intro.md": "# Intro\n\nHello, smith.\n",
+	}), "a@x", "Greet the smith")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "+++ b/modules/m1/reading/intro.md") || strings.Contains(diff, "courses/") {
+		t.Fatalf("diff should be relative to the folder: %q", diff)
+	}
+	if _, err := c.Merge(ctx, "crucible/edit/1", sha, "crucible: merge edit 1", "m@x"); err != nil {
+		t.Fatal(err)
+	}
+	if body := gitOut(t, remote, "show", "main:courses/t1/modules/m1/reading/intro.md"); !strings.Contains(body, "smith") {
+		t.Fatal("the edit lands in the training's folder")
+	}
+	if out := gitOut(t, remote, "ls-tree", "--name-only", "main"); out != "README.md\ncourses" {
+		t.Fatalf("nothing outside the folder changes: %q", out)
+	}
+
+	pushTo(t, remote, map[string]string{"link/.keep": ""})
+	work := filepath.Join(t.TempDir(), "w")
+	run(t, "", "clone", "-q", remote, work)
+	run(t, work, "rm", "-rq", "link")
+	if err := os.Symlink("courses/t1", filepath.Join(work, "link")); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, "add", "-A")
+	run(t, work, "-c", "user.name=o", "-c", "user.email=o@x", "commit", "-qm", "link")
+	run(t, work, "push", "-q", "origin", "HEAD:main")
+	c.Root = "link"
+	head := gitOut(t, remote, "rev-parse", "main")
+	if _, _, err := c.PushEdit(ctx, "crucible/edit/2", head, PutOps(map[string]string{"training.yaml": "x"}), "a@x", "x"); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a symlinked folder: want Invalid, got %v", err)
+	}
+}

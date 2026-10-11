@@ -23,7 +23,7 @@ const endMessages: Record<string, string> = {
   ttl: 'Time ran out on this lab.',
   user: 'You ended the lab.',
   provision_timeout: 'The lab took too long to start.',
-  schedule: "The program's schedule window closed.",
+  schedule: "The training's schedule window closed.",
   kill_switch: 'An admin paused all labs.',
   agent_restarted: 'Your laptop agent restarted — start the lab again.',
   budget: 'The budget cap was reached.',
@@ -272,7 +272,9 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           </div>
         )}
       </div>
-      <div className="lab-body" style={{ gridTemplateColumns: collapsed ? '0 6px 1fr' : `${split}% 6px 1fr` }}>
+      {/* Hidden tasks leave the grid altogether, so the terminals get the one column; the splitter hides with them. The
+          terminals' column may shrink below the width a terminal last drew at (minmax 0), or they spill off the page */}
+      <div className="lab-body" style={{ gridTemplateColumns: collapsed ? 'minmax(0, 1fr)' : `${split}% 6px minmax(0, 1fr)` }}>
         <aside className="tasks" hidden={collapsed} onPointerDown={beat} onKeyDown={beat} onScroll={beat}>
           <ol className="task-pips">
             {lab.tasks.map((t, i) => (
@@ -287,7 +289,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
           <div className="sr-only" role="status" aria-live="polite">{moved}</div>
         </aside>
         <div
-          className="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" aria-valuemin={25} aria-valuemax={70} aria-valuenow={Math.round(split)} tabIndex={0}
+          className="splitter" hidden={collapsed} role="separator" aria-orientation="vertical" aria-label="Resize panels" aria-valuemin={25} aria-valuemax={70} aria-valuenow={Math.round(split)} tabIndex={0}
           onPointerDown={startDrag}
           onKeyDown={(e) => {
             if (e.key === 'ArrowLeft') setSplit((s) => Math.max(25, s - 2))

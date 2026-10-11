@@ -54,10 +54,13 @@ describe('banners', () => {
 })
 
 describe('repoint', () => {
-  test('a repo change warns with the program count; a branch-only change does not', () => {
-    expect(repoWarning('old', 'new', 2)).toMatch(/^2 programs are pinned/)
-    expect(repoWarning('old', 'old', 2)).toBe('')
-    expect(repoWarning(undefined, 'new', 2)).toBe('') // a new registration
+  test('a repo or folder change warns when the training is pinned; a ref-only change does not', () => {
+    expect(repoWarning({ repo: 'old' }, 'new', '', true)).toMatch(/^This training is pinned/)
+    expect(repoWarning({ repo: 'old', path: 'a' }, '', 'b', true)).toMatch(/pinned/)
+    expect(repoWarning({ repo: 'old' }, 'old', '', true)).toBe('')
+    expect(repoWarning({ repo: 'old', path: 'a' }, '', '/a/', true)).toBe('') // empty keeps the repo; slashes don't count
+    expect(repoWarning({ repo: 'old' }, 'new', '', false)).toBe('') // follows its source: nothing to break
+    expect(repoWarning(undefined, 'new', '', true)).toBe('') // a new registration
   })
 })
 

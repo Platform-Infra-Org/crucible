@@ -18,7 +18,6 @@ export function Nav() {
       {me.can_view_spend && <NavLink to="/ledger">Ledger</NavLink>}
       {(me.teams.length > 0 || me.is_admin) && <NavLink to="/teams">Teams</NavLink>}
       {me.can_approve && <NavLink to="/approvals">Approvals</NavLink>}
-      {me.is_mentor && <NavLink to="/mentor">Mentor</NavLink>}
       <NavLink to="/connect">Connect your laptop</NavLink>
       <NavLink to="/docs">Docs</NavLink>
       <NavLink to="/settings">Settings</NavLink>

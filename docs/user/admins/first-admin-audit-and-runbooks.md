@@ -24,7 +24,7 @@ configure everything else from the app.
 
 Crucible records every privileged action: who did it, when, what it touched, and for configuration changes the values
 before and after. That includes approvals and rejections, budget-cap overrides, scores, returns and sign-offs, score
-overrides and resets, content edit decisions, roster and program changes, the kill switch, and revoked laptop
+overrides and resets, content edit decisions, tag and training role changes, the kill switch, and revoked laptop
 agents. The latest entries are under **Recent privileged actions** on Forge Status.
 
 ## Runbooks

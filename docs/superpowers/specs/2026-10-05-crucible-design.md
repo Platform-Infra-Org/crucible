@@ -50,7 +50,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Human-scored items | free text, file/link uploads, lab submissions (incl. override), live sign-offs |
 | FinOps v1 | TTL + idle destroy, schedules, budgets + hard caps, infracost estimate, in-app dashboard |
 | Teardown | Global lab kill switch **and** full platform hibernate/restore |
-| Extras approved | Forge ranks, `crucible lint`/preview CLI, email + Slack/Teams notifications, mentor pairing + journey view |
+| Extras approved | Forge ranks, `crucible lint`/preview CLI, email + Slack/Teams notifications, journey view (mentor pairing removed 2026-10-11) |
 | Themes | Built-in set, per-user choice, admin default |
 | Motion | Rich, fully disabled under `prefers-reduced-motion` or user toggle |
 | Release | Everything in one release (built in dependency order, §15) |
@@ -114,10 +114,10 @@ crucible-platform/
   platform.yaml          # org settings: default theme, escalation hours, cost tiers, rank thresholds, notification webhooks, snapshot bucket
   admins.yaml            # global admins (by OIDC email/subject)
   quotes.yaml            # extra loading-screen quotes (built-ins always present)
-  trainings.yaml         # registry: training id → content repo URL + branch
+  trainings.yaml         # registry: training id → content repo URL + ref (branch, tag or commit) + folder (default: root)
   teams/
     <team-id>/
-      team.yaml          # name, leader, seniors, members, trainees, mentor pairs
+      team.yaml          # name, leaders, seniors, juniors, trainees
       budget.yaml        # monthly budget + hard cap (USD), per-training sub-budgets
       programs/
         <training-id>.yaml   # team's enrollment of a global training (see 4.3)
@@ -226,28 +226,30 @@ aws:
 OIDC authorization-code + PKCE against the configured IdP: an Amazon Cognito user pool on AWS (setup guide: `docs/runbooks/cognito.md`), Keycloak for local development. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` authenticates with a **pairing token** the trainee generates on the *Connect your laptop* page (shown once, stored hashed, revocable). This works with any OIDC provider, including those without device-code support. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
 
 ### 5.2 Roles
-- **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views.
-- **Team:** `leader`, `senior`, `member`, `trainee` (one role per team; a user may be in multiple teams).
-- **Per program (team × training):** `manager`, `scorer`, `approver`. Defaults on enrollment: leader → manager + approver; seniors → scorers. Overridable in UI → committed to the program file.
-- **Mentor:** a pairing (senior/member → trainee) in `team.yaml`, not a role.
+Superseded on 2026-10-11 by `2026-10-11-teams-and-training-roles-design.md`, which is the authority; in short:
+- **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views, adding and moving people.
+- **Team tags:** `leader`, `senior`, `junior`, `trainee`; one team per person, one tag each, one or more leaders.
+- **Per training (owned by one team):** `participant`, `editor`, `admin`, each given to people or groups
+  (`all`, `all_<tag>s`, `<team>`, `<team>_<tag>s`). The owning team's leaders, seniors and juniors manage it.
+- **Mentors:** removed (2026-10-11); a team's leaders and seniors follow its people.
 
-### 5.3 Permission matrix (team scope)
+### 5.3 Permission matrix
 
-| Action | admin | leader | senior | member | trainee | program manager | scorer | approver |
-|---|---|---|---|---|---|---|---|---|
-| Edit team membership / mentors | ✓ | ✓ | | | | | | |
-| Enroll team in training, set program roles | ✓ | ✓ | | | | ✓ | | |
-| Bump pinned content ref, set schedule/TTL | ✓ | ✓ | | | | ✓ | | |
-| Take training / request lab | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| Score human items | ✓ | | | | | | ✓ | |
-| Approve lab request (within tier) | ✓ | tier 2 | | | | | | tier 1 |
-| View trainee progress | ✓ | ✓ | ✓ | | own | ✓ | ✓ | |
-| View team spend | ✓ | ✓ | | | | ✓ | | ✓ |
-| Review/merge content edits | ✓ | | | | | | | |
+| Action | admin | team leader | senior / junior (owning team) | trainee | training admin | editor | participant |
+|---|---|---|---|---|---|---|---|
+| Add, remove, move people; create/delete teams | ✓ | | | | | | |
+| Change tags in own team | ✓ | ✓ | | | | | |
+| Register a training (for own team) | ✓ | ✓ | ✓ | | | | |
+| Give a training's roles, source, pin, schedule/TTL, delete it | ✓ | ✓ (owning team) | ✓ | | ✓ | | |
+| Give a training to another team | ✓ | | | | | | |
+| Take training / request lab | | | | | | | ✓ |
+| Score human items, propose and review content edits | ✓ | | | | ✓ | ✓ | |
+| Approve lab request (within tier) | ✓ | tier 2 (owning team) | | | tier 1 | | |
+| View progress | ✓ | own team's people, owned trainings | owned trainings (seniors: own team's people) | own | ✓ | ✓ | own |
 
-Content edits are also reviewable by the training's `maintainers` (from `training.yaml`), regardless of team role.
+`maintainers` in `training.yaml` grant nothing.
 
-Rules: nobody approves their own lab request or scores their own submission. A trainee sees only their own scores; mentors see their mentees.
+Rules: nobody approves their own lab request or scores their own submission. A trainee sees only their own scores.
 
 ---
 
@@ -257,7 +259,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - On new commit: parse + validate (same validator as `crucible lint`). **Valid →** store as a new content version (by SHA). **Invalid →** keep previous active version, show errors on the admin *Forge Status* page, notify maintainers.
 - Programs pin a SHA. In-progress attempts finish on their pinned version; manager bumps via UI (diff summary shown first).
 - **Config writes (UI → platform repo):** bot commits directly with message `crucible: <action> by <user email>` and a `Crucible-Actor:` trailer. Optimistic concurrency: fetch → apply → push; on non-fast-forward, rebase and retry up to 3×; a true conflict returns an error to the user. DB caches config but git is authoritative — a manual git edit wins on next sync.
-- **Content edits from UI:** pushed to branch `crucible/edit/<edit-id>`; Crucible shows rendered preview + diff; a training maintainer other than the author approves → bot merges to the tracked branch (merge commit). Merge conflict → edit marked *stale*, author re-edits on fresh base.
+- **Content edits from UI:** pushed to branch `crucible/edit/<edit-id>`; Crucible shows rendered preview + diff; a training maintainer other than the author approves → bot merges to the tracked branch (merge commit); paths are relative to the training's folder. A training that follows a tag or a commit takes no edits from the UI. Merge conflict → edit marked *stale*, author re-edits on fresh base.
 - **`crucible lint <repo>`**: schema validation, broken links/assets, referenced scripts exist and are executable, check scripts `shellcheck`ed, quiz answers within option ranges, AWS labs pass infracost against `max_hourly_usd`.
 - **`crucible preview <repo>`**: runs the SPA + a local content server against the working tree (reading, quizzes, and `local`-runtime labs).
 
@@ -388,11 +390,11 @@ For comparison, an EKS-based setup (control plane ~73 + ALB ~20 + NAT ~35 + RDS 
 ---
 
 ## 10. Notifications
-Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to trainee + mentor). Users can mute per event type (email) in settings.
+Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to the trainee). Users can mute per event type (email) in settings.
 
-## 11. Mentor & journey view
-- Each trainee may have a mentor (in `team.yaml`). Mentor dashboard: mentees' progress, pending submissions, recent lab failures.
-- **Journey view** (leader/mentor/manager): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, the final (solution) hint revealed, no activity for 5 business days, or a submission returned twice.
+## 11. Journey view
+- Mentors and the mentor dashboard were removed on 2026-10-11.
+- **Journey view** (leaders, seniors, a training's managers, editors and admins): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, the final (solution) hint revealed, no activity for 5 business days, or a submission returned twice.
 
 ---
 

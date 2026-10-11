@@ -50,6 +50,7 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 		return true
 	}
 
+	// team is the team that owns training (its run lives there), or the team itself for EditTeam and ViewSpend.
 	t := c.P.Teams[team]
 	if t == nil {
 		return false
@@ -69,10 +70,10 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 	case TakeTraining:
 		return in(p.Enrolled)
 	case ViewProgress:
-		return (subject == actor && in(p.Enrolled)) || role == "leader" || role == "senior" ||
-			in(p.Roles.Manager) || in(p.Roles.Scorers) || (subject != "" && t.Mentors[subject] == actor)
-	case ManageProgram:
-		return role == "leader" || in(p.Roles.Manager)
+		return (subject == actor && in(p.Enrolled)) || (training != "" && t.Programs[training] != nil && t.Manages(actor)) ||
+			role == "leader" || role == "senior" || in(p.Roles.Manager) || in(p.Roles.Scorers) || c.oversees(actor, subject)
+	case ManageProgram: // the owning team's leaders, seniors and juniors, and the training's admins
+		return t.Programs[training] != nil && (t.Manages(actor) || in(p.Roles.Manager))
 	case Score:
 		return in(p.Roles.Scorers)
 	case ApproveLabs:
@@ -83,6 +84,29 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 		return role == "leader"
 	}
 	return false
+}
+
+// oversees: actor is a leader or senior of subject's own team (who follow their people's progress in trainings other
+// teams own).
+func (c Checker) oversees(actor, subject string) bool {
+	if subject == "" {
+		return false
+	}
+	st := c.P.TeamOf(subject)
+	if st == nil {
+		return false
+	}
+	r := st.RoleOf(actor)
+	return r == "leader" || r == "senior"
+}
+
+// CanCreateTraining: admins, and every leader, senior and junior (their team owns what they register).
+func (c Checker) CanCreateTraining(email string) bool {
+	if c.IsAdmin(email) {
+		return true
+	}
+	t := c.P.TeamOf(email)
+	return t != nil && t.Manages(email)
 }
 
 // Enrolled: email is enrolled in training in any team.
@@ -158,7 +182,7 @@ func (c Checker) TierApprovers(tier, team, training, requester string) []string 
 	case tier == TierApprover && t != nil && t.Programs[training] != nil:
 		list = t.Programs[training].Roles.Approvers
 	case tier == TierLeader && t != nil:
-		list = []string{t.Leader}
+		list = t.Leaders
 	case tier == TierAdmin:
 		list = c.P.Admins
 	}
@@ -191,7 +215,7 @@ func (c Checker) MayApprove(actor, requester, team, training string, estimateUSD
 	if overCap || tiers == nil || t == nil {
 		return false
 	}
-	if t.Leader == actor {
+	if slices.Contains(t.Leaders, actor) {
 		return estimateUSD <= tiers.Tier2USD
 	}
 	if p := t.Programs[training]; p != nil && slices.Contains(p.Roles.Approvers, actor) {

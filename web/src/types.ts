@@ -1,26 +1,30 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean; avatar: string }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
-export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
+export type Tag = 'leader' | 'senior' | 'junior' | 'trainee'
+// A training's roles: emails and group refs (all, all_seniors, <team>, <team>_seniors, …).
+export type Access = { participants: string[]; editors: string[]; admins: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
+// A training's one run, under the team that owns it.
 export type ProgramConfig = {
-  training: string; title: string; version: number; inline_schedule?: object; enrolled: string[]; roles: Roles; effective_roles?: Roles; schedule: string
+  training: string; title: string; team: string; version: number; inline_schedule?: object; roles: Access; resolved: Access; schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string
 }
-// The trainings page (/api/org/trainings): every training, with the caller's teams that run it.
-export type TeamRoster = {
-  id: string; name: string; version: number; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; can_edit_team: boolean
+// The trainings page (/api/org/trainings): the trainings the caller manages or edits.
+export type ManagedTraining = {
+  id: string; title: string; available: boolean; team: string; repo?: string; ref?: string; path?: string; can_manage: boolean; program?: ProgramConfig
 }
-export type TeamProgram = ProgramConfig & { team: string }
-export type ManagedTraining = { id: string; title: string; available: boolean; repo?: string; branch?: string; programs: TeamProgram[] }
-export type TrainingsAdmin = { is_admin: boolean; schedules: string[]; teams: TeamRoster[]; trainings: ManagedTraining[] }
+export type TrainingsAdmin = {
+  is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
+}
+export type Person = { email: string; name: string; team: string; tag: Tag | '' }
+export type People = { people: Person[]; groups: string[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
+export type Member = { email: string; name: string; tag: Tag }
 export type TeamView = {
-  id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
-  available_trainings: { id: string; title: string }[]; schedules: string[]; version: number
+  id: string; name: string; members: Member[]
+  budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]; schedules: string[]; version: number
   can_edit_team: boolean; is_admin: boolean
 }
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }
@@ -66,7 +70,7 @@ export type Approval = {
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
-export type TrainingStatus = { id: string; repo: string; branch: string; head: string; problems: string[] }
+export type TrainingStatus = { id: string; repo: string; ref: string; path: string; head: string; problems: string[] }
 export type PlatformView = {
   platform_error?: string; synced_at: string
   cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
@@ -117,11 +121,6 @@ export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
 export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
-export type Mentee = {
-  email: string; name: string; team: string; rank: string; programs: JourneyRow[]
-  pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
-  failures: { training: string; module: string; task?: string; kind: 'lab_failed' | 'check_failed'; detail: string; at: string }[]
-}
 export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
 export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
 export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'

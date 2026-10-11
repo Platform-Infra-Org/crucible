@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"crucible/internal/config"
 	"crucible/internal/db/dbtest"
 	"crucible/internal/gitsync"
 	"crucible/internal/rbac"
@@ -58,9 +59,9 @@ func TestStoreDrivesTheSnapshotWithoutGit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustExec(t, s.DB, `INSERT INTO trainings (id, repo, branch) VALUES ('t1', $1, 'main')`, repo) // AddTraining refuses local paths
-	must(s.CreateTeam(ctx, "boss@example.com", "a", TeamBody{Name: "A", Leader: "l@x.com", Trainees: []string{"u@x.com"}}))
-	must(s.Enroll(ctx, "boss@example.com", "a", "t1", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"u@x.com"}}))
+	mustExec(t, s.DB, `INSERT INTO trainings (id, repo, ref) VALUES ('t1', $1, 'main')`, repo) // AddTraining refuses local paths
+	must(s.CreateTeam(ctx, "boss@example.com", "a", body("A", "l@x.com:leader", "u@x.com:trainee")))
+	must(s.Enroll(ctx, "boss@example.com", "a", "t1", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"a_trainees"}}}))
 	must(sy.SyncOnce(ctx))
 	st := sy.Current()
 	if !(rbac.Checker{P: st.Platform}).IsAdmin("boss@example.com") {
@@ -71,7 +72,7 @@ func TestStoreDrivesTheSnapshotWithoutGit(t *testing.T) {
 	}
 
 	// a write through org, then a refresh, is visible with no git for config
-	must(s.SetTeam(ctx, "boss@example.com", "a", TeamBody{Version: 1, Name: "A2", Leader: "l@x.com", Trainees: []string{"u@x.com"}}))
+	must(s.SetTeam(ctx, "boss@example.com", "a", func() TeamBody { b := body("A2", "l@x.com:leader", "u@x.com:trainee"); b.Version = 1; return b }()))
 	must(sy.SyncOnce(ctx))
 	if got := sy.Current().Platform.Teams["a"].Name; got != "A2" {
 		t.Fatalf("team name = %q", got)

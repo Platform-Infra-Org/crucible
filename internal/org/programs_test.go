@@ -26,7 +26,7 @@ func mustTeam(t *testing.T, s *Store, id string, b TeamBody) {
 func mustTraining(t *testing.T, s *Store, id string) {
 	t.Helper()
 	t.Setenv("CRUCIBLE_GIT_ALLOW_FILE", "1")
-	if err := s.AddTraining(context.Background(), "admin@x", id, "https://git/"+id+".git", "main"); err != nil {
+	if err := s.AddTraining(context.Background(), "admin@x", id, config.TrainingRef{Repo: "https://git/" + id + ".git", Ref: "main"}); err != nil {
 		t.Fatalf("AddTraining: %v", err)
 	}
 }
@@ -38,66 +38,63 @@ func audits(t *testing.T, s *Store, action string) int {
 
 func orgFixture(t *testing.T) (*Store, context.Context) {
 	s := &Store{DB: dbtest.New(t)}
-	mustTeam(t, s, "platform", TeamBody{Name: "Platform", Leader: "lead@x", Seniors: []string{"senior@x"}, Trainees: []string{"new@x"}})
+	mustTeam(t, s, "platform", body("Platform", "lead@x:leader", "senior@x:senior", "new@x:trainee"))
+	mustTeam(t, s, "data", body("Data", "dl@x:leader", "ds@x:senior", "dt@x:trainee"))
 	mustTraining(t, s, "forge-101")
 	return s, context.Background()
 }
 
-func TestEnrollAppliesRoleDefaults(t *testing.T) {
+// A training's roles go to people and groups, from any team. They are stored as given and resolved on every read, so
+// a promotion changes who holds a role without touching the training.
+func TestEnrollStoresRolesAsGiven(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
+	roles := config.Access{Participants: []string{"all_trainees", " Guest@Corp "}, Editors: []string{"platform_seniors"}, Admins: []string{"dl@x"}}
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: roles}); err != nil {
 		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM training_roles WHERE training = 'forge-101'`); n != 4 {
+		t.Errorf("stored roles = %d, want 4", n)
 	}
 	p, _ := s.Platform(ctx)
 	prog := p.Teams["platform"].Programs["forge-101"]
-	if len(prog.Roles.Manager) != 1 || prog.Roles.Manager[0] != "lead@x" {
-		t.Errorf("manager = %v", prog.Roles.Manager)
+	if !slices.Equal(prog.Access.Participants, []string{"all_trainees", "guest@corp"}) {
+		t.Errorf("as given = %v", prog.Access.Participants)
 	}
-	if len(prog.Roles.Approvers) != 1 || prog.Roles.Approvers[0] != "lead@x" {
-		t.Errorf("approvers = %v", prog.Roles.Approvers)
+	if !slices.Equal(prog.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(prog.Editors, []string{"dl@x", "senior@x"}) ||
+		!slices.Equal(prog.Roles.Approvers, []string{"dl@x"}) {
+		t.Errorf("resolved: enrolled %v editors %v approvers %v", prog.Enrolled, prog.Editors, prog.Roles.Approvers)
 	}
-	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "senior@x" {
-		t.Errorf("scorers = %v", prog.Roles.Scorers)
-	}
-	if n := count(t, s, `SELECT count(*) FROM program_roles`); n != 0 {
-		t.Errorf("stored roles = %d: defaults are resolved at read time, never stored", n)
-	}
-	// the default follows the team: a new leader becomes manager and approver with no program edit
-	mustExec(t, s.DB, `UPDATE team_members SET role = 'senior' WHERE team = 'platform' AND email = 'lead@x'`)
-	mustExec(t, s.DB, `UPDATE team_members SET role = 'leader' WHERE team = 'platform' AND email = 'senior@x'`)
+	mustExec(t, s.DB, `UPDATE team_members SET role = 'senior' WHERE email = 'new@x'`) // a trainee promoted
 	p, _ = s.Platform(ctx)
 	prog = p.Teams["platform"].Programs["forge-101"]
-	if len(prog.Roles.Manager) != 1 || prog.Roles.Manager[0] != "senior@x" || len(prog.Roles.Approvers) != 1 || prog.Roles.Approvers[0] != "senior@x" {
-		t.Errorf("after a leader change manager = %v approvers = %v, want senior@x", prog.Roles.Manager, prog.Roles.Approvers)
-	}
-	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "lead@x" {
-		t.Errorf("scorers = %v, want the new senior", prog.Roles.Scorers)
+	if slices.Contains(prog.Enrolled, "new@x") || !slices.Contains(prog.Editors, "new@x") {
+		t.Errorf("after a promotion: enrolled %v editors %v", prog.Enrolled, prog.Editors)
 	}
 	if audits(t, s, "program.enroll") != 1 {
 		t.Error("enroll must be audited once")
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Conflict) {
-		t.Errorf("second enroll = %v, want Conflict", err)
+	// one run per training: another team can't take it too
+	if err := s.Enroll(ctx, "admin@x", "data", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Conflict) {
+		t.Errorf("a second team = %v, want Conflict", err)
 	}
 	if audits(t, s, "program.enroll") != 1 {
 		t.Error("a refused enroll must not be audited")
 	}
 }
 
-func TestSetProgramStoresExplicitRoles(t *testing.T) {
+func TestSetProgramReplacesRoles(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
 		t.Fatal(err)
 	}
-	// an admin overrides the scorers with the leader; an empty list would restore the default instead
-	b := ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Roles: config.Roles{Manager: []string{"Lead@x"}, Scorers: []string{"lead@x"}, Approvers: []string{"lead@x"}}, Enrolled: []string{" New@x "}}
-	if err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", b); err != nil {
+	b := ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Roles: config.Access{Participants: []string{"data"}, Editors: []string{"Lead@x"}}}
+	if err := s.SetProgram(ctx, "lead@x", "platform", "forge-101", b); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
 	prog := p.Teams["platform"].Programs["forge-101"]
-	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "lead@x" || len(prog.Enrolled) != 1 || prog.Enrolled[0] != "new@x" {
-		t.Errorf("scorers = %v enrolled = %v", prog.Roles.Scorers, prog.Enrolled)
+	if !slices.Equal(prog.Enrolled, []string{"dl@x", "ds@x", "dt@x"}) || !slices.Equal(prog.Editors, []string{"lead@x"}) || len(prog.Roles.Manager) != 0 {
+		t.Errorf("enrolled = %v editors = %v admins = %v", prog.Enrolled, prog.Editors, prog.Roles.Manager)
 	}
 	if prog.Version != 2 {
 		t.Errorf("version = %d", prog.Version)
@@ -126,7 +123,8 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		"negative idle":    {ProgramBody{BudgetUSDMonth: usd(0), IdleTimeout: "-5m"}, "idle_timeout"},
 		"bad extension":    {ProgramBody{BudgetUSDMonth: usd(0), MaxExtension: "2 hours"}, "max_extension"},
 		"negative budget":  {ProgramBody{BudgetUSDMonth: usd(-1)}, "negative"},
-		"bad email":        {ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"not-an-email"}}, "not-an-email"},
+		"bad ref":          {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"not an email"}}}, "not an email"},
+		"unknown team":     {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ghost_seniors"}}}, `no team "ghost"`},
 	} {
 		err := s.Enroll(ctx, "admin@x", "platform", "forge-101", c.b)
 		if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), c.want) {
@@ -140,7 +138,7 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 	if err := s.Enroll(ctx, "admin@x", "platform", "ghost", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "ghost") {
 		t.Errorf("unknown training = %v", err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.NotFound) {
+	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.NotFound) && !errors.Is(err, apperr.Invalid) {
 		t.Errorf("unknown team = %v", err)
 	}
 	if err := s.SetSchedule(ctx, "admin@x", "days", *inline); err != nil {
@@ -161,21 +159,6 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 	}
 	if audits(t, s, "program.update") != 0 {
 		t.Error("refused update must not be audited")
-	}
-}
-
-func TestEnrollRefusesSomeoneOutsideTheTeam(t *testing.T) {
-	s, ctx := orgFixture(t)
-	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"Stranger@x"}})
-	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "stranger@x") {
-		t.Errorf("enrolling a stranger = %v", err)
-	}
-	err = s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Roles{Scorers: []string{"outsider@x"}}})
-	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "outsider@x") {
-		t.Errorf("role for an outsider = %v", err)
-	}
-	if audits(t, s, "program.enroll") != 0 || count(t, s, `SELECT count(*) FROM programs`) != 0 {
-		t.Error("refused enroll left a trace")
 	}
 }
 
@@ -223,62 +206,9 @@ func TestSetPinRecordsTheSHAAndIsAudited(t *testing.T) {
 	}
 }
 
-func progressFixture(t *testing.T, s *Store) int64 {
-	var uid int64
-	if err := s.DB.QueryRow(context.Background(), `INSERT INTO users (sub, email) VALUES ('s1','new@x') RETURNING id`).Scan(&uid); err != nil {
-		t.Fatal(err)
-	}
-	mustExec(t, s.DB, `INSERT INTO item_progress (user_id, team, training, module, item, status, score)
-		VALUES ($1,'platform','forge-101','01-foundations','reading','complete',1)`, uid)
-	return uid
-}
-
-func TestDeleteProgramKeepsLearningHistory(t *testing.T) {
-	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
-		t.Fatal(err)
-	}
-	uid := progressFixture(t, s)
-	if err := s.DeleteProgram(ctx, "admin@x", "platform", "forge-101"); err != nil {
-		t.Fatal(err)
-	}
-	if n := count(t, s, `SELECT count(*) FROM item_progress WHERE user_id = $1`, uid); n != 1 {
-		t.Fatalf("progress rows after deleting the program = %d, want 1: a score is the trainee's", n)
-	}
-	if n := count(t, s, `SELECT count(*) FROM enrollments`) + count(t, s, `SELECT count(*) FROM program_roles`); n != 0 {
-		t.Errorf("children left behind = %d", n)
-	}
-	if audits(t, s, "program.delete") != 1 {
-		t.Error("delete must be audited once")
-	}
-	if err := s.DeleteProgram(ctx, "admin@x", "platform", "forge-101"); !errors.Is(err, apperr.NotFound) {
-		t.Errorf("second delete = %v, want NotFound", err)
-	}
-	if audits(t, s, "program.delete") != 1 {
-		t.Error("deleting nothing must not be audited")
-	}
-}
-
-func TestDeleteTeamKeepsLearningHistoryAndDropsItsPrograms(t *testing.T) {
-	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
-		t.Fatal(err)
-	}
-	uid := progressFixture(t, s)
-	if err := s.DeleteTeam(ctx, "admin@x", "platform"); err != nil {
-		t.Fatal(err)
-	}
-	if n := count(t, s, `SELECT count(*) FROM programs`) + count(t, s, `SELECT count(*) FROM enrollments`) + count(t, s, `SELECT count(*) FROM program_roles`); n != 0 {
-		t.Errorf("program rows left = %d", n)
-	}
-	if n := count(t, s, `SELECT count(*) FROM item_progress WHERE user_id = $1`, uid); n != 1 {
-		t.Errorf("progress rows = %d, want 1", n)
-	}
-}
-
 func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Enrolled: []string{"new@x"}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
 		t.Fatal(err)
 	}
 	// a restored snapshot can lack the foreign key's guarantee; replica mode skips the check
@@ -303,27 +233,80 @@ func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 	}
 }
 
-func TestEnrollStoresExplicitRoles(t *testing.T) {
+// An admin gives a training to another team: its run (pin, settings, roles) moves with it. A training no team owned
+// gets a fresh run.
+func TestSetOwnerMovesTheRun(t *testing.T) {
 	s, ctx := orgFixture(t)
-	b := ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Roles{Manager: []string{"senior@x"}, Scorers: []string{"Lead@x"}, Approvers: []string{"senior@x"}}}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", b); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(7), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, s, `SELECT count(*) FROM program_roles WHERE team='platform' AND training='forge-101'`); n != 3 {
-		t.Errorf("stored roles = %d, want the 3 named", n)
+	if err := s.SetPin(ctx, "admin@x", "platform", "forge-101", sha1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetOwner(ctx, "admin@x", "forge-101", "data"); err != nil {
+		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
-	r := p.Teams["platform"].Programs["forge-101"].Roles
-	if !slices.Equal(r.Manager, []string{"senior@x"}) || !slices.Equal(r.Scorers, []string{"lead@x"}) || !slices.Equal(r.Approvers, []string{"senior@x"}) {
-		t.Errorf("roles = %+v: explicit roles must replace the defaults", r)
+	if p.Teams["platform"].Programs["forge-101"] != nil {
+		t.Fatal("platform still owns it")
 	}
+	pr := p.Teams["data"].Programs["forge-101"]
+	if pr == nil || pr.PinnedRef != sha1 || pr.BudgetUSDMonth != 7 || !slices.Equal(pr.Enrolled, []string{"new@x"}) {
+		t.Fatalf("the run moved with it: %+v", pr)
+	}
+	if n := count(t, s, `SELECT count(*) FROM audit_log WHERE action = 'training.owner' AND detail->>'previous_team' = 'platform'`); n != 1 {
+		t.Error("the move is audited with the previous team")
+	}
+	if err := s.SetOwner(ctx, "admin@x", "forge-101", "data"); err != nil || audits(t, s, "training.owner") != 1 {
+		t.Errorf("the same owner again changes nothing: %v", err)
+	}
+	mustTraining(t, s, "orphan")
+	if err := s.SetOwner(ctx, "admin@x", "orphan", "platform"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ = s.Platform(ctx); p.Teams["platform"].Programs["orphan"] == nil {
+		t.Error("a training no team owned gets a run")
+	}
+	if err := s.SetOwner(ctx, "admin@x", "orphan", "ghost"); !errors.Is(err, apperr.NotFound) {
+		t.Errorf("unknown team = %v", err)
+	}
+}
+
+// Registering a training gives it to the team at once, with an empty run.
+func TestCreateTraining(t *testing.T) {
+	s, ctx := orgFixture(t)
+	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git", Path: "courses/k8s"}, "platform"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Platform(ctx)
+	if ref := p.Trainings["k8s"]; ref.Ref != "main" || ref.Path != "courses/k8s" || p.Teams["platform"].Programs["k8s"] == nil {
+		t.Fatalf("k8s = %+v, run %v", ref, p.Teams["platform"].Programs["k8s"])
+	}
+	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "platform"); !errors.Is(err, apperr.Conflict) {
+		t.Errorf("a taken id = %v, want Conflict", err)
+	}
+	if err := s.CreateTraining(ctx, "senior@x", "k9s", config.TrainingRef{Repo: "https://git/k.git"}, "ghost"); err == nil {
+		t.Error("an unknown team is refused")
+	}
+	if _, ok := mustPlatform(t, s).Trainings["k9s"]; ok {
+		t.Error("the refused create left the training behind")
+	}
+}
+
+func mustPlatform(t *testing.T, s *Store) *config.Platform {
+	t.Helper()
+	p, err := s.Platform(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func usd(v float64) *float64 { return &v }
 
 func TestProgramBudgetMustBeSent(t *testing.T) {
 	s, ctx := orgFixture(t)
-	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Enrolled: []string{"new@x"}})
+	err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Roles: config.Access{Participants: []string{"new@x"}}})
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "budget_usd_month") {
 		t.Fatalf("err = %v, want Invalid naming budget_usd_month", err)
 	}

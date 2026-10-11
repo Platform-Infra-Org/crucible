@@ -68,6 +68,10 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await page.getByRole('link', { name: 'Before the Lab' }).click()
   await page.getByRole('button', { name: 'Mark as read' }).click()
   await page.getByTestId('module-02-first-lab').getByRole('link', { name: 'Lab', exact: true }).click()
+  // the lobby centres its title, and the molten rule under it with it
+  const rule = await page.locator('.lobby h1').evaluate((h) => { const s = getComputedStyle(h, '::after'); return [parseFloat(s.marginLeft), parseFloat(s.marginRight)] })
+  expect(rule[0]).toBeGreaterThan(0)
+  expect(Math.abs(rule[0] - rule[1])).toBeLessThan(1)
   await page.getByRole('button', { name: 'Ignite the forge' }).click()
   await expect(page.getByRole('tab', { name: 'shell', exact: true })).toBeVisible({ timeout: 5 * 60_000 }) // first run pulls images
   await expect(page.getByTestId('lab-timer')).toHaveText(/\d{2}:\d{2}/)
@@ -76,6 +80,19 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await expect(full).toHaveAttribute('aria-pressed', 'true')
   await full.click()
   await expect(full).toHaveAttribute('aria-pressed', 'false')
+  // Hide tasks gives the terminals the whole width (they were once squeezed into the splitter's 6px column)
+  const body = await page.locator('.lab-body').boundingBox()
+  await page.getByRole('button', { name: 'Hide tasks' }).click()
+  await expect(page.locator('.tasks')).toBeHidden()
+  await expect(page.getByRole('separator', { name: 'Resize panels' })).toBeHidden()
+  await expect.poll(async () => (await page.locator('.terms').boundingBox())!.width).toBeGreaterThan(body!.width - 2)
+  await page.getByRole('button', { name: 'Show tasks' }).click()
+  await expect(page.locator('.tasks')).toBeVisible()
+  await expect.poll(async () => (await page.locator('.terms').boundingBox())!.width).toBeLessThan(body!.width * 0.8) // the terminals shrink back
+  const terms = (await page.locator('.terms').boundingBox())!
+  expect(terms.x + terms.width).toBeLessThanOrEqual(body!.x + body!.width + 1) // and stay on the page
+  const fs = (await page.getByRole('button', { name: 'Full screen' }).boundingBox())!
+  expect(fs.x + fs.width).toBeLessThanOrEqual(body!.x + body!.width + 1) // their buttons too, beside the tasks
 
   // Task 1: create the file in the shell terminal, then Check
   await typeIn(page, 'shell', "echo 'hello forge' > /tmp/forged.txt")

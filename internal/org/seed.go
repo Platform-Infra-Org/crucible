@@ -48,7 +48,7 @@ func (s *Store) Seed(ctx context.Context, p *config.Platform) (bool, error) {
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(p.Trainings)) {
-		if err := s.AddTraining(ctx, actor, id, p.Trainings[id].Repo, p.Trainings[id].Branch); err != nil {
+		if err := s.AddTraining(ctx, actor, id, p.Trainings[id]); err != nil {
 			return false, fmt.Errorf("training %s: %w", id, err)
 		}
 	}
@@ -57,13 +57,17 @@ func (s *Store) Seed(ctx context.Context, p *config.Platform) (bool, error) {
 			return false, fmt.Errorf("team %s: %w", id, err)
 		}
 	}
+	for _, id := range slices.Sorted(maps.Keys(p.Teams)) {
+		if err := s.seedPrograms(ctx, actor, id, p.Teams[id]); err != nil {
+			return false, fmt.Errorf("team %s: %w", id, err)
+		}
+	}
 	err := audit.Log(ctx, s.DB, actor, "seed.import", "platform", map[string]any{"teams": len(p.Teams), "trainings": len(p.Trainings)}, "")
 	return err == nil, err
 }
 
 func (s *Store) seedTeam(ctx context.Context, actor, id string, t *config.Team) error {
-	if err := s.CreateTeam(ctx, actor, id, TeamBody{Name: t.Name, Leader: t.Leader, Seniors: t.Seniors, Members: t.Members,
-		Trainees: t.Trainees, Mentors: t.Mentors}); err != nil {
+	if err := s.CreateTeam(ctx, actor, id, BodyOf(t)); err != nil {
 		return err
 	}
 	if b := t.Budget; b.MonthlyUSD > 0 || b.HardCapUSD > 0 {
@@ -79,14 +83,16 @@ func (s *Store) seedTeam(ctx context.Context, actor, id string, t *config.Team) 
 			return fmt.Errorf("%s webhook: %w", kind, err)
 		}
 	}
+	return nil
+}
+
+// seedPrograms gives each training its owning team's run, after every team exists (a role may name another team's
+// group).
+func (s *Store) seedPrograms(ctx context.Context, actor, id string, t *config.Team) error {
 	for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
 		p := t.Programs[tr]
-		// config.Load fills an unset role list with its default; store only what was set, so the default keeps
-		// following the team (a new leader, a promoted senior) as it does for programs created in the UI.
-		roles := config.Roles{Manager: explicit(p.Roles.Manager, []string{t.Leader}), Scorers: explicit(p.Roles.Scorers, t.Seniors),
-			Approvers: explicit(p.Roles.Approvers, []string{t.Leader})}
 		budget := p.BudgetUSDMonth
-		if err := s.Enroll(ctx, actor, id, tr, ProgramBody{Roles: roles, Enrolled: p.Enrolled, Schedule: p.Schedule,
+		if err := s.Enroll(ctx, actor, id, tr, ProgramBody{Roles: p.Access, Schedule: p.Schedule,
 			InlineSchedule: p.Inline, TTL: dur(p.LabDefaults.TTL), IdleTimeout: dur(p.LabDefaults.IdleTimeout),
 			MaxExtension: dur(p.LabDefaults.MaxExtension), BudgetUSDMonth: &budget, ReviewSelfReported: p.ReviewSelfReported}); err != nil {
 			return fmt.Errorf("program %s: %w", tr, err)
@@ -98,13 +104,4 @@ func (s *Store) seedTeam(ctx context.Context, actor, id string, t *config.Team) 
 		}
 	}
 	return nil
-}
-
-// explicit is list unless it is exactly the default config.Load would have filled in, which reads as unset.
-func explicit(list, def []string) []string {
-	a, b := slices.Sorted(slices.Values(list)), slices.Sorted(slices.Values(def))
-	if slices.Equal(a, b) {
-		return []string{}
-	}
-	return list
 }

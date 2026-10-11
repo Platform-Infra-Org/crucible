@@ -18,17 +18,17 @@ paused labs and when. Both actions are audited.
 ## Needs attention
 
 - Content edits waiting for review, with a link to **Edits**.
-- Labs that failed to start or are stuck being destroyed, with the trainee, program, state and error.
+- Labs that failed to start or are stuck being destroyed, with the trainee, training, state and error.
 
-## Program versions
+## Training versions
 
-Every program, the content version it runs (and whether it is pinned), and the branch head. A program that follows
-the branch but hasn't caught up is marked *behind*.
+Every training with the team that owns it, the content version it runs (and whether it is pinned), and the head of
+its source. A training that follows its source but hasn't caught up is marked *behind*.
 
 ## Sync
 
 When Crucible last fetched training content, and any error reading its configuration. Below it, every training: its
-repo, branch, head commit, and the problems that keep it from loading, if any.
+repo, the branch, tag or commit it follows (and its folder, if it isn't at the root), head commit, and the problems that keep it from loading, if any.
 
 ## Forge settings
 

@@ -43,6 +43,12 @@ func copyDir(t *testing.T, src string, rewrite map[string]string) string {
 		t.Fatalf("cp: %v %s", err, out)
 	}
 	for rel, body := range rewrite {
+		if body == "" { // "" removes the file
+			if err := os.Remove(filepath.Join(dir, rel)); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
 		if err := os.WriteFile(filepath.Join(dir, rel), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +81,9 @@ func setup(t *testing.T) *fx {
 	t.Helper()
 	content := bareFrom(t, "../../examples/forge-101")
 	dir := copyDir(t, "../../examples/platform", map[string]string{
-		"trainings.yaml": "trainings:\n  forge-101: {repo: " + content + "}\n  forge-201: {repo: " + content + "}\n  forge-103: {repo: " + content + "}\n"})
+		"trainings.yaml": "trainings:\n  forge-101: {repo: " + content + "}\n  forge-201: {repo: " + content + "}\n  forge-103: {repo: " + content + "}\n",
+		// trainings this test does not serve
+		"teams/forge/programs/forge-102.yaml": "", "teams/forge/programs/forge-301.yaml": "", "teams/forge/programs/forge-401.yaml": ""})
 	syncer := gitsync.New(t.TempDir(), func(context.Context) (*config.Platform, error) { return config.Load(dir) }, slog.Default())
 	if err := syncer.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -133,8 +141,8 @@ func TestProgramChangesShowWhatABumpBrings(t *testing.T) {
 	if err != nil || len(ch.Commits) != 1 || !strings.Contains(ch.Commits[0], "new words") {
 		t.Fatalf("diff summary: %+v %v", ch, err)
 	}
-	if _, err := f.s.ProgramChanges(ctx, f.leader, "forge", "forge-201"); !errors.Is(err, apperr.NotFound) {
-		t.Fatalf("a training the team does not run: %v", err)
+	if _, err := f.s.ProgramChanges(ctx, f.leader, "forge", "nope"); !errors.Is(err, apperr.NotFound) {
+		t.Fatalf("a training the team does not own: %v", err)
 	}
 }
 

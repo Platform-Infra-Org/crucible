@@ -6,15 +6,15 @@ order: 30
 ---
 # Approvals and extensions
 
-**Approvals** shows in the top bar when you can approve labs: as a program approver, a team leader or an admin.
+**Approvals** shows in the top bar when you can approve labs: as a training's admin, a team leader or a Crucible admin.
 
 ## Who decides what
 
 Every lab request is routed by its estimate, using the tiers your admins set:
 
 - **Auto**: laptop and cluster labs up to the auto-approve amount start at once. AWS labs never do.
-- **Approver**: up to tier 1, the program's approvers decide.
-- **Leader**: up to tier 2, the team leader.
+- **Approver**: up to tier 1, the training's admins decide.
+- **Leader**: up to tier 2, the leaders of the team that owns the training.
 - **Admin**: anything above, and anything that would pass a budget cap.
 
 Someone higher can always decide a cheaper request. Nobody approves their own. A trainee whose lab failed to start
@@ -22,11 +22,11 @@ can ask again within the hour without a new approval.
 
 ## The queue
 
-Each request shows who asked, the estimate and how it was worked out, who it is waiting for, the team's and the
-program's spend this month, the program's schedule, and the trainee's recent labs. Add a note if you like, then
+Each request shows who asked, the estimate and how it was worked out, who it is waiting for, the owning team's and the
+training's spend this month, the training's schedule, and the trainee's recent labs. Add a note if you like, then
 **Approve** or **Reject**. An approved lab starts at once; the trainee gets an email either way.
 
-You can't approve while labs are paused or the program's schedule window is closed.
+You can't approve while labs are paused or the training's schedule window is closed.
 
 ## Escalation
 

@@ -12,23 +12,14 @@ func TestCanScore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for email, want := range map[string]bool{
-		"senior@crucible.local":  true, // seniors are scorers by default
+		"senior@crucible.local":  true, // the seed's editors (forge_leaders, forge_seniors) score
+		"leader@crucible.local":  true,
 		"admin@crucible.local":   true,
 		"trainee@crucible.local": false,
-		"leader@crucible.local":  false,
+		"nobody@crucible.local":  false,
 	} {
 		if got := canScore(p, email); got != want {
 			t.Errorf("%s: %v", email, got)
 		}
-	}
-}
-
-func TestIsMentor(t *testing.T) {
-	p, err := config.Load("../../examples/platform")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !isMentor(p, "Senior@crucible.local") || isMentor(p, "leader@crucible.local") || isMentor(p, "trainee@crucible.local") {
-		t.Fatal("only the senior mentors someone in the fixture")
 	}
 }

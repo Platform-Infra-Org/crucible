@@ -26,7 +26,8 @@ type State struct {
 	Platform    *config.Platform
 	PlatformErr string                       // last error reading the configuration; the previous one stays in use
 	Trainings   map[string]*content.Training // "id@sha" → valid training
-	Heads       map[string]string            // training id → tracked branch HEAD
+	Heads       map[string]string            // training id → the commit its ref points at
+	OnBranch    map[string]bool              // training id → its ref is a branch, so edits can merge into it
 	ProgramSHAs map[string]string            // "team/training" → sha the program runs
 	Problems    map[string][]content.Problem // "id@sha" → why that version is invalid
 	SyncedAt    time.Time
@@ -107,15 +108,20 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	}
 
 	st := &State{Platform: plat, Trainings: map[string]*content.Training{},
-		Heads: map[string]string{}, ProgramSHAs: map[string]string{}, Problems: map[string][]content.Problem{}, SyncedAt: time.Now(), validated: map[string]bool{}}
+		Heads: map[string]string{}, OnBranch: map[string]bool{}, ProgramSHAs: map[string]string{}, Problems: map[string][]content.Problem{}, SyncedAt: time.Now(), validated: map[string]bool{}}
 	if prev != nil {
 		// ponytail: every version ever loaded stays in memory so running labs keep their content after a pin bump.
 		// Ceiling: memory grows with commits; prune versions with no program and no live lab if it ever matters.
 		maps.Copy(st.Trainings, prev.Trainings)
+		for key := range st.Trainings { // a training moved to another repo or folder: its old versions are not its content
+			if id, _, _ := strings.Cut(key, "@"); prev.moved(plat, id) {
+				delete(st.Trainings, key)
+			}
+		}
 	}
 
 	for id, ref := range plat.Trainings {
-		s.syncTraining(ctx, st, prev, plat, id, ref.Repo, ref.Branch)
+		s.syncTraining(ctx, st, prev, plat, id, ref)
 	}
 	if prev != nil && s.OnProblem != nil {
 		for key, probs := range st.Problems {
@@ -142,25 +148,37 @@ func (s *Syncer) keepPlatform(prev *State, err error) error {
 	return fmt.Errorf("reading the configuration: %w", err)
 }
 
+// moved reports whether training id now comes from another repo or folder than in s.
+func (s *State) moved(plat *config.Platform, id string) bool {
+	if s == nil || s.Platform == nil {
+		return false
+	}
+	a, b := s.Platform.Trainings[id], plat.Trainings[id]
+	return a.Repo != b.Repo || a.Path != b.Path
+}
+
 // syncTraining fetches one training's mirror and loads its head and pinned versions, bounded by repoTimeout so one
 // hung remote can't hold the sync lock (and with it Version, pin checks and the webhook) indefinitely.
-func (s *Syncer) syncTraining(ctx context.Context, st, prev *State, plat *config.Platform, id, repo, branch string) {
+func (s *Syncer) syncTraining(ctx context.Context, st, prev *State, plat *config.Platform, id string, ref config.TrainingRef) {
 	ctx, cancel := context.WithTimeout(ctx, repoTimeout)
 	defer cancel()
-	m := s.mirror(repo)
+	m := s.mirror(ref.Repo)
 	if err := m.Fetch(ctx); err != nil {
-		st.Problems[id] = []content.Problem{{File: repo, Msg: err.Error()}}
+		st.Problems[id] = []content.Problem{{File: ref.Repo, Msg: err.Error()}}
 		s.keepPrevPrograms(st, prev, plat, id)
 		return
 	}
-	head, err := m.Resolve(ctx, branch)
+	head, err := m.Resolve(ctx, ref.Ref)
 	if err != nil {
-		st.Problems[id] = []content.Problem{{File: repo, Msg: err.Error()}}
+		st.Problems[id] = []content.Problem{{File: ref.Repo, Msg: err.Error()}}
 		s.keepPrevPrograms(st, prev, plat, id)
 		return
 	}
-	st.Heads[id] = head
-	s.load(ctx, st, prev, m, id, head)
+	st.Heads[id], st.OnBranch[id] = head, m.IsBranch(ctx, ref.Ref)
+	if prev.moved(plat, id) {
+		prev = nil // its remembered problems belong to the old content
+	}
+	s.load(ctx, st, prev, m, id, ref.Path, head)
 	for teamID, team := range plat.Teams {
 		p, ok := team.Programs[id]
 		if !ok {
@@ -176,7 +194,7 @@ func (s *Syncer) syncTraining(ctx context.Context, st, prev *State, plat *config
 				}
 				continue
 			}
-			s.load(ctx, st, prev, m, id, sha)
+			s.load(ctx, st, prev, m, id, ref.Path, sha)
 		}
 		st.ProgramSHAs[key] = sha
 		if st.Training(id, sha) == nil && prev != nil && prev.Training(id, prev.ProgramSHAs[key]) != nil {
@@ -196,7 +214,8 @@ func (s *Syncer) keepPrevPrograms(st, prev *State, plat *config.Platform, id str
 	}
 }
 
-func (s *Syncer) load(ctx context.Context, st, prev *State, m Mirror, id, sha string) {
+// load exports training id at sha from the folder root of the mirror and validates it.
+func (s *Syncer) load(ctx context.Context, st, prev *State, m Mirror, id, root, sha string) {
 	key := id + "@" + sha
 	if st.Trainings[key] != nil || st.Problems[key] != nil {
 		return
@@ -207,7 +226,11 @@ func (s *Syncer) load(ctx context.Context, st, prev *State, m Mirror, id, sha st
 		return
 	}
 	dir := filepath.Join(s.DataDir, "content", id, sha)
-	if err := m.Export(ctx, sha, dir); err != nil {
+	if root != "" { // exports are reused by name: content from another folder at the same commit is another export
+		h := sha256.Sum256([]byte(root))
+		dir += "-" + hex.EncodeToString(h[:4])
+	}
+	if err := m.Export(ctx, sha, root, dir); err != nil {
 		st.Problems[key] = []content.Problem{{File: id, Msg: err.Error()}}
 		return
 	}
@@ -258,7 +281,7 @@ func (s *Syncer) Version(ctx context.Context, id, sha string) *content.Training 
 	// outside the lock and merge if a slow archive ever stalls syncs.
 	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
-	s.load(gctx, &next, cur, s.mirror(ref.Repo), id, sha)
+	s.load(gctx, &next, cur, s.mirror(ref.Repo), id, ref.Path, sha)
 	s.cur.Store(&next)
 	return next.Training(id, sha)
 }
@@ -272,16 +295,17 @@ type Changes struct {
 	Stat    string   `json:"stat"`    // git diff --stat: file names and line counts, never content
 }
 
-func (s *Syncer) trainingMirror(training string) (Mirror, error) {
+// trainingMirror returns the mirror holding training and the folder inside it that holds the training.
+func (s *Syncer) trainingMirror(training string) (Mirror, string, error) {
 	st := s.Current()
 	if st == nil || st.Platform == nil {
-		return Mirror{}, apperr.Wrap(apperr.Unavailable, "content is still syncing")
+		return Mirror{}, "", apperr.Wrap(apperr.Unavailable, "content is still syncing")
 	}
 	ref, ok := st.Platform.Trainings[training]
 	if !ok {
-		return Mirror{}, apperr.Wrap(apperr.NotFound, "unknown training")
+		return Mirror{}, "", apperr.Wrap(apperr.NotFound, "unknown training")
 	}
-	return s.mirror(ref.Repo), nil
+	return s.mirror(ref.Repo), ref.Path, nil
 }
 
 const (
@@ -301,7 +325,7 @@ func gitErr(ctx context.Context, err error, no error) error {
 }
 
 func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Changes, error) {
-	m, err := s.trainingMirror(training)
+	m, root, err := s.trainingMirror(training)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +338,13 @@ func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Chang
 	if from == to {
 		return out, nil
 	}
-	log, err := git(ctx, m.Dir, "log", "--format=%h %s", "-n", strconv.Itoa(maxCommits+1), "--end-of-options", from+".."+to)
+	logArgs := []string{"log", "--format=%h %s", "-n", strconv.Itoa(maxCommits + 1), "--end-of-options", from + ".." + to}
+	statArgs := []string{"diff", "--no-ext-diff", "--no-textconv", "--stat", "--stat-count=100"}
+	if root != "" { // only what changed in the training's folder, with paths relative to it
+		logArgs = append(logArgs, "--", ":(literal)"+root)
+		statArgs = append(statArgs, "--relative="+root+"/")
+	}
+	log, err := git(ctx, m.Dir, logArgs...)
 	if err != nil {
 		return nil, gitErr(ctx, err, apperr.Wrap(apperr.Invalid, "those versions are not in the training's history"))
 	}
@@ -326,16 +356,16 @@ func (s *Syncer) Changes(ctx context.Context, training, from, to string) (*Chang
 	if len(out.Commits) > maxCommits {
 		out.Commits, out.More = out.Commits[:maxCommits], true
 	}
-	if out.Stat, err = git(ctx, m.Dir, "diff", "--no-ext-diff", "--no-textconv", "--stat", "--stat-count=100", "--end-of-options", from, to); err != nil {
+	if out.Stat, err = git(ctx, m.Dir, append(statArgs, "--end-of-options", from, to)...); err != nil {
 		return nil, gitErr(ctx, err, err)
 	}
 	return out, nil
 }
 
-// CheckPin says whether sha may be pinned for training: a commit on the tracked branch (not another branch, an
+// CheckPin says whether sha may be pinned for training: a commit on the tracked ref (not another branch, an
 // unmerged edit or an arbitrary object) whose content loads cleanly.
 func (s *Syncer) CheckPin(ctx context.Context, training, sha string) error {
-	m, err := s.trainingMirror(training)
+	m, _, err := s.trainingMirror(training)
 	if err != nil {
 		return err
 	}

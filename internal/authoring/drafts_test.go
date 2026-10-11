@@ -127,7 +127,7 @@ func TestDraftLimitsAndAccess(t *testing.T) {
 		t.Fatalf("a base that is neither the draft's nor the head: %v", err)
 	}
 	// The senior becomes enrolled: editing rights do not depend on enrollment, so their drafts, files and checks stay open.
-	f.st.Platform.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local", "senior@crucible.local"}}
+	f.st.Platform.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local", "senior@crucible.local"}, Editors: []string{"leader@crucible.local", "senior@crucible.local"}}
 	for name, err := range map[string]error{
 		"get":      second(f.s.Get(ctx, f.senior, ids[0])),
 		"files":    second(f.s.Files(ctx, f.senior, ids[0])),

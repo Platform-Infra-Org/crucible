@@ -100,9 +100,9 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
         </select>
       </label>
       <h2>Lab spending</h2>
-      <p className="muted">Lab requests under the first line are approved on their own. Above it they go to the program's approver; above the second line they need an admin. Clear all three to leave them unset.</p>
+      <p className="muted">Lab requests under the first line are approved on their own. Above it the training's admins decide; above the second line, its team's leaders; above the third, an admin. Clear all three to leave them unset.</p>
       <label>Auto-approve under (USD) <input type="number" min={0} step="0.01" value={auto} onChange={(e) => setAuto(e.target.value)} /></label>
-      <label>Program approver up to (USD) <input type="number" min={0} step="0.01" value={t1} onChange={(e) => setT1(e.target.value)} /></label>
+      <label>Training admins approve up to (USD) <input type="number" min={0} step="0.01" value={t1} onChange={(e) => setT1(e.target.value)} /></label>
       <label>Admin approval above (USD) <input type="number" min={0} step="0.01" value={t2} onChange={(e) => setT2(e.target.value)} /></label>
       <label>Cluster lab rate (USD per hour, empty = cluster labs unavailable) <input type="number" min={0} step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} /></label>
       <label>Hours before a waiting request escalates <input type="number" min={0} step="0.5" value={esc} onChange={(e) => setEsc(e.target.value)} /></label>
@@ -156,7 +156,7 @@ function Schedules({ map, reload }: { map: Record<string, string>; reload: () =>
   return (
     <form className="stack panel" onSubmit={add}>
       <h2>Lab schedules</h2>
-      <p className="muted">A schedule says when a program's labs may run. Saving under an existing name replaces it.</p>
+      <p className="muted">A schedule says when a training's labs may run. Saving under an existing name replaces it.</p>
       {names.length === 0 && <p className="muted">No schedules yet; programs can run labs any time.</p>}
       <ul>
         {names.map((n) => (
@@ -203,7 +203,7 @@ function Move({ reload }: { reload: () => void }) {
   return (
     <form className="stack panel" onSubmit={load}>
       <h2>Move this forge</h2>
-      <p className="muted">The export is one file with the settings, admins, schedules, trainings, teams, enrollments, roles, budgets,
+      <p className="muted">The export is one file with the settings, admins, schedules, trainings, teams, tags, training roles, budgets,
         webhooks and everyone&apos;s progress and scores. It holds personal data: keep it somewhere private and never commit it.
         Labs, spend, sessions and the audit log stay behind.</p>
       <p><a className="button-link" href="/api/admin/export" download>Download an export</a></p>

@@ -2,7 +2,7 @@
 
 A self-hosted training platform: git-sourced trainings (readings, quizzes, labs), hands-on labs that run on the
 trainee's laptop (Docker), in Kubernetes, or in a shared AWS account, human scoring, cost approvals and budgets,
-forge ranks, and mentoring. One Go API serves a React SPA. Git is the source of truth for config and content; the UI
+and forge ranks. One Go API serves a React SPA. Git is the source of truth for config and content; the UI
 writes content edits back to git as a bot. Configuration and people live in Postgres.
 
 - Spec: `docs/superpowers/specs/2026-10-05-crucible-design.md` (the authority on behaviour)
@@ -85,12 +85,17 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 ## Invariants worth knowing before changing code
 
-- Anyone enrolled in a training never sees its answer keys (rubrics — `json:"-"`, only via `ScorerView` — raw files,
-  edit diffs, Anvil data, peers' uploads), **unless they may edit it**: admins, its maintainers, and leaders/seniors of
-  teams running it keep editing and reviewing while enrolled (owner's ruling, 2026-10-08; `TestEnrolledEditorsKeepEditing`).
-  Enrolled users never score their own training (admins included).
+- Teams and roles (owner's model, 2026-10-11; `docs/superpowers/specs/2026-10-11-teams-and-training-roles-design.md`):
+  one team per person with one tag (leader/senior/junior/trainee); a training is owned by one team (one run: pin,
+  schedule, budget) and has participant/editor/admin roles given to emails or groups (`all`, `all_seniors`, `platform`,
+  `platform_seniors`), resolved by `config.Platform.Resolve` on every read. Internally a training's run is still a
+  `config.Program` under its owning team, so `(team, training)` keys mean "the owning team".
+- A participant never sees a training's answer keys (rubrics — `json:"-"`, only via `ScorerView` — raw files,
+  edit diffs, Anvil data, peers' uploads), **unless they may edit it**: admins and its editors and admins keep editing
+  and reviewing while participating (owner's ruling, 2026-10-08; `TestEnrolledEditorsKeepEditing`).
+  Participants never score their own training (admins included).
 - Git is the source of truth for **training content**. Configuration and org data (settings, tiers, schedules, quotes,
-  admins, the training registry, teams, membership, mentors, webhooks, budgets, programs, roles, enrollments, pins)
+  admins, the training registry, teams, tags, webhooks, budgets, training runs, training roles, pins)
   live in Postgres behind `internal/org`: validated, audited, permission-checked, versioned writes, and nowhere else (no
   git platform repo; a set `CRUCIBLE_PLATFORM_REPO` stops the server). A fresh instance needs only `DATABASE_URL` and
   `CRUCIBLE_BOOTSTRAP_ADMIN`; `CRUCIBLE_SEED_DIR` imports a YAML platform directory into an empty database once (dev,

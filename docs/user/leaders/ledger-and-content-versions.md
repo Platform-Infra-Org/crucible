@@ -8,10 +8,10 @@ order: 50
 
 ## The Ledger
 
-**Ledger** shows in the top bar for team leaders, program managers, approvers and admins. It covers this month's lab
+**Ledger** shows in the top bar for team leaders, trainings' admins and Crucible admins. It covers this month's lab
 spend for the teams you may see:
 
-- **Budgets**: how much of each team's and program's budget is spent.
+- **Budgets**: how much of each team's and training's budget is spent.
 - **Day by day**: spend per day.
 - **Running now** and **Labs this month**: each lab with who asked, its runtime, estimate and cost so far.
 - **Top spenders**.
@@ -23,14 +23,15 @@ enforcing the budgets meanwhile.
 
 ## Content versions
 
-A program runs one version of its training. Labs always run on the exact version they started with.
+A training runs one version of its content. Labs always run on the exact version they started with.
 
-By default a program follows the training's branch: new content reaches trainees as soon as it is merged. Program
-managers can pin it instead, under **Content version** in the program's panel on
+By default a training follows its source, usually a branch: new content reaches participants as soon as it is
+merged. A training registered at a tag or a commit stays there until its managers change its source. Its
+managers can pin it instead, under **Content version** on
 [Manage trainings](/docs/leaders/manage-trainings):
 
-- When the program is behind, **Show what changed** lists the new commits and the files they change. Read them, then
+- When the training is behind, **Show what changed** lists the new commits and the files they change. Read them, then
   **Pin to** the new version.
-- **Follow the branch head** unpins it again.
+- **Follow the source head** unpins it again.
 
-Admins see every program's version, and whether it is behind, on Forge Status.
+Admins see every training's version, and whether it is behind, on Forge Status.

@@ -55,25 +55,21 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
 	mustExec(t, pool, `INSERT INTO team_members (team, email, role) VALUES
 		('forge','leader@x','leader'), ('forge','senior@x','senior'), ('forge','trainee@x','trainee')`)
-	mustExec(t, pool, `INSERT INTO mentors (team, trainee, mentor) VALUES ('forge','trainee@x','senior@x')`)
 	mustExec(t, pool, `INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('forge', 200, 250)`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo, branch) VALUES ('forge-101','https://git/x.git','main')`)
+	mustExec(t, pool, `INSERT INTO trainings (id, repo, ref) VALUES ('forge-101','https://git/x.git','main')`)
 	mustExec(t, pool, `INSERT INTO schedules (name, timezone, windows) VALUES
 		('days','UTC','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, budget_usd_month, schedule_name, ttl) VALUES ('forge','forge-101', 100, 'days', '2h')`)
-	mustExec(t, pool, `INSERT INTO program_roles (team, training, email, role) VALUES ('forge','forge-101','senior@x','scorer')`)
-	mustExec(t, pool, `INSERT INTO enrollments (team, training, email) VALUES ('forge','forge-101','trainee@x')`)
+	mustExec(t, pool, `INSERT INTO training_roles (training, ref, role) VALUES ('forge-101','forge_seniors','editor'),
+		('forge-101','trainee@x','participant')`)
 
 	p, err := (&Store{DB: pool}).Platform(ctx)
 	if err != nil {
 		t.Fatalf("Platform: %v", err)
 	}
 	team := p.Teams["forge"]
-	if team == nil || team.Leader != "leader@x" || len(team.Trainees) != 1 || team.Version != 1 {
+	if team == nil || !slices.Equal(team.Leaders, []string{"leader@x"}) || len(team.Trainees) != 1 || team.Version != 1 {
 		t.Fatalf("team = %+v", team)
-	}
-	if team.Mentors["trainee@x"] != "senior@x" {
-		t.Errorf("mentors = %v", team.Mentors)
 	}
 	if team.Budget.MonthlyUSD != 200 || team.Budget.HardCapUSD != 250 || team.Budget.Version != 1 {
 		t.Errorf("budget = %+v", team.Budget)
@@ -85,8 +81,8 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "senior@x" {
 		t.Errorf("roles = %+v", prog.Roles)
 	}
-	if len(prog.Roles.Manager) != 1 || prog.Roles.Manager[0] != "leader@x" {
-		t.Errorf("manager should default to the leader: %+v", prog.Roles)
+	if len(prog.Roles.Manager) != 0 || !slices.Equal(prog.Access.Editors, []string{"forge_seniors"}) {
+		t.Errorf("roles are as given, no defaults: %+v %+v", prog.Roles, prog.Access)
 	}
 	if len(prog.Enrolled) != 1 || prog.Enrolled[0] != "trainee@x" {
 		t.Errorf("enrolled = %v", prog.Enrolled)
@@ -159,20 +155,30 @@ func TestMembersAreSortedAndNeverNil(t *testing.T) {
 	if !slices.Equal(tm.Seniors, []string{"s1@x", "s2@x", "s3@x"}) || !slices.Equal(tm.Trainees, []string{"a@x", "b@x"}) {
 		t.Errorf("seniors=%v trainees=%v", tm.Seniors, tm.Trainees)
 	}
-	if tm.Members == nil {
-		t.Error("Members must be an empty slice, not nil (JSON null breaks the SPA)")
+	if tm.Juniors == nil {
+		t.Error("Juniors must be an empty slice, not nil (JSON null breaks the SPA)")
 	}
 }
 
-func TestLeaderRules(t *testing.T) {
+// A team may have several leaders; a person is on one team; a training has one run.
+func TestMembershipRules(t *testing.T) {
 	pool := dbtest.New(t)
-	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
-	if _, err := platform(t, pool); err == nil || !strings.Contains(err.Error(), "teams/t: team has no leader") {
-		t.Errorf("leaderless team: err = %v", err)
+	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T'), ('u','U')`)
+	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','a@x','leader'), ('t','b@x','leader'), ('u','c@x','leader')`)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO team_members VALUES ('u','a@x','senior')`); err == nil {
+		t.Error("a person on a second team must be rejected")
 	}
-	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','a@x','leader')`)
-	if _, err := pool.Exec(context.Background(), `INSERT INTO team_members VALUES ('t','b@x','leader')`); err == nil {
-		t.Error("a second leader must be rejected")
+	if _, err := pool.Exec(context.Background(), `INSERT INTO team_members VALUES ('t','d@x','member')`); err == nil {
+		t.Error("member is no longer a tag")
+	}
+	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('t','tr')`)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO programs (team, training) VALUES ('u','tr')`); err == nil {
+		t.Error("a training run by two teams must be rejected")
+	}
+	p, err := platform(t, pool)
+	if err != nil || !slices.Equal(p.Teams["t"].Leaders, []string{"a@x", "b@x"}) {
+		t.Fatalf("two leaders: %v %v", p, err)
 	}
 }
 
@@ -183,12 +189,11 @@ func TestMixedCaseEmailsAreRejected(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('t','tr')`)
 	for _, q := range []string{
 		`INSERT INTO admins VALUES ('A@x')`,
-		`INSERT INTO team_members VALUES ('t','A@x','member')`,
-		`INSERT INTO team_members VALUES ('t',' a@x','member')`,
-		`INSERT INTO mentors VALUES ('t','a@x','B@x')`,
-		`INSERT INTO mentors VALUES ('t','A@x','b@x')`,
-		`INSERT INTO program_roles VALUES ('t','tr','A@x','scorer')`,
-		`INSERT INTO enrollments VALUES ('t','tr','A@x')`,
+		`INSERT INTO team_members VALUES ('t','A@x','junior')`,
+		`INSERT INTO team_members VALUES ('t',' a@x','junior')`,
+		`INSERT INTO training_roles VALUES ('tr','A@x','editor')`,
+		`INSERT INTO training_roles VALUES ('tr','',  'editor')`,
+		`INSERT INTO training_roles VALUES ('tr','a@x','scorer')`,
 	} {
 		if _, err := pool.Exec(context.Background(), q); err == nil {
 			t.Errorf("accepted: %s", q)
@@ -243,18 +248,16 @@ schedules:
 	write("quotes.yaml", "quotes: [one, two]\n")
 	write("trainings.yaml", "trainings:\n  a: {repo: https://git/a.git, branch: dev}\n  b: {repo: https://git/b.git}\n")
 	write("teams/t/team.yaml", `name: T
-leader: l@x
+leaders: [l@x]
 seniors: [s1@x, s2@x]
-members: [m@x]
+juniors: [m@x]
 trainees: [tr@x]
-mentors: { tr@x: s1@x }
 notifications: { slack_webhook: "https://hooks/s", teams_webhook: "https://hooks/t" }
 `)
 	write("teams/t/budget.yaml", "monthly_usd: 200\nhard_cap_usd: 250\n")
 	write("teams/t/programs/a.yaml", `training: a
 pinned_ref: 0123456789abcdef0123456789abcdef01234567
-roles: { manager: [m@x], scorers: [s2@x], approvers: [s1@x] }
-enrolled: [tr@x]
+roles: { participants: [tr@x, all_juniors], editors: [s2@x], admins: [s1@x] }
 lab_defaults: { ttl: 2h, idle_timeout: 30m, max_extension: 45m }
 schedule: bh
 budget_usd_month: 50
@@ -280,15 +283,13 @@ func TestPlatformMatchesConfigLoad(t *testing.T) {
 		`INSERT INTO quotes (text) VALUES ('one'),('two')`,
 		`INSERT INTO trainings VALUES ('a','https://git/a.git','dev'),('b','https://git/b.git','main')`,
 		`INSERT INTO teams (id, name) VALUES ('t','T')`,
-		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','member'),('t','tr@x','trainee')`,
-		`INSERT INTO mentors VALUES ('t','tr@x','s1@x')`,
+		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','junior'),('t','tr@x','trainee')`,
 		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s'),('t','teams','https://hooks/t')`,
 		`INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('t',200,250)`,
 		`INSERT INTO programs (team, training, pinned_ref, schedule_name, ttl, idle_timeout, max_extension, budget_usd_month, review_self_reported)
 			VALUES ('t','a','0123456789abcdef0123456789abcdef01234567','bh','2h','30m','45m',50,true)`,
 		`INSERT INTO programs (team, training, inline_schedule) VALUES ('t','b','{"timezone":"UTC","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`,
-		`INSERT INTO program_roles VALUES ('t','a','m@x','manager'),('t','a','s2@x','scorer'),('t','a','s1@x','approver')`,
-		`INSERT INTO enrollments VALUES ('t','a','tr@x')`,
+		`INSERT INTO training_roles VALUES ('a','tr@x','participant'),('a','all_juniors','participant'),('a','s2@x','editor'),('a','s1@x','admin')`,
 	} {
 		mustExec(t, pool, q)
 	}
@@ -302,8 +303,8 @@ func TestPlatformMatchesConfigLoad(t *testing.T) {
 			pr.Version = 0
 		}
 	}
-	if pr := got.Teams["t"].Programs["b"]; !slices.Equal(pr.Roles.Manager, []string{"l@x"}) || !slices.Equal(pr.Roles.Scorers, []string{"s1@x", "s2@x"}) {
-		t.Errorf("unset roles must default to the leader and seniors: %+v", pr.Roles)
+	if pr := got.Teams["t"].Programs["a"]; !slices.Equal(pr.Enrolled, []string{"m@x", "tr@x"}) || !slices.Equal(pr.Roles.Scorers, []string{"s1@x", "s2@x"}) {
+		t.Errorf("roles resolve through groups: %+v %v", pr.Roles, pr.Enrolled)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("SQL path and config.Load differ\n got: %s\nwant: %s", dump(got), dump(want))

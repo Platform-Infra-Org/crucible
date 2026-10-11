@@ -184,11 +184,11 @@ body.hide-done .item.done { display: none; }
               <li>A timer, an idle prompt, one extension, recorded terminals</li>
               <li>Three places to run: laptop, cluster, AWS (below)</li>
             </ul></div>
-          <div class="cap"><span class="who">Scorers, mentors, leaders</span><h3>Score and follow</h3>
+          <div class="cap"><span class="who">Scorers, leaders</span><h3>Score and follow</h3>
             <ul>
               <li>The Anvil: written answers, uploads, lab reviews and self-reported labs, with rubrics; return for rework</li>
               <li>Journey: each person and training as heat cells, with flags for who may be stuck</li>
-              <li>Mentor page; email and Slack/Teams notifications</li>
+              <li>Journey; email and Slack/Teams notifications</li>
             </ul></div>
           <div class="cap"><span class="who">Approvers, leaders, admins</span><h3>Spend safely</h3>
             <ul>
@@ -199,7 +199,7 @@ body.hide-done .item.done { display: none; }
             </ul></div>
           <div class="cap"><span class="who">Admins</span><h3>Run the forge</h3>
             <ul>
-              <li>Forge settings, teams, rosters and Manage trainings, all audited</li>
+              <li>Forge settings, teams and their tags, training roles for people and groups, Manage trainings, all audited</li>
               <li>Move this forge: export to one file, import into a fresh instance</li>
               <li>Sign-in through Keycloak or Cognito; one admin to start</li>
               <li>AWS deployment on one k3s node that sleeps outside working hours</li>
@@ -287,7 +287,7 @@ body.hide-done .item.done { display: none; }
         </div>
         <div class="users" aria-label="Local accounts">
           <div><code>trainee</code><br><span class="where">takes trainings</span></div>
-          <div><code>senior</code><br><span class="where">scores, mentors, maintains</span></div>
+          <div><code>senior</code><br><span class="where">scores and edits</span></div>
           <div><code>leader</code><br><span class="where">leads The Forge, approves</span></div>
           <div><code>admin</code><br><span class="where">runs the forge</span></div>
         </div>
@@ -316,7 +316,7 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
               <p class="expect"><b>Expect</b>the Crucible title in the middle of the screen with embers drifting behind it (none with reduced motion), and the button under it; the button goes on to the Keycloak sign-in. After <b>Log out</b> you land back on the gate.</p></div></li>
           <li class="item" data-id="stack-roles"><label><input type="checkbox" id="c-stack-roles"><span class="t">Sign in as each role</span></label>
             <div class="body"><p>Use a private window per person. Compare the top bar.</p>
-              <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; mentors see <b>Mentor</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
+              <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
           <li class="item" data-id="stack-card"><label><input type="checkbox" id="c-stack-card"><span class="t">User card, themes and calm motion</span></label>
             <div class="body"><ol class="how"><li>Choose your icon and name at the top right: check your name, email and teams; pick a forge icon.</li><li>Settings: switch through all eight themes (Forge, Anvil, Quench, Damascus, Verdigris, Starmetal, Parchment, High Contrast), then log out: the gate wears the theme you left on; tick <b>Calm forge</b>.</li></ol>
               <p class="expect"><b>Expect</b>the icon survives a reload and another browser; team names link to their pages; Calm forge stops every animation.</p></div></li>
@@ -360,9 +360,9 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
           <li class="item" data-id="team-create"><label><input type="checkbox" id="c-team-create"><span class="t">Start a team</span></label>
             <div class="body"><p>As admin: <b>Teams</b> → <b>+ Start a team</b> → id <code>anvil</code>, a name, leader <code>leader@crucible.local</code>.</p>
               <p class="expect"><b>Expect</b>you land on the new team's page; a duplicate id is refused.</p></div></li>
-          <li class="item" data-id="team-roster"><label><input type="checkbox" id="c-team-roster"><span class="t">Roster and mentors</span></label>
-            <div class="body"><ol class="how"><li><b>Edit the roster</b>: add a senior, a trainee and a pair <code>trainee = senior</code>.</li><li>List one person in two roles; name a mentor who isn't on the team.</li></ol>
-              <p class="expect"><b>Expect</b>valid saves show as chips; each wrong one is refused and names the person.</p></div></li>
+          <li class="item" data-id="team-roster"><label><input type="checkbox" id="c-team-roster"><span class="t">People and tags</span></label>
+            <div class="body"><ol class="how"><li>As admin on <i>anvil</i>: <b>Add someone</b> <code>senior@crucible.local</code> as a senior (Crucible asks: they move from The Forge), then a new email as a trainee.</li><li>As the leader: choose a member's tag in the list and pick <i>junior</i> from the menu (try the arrow keys and Escape); then try making yourself a trainee while you are the only leader.</li><li>Use <b>Find</b>, <b>Tag</b>, <b>Sort by</b> and <b>By tag</b>; reload the page.</li><li>Move <code>senior@crucible.local</code> back to The Forge.</li></ol>
+              <p class="expect"><b>Expect</b>the tag changes at once; the leaderless team is refused with the reason; the list filters, sorts and groups, and the view survives the reload; a leader has no <b>Add someone</b> or <b>Remove</b>; a trainee sees the tags without menus.</p></div></li>
           <li class="item" data-id="team-budget"><label><input type="checkbox" id="c-team-budget"><span class="t">Team budget</span></label>
             <div class="body"><p>As admin, set a monthly budget and hard cap on the team page.</p>
               <p class="expect"><b>Expect</b>the summary updates; leaders see it read-only; the Ledger shows the meter.</p></div></li>
@@ -401,20 +401,23 @@ git -C .local/git/forge-501.git config core.sharedRepository world
 chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>a bare repo the API container can read and push edits into.</p></div></li>
           <li class="item" data-id="auth-register"><label><input type="checkbox" id="c-auth-register"><span class="t">Register it</span></label>
-            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch <code>main</code>.</p>
+            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch, tag or commit <code>main</code>, folder empty (the repository root).</p>
               <p class="expect"><b>Expect</b>it appears in the list, marked <i>content not loaded yet</i> until the next sync (about 10 seconds locally), then with its title. Local paths work here only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
           <li class="item" data-id="auth-refuse"><label><input type="checkbox" id="c-auth-refuse"><span class="t">Unsafe repository URLs are refused</span></label>
             <div class="body"><p>Try registering repo <code>--upload-pack=touch</code> and one with a space in it.</p>
               <p class="expect"><b>Expect</b>both refused with the reason; nothing is saved.</p></div></li>
-          <li class="item" data-id="auth-start"><label><input type="checkbox" id="c-auth-start"><span class="t">Start it for a team and enroll people</span></label>
-            <div class="body"><ol class="how"><li><b>Start it for a team</b> → The Forge.</li><li>Enroll <code>trainee@crucible.local</code>; then a brand-new email.</li><li>Under <b>Roles</b>, add a scorer and an approver.</li></ol>
-              <p class="expect"><b>Expect</b>the new email is first offered as a new trainee on the team; empty roles show their defaults (the leader manages and approves, seniors score).</p></div></li>
+          <li class="item" data-id="auth-start"><label><input type="checkbox" id="c-auth-start"><span class="t">Give its roles to people and groups</span></label>
+            <div class="body"><ol class="how"><li>Under <b>Roles</b>, add <code>forge_trainees</code> and a brand-new email to <b>Participants</b>.</li><li>Add <code>forge_seniors</code> to <b>Editors</b> and <code>leader@crucible.local</code> to <b>Admins</b>.</li><li>Try a group of a team that doesn't exist, such as <code>ghost_seniors</code>.</li><li>As the senior (not an admin), register another training: it belongs to The Forge.</li></ol>
+              <p class="expect"><b>Expect</b>groups show with a flag and say who they are; the count of people updates; the unknown group is refused; the trainee can't open Manage trainings' <b>+ New training</b>.</p></div></li>
           <li class="item" data-id="auth-take"><label><input type="checkbox" id="c-auth-take"><span class="t">The trainee takes it</span></label>
             <div class="body"><p>As trainee: Hearth → the new card; read, take the quiz.</p>
               <p class="expect"><b>Expect</b>with <code>progression: linear</code>, later modules stay locked until earlier ones are forged; the Trainings card offers <b>Open</b>.</p></div></li>
           <li class="item" data-id="auth-version"><label><input type="checkbox" id="c-auth-version"><span class="t">Content versions and pinning</span></label>
-            <div class="body"><p>Push a new commit to the bare repo. Then on the program: <b>Content version</b> → <b>Show what changed</b> → <b>Pin</b>; later <b>Follow the branch head</b>.</p>
+            <div class="body"><p>Push a new commit to the bare repo. Then on the program: <b>Content version</b> → <b>Show what changed</b> → <b>Pin</b>; later <b>Follow the source head</b>.</p>
               <p class="expect"><b>Expect</b>the commit list and diff stat; a pinned program keeps running the pinned version; labs always run at their exact content version.</p></div></li>
+          <li class="item" data-id="auth-ref-folder"><label><input type="checkbox" id="c-auth-ref-folder"><span class="t">Follow a tag, from a folder</span></label>
+            <div class="body"><ol class="how"><li>In a clone of the repo, move everything into <code>courses/forge-501/</code>, commit, tag it <code>v1</code> and push the commit and the tag.</li><li><b>Source</b> → <b>Change source</b>: repository URL empty, <b>Branch, tag or commit</b> <code>v1</code>, <b>Folder</b> <code>courses/forge-501</code>.</li><li>Push another commit to <code>main</code>.</li></ol>
+              <p class="expect"><b>Expect</b>the training loads from the folder and stays on <code>v1</code> after the new commit; Forge Status shows <code>v1</code> and the folder; <b>Edit content</b> is gone (a tag changes only in git). Back on <code>main</code> with the same folder, edits return and their diffs show paths inside the folder.</p></div></li>
           <li class="item" data-id="auth-delete"><label><input type="checkbox" id="c-auth-delete"><span class="t">Delete the training</span></label>
             <div class="body"><p><b>Source</b> → <b>Delete training</b>, then register it again and start it for the team.</p>
               <p class="expect"><b>Expect</b>it names the teams it stops for; the repo is untouched; progress comes back after re-registering.</p></div></li>
@@ -434,8 +437,8 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>Submit. As senior (a maintainer), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
               <p class="expect"><b>Expect</b>the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
           <li class="item" data-id="ed-enrolled"><label><input type="checkbox" id="c-ed-enrolled"><span class="t">Who may edit</span></label>
-            <div class="body"><p>Enroll the leader in the training; check the trainee's view.</p>
-              <p class="expect"><b>Expect</b>the enrolled leader can still edit (they run it); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
+            <div class="body"><p>Make the leader a participant of the training too; check the trainee's view.</p>
+              <p class="expect"><b>Expect</b>the leader still edits (they are an editor through <code>forge_leaders</code>); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
           <li class="item" data-id="ed-rebase"><label><input type="checkbox" id="c-ed-rebase"><span class="t">Newer content while you edit</span></label>
             <div class="body"><p>With a draft open, push a change to the same file in git.</p>
               <p class="expect"><b>Expect</b>the draft offers to rebase, shows the conflict and ends on the new base.</p></div></li>
@@ -450,16 +453,16 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>right and wrong shown at once; the best attempt counts; attempt limits and cooldowns when the quiz sets them.</p></div></li>
           <li class="item" data-id="ln-human"><label><input type="checkbox" id="c-ln-human"><span class="t">Answers a person scores</span></label>
             <div class="body"><p>Forge 301 → Quiz: a written answer and an upload.</p>
-              <p class="expect"><b>Expect</b><i>Waiting for a scorer</i>; the senior sees both on the <b>Anvil</b> with the rubric. Nobody scores a training they are enrolled in.</p></div></li>
+              <p class="expect"><b>Expect</b><i>Waiting for a scorer</i>; the senior sees both on the <b>Anvil</b> with the rubric. Nobody scores a training they take.</p></div></li>
           <li class="item" data-id="ln-anvil"><label><input type="checkbox" id="c-ln-anvil"><span class="t">Score, return for rework, sign off</span></label>
             <div class="body"><p>As senior: score one, return the other with feedback; mark a live sign-off passed.</p>
               <p class="expect"><b>Expect</b>the trainee sees the feedback; a returned answer can be sent again; a scored one is final (an admin can reset it from the Journey).</p></div></li>
           <li class="item" data-id="ln-rank"><label><input type="checkbox" id="c-ln-rank"><span class="t">Ranks and badges</span></label>
             <div class="body"><p>Finish Forge 102 as trainee.</p>
               <p class="expect"><b>Expect</b>a badge on the Hearth and a rank-up moment when a threshold is passed; ranks never drop.</p></div></li>
-          <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Mentor and Journey</span></label>
-            <div class="body"><p>As senior: <b>Mentor</b>. As leader: the team's Journey.</p>
-              <p class="expect"><b>Expect</b>the mentee's rank, heat map, work waiting on a scorer and recent lab trouble; Journey flags someone stuck or quiet.</p></div></li>
+          <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Journey</span></label>
+            <div class="body"><p>As leader and as senior: the team's Journey.</p>
+              <p class="expect"><b>Expect</b>the heat map for the team's people, and flags for someone stuck or quiet. There is no <b>Mentor</b> link anywhere.</p></div></li>
           <li class="item" data-id="ln-notify"><label><input type="checkbox" id="c-ln-notify"><span class="t">Notifications</span></label>
             <div class="body"><p>Settings → <b>Email notifications</b>: untick one kind.</p>
               <p class="expect"><b>Expect</b>locally the page says email isn't configured; the choice is kept and applies once SMTP is set.</p></div></li>
@@ -527,7 +530,7 @@ kubectl -n lab-&lt;id&gt; get pod,resourcequota,networkpolicy</code></pre></div>
         <p class="lede">On the stack <code>make cluster-check</code> left running. A fake lab account stands in for AWS, Forge 401's <i>Cloud Heat</i> is priced at $0.04 an hour, and nothing leaves your machine.</p>
         <ul class="items">
           <li class="item" data-id="dr-request"><label><input type="checkbox" id="c-dr-request"><span class="t">Request Cloud Heat</span></label>
-            <div class="body"><p>Start Forge 401 for The Forge and enroll the trainee. As trainee open <i>Cloud Heat</i>.</p>
+            <div class="body"><p>On Forge 401 (The Forge owns it) make the trainee a participant. As trainee open <i>Cloud Heat</i>.</p>
               <p class="expect"><b>Expect</b><b>Request approval ($0.04)</b>: AWS labs never start on their own; the page shows who it waits for and offers <b>Withdraw request</b>.</p></div></li>
           <li class="item" data-id="dr-approve"><label><input type="checkbox" id="c-dr-approve"><span class="t">Approve it</span></label>
             <div class="body"><p>As leader: <b>Approvals</b>.</p>

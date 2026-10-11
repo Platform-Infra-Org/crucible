@@ -69,8 +69,8 @@ input, select, textarea { font: inherit; color: var(--text); background: var(--s
 .toolbar.fit input, .toolbar.fit select { width: auto; max-width: 100%; }
 
 /* Manage trainings: a list of trainings beside the chosen one; each team's program is a panel of chips and controls. */
-.manage-grid { display: grid; grid-template-columns: minmax(12rem, 16rem) 1fr; gap: 1.5rem; align-items: start; }
-@media (max-width: 760px) { .manage-grid { grid-template-columns: 1fr; } }
+.manage-grid { display: grid; grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
+@media (max-width: 760px) { .manage-grid { grid-template-columns: minmax(0, 1fr); } }
 .manage-list ul { list-style: none; padding: 0; margin: 0 0 0.75rem; display: grid; gap: 0.25rem; }
 .manage-list a { display: block; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid transparent; color: var(--text); text-decoration: none; }
 .manage-list a:hover { background: var(--surface); }
@@ -113,7 +113,35 @@ button.danger-text { color: var(--danger); border-color: var(--danger); }
 .enroll { margin: 0.25rem 0 0; }
 .enroll input { min-width: min(18rem, 100%); }
 .enroll [role='alert'] { flex-basis: 100%; margin: 0; }
-.role-row { display: grid; grid-template-columns: 7rem 1fr; gap: 0.5rem; align-items: baseline; margin: 0.35rem 0; }
+/* A team's people: the tag next to each person is a pill; for a leader or an admin it opens a menu of the four tags. The
+   pill's text stays --text; the tag's colour is only its edge and tint, and the word says the tag. */
+.people td { vertical-align: middle; }
+.people td .muted { margin-left: 0.35rem; }
+.tag-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.7rem; border-radius: 999px; font-size: 0.85rem;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); line-height: 1.5; }
+.tag-pill.tag-leader { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); }
+.tag-pill.tag-senior { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, var(--surface-2)); }
+.tag-pill.tag-junior { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, var(--surface-2)); }
+button.tag-pill { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+button.tag-pill:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.tag-picker { position: relative; display: inline-block; }
+.tag-menu { position: absolute; top: calc(100% + 0.3rem); left: 0; z-index: 20; display: grid; gap: 0.3rem; padding: 0.45rem;
+  min-width: 8rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--glow);
+  animation: card-cast 0.22s ease-out; }
+.tag-menu .tag-pill { justify-content: space-between; }
+.tag-menu [aria-checked='true']::after { content: '✓'; }
+.people-tools .segmented { align-self: flex-end; height: 2.5rem; align-items: center; }
+.tag-group h3 { margin: 1rem 0 0.25rem; font-size: 1rem; }
+/* A team's tag changer and an admin's add-someone row: a caption, the picker, the tag, the action. */
+.retag { margin: 0.75rem 0 0; }
+.retag .role-name { min-width: 7rem; }
+.retag input { min-width: min(18rem, 100%); }
+.retag [role='alert'] { flex-basis: 100%; margin: 0; }
+/* A group holding a role (all_seniors, platform): the accent edge says it stands for many people. */
+.chip.group { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.role-row { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 0.5rem; align-items: baseline; margin: 0.35rem 0; }
+.chip { max-width: 100%; overflow-wrap: anywhere; } /* a long email wraps inside its chip, never past the panel */
+@media (max-width: 640px) { .role-row { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; } }
 .role-name { color: var(--muted); }
 .role-default { margin: 0.2rem 0 0.4rem; }
 .lab-settings { margin-top: 1rem; }
@@ -287,6 +315,7 @@ a.button-link:hover { border-color: var(--accent); }
 .lab { display: grid; grid-template-rows: auto auto 1fr; height: calc(100vh - 53px); }
 .lab-head { display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .lab-head h1 { font-size: 1.1rem; margin: 0; }
+.lab-head button { white-space: nowrap; } /* "Hide tasks", "End lab" stay one line; the note beside them wraps instead */
 .lab-body { display: grid; min-height: 0; }
 .tasks { overflow: auto; padding: 1rem 1.25rem; background: var(--surface); position: relative; }
 .task-pips { display: flex; gap: 0.4rem; list-style: none; padding: 0; margin: 0 0 1rem; }
@@ -296,9 +325,9 @@ a.button-link:hover { border-color: var(--accent); }
 .pip.current { box-shadow: var(--glow); border-color: var(--accent); }
 .splitter { cursor: col-resize; background: var(--border); }
 .splitter:hover, .splitter:focus-visible { background: var(--accent); }
-.terms { display: grid; grid-template-rows: auto 1fr; min-height: 0; background: var(--term-bg); }
+.terms { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-height: 0; background: var(--term-bg); } /* its column never outgrows the pane */
 .terms.fullscreen { position: fixed; inset: 0; z-index: 50; }
-.tabs { display: flex; gap: 0.25rem; padding: 0.35rem; background: var(--surface-2); }
+.tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem; padding: 0.35rem; background: var(--surface-2); } /* wraps rather than pushing its buttons off a narrow pane */
 .tabs [role='tab'][aria-selected='true'] { border-color: var(--accent); color: var(--accent); }
 .terminal { height: 100%; padding: 0.4rem; }
 .hint { border-left: 3px solid var(--accent-2); padding-left: 0.75rem; margin: 0.75rem 0; }
@@ -315,6 +344,7 @@ a.button-link:hover { border-color: var(--accent); }
 .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); z-index: 40; }
 .modal { background: var(--surface); border: 1px solid var(--accent); border-radius: 14px; padding: 1.5rem 2rem; box-shadow: var(--glow); max-width: 420px; text-align: center; }
 .lobby { text-align: center; }
+.lobby h1::after { margin-inline: auto; } /* the title's molten rule centres with it */
 .cooled { margin: 1.5rem auto; max-width: 520px; padding: 1rem; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
 pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px; overflow: auto; }
 
@@ -332,7 +362,8 @@ pre.command { background: var(--surface-2); padding: 0.75rem; border-radius: 8px
 .table-wrap { overflow-x: auto; max-width: 100%; }
 .grid { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
 .grid th, .grid td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
-.facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.3rem 1rem; }
+.facts dd { overflow-wrap: anywhere; } /* a repository URL or a commit wraps rather than widening the page */
 .facts dt { color: var(--muted); }
 .stack textarea, .stack input:not([type='checkbox']), .stack select { font: inherit; padding: 0.4rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .conflict { border: 1px solid var(--danger); border-radius: 6px; padding: 0.5rem 0.75rem; display: flex; gap: 0.75rem; align-items: center; }

@@ -47,37 +47,40 @@ func redactRepo(repo string) string {
 
 var errNoChange = errors.New("no change")
 
-// AddTraining registers a training, or repoints a registered one; an empty branch means main. Registering the
-// same repo and branch again changes nothing and writes no audit row. A repoint records the previous repo and branch.
-func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string) error {
-	repo, branch = strings.TrimSpace(repo), strings.TrimSpace(branch)
+// AddTraining registers a training, or repoints a registered one; an empty ref means main and an empty path the repo
+// root. An empty repo keeps a registered training's repo: the screen never sees its credentials, so it can't send them
+// back. Registering the same repo, ref and path again changes nothing and writes no audit row. A repoint records the
+// previous ones.
+func (s *Store) AddTraining(ctx context.Context, actor, id string, ref config.TrainingRef) error {
 	if !config.ValidTrainingID(id) {
 		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
 	}
-	if repo == "" {
-		return apperr.Wrap(apperr.Invalid, "a training needs a repo URL")
+	if strings.TrimSpace(ref.Repo) == "" {
+		// ponytail: read outside the write's transaction; a concurrent repoint of the same training by another admin
+		// loses its repo to this one, as any last write would.
+		if err := s.DB.QueryRow(ctx, `SELECT repo FROM trainings WHERE id = $1`, id).Scan(&ref.Repo); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 	}
-	if branch == "" {
-		branch = "main"
-	}
-	if err := checkRepo(repo); err != nil {
+	ref, err := cleanTrainingRef(ref)
+	if err != nil {
 		return err
 	}
-	detail := map[string]any{"repo": redactRepo(repo), "branch": branch, "previous_repo": nil, "previous_branch": nil}
-	err := s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
-		var pr, pb string
-		err := tx.QueryRow(ctx, `SELECT repo, branch FROM trainings WHERE id = $1 FOR UPDATE`, id).Scan(&pr, &pb)
+	detail := map[string]any{"repo": redactRepo(ref.Repo), "ref": ref.Ref, "path": ref.Path, "previous_repo": nil, "previous_ref": nil, "previous_path": nil}
+	err = s.inTx(ctx, actor, "training.add", id, detail, func(tx pgx.Tx) error {
+		var prev config.TrainingRef
+		err := tx.QueryRow(ctx, `SELECT repo, ref, path FROM trainings WHERE id = $1 FOR UPDATE`, id).Scan(&prev.Repo, &prev.Ref, &prev.Path)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			_, err = tx.Exec(ctx, `INSERT INTO trainings (id, repo, branch) VALUES ($1, $2, $3)`, id, repo, branch)
+			_, err = tx.Exec(ctx, `INSERT INTO trainings (id, repo, ref, path) VALUES ($1, $2, $3, $4)`, id, ref.Repo, ref.Ref, ref.Path)
 			return err
 		case err != nil:
 			return err
-		case pr == repo && pb == branch:
+		case prev == ref:
 			return errNoChange
 		}
-		detail["previous_repo"], detail["previous_branch"] = redactRepo(pr), pb // audit.Log runs after fn
-		if pr != repo {                                                         // pinned SHAs belong to the old repository; make the move visible
+		detail["previous_repo"], detail["previous_ref"], detail["previous_path"] = redactRepo(prev.Repo), prev.Ref, prev.Path // audit.Log runs after fn
+		if prev.Repo != ref.Repo || prev.Path != ref.Path {                                                                   // pinned SHAs belong to the old content; make the move visible
 			var n int
 			if err := tx.QueryRow(ctx, `SELECT count(*) FROM programs WHERE training = $1`, id).Scan(&n); err != nil {
 				return err
@@ -86,13 +89,57 @@ func (s *Store) AddTraining(ctx context.Context, actor, id, repo, branch string)
 				detail["programs_affected"] = n
 			}
 		}
-		_, err = tx.Exec(ctx, `UPDATE trainings SET repo = $2, branch = $3 WHERE id = $1`, id, repo, branch)
+		_, err = tx.Exec(ctx, `UPDATE trainings SET repo = $2, ref = $3, path = $4 WHERE id = $1`, id, ref.Repo, ref.Ref, ref.Path)
 		return err
 	})
 	if errors.Is(err, errNoChange) {
 		return nil
 	}
 	return err
+}
+
+// CreateTraining registers a new training owned by team, with an empty run: no roles, any time, no budget. The
+// route decides who may create one for which team.
+func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config.TrainingRef, team string) error {
+	if !config.ValidTrainingID(id) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
+	}
+	ref, err := cleanTrainingRef(ref)
+	if err != nil {
+		return err
+	}
+	detail := map[string]any{"repo": redactRepo(ref.Repo), "ref": ref.Ref, "path": ref.Path, "team": team}
+	return s.inTx(ctx, actor, "training.create", id, detail, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO trainings (id, repo, ref, path) VALUES ($1, $2, $3, $4)`, id, ref.Repo, ref.Ref, ref.Path)
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23505" {
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("a training %q already exists; pick another id", id))
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO programs (team, training) VALUES ($1, $2)`, team, id)
+		return fkError(err, team, id, nil)
+	})
+}
+
+// cleanTrainingRef trims and checks a training's repo, ref and path, filling in the defaults.
+func cleanTrainingRef(ref config.TrainingRef) (config.TrainingRef, error) {
+	ref.Repo = strings.TrimSpace(ref.Repo)
+	if ref.Repo == "" {
+		return ref, apperr.Wrap(apperr.Invalid, "a training needs a repo URL")
+	}
+	if err := checkRepo(ref.Repo); err != nil {
+		return ref, err
+	}
+	var err error
+	if ref.Ref, err = config.CleanRef(ref.Ref); err != nil {
+		return ref, apperr.Wrap(apperr.Invalid, err.Error())
+	}
+	if ref.Path, err = config.CleanPath(ref.Path); err != nil {
+		return ref, apperr.Wrap(apperr.Invalid, err.Error())
+	}
+	return ref, nil
 }
 
 // checkRepo refuses a repo URL git could read as an option or a local path (unless this instance allows file remotes).
@@ -125,8 +172,8 @@ func (s *Store) RemoveTraining(ctx context.Context, actor, id string) error {
 		}
 		slices.Sort(stopped)
 		detail["stopped_for"] = nonNil(stopped)
-		var repo, branch string
-		err = tx.QueryRow(ctx, `DELETE FROM trainings WHERE id = $1 RETURNING repo, branch`, id).Scan(&repo, &branch)
+		var repo, ref, root string
+		err = tx.QueryRow(ctx, `DELETE FROM trainings WHERE id = $1 RETURNING repo, ref, path`, id).Scan(&repo, &ref, &root)
 		var pg *pgconn.PgError
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -136,7 +183,7 @@ func (s *Store) RemoveTraining(ctx context.Context, actor, id string) error {
 		case err != nil:
 			return err
 		}
-		detail["repo"], detail["branch"] = redactRepo(repo), branch
+		detail["repo"], detail["ref"], detail["path"] = redactRepo(repo), ref, root
 		return nil
 	})
 }

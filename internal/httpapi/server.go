@@ -103,27 +103,26 @@ func NewRouter(d Deps) chi.Router {
 		r.Use(d.Auth.Middleware, auth.RequireUser)
 		r.Get("/api/me", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context())
-			admin, theme, teams, canApprove, scorer, canSpend, mentor, manage := false, "forge", []string{}, false, false, false, false, false
+			admin, theme, teams, canApprove, scorer, canSpend, manage := false, "forge", []string{}, false, false, false, false
 			if st := state(d); st != nil && st.Platform != nil {
 				c := rbac.Checker{P: st.Platform}
 				admin, theme = c.IsAdmin(u.Email), st.Platform.Settings.DefaultTheme
 				canApprove, scorer, manage = admin, canScore(st.Platform, u.Email), admin
 				canSpend = len(c.SpendTeams(u.Email)) > 0
-				mentor = isMentor(st.Platform, u.Email)
+				manage = manage || c.CanCreateTraining(u.Email) // leaders, seniors and juniors register and run trainings
 				for id, t := range st.Platform.Teams {
-					if configapi.Role(t, u.Email) != "" { // team role or a program role in one of its programs
+					if configapi.Role(t, u.Email) != "" {
 						teams = append(teams, id)
 					}
-					canApprove = canApprove || t.Leader == u.Email
-					manage = manage || t.Leader == u.Email // a leader starts programs for the team
+					canApprove = canApprove || slices.Contains(t.Leaders, strings.ToLower(u.Email))
 					for _, p := range t.Programs {
-						canApprove = canApprove || slices.Contains(p.Roles.Approvers, u.Email)
-						manage = manage || slices.Contains(p.Roles.Manager, u.Email)
+						canApprove = canApprove || slices.Contains(p.Roles.Approvers, strings.ToLower(u.Email))
+						manage = manage || slices.Contains(p.Roles.Manager, strings.ToLower(u.Email)) || slices.Contains(p.Editors, strings.ToLower(u.Email))
 					}
 				}
 				sort.Strings(teams)
 			}
-			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend, "is_mentor": mentor,
+			httpx.JSON(w, http.StatusOK, map[string]any{"user": u, "is_admin": admin, "default_theme": theme, "teams": teams, "can_approve": canApprove, "can_score": scorer, "can_view_spend": canSpend,
 				"can_edit_content": d.Edits != nil && d.Edits.CanUse(u.Email), "can_manage_trainings": manage})
 		})
 		r.Put("/api/me/avatar", func(w http.ResponseWriter, r *http.Request) {
@@ -273,19 +272,7 @@ func spa(dir string) http.HandlerFunc {
 	}
 }
 
-// isMentor: someone in team.yaml mentors a trainee (spec §11); they get the mentor dashboard.
-func isMentor(p *config.Platform, email string) bool {
-	for _, t := range p.Teams {
-		for _, m := range t.Mentors {
-			if m == strings.ToLower(email) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// canScore: admins, and anyone listed as a scorer of some program (the Anvil link in the nav).
+// canScore: admins, and every editor or admin of some training (the Anvil link in the nav).
 func canScore(p *config.Platform, email string) bool {
 	if (rbac.Checker{P: p}).IsAdmin(email) {
 		return true

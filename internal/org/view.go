@@ -5,9 +5,9 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"crucible/internal/apperr"
 	"crucible/internal/config"
@@ -23,13 +23,14 @@ type BudgetView struct {
 	HardCapUSD float64 `json:"hard_cap_usd"`
 }
 
+// ProgramView is a training's run as the team and trainings pages show it.
 type ProgramView struct {
 	Training           string            `json:"training"`
 	Title              string            `json:"title"`
+	Team               string            `json:"team"` // the owning team
 	Version            int64             `json:"version"`
-	Enrolled           []string          `json:"enrolled"`
-	Roles              config.Roles      `json:"roles"`           // as stored: empty means "use the defaults"
-	EffectiveRoles     config.Roles      `json:"effective_roles"` // who holds each role now; read-only, never sent back
+	Roles              config.Access     `json:"roles"`    // as given: people and groups; what a save sends back
+	Resolved           config.Access     `json:"resolved"` // who that is now; read-only
 	Schedule           string            `json:"schedule"`
 	InlineSchedule     *config.Schedule  `json:"inline_schedule,omitempty"`
 	LabDefaults        map[string]string `json:"lab_defaults"`
@@ -41,27 +42,24 @@ type ProgramView struct {
 	CanManage          bool              `json:"can_manage"`
 }
 
-type TrainingOption struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+// Member is someone on a team, their name ("" until they first sign in) and their tag.
+type Member struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Tag   string `json:"tag"`
 }
 
 // TeamView is the team as the page needs it. It has no field for a webhook URL, on purpose.
 type TeamView struct {
-	ID                 string            `json:"id"`
-	Version            int64             `json:"version"`
-	Name               string            `json:"name"`
-	Leader             string            `json:"leader"`
-	Seniors            []string          `json:"seniors"`
-	Members            []string          `json:"members"`
-	Trainees           []string          `json:"trainees"`
-	Mentors            map[string]string `json:"mentors"`
-	Budget             *BudgetView       `json:"budget,omitempty"`
-	Programs           []ProgramView     `json:"programs"`
-	AvailableTrainings []TrainingOption  `json:"available_trainings"`
-	Schedules          []string          `json:"schedules"`
-	CanEditTeam        bool              `json:"can_edit_team"`
-	IsAdmin            bool              `json:"is_admin"`
+	ID          string        `json:"id"`
+	Version     int64         `json:"version"`
+	Name        string        `json:"name"`
+	Members     []Member      `json:"members"` // by tag, strongest first, then email
+	Budget      *BudgetView   `json:"budget,omitempty"`
+	Programs    []ProgramView `json:"programs"` // the trainings it owns
+	Schedules   []string      `json:"schedules"`
+	CanEditTeam bool          `json:"can_edit_team"` // a leader or an admin: may change tags
+	IsAdmin     bool          `json:"is_admin"`      // may add, remove and move people
 }
 
 func dur(d yamlx.Duration) string {
@@ -72,57 +70,49 @@ func dur(d yamlx.Duration) string {
 	return s.(string)
 }
 
-// teamRole is configapi.Role (which this package cannot import): the team role, else the strongest program role.
-func teamRole(t *config.Team, email string) string {
-	if r := t.RoleOf(email); r != "" {
-		return r
+// members lists t's people by tag, strongest first, then email, with the name each signed in with.
+func (a *api) members(r *http.Request, t *config.Team) ([]Member, error) {
+	rows, err := a.s.DB.Query(r.Context(), `SELECT lower(email), max(name) FROM users WHERE lower(email) = ANY($1) GROUP BY lower(email)`, t.People())
+	if err != nil {
+		return nil, err
 	}
-	email, role := strings.ToLower(email), ""
-	for _, p := range t.Programs {
-		switch {
-		case slices.Contains(p.Roles.Manager, email):
-			return "manager"
-		case slices.Contains(p.Roles.Approvers, email):
-			role = "approver"
-		case role == "" && slices.Contains(p.Roles.Scorers, email):
-			role = "scorer"
+	names := map[string]string{}
+	var e, n string
+	if _, err := pgx.ForEachRow(rows, []any{&e, &n}, func() error { names[e] = n; return nil }); err != nil {
+		return nil, err
+	}
+	out := []Member{}
+	for _, tag := range config.Tags {
+		for _, e := range slices.Sorted(slices.Values(t.Tagged(tag))) {
+			out = append(out, Member{Email: e, Name: names[e], Tag: tag})
 		}
 	}
-	return role
+	return out, nil
 }
 
-// getTeam follows configapi.Team: anyone with a team or program role may read it, and so may an admin; everyone
-// else gets a 404 so team ids are not probed. The budget goes only to those who may see spend.
+// getTeam: its members and admins may read it; everyone else gets a 404 so team ids are not probed. The budget goes
+// only to those who may see spend.
 func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	id := chi.URLParam(r, "id")
 	t := c.P.Teams[id]
-	if t == nil || (teamRole(t, actor) == "" && !c.IsAdmin(actor)) {
+	if t == nil || (t.RoleOf(actor) == "" && !c.IsAdmin(actor)) {
 		return apperr.Wrap(apperr.NotFound, "team not found")
 	}
-	v := TeamView{ID: id, Version: t.Version, Name: t.Name, Leader: t.Leader, Seniors: nonNil(t.Seniors), Members: nonNil(t.Members),
-		Trainees: nonNil(t.Trainees), Mentors: t.Mentors, Programs: []ProgramView{}, AvailableTrainings: []TrainingOption{},
-		Schedules:   nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))),
-		CanEditTeam: c.Can(actor, rbac.EditTeam, id, "", ""), IsAdmin: c.IsAdmin(actor)}
-	if v.Mentors == nil {
-		v.Mentors = map[string]string{}
-	}
-	spend := c.Can(actor, rbac.ViewSpend, id, "", "")
-	stored, err := a.storedRoles(r, id)
+	people, err := a.members(r, t)
 	if err != nil {
 		return err
 	}
-	for _, tr := range slices.Sorted(maps.Keys(c.P.Trainings)) {
+	v := TeamView{ID: id, Version: t.Version, Name: t.Name, Members: people, Programs: []ProgramView{},
+		Schedules:   nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))),
+		CanEditTeam: c.Can(actor, rbac.EditTeam, id, "", ""), IsAdmin: c.IsAdmin(actor)}
+	spend := c.Can(actor, rbac.ViewSpend, id, "", "")
+	for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
 		title, running, head := tr, "", ""
 		if a.d.Content != nil {
 			title, running, head = a.d.Content(id, tr)
 		}
-		p := t.Programs[tr]
-		if p == nil {
-			v.AvailableTrainings = append(v.AvailableTrainings, TrainingOption{ID: tr, Title: title})
-			continue
-		}
 		spend = spend || c.Can(actor, rbac.ViewSpend, id, tr, "")
-		v.Programs = append(v.Programs, programView(c, actor, id, tr, p, stored[tr], title, running, head))
+		v.Programs = append(v.Programs, programView(c, actor, id, tr, t.Programs[tr], title, running, head))
 	}
 	if spend {
 		v.Budget = &BudgetView{Version: t.Budget.Version, MonthlyUSD: t.Budget.MonthlyUSD, HardCapUSD: t.Budget.HardCapUSD}
@@ -131,27 +121,26 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 	return nil
 }
 
-// programView is a program as the team and trainings pages show it. stored is the explicit role rows (see storedRoles).
-func programView(c rbac.Checker, actor, team, tr string, p *config.Program, stored config.Roles, title, running, head string) ProgramView {
-	return ProgramView{Training: tr, Title: title, Version: p.Version, Enrolled: nonNil(p.Enrolled),
-		Roles:          config.Roles{Manager: nonNil(stored.Manager), Scorers: nonNil(stored.Scorers), Approvers: nonNil(stored.Approvers)},
-		EffectiveRoles: config.Roles{Manager: nonNil(p.Roles.Manager), Scorers: nonNil(p.Roles.Scorers), Approvers: nonNil(p.Roles.Approvers)},
-		Schedule:       p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
-		PinnedRef: p.PinnedRef, RunningSHA: running, HeadSHA: head, CanManage: c.Can(actor, rbac.ManageProgram, team, tr, ""),
+func programView(c rbac.Checker, actor, team, tr string, p *config.Program, title, running, head string) ProgramView {
+	a := p.Access
+	return ProgramView{Training: tr, Title: title, Team: team, Version: p.Version,
+		Roles:    config.Access{Participants: nonNil(a.Participants), Editors: nonNil(a.Editors), Admins: nonNil(a.Admins)},
+		Resolved: config.Access{Participants: nonNil(p.Enrolled), Editors: nonNil(p.Editors), Admins: nonNil(p.Roles.Manager)},
+		Schedule: p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,
+		PinnedRef: p.PinnedRef, RunningSHA: running, HeadSHA: head, CanManage: c.IsAdmin(actor) || c.Can(actor, rbac.ManageProgram, team, tr, ""),
 		LabDefaults: map[string]string{"ttl": dur(p.LabDefaults.TTL), "idle_timeout": dur(p.LabDefaults.IdleTimeout),
 			"max_extension": dur(p.LabDefaults.MaxExtension)}}
 }
 
-// programRoute checks the caller before the body is read: program managers (the leader, or a named manager) and
-// admins, as configapi does for an existing program. On a program that does not exist yet only the leader and admins pass.
+// programRoute checks the caller before the body is read: the training's managers and admins. team must own training.
 func (a *api) programRoute(fn func(a *api, r *http.Request, actor, team, training string) (int64, error)) handler {
 	return func(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 		team, training := chi.URLParam(r, "team"), chi.URLParam(r, "training")
-		if !c.Can(actor, rbac.ManageProgram, team, training, "") {
-			return apperr.Wrap(apperr.Forbidden, "only the team leader, the program's managers or an admin can change this program")
+		if t := c.P.Teams[team]; t == nil || t.Programs[training] == nil {
+			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %s does not own %s", team, training))
 		}
-		if c.P.Teams[team] == nil {
-			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("no team %q", team))
+		if err := manage(c, actor, training); err != nil {
+			return err
 		}
 		v, err := fn(a, r, actor, team, training)
 		if err != nil {
@@ -169,18 +158,6 @@ func putProgram(a *api, r *http.Request, actor, team, training string) (int64, e
 	return b.Version + 1, a.s.SetProgram(r.Context(), actor, team, training, b)
 }
 
-func postProgram(a *api, r *http.Request, actor, team, training string) (int64, error) {
-	var b ProgramBody
-	if err := httpx.Read(r, &b); err != nil {
-		return 0, err
-	}
-	return 1, a.s.Enroll(r.Context(), actor, team, training, b)
-}
-
-func deleteProgram(a *api, r *http.Request, actor, team, training string) (int64, error) {
-	return 0, a.s.DeleteProgram(r.Context(), actor, team, training)
-}
-
 // putBudget: admins only, as configapi.SetBudget.
 func (a *api) putBudget(w http.ResponseWriter, r *http.Request, actor string, _ rbac.Checker) error {
 	var b BudgetBody
@@ -193,36 +170,57 @@ func (a *api) putBudget(w http.ResponseWriter, r *http.Request, actor string, _ 
 	return a.done(w, r, b.Version+1)
 }
 
-// storedRoles reads the explicit role rows. The snapshot holds the defaults already filled in, and a save that
-// echoed those would freeze them against today's leader and seniors.
-func (a *api) storedRoles(r *http.Request, team string) (map[string]config.Roles, error) {
-	rows, err := a.s.DB.Query(r.Context(), `SELECT training, role, email FROM program_roles WHERE team = $1 ORDER BY email`, team)
+// Person is someone Crucible knows: signed in at least once, on a team, or an admin.
+type Person struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	Team  string `json:"team"` // "" when on no team
+	Tag   string `json:"tag"`
+}
+
+// getPeople lists everyone and every group, for picking who holds a training's roles. Leaders, seniors, juniors and
+// admins may read it: the people who manage trainings.
+func (a *api) getPeople(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
+	if !c.CanCreateTraining(actor) {
+		return apperr.Wrap(apperr.Forbidden, "only a team's leaders, seniors and juniors, or an admin, can list people")
+	}
+	rows, err := a.s.DB.Query(r.Context(), `SELECT lower(email), max(name) FROM users WHERE email <> '' GROUP BY lower(email)`)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	out := map[string]config.Roles{}
+	names := map[string]string{}
 	for rows.Next() {
-		var tr, role, email string
-		if err := rows.Scan(&tr, &role, &email); err != nil {
-			return nil, err
+		var e, n string
+		if err := rows.Scan(&e, &n); err != nil {
+			rows.Close()
+			return err
 		}
-		x := out[tr]
-		switch role {
-		case "manager":
-			x.Manager = append(x.Manager, email)
-		case "scorer":
-			x.Scorers = append(x.Scorers, email)
-		case "approver":
-			x.Approvers = append(x.Approvers, email)
-		}
-		out[tr] = x
+		names[e] = n
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	for tr, x := range out {
-		out[tr] = config.Roles{Manager: nonNil(x.Manager), Scorers: nonNil(x.Scorers), Approvers: nonNil(x.Approvers)}
+	for _, t := range c.P.Teams {
+		for _, e := range t.People() {
+			if _, ok := names[e]; !ok {
+				names[e] = ""
+			}
+		}
 	}
-	return out, nil
+	for _, e := range c.P.Admins {
+		if _, ok := names[e]; !ok {
+			names[e] = ""
+		}
+	}
+	people := []Person{}
+	for _, e := range slices.Sorted(maps.Keys(names)) {
+		p := Person{Email: e, Name: names[e]}
+		if t := c.P.TeamOf(e); t != nil {
+			p.Team, p.Tag = t.ID, t.RoleOf(e)
+		}
+		people = append(people, p)
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"people": people, "groups": c.P.Groups()})
+	return nil
 }

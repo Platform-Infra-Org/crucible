@@ -57,7 +57,7 @@ func (s *Service) CheckBudgets(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			scope, who, to := teamID, "Team "+t.Name, append([]string{t.Leader}, p.Admins...)
+			scope, who, to := teamID, "Team "+t.Name, append(slices.Clone(t.Leaders), p.Admins...)
 			if tr != "" {
 				scope, who, to = teamID+"/"+tr, "Program "+teamID+"/"+tr, append(to, t.Programs[tr].Roles.Manager...)
 			}

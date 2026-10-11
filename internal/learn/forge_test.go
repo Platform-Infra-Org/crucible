@@ -82,7 +82,7 @@ func TestRankIsNeverLost(t *testing.T) {
 	}
 }
 
-func TestRankUpNotifiesOnceTraineeAndMentor(t *testing.T) {
+func TestRankUpNotifiesTheTraineeOnce(t *testing.T) {
 	ctx := context.Background()
 	s, u, _ := fixture(t)
 	notes := &fakeNotify{}
@@ -110,8 +110,8 @@ func TestRankUpNotifiesOnceTraineeAndMentor(t *testing.T) {
 	if len(ups) != 1 {
 		t.Fatalf("exactly one rank-up notification, got %d", len(ups))
 	}
-	if ev := ups[0]; !slices.Equal(ev.To, []string{"trainee@crucible.local", "senior@crucible.local"}) || ev.Team != "" {
-		t.Fatalf("to the trainee and their mentor, never a team channel: %+v", ev)
+	if ev := ups[0]; !slices.Equal(ev.To, []string{"trainee@crucible.local"}) || ev.Team != "" {
+		t.Fatalf("to the trainee, never a team channel: %+v", ev)
 	}
 	v, _ := s.UpdateForge(ctx, u.ID)
 	if !v.RankUp {

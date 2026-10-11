@@ -28,7 +28,7 @@ A passed task stays passed. Tasks usually open one at a time, in order; some lab
 - **Skip task** appears only when a task's setup failed, so it can't hold you up. Skipping costs nothing.
 - **Hint** helps when you are stuck; see [Hints and extensions](/docs/trainees/hints-and-extensions).
 
-Laptop labs are *self-reported*: the checks run on your own machine. Some programs ask a scorer to look over your
+Laptop labs are *self-reported*: the checks run on your own machine. Some trainings ask a scorer to look over your
 results before the lab counts as forged.
 
 ## Terminals

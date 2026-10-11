@@ -7,7 +7,7 @@ import { Loader } from '../components/Loader'
 import { toast } from '../lib/alerts'
 import { hours, usd } from '../lib/money'
 
-export const tierLabel: Record<Tier, string> = { auto: 'auto-approved', approver: 'a program approver', leader: 'the team leader', admin: 'an admin' }
+export const tierLabel: Record<Tier, string> = { auto: 'auto-approved', approver: "the training's admins", leader: "the owning team's leaders", admin: 'an admin' }
 
 export function ApprovalsPage() {
   const { data, error, reload } = useFetch<Approval[]>('/api/approvals', 15_000)

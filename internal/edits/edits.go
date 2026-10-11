@@ -1,5 +1,5 @@
-// Package edits lets maintainers and leads change training content from the UI (spec §6): every edit is pushed to its
-// own branch, reviewed in Crucible by a maintainer other than its author, and merged by the bot. Plain git, any host.
+// Package edits lets a training's editors change its content from the UI (spec §6): every edit is pushed to its own
+// branch, reviewed in Crucible by an editor or admin other than its author, and merged by the bot. Plain git, any host.
 package edits
 
 import (
@@ -174,38 +174,30 @@ func (s *Service) state() (*gitsync.State, error) {
 	return st, nil
 }
 
-// head is the training version at its tracked branch head: edits are based on it, and its maintainers review them.
+// head is the training version at its tracked branch head: edits are based on it.
 func head(st *gitsync.State, training string) (*content.Training, string) {
 	sha := st.Heads[training]
 	return st.Training(training, sha), sha
 }
 
-func maintainer(t *content.Training, email string) bool {
-	return t != nil && slices.ContainsFunc(t.Maintainers, func(m string) bool { return strings.EqualFold(m, email) })
+// editor: the training's editors and admins (its roles), whose run lives under the team that owns it.
+func editor(p *config.Platform, training, email string) bool {
+	_, pr := p.Owner(training)
+	return pr != nil && slices.Contains(pr.Editors, strings.ToLower(email))
 }
 
-// canPropose: admins, the training's maintainers, and leaders and seniors of teams with a program for the training,
-// whether or not they are also enrolled in it (the owner's call, 2026-10-08: those who run a training may edit it while
-// taking it). Proposing means reading the raw files, answer keys and check scripts included, so nobody else gets in:
-// being enrolled grants nothing. Scoring stays closed to the enrolled (rbac.Score).
+// canPropose: Crucible admins and the training's editors and admins, whether or not they also take it (the owner's
+// call, 2026-10-08: those who run a training may edit it while taking it). Proposing means reading the raw files,
+// answer keys and check scripts included, so nobody else gets in: being a participant grants nothing. Scoring stays
+// closed to participants (rbac.Score).
 func canPropose(p *config.Platform, t *content.Training, email string) bool {
-	email = strings.ToLower(email)
-	if (rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email) {
-		return true
-	}
-	for _, team := range p.Teams {
-		if r := team.RoleOf(email); team.Programs[t.ID] != nil && (r == "leader" || r == "senior") {
-			return true
-		}
-	}
-	return false
+	return (rbac.Checker{P: p}).IsAdmin(email) || editor(p, t.ID, email)
 }
 
-// canReview: admins and the head version's maintainers (spec §5.3), never the author; enrolled or not. t is nil
-// when the training has no valid head (or left the platform): then only admins can still decide its edits.
-func canReview(p *config.Platform, training string, t *content.Training, email, author string) bool {
+// canReview: Crucible admins and the training's editors and admins, never the author; participating or not.
+func canReview(p *config.Platform, training string, _ *content.Training, email, author string) bool {
 	email = strings.ToLower(email)
-	return email != author && ((rbac.Checker{P: p}).IsAdmin(email) || maintainer(t, email))
+	return email != author && ((rbac.Checker{P: p}).IsAdmin(email) || editor(p, training, email))
 }
 
 func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Training, string, error) {
@@ -223,6 +215,9 @@ func (s *Service) training(u *auth.User, id string) (*gitsync.State, *content.Tr
 	if !canPropose(st.Platform, t, u.Email) {
 		return nil, nil, "", apperr.Wrap(apperr.Forbidden, "you can't edit this training")
 	}
+	if !st.OnBranch[id] {
+		return nil, nil, "", apperr.Wrap(apperr.Invalid, "this training follows a tag or a commit, not a branch, so it changes only in git")
+	}
 	return st, t, sha, nil
 }
 
@@ -234,7 +229,7 @@ func (s *Service) Trainings(u *auth.User) []TrainingRef {
 		return out
 	}
 	for _, id := range slices.Sorted(maps.Keys(st.Platform.Trainings)) {
-		if t, _ := head(st, id); t != nil && canPropose(st.Platform, t, u.Email) {
+		if t, _ := head(st, id); t != nil && st.OnBranch[id] && canPropose(st.Platform, t, u.Email) {
 			out = append(out, TrainingRef{ID: id, Title: t.Title})
 		}
 	}
@@ -473,12 +468,13 @@ func (s *Service) Create(ctx context.Context, u *auth.User, in NewEdit) (*Edit, 
 		return nil, err
 	}
 	committed = true
+	// The training's editors and admins review it; with none but the author, Crucible's admins do.
 	var to []string
-	for _, e := range slices.Concat(t.Maintainers, st.Platform.Admins) {
-		e = strings.ToLower(e)
-		if canReview(st.Platform, in.Training, t, e, me) && !slices.Contains(to, e) {
-			to = append(to, e)
-		}
+	if _, pr := st.Platform.Owner(in.Training); pr != nil {
+		to = slices.DeleteFunc(slices.Clone(pr.Editors), func(e string) bool { return e == me })
+	}
+	if len(to) == 0 {
+		to = slices.DeleteFunc(slices.Clone(st.Platform.Admins), func(e string) bool { return e == me })
 	}
 	s.notify(ctx, notify.Event{Kind: notify.ContentEdit, To: to, Subject: "Content edit waiting for review: " + title,
 		Text: fmt.Sprintf("%s proposed a change to %s.", me, t.Title), Link: fmt.Sprintf("/edits/%d", id)})
@@ -588,7 +584,7 @@ func mayDecide(st *gitsync.State, u *auth.User, e *Edit, to string) error {
 	case to == "withdrawn" && e.Author != strings.ToLower(u.Email):
 		return apperr.Wrap(apperr.Forbidden, "only the author can withdraw an edit")
 	case to != "withdrawn" && !e.CanReview && e.Status == "pending":
-		return apperr.Wrap(apperr.Forbidden, "only the training's maintainers or an admin, other than the author, can review this edit")
+		return apperr.Wrap(apperr.Forbidden, "only the training's editors and admins, or a Crucible admin, other than the author, can review this edit")
 	case e.Status != "pending":
 		return apperr.Wrap(apperr.Conflict, "this edit was already decided")
 	}
@@ -652,8 +648,8 @@ func (s *Service) decide(ctx context.Context, u *auth.User, id int64, to, note s
 	}
 	detail := map[string]any{"edit": e.ID, "title": e.Title, "author": e.Author, "note": note, "as": "author"}
 	if to != "withdrawn" {
-		detail["as"] = "maintainer"
-		if t, _ := head(st, e.Training); !maintainer(t, me) {
+		detail["as"] = "editor"
+		if !editor(st.Platform, e.Training, me) {
 			detail["as"] = "admin" // an override: admins review any training
 		}
 	}

@@ -1,15 +1,14 @@
 ---
-title: Journey and mentoring
+title: The Journey
 roles: [leader]
-covers: [route:/teams/:team/journey, route:/mentor]
+covers: [route:/teams/:team/journey]
 order: 40
 ---
-# Journey and mentoring
+# The Journey
 
-## The Journey
-
-Open your team and choose **Journey**. You see the people and programs you may follow: the leader and seniors see
-everyone, managers and scorers their programs, mentors their mentees.
+Open your team and choose **Journey**. You see the people you may follow: the participants of the trainings the team owns (its leaders,
+seniors and juniors run those), the team's own people in trainings other teams own (for its leaders and seniors),
+and the trainings you edit or are an admin of.
 
 At the top are four numbers: how many people, how many trainings, how much is forged on average, and how many need a
 look. Then choose how to read it:
@@ -38,9 +37,3 @@ Crucible flags a row when someone may need help:
 - **Not started yet**: no activity at all.
 
 Nobody is flagged as quiet while their work waits for a scorer: then the scorer is the one holding things up.
-
-## Mentoring
-
-Mentors are set on the team roster. **Mentor** shows in the top bar once you mentor someone. For each mentee you see
-their rank, their heat map, anything waiting for a scorer, and their recent lab trouble. You also hear when a mentee
-reaches a new rank.

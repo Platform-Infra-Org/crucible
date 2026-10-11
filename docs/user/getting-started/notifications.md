@@ -16,10 +16,10 @@ Which of these reach you depends on your roles:
 - A lab request is waiting for your approval, or was escalated to you.
 - Your lab request was approved, rejected or expired.
 - A budget reached 80% or its hard cap.
-- Content you maintain failed to sync, or a lab scenario you maintain failed to prepare.
+- A training you edit failed to sync, or one of its lab scenarios failed to prepare.
 - A submission is waiting for your score.
 - Your submission was scored or returned for rework.
-- You, or one of your mentees, reached a new forge rank.
+- You reached a new forge rank.
 - A content edit waits for your review, or yours was decided.
 - Leftover AWS lab resources need attention, or a lab is stuck while being destroyed (admins).
 

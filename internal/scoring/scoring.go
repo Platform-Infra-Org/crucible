@@ -360,7 +360,7 @@ func (s *Service) CanScore(u *auth.User, team, training, owner string) bool {
 	return err == nil && ok
 }
 
-// CanView: the trainee themself, their program's scorers and managers, team leader/seniors, their mentor, admins
+// CanView: the trainee themself, their program's scorers and managers, team leader/seniors, admins
 // (spec §5.3 "View trainee progress").
 func (s *Service) CanView(u *auth.User, team, training, owner string) bool {
 	c, _, err := s.checker()

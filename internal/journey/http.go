@@ -18,12 +18,4 @@ func (s *Service) Routes(r chi.Router) {
 		}
 		httpx.JSON(w, http.StatusOK, rows)
 	})
-	r.Get("/api/mentor", func(w http.ResponseWriter, r *http.Request) {
-		ms, err := s.Mentees(r.Context(), auth.UserFrom(r.Context()))
-		if err != nil {
-			httpx.Error(w, err)
-			return
-		}
-		httpx.JSON(w, http.StatusOK, ms)
-	})
 }

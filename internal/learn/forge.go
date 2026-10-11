@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"math"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -69,7 +68,7 @@ type ForgeView struct {
 }
 
 // UpdateForge recomputes the user's % and badges and raises the stored rank when a higher one is reached. The rank is
-// never lowered. Crossing into a higher rank notifies the trainee and their mentors exactly once: the conditional
+// never lowered. Crossing into a higher rank notifies the trainee exactly once: the conditional
 // upsert lets only one concurrent caller raise a level.
 func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, error) {
 	st, err := s.state()
@@ -150,11 +149,6 @@ func (s *Service) rankUp(ctx context.Context, p *config.Platform, email, name, r
 		return
 	}
 	to := []string{email}
-	for _, t := range p.Teams {
-		if m := t.Mentors[email]; m != "" && !slices.Contains(to, m) {
-			to = append(to, m)
-		}
-	}
 	who := name
 	if who == "" {
 		who = email

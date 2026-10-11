@@ -10,7 +10,7 @@ Some of your work is scored by a person, a scorer, on the Anvil:
 
 - written answers, uploads and live sign-offs in quizzes;
 - lab tasks marked for review, where you write notes on what you did;
-- whole laptop labs, when your program asks a scorer to look over self-reported results.
+- whole laptop labs, when your training asks a scorer to look over self-reported results.
 
 ## Waiting
 
@@ -30,5 +30,5 @@ Either way, the work goes back to the scorers.
 
 ## Who scores you
 
-Scorers are people your team chose for the program. Nobody scores their own work, and nobody enrolled in a training
+Scorers are the training's editors and admins. Nobody scores their own work, and nobody who takes a training
 scores it.

@@ -3,28 +3,37 @@ package org
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"crucible/internal/apperr"
+	"crucible/internal/config"
 	"crucible/internal/db/dbtest"
 )
 
-func TestCreateTeamStoresLeaderAndRoster(t *testing.T) {
+// body is a team from "email:tag" pairs.
+func body(name string, members ...string) TeamBody {
+	b := TeamBody{Name: name, Members: map[string]string{}}
+	for _, m := range members {
+		e, tag, _ := strings.Cut(m, ":")
+		b.Members[e] = tag
+	}
+	return b
+}
+
+func TestCreateTeamStoresTags(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	b := TeamBody{Name: "Platform", Leader: "lead@x", Seniors: []string{"senior@x"}, Trainees: []string{"new@x"},
-		Mentors: map[string]string{"new@x": "senior@x"}}
+	b := body("Platform", "lead@x:leader", "lead2@x:leader", "senior@x:senior", "jun@x:junior", "new@x:trainee")
 	if err := s.CreateTeam(ctx, "admin@x", "platform", b); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
 	p, _ := s.Platform(ctx)
 	team := p.Teams["platform"]
-	if team == nil || team.Leader != "lead@x" || team.Name != "Platform" {
+	if team == nil || !slices.Equal(team.Leaders, []string{"lead2@x", "lead@x"}) || team.Name != "Platform" ||
+		!slices.Equal(team.Juniors, []string{"jun@x"}) || team.RoleOf("new@x") != "trainee" {
 		t.Fatalf("team = %+v", team)
-	}
-	if team.Mentors["new@x"] != "senior@x" {
-		t.Errorf("mentors = %v", team.Mentors)
 	}
 	if err := s.CreateTeam(ctx, "admin@x", "platform", b); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("duplicate id = %v, want Conflict", err)
@@ -33,9 +42,9 @@ func TestCreateTeamStoresLeaderAndRoster(t *testing.T) {
 
 func TestTeamIDsAreSlugs(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
-	for _, id := range []string{"", "../etc", "Platform Team", "a/b", `a\b`, strings.Repeat("x", 100)} {
-		if err := s.CreateTeam(context.Background(), "admin@x", id, TeamBody{Name: "x", Leader: "l@x"}); !errors.Is(err, apperr.Invalid) {
-			t.Errorf("id %q must be refused: ids appear in URLs and audit targets (%v)", id, err)
+	for _, id := range []string{"", "../etc", "Platform Team", "a/b", `a\b`, strings.Repeat("x", 100), "all", "ops_seniors", "x_trainees", "a@b"} {
+		if err := s.CreateTeam(context.Background(), "admin@x", id, body("x", "l@x:leader")); !errors.Is(err, apperr.Invalid) {
+			t.Errorf("id %q must be refused: ids appear in URLs, audit targets and group refs (%v)", id, err)
 		}
 	}
 }
@@ -43,7 +52,7 @@ func TestTeamIDsAreSlugs(t *testing.T) {
 func TestEmailsAreNormalisedToOnePerson(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	b := TeamBody{Name: "Platform", Leader: "lead@x", Trainees: []string{"  Alice@Corp.COM ", "alice@corp.com"}}
+	b := body("Platform", "lead@x:leader", "  Alice@Corp.COM :trainee", "alice@corp.com:trainee")
 	if err := s.CreateTeam(ctx, "admin@x", "platform", b); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
@@ -53,35 +62,66 @@ func TestEmailsAreNormalisedToOnePerson(t *testing.T) {
 	}
 }
 
-func TestOneRolePerPersonPerTeam(t *testing.T) {
+func TestOneTagPerPerson(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
-	b := TeamBody{Name: "Platform", Leader: "lead@x", Seniors: []string{"Dual@x"}, Trainees: []string{"dual@x"}}
+	b := body("Platform", "lead@x:leader", "Dual@x:senior", "dual@x:trainee")
 	err := s.CreateTeam(context.Background(), "admin@x", "platform", b)
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "dual@x") {
-		t.Errorf("same person in two roles = %v, want Invalid naming them", err)
+		t.Errorf("same person with two tags = %v, want Invalid naming them", err)
 	}
 }
 
 func TestTeamNeedsALeaderAndValidAddresses(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	for _, b := range []TeamBody{{Name: "x"}, {Name: "x", Leader: "l@x", Members: []string{"nope"}}, {Leader: "l@x"}} {
+	for _, b := range []TeamBody{body("x"), body("x", "s@x:senior"), body("x", "l@x:leader", "nope:junior"),
+		body("x", "l@x:leader", "m@x:member"), body("", "l@x:leader")} {
 		if err := s.CreateTeam(ctx, "a@x", "t", b); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%+v = %v, want Invalid", b, err)
 		}
 	}
 }
 
+// A person is on one team. An admin who adds them to another moves them: they leave the old team, and the old team's
+// version moves on. Taking a team's last leader is refused.
+func TestAddingSomeoneMovesThemBetweenTeams(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	ctx := context.Background()
+	a := body("A", "la@x:leader", "mover@x:senior", "ta@x:trainee")
+	if err := s.CreateTeam(ctx, "admin@x", "a", a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTeam(ctx, "admin@x", "b", body("B", "lb@x:leader", "mover@x:junior")); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Platform(ctx)
+	if p.TeamOf("mover@x").ID != "b" || p.Teams["a"].RoleOf("mover@x") != "" || p.Teams["a"].Version != 2 {
+		t.Fatalf("mover@x should now be on b only: a=%+v", p.Teams["a"])
+	}
+	var detail string
+	s.DB.QueryRow(ctx, `SELECT detail::text FROM audit_log WHERE action = 'team.create' AND target = 'b'`).Scan(&detail)
+	if !strings.Contains(detail, `"moved_from": {"mover@x": "a"}`) {
+		t.Errorf("the move is audited: %s", detail)
+	}
+	err := s.CreateTeam(ctx, "admin@x", "c", body("C", "la@x:leader"))
+	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "last leader out of team a") {
+		t.Fatalf("taking a's only leader = %v", err)
+	}
+	if p, _ = s.Platform(ctx); p.Teams["c"] != nil || p.TeamOf("la@x").ID != "a" {
+		t.Error("the refused move changed nothing")
+	}
+}
+
 func TestStaleTeamVersionIsRefused(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	if err := s.CreateTeam(ctx, "admin@x", "platform", TeamBody{Name: "Platform", Leader: "lead@x"}); err != nil {
+	if err := s.CreateTeam(ctx, "admin@x", "platform", body("Platform", "lead@x:leader")); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
 	v := p.Teams["platform"].Version
-	first := TeamBody{Version: v, Name: "Platform", Leader: "lead@x", Trainees: []string{"a@x"}}
-	second := TeamBody{Version: v, Name: "Platform", Leader: "lead@x", Trainees: []string{"b@x"}}
+	first, second := body("Platform", "lead@x:leader", "a@x:trainee"), body("Platform", "lead@x:leader", "b@x:trainee")
+	first.Version, second.Version = v, v
 	if err := s.SetTeam(ctx, "admin@x", "platform", first); err != nil {
 		t.Fatal(err)
 	}
@@ -101,34 +141,15 @@ func TestStaleTeamVersionIsRefused(t *testing.T) {
 	}
 }
 
-func TestMentorMustBeInTheTeamAndNotTheTraineeThemselves(t *testing.T) {
-	s := &Store{DB: dbtest.New(t)}
-	ctx := context.Background()
-	base := func(m map[string]string) TeamBody {
-		return TeamBody{Name: "P", Leader: "lead@x", Seniors: []string{"s@x"}, Trainees: []string{"t@x"}, Mentors: m}
-	}
-	for name, m := range map[string]map[string]string{
-		"unknown mentor":  {"t@x": "stranger@x"},
-		"unknown trainee": {"stranger@x": "s@x"},
-		"self":            {"t@x": "T@x"},
-	} {
-		if err := s.CreateTeam(ctx, "a@x", "p", base(m)); !errors.Is(err, apperr.Invalid) {
-			t.Errorf("%s = %v, want Invalid", name, err)
-		}
-	}
-	if err := s.CreateTeam(ctx, "a@x", "p", base(map[string]string{"T@x": "lead@x"})); err != nil {
-		t.Errorf("the leader may mentor: %v", err)
-	}
-}
-
 func TestTeamWritesAreAudited(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	b := TeamBody{Name: "P", Leader: "lead@x", Trainees: []string{"new@x"}}
+	b := body("P", "lead@x:leader", "new@x:trainee")
 	if err := s.CreateTeam(ctx, "Boss@x", "p", b); err != nil {
 		t.Fatal(err)
 	}
-	b.Version, b.Trainees = 1, []string{"other@x"}
+	b = body("P", "lead@x:leader", "other@x:trainee")
+	b.Version = 1
 	if err := s.SetTeam(ctx, "boss@x", "p", b); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +176,7 @@ func TestTeamWritesAreAudited(t *testing.T) {
 func TestDeleteTeamKeepsLearningHistory(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	if err := s.CreateTeam(ctx, "a@x", "p", TeamBody{Name: "P", Leader: "lead@x", Trainees: []string{"t@x"}}); err != nil {
+	if err := s.CreateTeam(ctx, "a@x", "p", body("P", "lead@x:leader", "t@x:trainee")); err != nil {
 		t.Fatal(err)
 	}
 	var uid int64
@@ -174,7 +195,7 @@ func TestDeleteTeamKeepsLearningHistory(t *testing.T) {
 		t.Errorf("progress rows = %d, want 1: deleting a team must not delete learning history", n)
 	}
 	var rows int
-	s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM team_members) + (SELECT count(*) FROM mentors)`).Scan(&rows)
+	s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM team_members)`).Scan(&rows)
 	if rows != 0 {
 		t.Errorf("roster rows left behind = %d", rows)
 	}
@@ -183,7 +204,7 @@ func TestDeleteTeamKeepsLearningHistory(t *testing.T) {
 func TestTeamWebhooks(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	if err := s.CreateTeam(ctx, "a@x", "p", TeamBody{Name: "P", Leader: "lead@x"}); err != nil {
+	if err := s.CreateTeam(ctx, "a@x", "p", body("P", "lead@x:leader")); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct{ kind, url string }{{"slack", "http://x"}, {"discord", "https://x"}} {
@@ -223,5 +244,20 @@ func TestTeamWebhooks(t *testing.T) {
 	s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'team.webhook'`).Scan(&rows)
 	if rows != 2 { // the set and the real clear; the failed clear and the refused writes leave none
 		t.Errorf("team.webhook audit rows = %d, want 2", rows)
+	}
+}
+
+// A team that owns trainings can't be deleted: the trainings would lose their run (pin, schedule, budget).
+func TestDeleteTeamThatOwnsTrainingsIsRefused(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	ctx := context.Background()
+	if err := s.CreateTeam(ctx, "a@x", "p", body("P", "lead@x:leader")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateTraining(ctx, "lead@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteTeam(ctx, "a@x", "p"); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "k8s") {
+		t.Fatalf("deleting a team that owns k8s = %v", err)
 	}
 }

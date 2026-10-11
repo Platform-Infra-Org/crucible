@@ -52,7 +52,7 @@ export function ForgeStatusPage() {
       <section className="panel">
       <h2>Program versions</h2>
       <div className="table-wrap"><table className="grid">
-        <thead><tr><th>Program</th><th>Runs</th><th>Branch head</th></tr></thead>
+        <thead><tr><th>Program</th><th>Runs</th><th>Head</th></tr></thead>
         <tbody>{p.programs.map((g) => (
           <tr key={g.team + g.training}><td>{g.team}/{g.training}</td><td><code>{g.running.slice(0, 7)}</code>{g.pinned_ref && <span className="badge"> pinned</span>}</td>
             <td><code>{g.head.slice(0, 7)}</code>{!g.pinned_ref && g.running !== g.head && <span className="badge warn"> behind</span>}</td></tr>
@@ -70,7 +70,7 @@ export function ForgeStatusPage() {
         <tbody>
           {p.trainings.map((t) => (
             <tr key={t.id}>
-              <td>{t.id}</td><td><code>{t.repo}</code> ({t.branch})</td><td><code>{t.head.slice(0, 7)}</code></td>
+              <td>{t.id}</td><td><code>{t.repo}</code> ({t.ref}{t.path && <>, <code>{t.path}/</code></>})</td><td><code>{t.head.slice(0, 7)}</code></td>
               <td>{t.problems.length === 0 ? '✓' : <ul>{t.problems.map((m) => <li key={m} className="error">{m}</li>)}</ul>}</td>
             </tr>
           ))}
@@ -82,7 +82,7 @@ export function ForgeStatusPage() {
       <p className="muted">Change these under <Link to="/admin/settings">Forge settings</Link>; they take effect at once.</p>
       <dl className="facts">
         <dt>Cost tiers</dt>
-        <dd>{p.cost_tiers ? `auto ≤ ${usd(p.cost_tiers.auto_approve_usd)} · approver ≤ ${usd(p.cost_tiers.tier1_usd)} · leader ≤ ${usd(p.cost_tiers.tier2_usd)} · admin above` : 'not set'}</dd>
+        <dd>{p.cost_tiers ? `auto ≤ ${usd(p.cost_tiers.auto_approve_usd)} · training admins ≤ ${usd(p.cost_tiers.tier1_usd)} · team leaders ≤ ${usd(p.cost_tiers.tier2_usd)} · admin above` : 'not set'}</dd>
         <dt>Escalation</dt><dd>after {p.escalation_hours} business hours per tier</dd>
         <dt>Schedules</dt><dd>{Object.entries(p.schedules).map(([n, d]) => `${n}: ${d}`).join(' · ') || 'none'}</dd>
         <dt>Admins</dt><dd>{p.admins.join(', ')}</dd>

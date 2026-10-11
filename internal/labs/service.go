@@ -874,18 +874,25 @@ func (s *Service) runSetup(ctx context.Context, inst *Instance, lab *content.Lab
 		last = fmt.Errorf("setup exited with %d", res.ExitCode)
 	}
 	s.Log.Warn("setup script failed twice", "lab", inst.ID, "task", taskID)
-	if t := s.trainingOf(ctx, inst); t != nil {
+	if st, err := s.platform(); err == nil {
+		s.setupFailed(ctx, st.Platform, inst, taskID)
+	}
+	s.event(ctx, inst.ID, "setup_failed", taskID)
+	return last
+}
+
+// setupFailed tells the training's editors and admins, who look after its content, that a setup script failed twice.
+func (s *Service) setupFailed(ctx context.Context, p *config.Platform, inst *Instance, taskID string) {
+	if _, pr := p.Owner(inst.Training); pr != nil {
 		step := "the lab-level setup"
 		if taskID != "" {
 			step = "the setup for task " + taskID
 		}
-		s.notify(ctx, notify.Event{Kind: notify.SetupFailed, To: t.Maintainers,
+		s.notify(ctx, notify.Event{Kind: notify.SetupFailed, To: pr.Editors,
 			Subject: fmt.Sprintf("Lab scenario failed to prepare: %s / %s", inst.Training, inst.Module),
 			Text: fmt.Sprintf("%s in %s/%s exited non-zero twice (lab %s, team %s). The trainee was offered a skip. Script output is stored in setup_runs.",
 				step, inst.Training, inst.Module, inst.ID, inst.Team)})
 	}
-	s.event(ctx, inst.ID, "setup_failed", taskID)
-	return last
 }
 
 // readyTask loads a lab the user owns, requires it to be ready, and resolves the task.

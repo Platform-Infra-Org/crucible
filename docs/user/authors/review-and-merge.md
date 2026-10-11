@@ -28,14 +28,14 @@ changed but never renamed or deleted.
 
 ## Reviewing
 
-A maintainer of the training, or an admin, reviews the edit, whether or not they are enrolled in it. You never review
-your own. A reviewer can leave a note and:
+An editor or admin of the training, or a Crucible admin, reviews the edit, whether or not they take the training. You
+never review your own. A reviewer can leave a note and:
 
 - **Approve and merge**: the bot merges exactly the commit that was reviewed, and Crucible picks up the new version.
 - **Reject**: nothing changes in the training.
 
-The author can **Withdraw** a pending edit. Crucible emails the author when the edit is decided, and the maintainers
-when an edit is waiting for them.
+The author can **Withdraw** a pending edit. Crucible emails the author when the edit is decided, and the training's
+editors and admins when an edit is waiting for them (Crucible's admins, when it has none but you).
 
 If someone pushed to the edit's branch outside Crucible, approving puts the reviewed change back on the branch
 instead, and the edit needs a fresh approval.

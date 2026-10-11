@@ -67,7 +67,7 @@ func history(t *testing.T, s *Store) string {
 func TestExportImportRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	src, file := exported(t)
-	if !json.Valid(file) || !strings.HasPrefix(string(file), `{"crucible_export":1,`) {
+	if !json.Valid(file) || !strings.HasPrefix(string(file), `{"crucible_export":3,`) {
 		t.Fatalf("the file opens with its version: %.80s", file)
 	}
 	if strings.Contains(string(file), "kc-1") || strings.Contains(string(file), `"sess"`) {
@@ -101,9 +101,9 @@ func TestExportImportRoundTrip(t *testing.T) {
 		t.Errorf("imported configuration differs\n got: %s\nwant: %s", dump(got), dump(want))
 	}
 	var roles int
-	mustScan(t, dst.DB, `SELECT count(*) FROM program_roles WHERE training = 'b'`, &roles)
+	mustScan(t, dst.DB, `SELECT count(*) FROM training_roles WHERE training = 'b'`, &roles)
 	if roles != 0 {
-		t.Errorf("default roles stay unset after an import: %d rows", roles)
+		t.Errorf("a training with no roles has none after an import: %d rows", roles)
 	}
 	var sub string
 	mustScan(t, dst.DB, `SELECT sub FROM users WHERE email = 'new-boss@x'`, &sub)
@@ -140,7 +140,7 @@ func TestImportRefusesNonEmptyInstance(t *testing.T) {
 
 func TestImportRefusesUnknownVersion(t *testing.T) {
 	dst := &Store{DB: dbtest.New(t)}
-	err := dst.Import(context.Background(), "a@x", []byte(`{"crucible_export":2,"tables":{}}`))
+	err := dst.Import(context.Background(), "a@x", []byte(`{"crucible_export":1,"tables":{}}`))
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "version 1") {
 		t.Fatalf("unknown version = %v, want it refused naming the version this build reads", err)
 	}

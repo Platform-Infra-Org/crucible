@@ -20,7 +20,8 @@ line.
 **Lab spending** — the three cost tiers that decide who may approve a lab:
 
 - *Auto-approve under*: nobody is asked.
-- *Program approver up to*: the program's approvers, or the team leader.
+- *Training admins approve up to*: the training's admins; above that, up to the next line, the leaders of the team that
+  owns it.
 - *Admin approval above*: an admin only.
 
 Also here: the **cluster lab rate** per hour, and the **hours before a waiting request escalates**. Leave the
@@ -33,9 +34,9 @@ cost. The tiers go in as a set: give all three or none.
 so: losing that account would lock the forge with nobody able to let anyone back in. If there is only one admin, the
 page asks you to add a second. Two admins removing each other at the same moment can't both succeed.
 
-**Lab schedules** — a named set of open windows in a time zone, such as `mon,tue,wed,thu,fri 08:00-19:00`. Programs
-pick one in their settings. Saving under a name that exists replaces it. A schedule a program still uses can't be
-deleted; change the program first. See
+**Lab schedules** — a named set of open windows in a time zone, such as `mon,tue,wed,thu,fri 08:00-19:00`. Trainings
+pick one in their lab settings. Saving under a name that exists replaces it. A schedule a training still uses can't be
+deleted; change the training first. See
 [Schedules, budgets and caps](/docs/leaders/schedules-budgets-and-caps) for what a schedule does to a lab.
 
 ## Moving the forge
@@ -44,7 +45,7 @@ deleted; change the program first. See
 test install to the real one, or from one identity provider to another.
 
 **Download an export** saves one JSON file with everything people set up here: settings, admins, schedules, quotes,
-trainings, teams with their people, mentors, budgets and webhooks, programs with their roles and enrollments, and
+trainings with their roles and settings, teams with their people and tags, budgets and webhooks, and
 everyone's progress, quiz attempts, scored work, ranks and badges. Each export is written to the audit log.
 
 The file is personal data: names, emails, answers, scores and webhook URLs. Keep it somewhere private, delete it when

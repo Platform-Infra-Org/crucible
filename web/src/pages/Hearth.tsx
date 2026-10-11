@@ -30,7 +30,7 @@ export function Hearth() {
       <div className="forge-slot">{forge.data && <RankCard forge={forge.data} />}</div>
       {error && <p className="error">{error.message}</p>}
       {!data && !error && <Loader label="Gathering your trainings…" />}
-      {data && data.length === 0 && <p className="muted">You're not enrolled in any training yet. Your team leader can enroll you.</p>}
+      {data && data.length === 0 && <p className="muted">You're not taking any training yet. The people who run a training make you a participant.</p>}
       {data && data.length > 0 && (
         <div className="cards">
           {data.map((c) => (

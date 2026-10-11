@@ -44,8 +44,7 @@ export function EditReviewPage() {
         <span className="muted">{e.training} · by {e.author}{e.reviewer ? ` · reviewed by ${e.reviewer}` : ''}</span>
       </p>
       {e.status === 'stale' && <p role="alert" className="error">This edit no longer applies to the current content.</p>}
-      {e.note && <p>Note: {e.note}</p>}
-      <p role="alert" className="error">{msg}</p>
+      {e.note && <p className="hint"><span className="muted">Review note from {e.reviewer}:</span> {e.note}</p>}
       <h2>Changes</h2>
       <DiffView diff={e.diff ?? ''} />
       <h2>Files</h2>
@@ -59,15 +58,28 @@ export function EditReviewPage() {
           : <p key={i}>Deleted <code>{op.path}</code> (its full text is in the changes above)</p>,
       )}
       {(e.can_review || e.can_withdraw) && (
-        <p>
-          {e.can_review && <><label>Review note <textarea value={note} onChange={(x) => byteLen(x.target.value) <= 2000 && setNote(x.target.value)} /></label>{' '}</>}
-          {e.can_review && <><button disabled={busy} onClick={() => act('approve')}>Approve and merge</button>{' '}
-            <button className="ghost" disabled={busy} onClick={() => act('reject')}>Reject</button>{' '}</>}
-          {e.can_withdraw && <button className="ghost" disabled={busy} onClick={() => act('withdraw')}>Withdraw</button>}
-        </p>
+        <form className="stack panel" aria-labelledby="decide" onSubmit={(x) => { x.preventDefault(); void act('approve') }}>
+          <h2 id="decide">{e.can_review ? 'Your review' : 'Waiting for review'}</h2>
+          <p className="muted">
+            {e.can_review
+              ? 'Approving merges exactly this change, and trainees see it at once. Rejecting leaves the training as it is. The author reads your note either way.'
+              : 'A maintainer or an admin reviews it. Withdraw it to keep working on the draft.'}
+          </p>
+          {e.can_review && (
+            <label>Review note <textarea rows={4} placeholder="What you checked, or what to change" value={note} onChange={(x) => byteLen(x.target.value) <= 2000 && setNote(x.target.value)} /></label>
+          )}
+          <div className="row">
+            {e.can_review && <>
+              <button className="primary" disabled={busy}>Approve and merge</button>
+              <button type="button" className="ghost" disabled={busy} onClick={() => act('reject')}>Reject</button>
+            </>}
+            {e.can_withdraw && <button type="button" className="ghost" disabled={busy} onClick={() => act('withdraw')}>Withdraw</button>}
+          </div>
+        </form>
       )}
+      <p role="alert" className="error">{msg}</p>
       {['stale', 'rejected', 'withdrawn'].includes(e.status) && me.can_edit_content && e.author === me.user.email.toLowerCase() && (
-        <Link to={draft ? `/edits/drafts/${draft.id}` : `/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
+        <Link className="button-link" to={draft ? `/edits/drafts/${draft.id}` : `/edits/new?training=${encodeURIComponent(e.training)}&from=${e.id}`}>Reopen in the editor</Link>
       )}
     </section>
   )

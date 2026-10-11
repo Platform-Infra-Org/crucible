@@ -4,9 +4,6 @@
   --glow: 0 0 24px rgba(255, 122, 26, 0.45); --term-bg: #0f0c0a; --term-fg: #f3e9df;
   --on-accent: #1a0f05; --diff-add: #7bd88f; --diff-del: #ff5a4d; --diff-hunk: #ffc24b;
   --spark: #fff4d6; /* white-hot: motes, icon cores, the crucible ring */
-  --anvil: #2e2622; /* the gate's anvil and the dark iron of the forging */
-  --rune-1: #ff7a3d; --rune-2: #ffc93d; --rune-3: #5ee39a; --rune-4: #4fd8ff; --rune-5: #5b8cff; --rune-6: #b46bff; /* the rune sword's six runes, ember to violet */
-  --arc: #6d8cff; --arc-2: #b86bff; /* the rune sword's blue-violet lightning and aura */
 }
 [data-theme='anvil'] {
   --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e;
@@ -14,9 +11,6 @@
   --glow: 0 0 18px rgba(47, 93, 138, 0.25); --term-bg: #1c232b; --term-fg: #eef1f4;
   --on-accent: #ffffff; --diff-add: #81c784; --diff-del: #ef9a9a; --diff-hunk: #ffb74d;
   --spark: #fff8ec; /* white-hot: motes, icon cores, the crucible ring */
-  --anvil: #4a5562; /* the gate's anvil and the dark iron of the forging */
-  --rune-1: #e8601c; --rune-2: #d9a20f; --rune-3: #22b36b; --rune-4: #12a8d6; --rune-5: #3f6fe8; --rune-6: #9a4ae6; /* the rune sword's six runes, ember to violet */
-  --arc: #3f5fe0; --arc-2: #8a3fe0; /* the rune sword's blue-violet lightning and aura */
 }
 [data-theme='quench'] {
   --bg: #0b1424; --surface: #111e33; --surface-2: #182a45; --text: #e6f1ff; --muted: #93a8c6;
@@ -24,9 +18,6 @@
   --glow: 0 0 22px rgba(60, 200, 232, 0.4); --term-bg: #070e1a; --term-fg: #e6f1ff;
   --on-accent: #1a0f05; --diff-add: #7fe3c5; --diff-del: #ff6b81; --diff-hunk: #7fe3c5;
   --spark: #eafcff; /* white-hot: motes, icon cores, the crucible ring */
-  --anvil: #1f3352; /* the gate's anvil and the dark iron of the forging */
-  --rune-1: #ff7a3d; --rune-2: #ffc93d; --rune-3: #5ee39a; --rune-4: #4fd8ff; --rune-5: #5b8cff; --rune-6: #b46bff; /* the rune sword's six runes, ember to violet */
-  --arc: #6d8cff; --arc-2: #b86bff; /* the rune sword's blue-violet lightning and aura */
 }
 [data-theme='contrast'] {
   --bg: #000; --surface: #000; --surface-2: #111; --text: #fff; --muted: #e6e6e6;
@@ -34,7 +25,4 @@
   --glow: none; --term-bg: #000; --term-fg: #fff;
   --on-accent: #1a0f05; --diff-add: #5dff7a; --diff-del: #ff8080; --diff-hunk: #00e5ff;
   --spark: #ffffff; /* white-hot: motes, icon cores, the crucible ring */
-  --anvil: #1a1a1a; /* the gate's anvil and the dark iron of the forging */
-  --rune-1: #ff8a3d; --rune-2: #ffd400; --rune-3: #3dff9a; --rune-4: #3de7ff; --rune-5: #6f9bff; --rune-6: #c77dff; /* the rune sword's six runes, ember to violet */
-  --arc: #7f9cff; --arc-2: #c77dff; /* the rune sword's blue-violet lightning and aura */
 }

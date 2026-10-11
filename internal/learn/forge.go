@@ -8,13 +8,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
-// Forge ranks and badges (spec §7). They are personal: nothing here compares one trainee with another.
+// Sword ranks, the smith rank and badges (spec 2026-10-11). Nothing here orders one person against another.
 
 type Notifier interface {
 	Notify(ctx context.Context, ev notify.Event) error
@@ -22,7 +25,7 @@ type Notifier interface {
 
 type RankStep struct {
 	Name string  `json:"name"`
-	At   float64 `json:"at"` // % of enrolled training needed
+	At   float64 `json:"at"` // % of this training needed
 }
 
 var rankNames = []string{"Ore", "Ingot", "Tempered", "Blade", "Sword", "Masterwork"}
@@ -58,18 +61,59 @@ type Badge struct {
 	EarnedAt time.Time `json:"earned_at"`
 }
 
-type ForgeView struct {
-	Percent float64    `json:"percent"` // of all enrolled training, weighted by item points, one decimal
-	Level   int        `json:"level"`   // highest ever earned
-	Rank    string     `json:"rank"`
-	Ladder  []RankStep `json:"ladder"`
-	Badges  []Badge    `json:"badges"`
-	RankUp  bool       `json:"rank_up"` // a new rank the trainee has not been shown yet
+type Sword struct {
+	Training string    `json:"training"`
+	Title    string    `json:"title"`
+	Level    int       `json:"level"` // highest ever reached
+	Rank     string    `json:"rank"`
+	Percent  float64   `json:"percent"` // of this training, weighted by item points, one decimal
+	Next     *RankStep `json:"next"`
 }
 
-// UpdateForge recomputes the user's % and badges and raises the stored rank when a higher one is reached. The rank is
-// never lowered. Crossing into a higher rank notifies the trainee exactly once: the conditional
-// upsert lets only one concurrent caller raise a level.
+type SmithView struct {
+	XP    int         `json:"xp"`
+	Level int         `json:"level"`
+	Title string      `json:"title"`
+	Next  *smith.Step `json:"next"`
+}
+
+type SwordUp struct {
+	Training string `json:"training"`
+	Title    string `json:"title"`
+	Level    int    `json:"level"`
+	Rank     string `json:"rank"`
+}
+
+type RankUps struct {
+	Smith  *smith.Ref `json:"smith"`
+	Swords []SwordUp  `json:"swords"`
+}
+
+type ForgeView struct {
+	Smith       SmithView    `json:"smith"`
+	Swords      []Sword      `json:"swords"`
+	Badges      []Badge      `json:"badges"`
+	SwordLadder []RankStep   `json:"sword_ladder"`
+	SmithLadder []smith.Step `json:"smith_ladder"`
+	RankUp      RankUps      `json:"rank_up"`
+}
+
+// raise stores level for a key the first time silently (seen) and afterwards raises it only, unseen. It reports
+// whether this caller raised it: only that caller announces the rise, so it is announced once.
+func raise(ctx context.Context, db *pgxpool.Pool, insert, update string, args ...any) (bool, error) {
+	tag, err := db.Exec(ctx, insert, args...)
+	if err != nil || tag.RowsAffected() > 0 {
+		return false, err
+	}
+	var lvl int
+	err = db.QueryRow(ctx, update, args...).Scan(&lvl)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// UpdateForge recomputes the user's swords, badges and experience and raises what they reached. Nothing is lowered.
 func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, error) {
 	st, err := s.state()
 	if err != nil {
@@ -79,53 +123,94 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	if err := s.DB.QueryRow(ctx, `SELECT email, name FROM users WHERE id = $1`, userID).Scan(&email, &name); err != nil {
 		return nil, err
 	}
-	var done, total float64
+	v := &ForgeView{SwordLadder: Ladder(st.Platform.Settings.Ranks), SmithLadder: smith.Ladder(st.Platform.Settings.Smith),
+		Swords: []Sword{}, Badges: []Badge{}, RankUp: RankUps{Swords: []SwordUp{}}}
 	titles := map[string]string{}
+	work := 0.0
 	for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(email) {
 		sd, err := s.Standing(ctx, userID, e.Team.ID, e.Program.Training)
 		if err != nil {
 			return nil, err
 		}
 		if sd == nil || sd.Total == 0 {
-			continue // ponytail: unavailable content neither helps nor hurts the rank until it syncs again
+			continue // ponytail: unavailable content neither helps nor hurts until it syncs again
 		}
-		done, total = done+sd.Done, total+sd.Total
-		titles[sd.Training.ID] = sd.Training.Title
+		id := sd.Training.ID
+		titles[id] = sd.Training.Title
+		work += sd.Done * smith.PerPoint
+		pct := forgePercent(sd.Done, sd.Total)
+		if _, err := raise(ctx, s.DB,
+			`INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`,
+			`UPDATE sword_ranks SET level = $3, earned_at = now(), seen = false WHERE user_id = $1 AND training = $2 AND level < $3 RETURNING level`,
+			userID, id, RankFor(pct, v.SwordLadder)); err != nil {
+			return nil, err
+		}
+		v.Swords = append(v.Swords, Sword{Training: id, Title: sd.Training.Title, Percent: pct})
 		if sd.Done >= sd.Total-1e-9 {
 			if _, err := s.DB.Exec(ctx, `INSERT INTO badges (user_id, training, team) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-				userID, sd.Training.ID, e.Team.ID); err != nil {
+				userID, id, e.Team.ID); err != nil {
 				return nil, err
 			}
 		}
 	}
-	v := &ForgeView{Ladder: Ladder(st.Platform.Settings.Ranks), Badges: []Badge{}}
-	if total > 0 {
-		v.Percent = forgePercent(done, total)
-	}
-	lvl := RankFor(v.Percent, v.Ladder)
-	// The first computation for a user only records where they already are (seen, no notification), so deploying this
-	// does not announce a rank to everyone with existing progress.
-	tag, err := s.DB.Exec(ctx, `INSERT INTO ranks (user_id, level, seen) VALUES ($1, $2, true) ON CONFLICT DO NOTHING`, userID, lvl)
+	// Stored swords, the ones of trainings no longer taken included: their milestones are kept.
+	rows, err := s.DB.Query(ctx, `SELECT training, level, NOT seen FROM sword_ranks WHERE user_id = $1`, userID)
 	if err != nil {
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
-		var raised int
-		err = s.DB.QueryRow(ctx, `UPDATE ranks SET level = $2, earned_at = now(), seen = false WHERE user_id = $1 AND level < $2 RETURNING level`,
-			userID, lvl).Scan(&raised)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows): // not above the stored rank
-		case err != nil:
-			return nil, err
-		default:
-			s.rankUp(ctx, st.Platform, email, name, v.Ladder[raised].Name)
+	stored, milestones := map[string]int{}, 0
+	var tr string
+	var lvl int
+	var unseen bool
+	if _, err := pgx.ForEachRow(rows, []any{&tr, &lvl, &unseen}, func() error {
+		stored[tr], milestones = lvl, milestones+smith.MilestoneXP(lvl)
+		if unseen && titles[tr] != "" {
+			v.RankUp.Swords = append(v.RankUp.Swords, SwordUp{Training: tr, Title: titles[tr], Level: lvl, Rank: v.SwordLadder[lvl].Name})
 		}
-	}
-	if err := s.DB.QueryRow(ctx, `SELECT level, NOT seen FROM ranks WHERE user_id = $1`, userID).Scan(&v.Level, &v.RankUp); err != nil {
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	v.Rank = v.Ladder[min(v.Level, len(v.Ladder)-1)].Name
-	rows, err := s.DB.Query(ctx, `SELECT training, earned_at FROM badges WHERE user_id = $1 ORDER BY earned_at`, userID)
+	for i := range v.Swords {
+		sw := &v.Swords[i]
+		sw.Level = stored[sw.Training]
+		sw.Rank = v.SwordLadder[sw.Level].Name
+		if sw.Level+1 < len(v.SwordLadder) {
+			sw.Next = &v.SwordLadder[sw.Level+1]
+		}
+	}
+	xp := int(math.Round(work)) + milestones
+	if _, err := s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, $2, $3, true)
+		ON CONFLICT (user_id) DO UPDATE SET xp = GREATEST(smiths.xp, EXCLUDED.xp)`, userID, xp, smith.LevelFor(xp, v.SmithLadder)); err != nil {
+		return nil, err
+	}
+	if err := s.DB.QueryRow(ctx, `SELECT xp FROM smiths WHERE user_id = $1`, userID).Scan(&v.Smith.XP); err != nil {
+		return nil, err
+	}
+	// The row exists now (inserted seen, silently, on the first computation): from here the level only rises, and the
+	// one caller whose update returns a row announces it.
+	var raisedTo int
+	err = s.DB.QueryRow(ctx, `UPDATE smiths SET level = $2, earned_at = now(), seen = false WHERE user_id = $1 AND level < $2 RETURNING level`,
+		userID, smith.LevelFor(v.Smith.XP, v.SmithLadder)).Scan(&raisedTo)
+	raised := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if err := s.DB.QueryRow(ctx, `SELECT level, NOT seen FROM smiths WHERE user_id = $1`, userID).Scan(&v.Smith.Level, &unseen); err != nil {
+		return nil, err
+	}
+	ref := smith.RefFor(v.Smith.Level)
+	v.Smith.Title = ref.Title
+	if v.Smith.Level+1 < len(v.SmithLadder) {
+		v.Smith.Next = &v.SmithLadder[v.Smith.Level+1]
+	}
+	if unseen {
+		v.RankUp.Smith = &ref
+	}
+	if raised {
+		s.rankUp(ctx, email, name, ref.Title)
+	}
+	rows, err = s.DB.Query(ctx, `SELECT training, earned_at FROM badges WHERE user_id = $1 ORDER BY earned_at`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -144,24 +229,51 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 	return v, nil
 }
 
-func (s *Service) rankUp(ctx context.Context, p *config.Platform, email, name, rank string) {
+func (s *Service) rankUp(ctx context.Context, email, name, title string) {
 	if s.Notify == nil {
 		return
 	}
-	to := []string{email}
 	who := name
 	if who == "" {
 		who = email
 	}
-	ev := notify.Event{Kind: notify.RankUp, To: to, Subject: who + " reached " + rank,
-		Text: who + " is now " + rank + " in the Crucible. The forge remembers.", Link: "/"}
+	a := smith.Article(title)
+	ev := notify.Event{Kind: notify.RankUp, To: []string{email}, Subject: who + " is now " + a + " " + title,
+		Text: who + " is now " + a + " " + title + " of the Crucible. The forge remembers.", Link: "/"}
 	if err := s.Notify.Notify(context.WithoutCancel(ctx), ev); err != nil {
 		slog.Error("queueing the rank-up notification failed", "err", err)
 	}
 }
 
-// SeenRankUp clears the banner only for the level the client was shown; a rank raised since stays unseen.
-func (s *Service) SeenRankUp(ctx context.Context, userID int64, level int) error {
-	_, err := s.DB.Exec(ctx, `UPDATE ranks SET seen = true WHERE user_id = $1 AND level = $2`, userID, level)
-	return err
+// SeenRankUp clears one banner, only at the level the client was shown; a rank raised since stays unseen.
+func (s *Service) SeenRankUp(ctx context.Context, userID int64, kind, training string, level int) error {
+	switch kind {
+	case "smith":
+		_, err := s.DB.Exec(ctx, `UPDATE smiths SET seen = true WHERE user_id = $1 AND level = $2`, userID, level)
+		return err
+	case "sword":
+		_, err := s.DB.Exec(ctx, `UPDATE sword_ranks SET seen = true WHERE user_id = $1 AND training = $2 AND level = $3`, userID, training, level)
+		return err
+	}
+	return apperr.Wrap(apperr.Invalid, `kind must be "smith" or "sword"`)
+}
+
+// SwordRanks are these people's sword levels by training, for Journey.
+func (s *Service) SwordRanks(ctx context.Context, userIDs []int64) (map[int64]map[string]int, error) {
+	rows, err := s.DB.Query(ctx, `SELECT user_id, training, level FROM sword_ranks WHERE user_id = ANY($1)`, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := map[int64]map[string]int{}
+	var id int64
+	var tr string
+	var lvl int
+	_, err = pgx.ForEachRow(rows, []any{&id, &tr, &lvl}, func() error {
+		if out[id] == nil {
+			out[id] = map[string]int{}
+		}
+		out[id][tr] = lvl
+		return nil
+	})
+	return out, err
 }

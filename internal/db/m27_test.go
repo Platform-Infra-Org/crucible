@@ -10,7 +10,7 @@ import (
 	"crucible/internal/db/dbtest"
 )
 
-// 00027 adds the smith thresholds and the sword_ranks and smiths tables (ranks stays until the code stops writing it).
+// 00027 adds the smith thresholds and the sword_ranks and smiths tables.
 func TestMigration00027(t *testing.T) {
 	pool := dbtest.New(t)
 	ctx := t.Context()

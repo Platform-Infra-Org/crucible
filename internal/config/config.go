@@ -98,6 +98,9 @@ func (s *SmithThresholds) Fill() error {
 	}
 	st := s.Steps()
 	for i := 1; i < len(st); i++ {
+		if st[i] > 1_000_000_000 {
+			return fmt.Errorf("a smith rank needs at most 1,000,000,000 experience, got %d", st[i])
+		}
 		if st[i] <= st[i-1] {
 			return fmt.Errorf("each smith rank must need more than the one before (0 < apprentice < journeyman < smith < master_smith < grandmaster), got %v", st[1:])
 		}

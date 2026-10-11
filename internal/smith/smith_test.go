@@ -35,7 +35,7 @@ func TestLookupDefaultsToBellowsHand(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	var id int64
-	if err := db.QueryRow(ctx, `INSERT INTO users (sub, email, name) VALUES ('s', 'smith@crucible.local', 'S') RETURNING id`).Scan(&id); err != nil {
+	if err := db.QueryRow(ctx, `INSERT INTO users (sub, email, name) VALUES ('s', 'Smith@Crucible.Local', 'S') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, 600, 2, true)`, id); err != nil {

@@ -493,8 +493,9 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 	}
 }
 
-// AddSmiths sets the author's and reviewer's smith ranks on edits headed for a client, in one query.
-func (s *Service) AddSmiths(ctx context.Context, list ...*Edit) error {
+// addSmiths sets the author's and reviewer's smith ranks on edits headed for a client, in one query. List and Get
+// call it, and every method that returns an edit (Create, Approve, Reject, Withdraw) ends in Get.
+func (s *Service) addSmiths(ctx context.Context, list ...*Edit) error {
 	var emails []string
 	for _, e := range list {
 		emails = append(emails, e.Author, e.Reviewer)
@@ -562,7 +563,7 @@ func (s *Service) List(ctx context.Context, u *auth.User) ([]Edit, error) {
 	for i := range out {
 		ptrs[i] = &out[i]
 	}
-	return out, s.AddSmiths(ctx, ptrs...)
+	return out, s.addSmiths(ctx, ptrs...)
 }
 
 func (s *Service) Get(ctx context.Context, u *auth.User, id int64) (*Edit, error) {
@@ -577,7 +578,7 @@ func (s *Service) Get(ctx context.Context, u *auth.User, id int64) (*Edit, error
 	if !visible(st, u, e) {
 		return nil, apperr.Wrap(apperr.NotFound, "edit not found")
 	}
-	return e, s.AddSmiths(ctx, e)
+	return e, s.addSmiths(ctx, e)
 }
 
 func (s *Service) Approve(ctx context.Context, u *auth.User, id int64, note string) (*Edit, error) {

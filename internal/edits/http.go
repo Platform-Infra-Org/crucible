@@ -45,9 +45,6 @@ func (s *Service) Routes(r chi.Router) {
 			return
 		}
 		e, err := s.Create(r.Context(), user(r), in)
-		if err == nil {
-			err = s.AddSmiths(r.Context(), e)
-		}
 		reply(w, e, err)
 	})
 	r.Get("/api/edits/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -80,9 +77,6 @@ func (s *Service) Routes(r chi.Router) {
 			e, err = s.Reject(r.Context(), user(r), n, body.Note)
 		default:
 			e, err = s.Withdraw(r.Context(), user(r), n)
-		}
-		if err == nil {
-			err = s.AddSmiths(r.Context(), e)
 		}
 		reply(w, e, err)
 	})

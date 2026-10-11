@@ -302,4 +302,10 @@ func TestSmithThresholdsDefaultAndValidate(t *testing.T) {
 	if err := (&SmithThresholds{Apprentice: -1}).Fill(); err == nil {
 		t.Fatal("negative refused")
 	}
+	if err := (&SmithThresholds{Grandmaster: 1_000_000_001}).Fill(); err == nil || !strings.Contains(err.Error(), "1,000,000,000") {
+		t.Fatalf("a threshold past a billion is refused before it reaches Postgres: %v", err)
+	}
+	if err := (&SmithThresholds{Grandmaster: 1_000_000_000}).Fill(); err != nil {
+		t.Fatalf("a billion is allowed: %v", err)
+	}
 }

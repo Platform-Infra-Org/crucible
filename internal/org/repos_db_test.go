@@ -82,13 +82,31 @@ func TestTokenAndKeyAreRefusedOnTheWrongKindOfURL(t *testing.T) {
 	ctx := context.Background()
 	s := repoStore(t)
 	for name, b := range map[string]RepoBody{
-		"a token over ssh":        {URL: "git@github.com:o/r.git", Auth: "token", Secret: "x"},
-		"a deploy key over https": {URL: "https://github.com/o/r.git", Auth: "ssh"},
-		"a credential in the URL": {URL: "https://tok@github.com/o/r.git", Auth: "token", Secret: "x"},
+		"a token over ssh":         {URL: "git@github.com:o/r.git", Auth: "token", Secret: "x"},
+		"a credential in the URL":  {URL: "https://tok@github.com/o/r.git", Auth: "token", Secret: "x"},
+		"a deploy key for no repo": {URL: "https://github.com", Auth: "ssh"},
 	} {
 		if _, err := s.ConnectRepo(ctx, "admin@x", 0, b, s.Secrets); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+// Choosing a deploy key for an http(s) repository reaches the same repository over SSH: Crucible stores the git@
+// form rather than making someone retype the URL.
+func TestADeployKeyOverHTTPSStoresTheSSHForm(t *testing.T) {
+	ctx := context.Background()
+	s := repoStore(t)
+	id, err := s.ConnectRepo(ctx, "admin@x", 0, RepoBody{URL: "https://github.com/org/trainings.git", Auth: "ssh"}, s.Secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var url, auth string
+	if err := s.DB.QueryRow(ctx, `SELECT url, auth FROM repositories WHERE id = $1`, id).Scan(&url, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if url != "git@github.com:org/trainings.git" || auth != "ssh" {
+		t.Fatalf("stored %q as %q", url, auth)
 	}
 }
 

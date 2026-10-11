@@ -65,8 +65,13 @@ func cleanRepoBody(b RepoBody) (RepoBody, error) {
 	if b.Auth == "token" && !strings.HasPrefix(strings.ToLower(b.URL), "http") {
 		return b, apperr.Wrap(apperr.Invalid, "a token is only used for http:// and https:// repositories")
 	}
-	if b.Auth == "ssh" && !IsSSH(b.URL) {
-		return b, apperr.Wrap(apperr.Invalid, "a deploy key is only used for ssh:// and git@host:path repositories")
+	if b.Auth == "ssh" {
+		// A deploy key reaches the same repository over SSH, so take the URL as given and store its SSH form.
+		ssh, err := ToSSH(b.URL)
+		if err != nil {
+			return b, err
+		}
+		b.URL = ssh
 	}
 	return b, nil
 }

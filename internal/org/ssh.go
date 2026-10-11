@@ -75,6 +75,22 @@ func parseURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// ToSSH turns an http(s) repository URL into the SSH form of the same repository, so choosing a deploy key does not
+// make someone retype their URL. One that is already SSH is returned unchanged.
+func ToSSH(raw string) (string, error) {
+	if IsSSH(raw) {
+		return raw, nil
+	}
+	u, err := parseURL(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Host == "" || strings.Trim(u.Path, "/") == "" {
+		return "", apperr.Wrap(apperr.Invalid, "this URL does not name a repository on a host")
+	}
+	return "git@" + u.Hostname() + ":" + strings.Trim(u.Path, "/"), nil
+}
+
 // IsSSH reports whether a URL is one Crucible would reach over SSH.
 func IsSSH(raw string) bool {
 	if strings.HasPrefix(strings.ToLower(raw), "ssh://") {

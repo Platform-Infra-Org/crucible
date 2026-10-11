@@ -118,7 +118,8 @@ function Credential({ repo, canKeepSecrets, onDone }: { repo: Repo; canKeepSecre
       <Kinds url={repo.url} auth={auth} setAuth={setAuth} canKeepSecrets={canKeepSecrets} />
       {auth === 'token' && <TokenFields username={username} setUsername={setUsername} secret={secret} setSecret={setSecret} hasSecret={repo.has_secret} />}
       {auth === 'ssh' && <p className="muted">Crucible makes the keypair and keeps the private half; you add the
-        public half to the repository. {repo.auth === 'ssh' && 'Saving again makes a new pair, so the old key stops working.'}</p>}
+        public half to the repository.{!isSSH(repo.url) && ' This repository will be read over SSH from now on, so its URL changes to the git@ form of the same repository.'}
+        {repo.auth === 'ssh' && ' Saving again makes a new pair, so the old key stops working.'}</p>}
       <button className="primary" disabled={busy}>Save credential</button>
     </form>
   )
@@ -135,7 +136,7 @@ function Kinds({ url, auth, setAuth, canKeepSecrets }: { url: string; auth: Repo
       <select value={auth} onChange={(e) => setAuth(e.target.value as Repo['auth'])}>
         <option value="none">Nothing — the repository is public</option>
         <option value="token" disabled={!canKeepSecrets || !/^https?:\/\//i.test(url)}>An access token</option>
-        <option value="ssh" disabled={!canKeepSecrets || !isSSH(url)}>A deploy key Crucible makes</option>
+        <option value="ssh" disabled={!canKeepSecrets || !(isSSH(url) || /^https?:\/\//i.test(url))}>A deploy key Crucible makes</option>
       </select>
     </label>
   )
@@ -202,7 +203,8 @@ function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChan
       <Kinds url={url} auth={auth} setAuth={setAuth} canKeepSecrets={canKeepSecrets} />
       {auth === 'token' && <TokenFields username={username} setUsername={setUsername} secret={secret} setSecret={setSecret} hasSecret={false} />}
       {auth === 'ssh' && <p className="muted">Crucible makes a keypair for this repository and shows the public half
-        once it is connected; you add that to the repository as a deploy key with write access.</p>}
+        once it is connected; you add that to the repository as a deploy key with write access.
+        {!isSSH(url) && ' An https:// URL is stored as the git@ form of the same repository.'}</p>}
       <button className="primary" disabled={busy}>Connect repository</button>
     </form>
   )

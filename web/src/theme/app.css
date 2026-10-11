@@ -766,6 +766,11 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .repo-trainings .chips { margin: 0; }
 .repo .hint { margin: 0.4rem 0 0; }
 .repo-actions { margin: 0.9rem 0 0; }
+/* A credential, or the deploy key to copy, is a section of the row rather than a continuation of its buttons:
+   a rule separates it, and its fields line up with everything else in the row. */
+.repo form.stack, .deploy-key { margin: 0.9rem 0 0; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.repo form.stack > *, .deploy-key > * { max-width: 46rem; }
+.repo form.stack label { width: 100%; }
 .deploy-key { margin: 0.75rem 0 0; }
 .deploy-key .key { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem;
   overflow-x: auto; margin: 0.5rem 0; }

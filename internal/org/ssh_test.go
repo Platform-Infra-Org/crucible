@@ -117,3 +117,23 @@ func TestIsSSH(t *testing.T) {
 		}
 	}
 }
+
+func TestToSSHRewritesAnHTTPSRepository(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://github.com/org/repo.git":            "git@github.com:org/repo.git",
+		"https://gitlab.example.com/group/sub/x.git": "git@gitlab.example.com:group/sub/x.git",
+		"http://git.internal/o/r.git":                "git@git.internal:o/r.git",
+		"git@github.com:org/repo.git":                "git@github.com:org/repo.git", // already SSH: unchanged
+		"ssh://git@github.com/org/repo.git":          "ssh://git@github.com/org/repo.git",
+	} {
+		got, err := ToSSH(raw)
+		if err != nil || got != want {
+			t.Errorf("ToSSH(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	for _, bad := range []string{"https://github.com", "https://", "not a url at all"} {
+		if got, err := ToSSH(bad); err == nil {
+			t.Errorf("ToSSH(%q) = %q, want an error", bad, got)
+		}
+	}
+}

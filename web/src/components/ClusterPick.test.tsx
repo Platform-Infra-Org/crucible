@@ -14,6 +14,7 @@ describe('cluster labs', () => {
   test('no contexts says how to get one', () => {
     const h = renderToStaticMarkup(<ClusterPick contexts={[]} value="" onChange={() => {}} clusterWide={false} consent onConsent={() => {}} />)
     expect(h).toContain('crucible-agent cluster up')
+    expect(h).not.toContain('No cluster?') // the sentence before already says so
   })
   test('health lists each release and what is not ready, in words', () => {
     const h = renderToStaticMarkup(<ReleaseHealth health={{ releases: [{ name: 'forge', status: 'progressing', unready: ['deployment/forge: 1 of 2 ready'] }] }} />)

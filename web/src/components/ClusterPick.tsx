@@ -7,8 +7,8 @@ export function ClusterPick({ contexts, value, onChange, clusterWide, consent, o
   if (contexts.length === 0) {
     return (
       <p className="muted cluster-pick">
-        Your laptop agent doesn&apos;t see a cluster. No cluster? Run <code>crucible-agent cluster up</code> to make one on this laptop (needs Docker), or point the agent at
-        your kubeconfig with <code>--kubeconfig</code>, and it shows up here.
+        Your laptop agent doesn&apos;t see a cluster. Run <code>crucible-agent cluster up</code> to make one on this laptop (needs
+        Docker), or point the agent at your kubeconfig with <code>--kubeconfig</code>, and it shows up here.
       </p>
     )
   }

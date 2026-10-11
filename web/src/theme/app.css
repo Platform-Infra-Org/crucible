@@ -115,7 +115,12 @@ button.danger-text { color: var(--danger); border-color: var(--danger); }
 .enroll [role='alert'] { flex-basis: 100%; margin: 0; }
 /* A team's people: the tag next to each person is a pill; for a leader or an admin it opens a menu of the four tags. The
    pill's text stays --text; the tag's colour is only its edge and tint, and the word says the tag. */
-.people td { vertical-align: middle; }
+/* Grouped by tag, each group is its own table, so fix the columns: left to itself every table sizes to its own rows
+   and the Tag column lands somewhere else in each one (a group with display names is wider than one without). */
+.people { table-layout: fixed; min-width: 30rem; } /* below that the wrap scrolls rather than break emails mid-word */
+.people :is(th, td):nth-child(2) { width: 11rem; }
+.people :is(th, td):nth-child(3) { width: 7.5rem; }
+.people td { vertical-align: middle; overflow-wrap: anywhere; }
 .people td .muted { margin-left: 0.35rem; }
 .tag-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.7rem; border-radius: 999px; font-size: 0.85rem;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text); line-height: 1.5; }

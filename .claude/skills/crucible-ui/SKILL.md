@@ -83,7 +83,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Segmented choice | `.segmented` with `button[aria-pressed]` (Journey's By person / By training). Keep state in the URL with `useSearchParams` when a view should be shareable. |
 | Lists of people | `.chips` of `.chip` (with an × button to remove); `.role-row` for label + chips rows. |
 | Facts | `dl.facts` for label/value pairs; `.badge` for status and small tags (`.complete`, `.in_progress`, `.warn`, edit statuses). |
-| Tables | `table.grid` (quiet uppercase headers, rows light up on hover), `td.actions` right-aligned. |
+| Tables | `table.grid` (quiet uppercase headers, rows light up on hover), `td.actions` right-aligned. When the same table repeats once per group (the team's people By tag), give it `table-layout: fixed` with a width per column: left to itself each table sizes to its own rows and a column lands somewhere else in each one. Pair it with a `min-width` so narrow screens scroll the `.table-wrap` instead of breaking emails mid-word. |
 | Progress | `MoltenBar` (flowing metal; respects calm), `meter` for budgets (molten → `--accent-2` past `low` → `--danger` at `high`). |
 | Empty state | `<p className="muted empty">No labs yet.</p>`: a dashed hearth with the ⚒ mark. Say what will appear and, if possible, how to get it. |
 | Disclosure | `details.lab-settings` with a `summary` in the accent colour (secondary settings, roster editing). |

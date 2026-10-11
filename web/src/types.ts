@@ -18,10 +18,10 @@ export type ManagedTraining = {
 export type TrainingsAdmin = {
   is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
 }
-export type Person = { email: string; name: string; team: string; tag: Tag | '' }
+export type Person = { email: string; name: string; team: string; tag: Tag | ''; smith?: SmithRef }
 export type People = { people: Person[]; groups: string[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
-export type Member = { email: string; name: string; tag: Tag }
+export type Member = { email: string; name: string; tag: Tag; smith?: SmithRef }
 export type TeamView = {
   id: string; name: string; members: Member[]
   budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]; schedules: string[]; version: number
@@ -69,7 +69,7 @@ export type Approval = {
   id: string; requester: string; requester_name: string; team: string; training: string; module: string; lab_title: string
   runtime: string; hourly_usd: number; estimate_usd: number; ttl_s: number; tier: Tier; over_cap: boolean
   requested_at: string; escalate_at?: string; team_spend: Spend; program_spend: Spend; recent: RecentLab[]; schedule: ScheduleInfo
-  kind: 'request' | 'extension'; extend_until?: string
+  kind: 'request' | 'extension'; extend_until?: string; requester_smith?: SmithRef
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
@@ -93,7 +93,7 @@ export type Submission = {
   id: number; trainee: string; trainee_name: string; team: string; training: string; module: string
   kind: 'question' | 'task' | 'lab'; item: string; lab_id?: string; type: SubmissionType; prompt: string; rubric: string
   max_points: number; answer: string; files: SubmissionFile[]; status: Feedback['status']; points: number
-  feedback: string; scored_by?: string; scored_at?: string; created_at: string
+  feedback: string; scored_by?: string; scored_at?: string; created_at: string; trainee_smith?: SmithRef
 }
 export type CheckRun = { lab_id: string; at: string; exit_code: number; output: string; answer?: string; self_reported: boolean }
 export type TaskEvidence = {
@@ -103,7 +103,7 @@ export type TaskEvidence = {
 export type TranscriptInfo = { id: number; lab_id: string; terminal: string; bytes: number; truncated: boolean; started_at: string; ended_at: string }
 export type LabEvidence = { runtime: string; self_reported: boolean; tasks: TaskEvidence[]; transcripts: TranscriptInfo[] }
 export type AnvilDetail = { submission: Submission; history: Submission[]; lab?: LabEvidence }
-export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string }
+export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string; trainee_smith?: SmithRef }
 
 export type LedgerLab = {
   id: string; team: string; training: string; module: string; requester: string; runtime: string; state: LabState
@@ -132,7 +132,7 @@ export type Forge = {
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
-export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string
+export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string; smith?: SmithRef; sword?: { level: number; rank: string }
   cluster_labs?: { module: string; context: string; health?: Health }[] }
 export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
 export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
@@ -140,7 +140,7 @@ export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stal
 export type ContentEdit = {
   id: number; training: string; title: string; author: string; base_sha: string; head_sha?: string; branch: string; status: EditStatus
   reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; ops?: EditOp[]; diff?: string
-  can_review: boolean; can_withdraw: boolean
+  can_review: boolean; can_withdraw: boolean; author_smith?: SmithRef; reviewer_smith?: SmithRef
 }
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }

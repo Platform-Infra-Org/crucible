@@ -5,7 +5,7 @@ import { JourneyPage } from './Journey'
 import type { JourneyRow } from '../types'
 
 const rows: JourneyRow[] = [
-  { email: 't@x', name: 'Tara', avatar: 'flame', team: 'forge', training: 'f101', title: 'Forge 101', percent: 50,
+  { email: 't@x', name: 'Tara', avatar: 'flame', team: 'forge', training: 'f101', title: 'Forge 101', percent: 50, smith: { level: 3, title: 'Smith' }, sword: { level: 3, rank: 'Blade' },
     cells: [{ module: 'm1', title: 'Sparks', heat: 'forged' }, { module: 'm2', title: 'Embers', heat: 'cold' }],
     flags: [{ kind: 'inactive', detail: 'no activity for 5 business days' }] },
   { email: 'u@x', name: 'Uma', team: 'forge', training: 'f101', title: 'Forge 101', percent: 100, cells: [], flags: [] },
@@ -23,6 +23,9 @@ test('by person: a panel each, with the molten bar, the cells, the flags and the
   expect(h).toContain('<strong>1</strong> needs a look')
   expect(h).toMatch(/aria-label="Tara".*aria-label="Uma"/)
   expect(h).toContain('aria-valuenow="50"')
+  expect(h).toContain('<span class="smith-mark l3">')
+  expect(h).toContain('<span class="badge">Blade</span>')
+  expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
   expect(h).toContain('Sparks<span class="sr-only">: forged</span>')
   expect(h).toContain('Gone quiet: no activity for 5 business days')
   expect(h).toContain('data-testid="journey-t@x-f101"')

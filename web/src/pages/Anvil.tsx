@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
 import type { AnvilDetail, LabEvidence, SignOff, Submission, SubmissionType, TaskEvidence } from '../types'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { TranscriptView } from '../components/Transcript'
@@ -38,7 +39,7 @@ export function AnvilPage() {
         {data.map((s) => (
           <li key={s.id} className="card">
             <Link to={`/anvil/${s.id}`} aria-label={`Submission from ${s.trainee}: ${s.prompt}`}>
-              <strong>{s.trainee_name || s.trainee}</strong> · {typeLabel[s.type]} · {s.training} / {s.module}
+              <strong>{s.trainee_name || s.trainee}</strong> <SmithMark smith={s.trainee_smith} /> · {typeLabel[s.type]} · {s.training} / {s.module}
               <span className="muted"> · {new Date(s.created_at).toLocaleString()}</span>
               <p>{s.prompt}</p>
             </Link>
@@ -78,7 +79,7 @@ function SignOffRow({ o, onDone }: { o: SignOff; onDone: () => void }) {
   }
   return (
     <li className="card" aria-label={`Sign-off for ${o.trainee}: ${o.prompt}`}>
-      <p><strong>{o.trainee_name || o.trainee}</strong> · {o.training} / {o.module} · {o.points} pts</p>
+      <p><strong>{o.trainee_name || o.trainee}</strong> <SmithMark smith={o.trainee_smith} /> · {o.training} / {o.module} · {o.points} pts</p>
       <p>{o.prompt}</p>
       <div className="row">
         <label>Notes <input value={notes} maxLength={5000} onChange={(e) => setNotes(e.target.value)} /></label>
@@ -117,7 +118,7 @@ export function AnvilDetailPage() {
   return (
     <section className="page anvil">
       <Link to="/anvil">← Back to the Anvil</Link>
-      <h1>{typeLabel[s.type]} from {s.trainee_name || s.trainee}</h1>
+      <h1>{typeLabel[s.type]} from {s.trainee_name || s.trainee} <SmithMark smith={s.trainee_smith} /></h1>
       <p className="muted">{s.trainee} · {s.training} / {s.module} · submitted {new Date(s.created_at).toLocaleString()}</p>
       <h2>Prompt</h2>
       <p className="pre">{s.prompt}</p>
@@ -255,7 +256,7 @@ function ResetPanel({ s, onDone }: { s: Submission; onDone: () => void }) {
   return (
     <section className="card" aria-label="Admin reset">
       <h2>Reset (admin)</h2>
-      <p className="muted">Forge ranks are never lowered by a reset.</p>
+      <p className="muted">Sword and smith ranks are never lowered by a reset.</p>
       <div className="row">
         <label><input type="checkbox" checked={attempts} onChange={(e) => setAttempts(e.target.checked)} /> Clear this module&apos;s quiz attempts</label>
         <label><input type="checkbox" checked={score} disabled={s.status !== 'scored'} onChange={(e) => setScore(e.target.checked)} /> Reopen this score</label>

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { ContentEdit, DraftInfo } from '../types'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 
@@ -69,7 +70,7 @@ export function EditList({ training }: { training?: string }) {
         {list.map((e) => (
           <li key={e.id}>
             <Link to={`/edits/${e.id}`}>{e.title}</Link> <span className={`badge ${e.status}`}>{e.status}</span>{' '}
-            <span className="muted">{training ? e.author : `${e.training} · ${e.author}`}</span>
+            <span className="muted">{training ? e.author : `${e.training} · ${e.author}`}</span> <SmithMark smith={e.author_smith} />
           </li>
         ))}
       </ul>

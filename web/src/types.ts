@@ -49,13 +49,16 @@ export type LabView = {
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number
   can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
-  log?: string[]
+  log?: string[]; cluster_context?: string; health?: Health
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
 export type HintResult = { index: number; text: string; cost: number; lab: LabView }
 export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null
-  estimate_usd: number; needs_approval: boolean; blocked?: string }
+  estimate_usd: number; needs_approval: boolean; blocked?: string; contexts?: KubeContext[]; cluster_wide?: boolean }
+export type KubeContext = { name: string; server: string }
+export type ReleaseStatus = 'healthy' | 'progressing' | 'failing'
+export type Health = { releases: { name: string; status: ReleaseStatus; unready: string[] }[] }
 
 export type NotificationPrefs = { email_enabled: boolean; kinds: { kind: string; label: string; muted: boolean }[] }
 

@@ -317,6 +317,13 @@ a.button-link:hover { border-color: var(--accent); }
 .lab-head h1 { font-size: 1.1rem; margin: 0; }
 .lab-head button { white-space: nowrap; } /* "Hide tasks", "End lab" stay one line; the note beside them wraps instead */
 .lab-body { display: grid; min-height: 0; }
+/* A cluster lab's start panel: the context picker and the cluster-wide consent. */
+.stack.cluster-pick, p.cluster-pick { margin: 0.75rem auto 1.25rem; width: min(100%, 32rem); text-align: left; }
+.stack.cluster-pick { grid-template-columns: minmax(0, 1fr); } /* a long context name wraps in the select instead of widening the page */
+.cluster-pick select { width: 100%; min-width: 0; }
+/* A cluster lab's releases and what is not ready yet. */
+.release-health ul ul { margin: 0.25rem 0 0.5rem 1rem; }
+.release-health > ul { list-style: none; padding: 0; margin: 0; }
 .tasks { overflow: auto; padding: 1rem 1.25rem; background: var(--surface); position: relative; }
 .task-pips { display: flex; gap: 0.4rem; list-style: none; padding: 0; margin: 0 0 1rem; }
 .pip { width: 2.2rem; height: 2.2rem; border-radius: 50%; padding: 0; }

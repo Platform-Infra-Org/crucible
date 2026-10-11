@@ -140,6 +140,7 @@ export type AdminSettings = {
   version: number; default_theme: string; cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
   escalation_hours: number
   ranks: { ingot: number; tempered: number; blade: number; sword: number; masterwork: number }
+  smith: { apprentice: number; journeyman: number; smith: number; master_smith: number; grandmaster: number }
 }
 export type Schedule = { timezone: string; windows: { days: string[]; start: string; end: string }[] }
 

@@ -78,6 +78,7 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
   const [t2, setT2] = useState(t ? String(t.tier2_usd) : '')
   const [esc, setEsc] = useState(String(s.escalation_hours))
   const [ranks, setRanks] = useState(() => Object.fromEntries(Object.entries(s.ranks).map(([k, v]) => [k, String(v)])))
+  const [smith, setSmith] = useState(() => Object.fromEntries(Object.entries(s.smith).map(([k, v]) => [k, String(v)])))
   const { run, fail, note, busy } = useSave(reload)
   const save = (e: FormEvent) => {
     e.preventDefault()
@@ -87,7 +88,8 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
       await api('/api/admin/settings', { method: 'PUT', json: {
         version: s.version, default_theme: theme, cost_tiers: r.tiers,
         escalation_hours: Number(esc) || 0,
-        ranks: Object.fromEntries(Object.entries(ranks).map(([k, v]) => [k, Number(v)])) } })
+        ranks: Object.fromEntries(Object.entries(ranks).map(([k, v]) => [k, Number(v)])),
+        smith: Object.fromEntries(Object.entries(smith).map(([k, v]) => [k, Number(v)])) } })
     }, 'Settings saved.')
   }
   return (
@@ -104,10 +106,15 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
       <label>Training admins approve up to (USD) <input type="number" min={0} step="0.01" value={t1} onChange={(e) => setT1(e.target.value)} /></label>
       <label>Admin approval above (USD) <input type="number" min={0} step="0.01" value={t2} onChange={(e) => setT2(e.target.value)} /></label>
       <label>Hours before a waiting request escalates <input type="number" min={0} step="0.5" value={esc} onChange={(e) => setEsc(e.target.value)} /></label>
-      <h2>Forge ranks</h2>
-      <p className="muted">The percent of a training a trainee must complete to reach each rank.</p>
+      <h2>Sword ranks</h2>
+      <p className="muted">The percent of a training a trainee must complete for each sword rank.</p>
       {Object.keys(ranks).map((k) => (
         <label key={k}>{k[0].toUpperCase() + k.slice(1)} at (%) <input type="number" min={0} max={100} value={ranks[k]} onChange={(e) => setRanks({ ...ranks, [k]: e.target.value })} /></label>
+      ))}
+      <h2>Smith ranks</h2>
+      <p className="muted">The experience a smith needs for each rank. Bellows Hand is always 0.</p>
+      {Object.keys(smith).map((k) => (
+        <label key={k}>{k.split('_').map((w) => w[0].toUpperCase() + w.slice(1)).join(' ')} at (experience) <input type="number" min={1} step={1} value={smith[k]} onChange={(e) => setSmith({ ...smith, [k]: e.target.value })} /></label>
       ))}
       <button className="primary" disabled={busy}>Save settings</button>
       {note}

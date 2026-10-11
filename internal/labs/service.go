@@ -1627,7 +1627,7 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 		if !active[id] {
 			runtime := "local"
 			_ = s.DB.QueryRow(ctx, `SELECT runtime FROM lab_instances WHERE id = $1`, id).Scan(&runtime)
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(runtime))
 			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: runtime}); err != nil {
 				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
 			}

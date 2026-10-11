@@ -470,3 +470,52 @@ func TestHealthReportsNeverCarryNullLists(t *testing.T) {
 		t.Fatalf("stored: %s", b)
 	}
 }
+
+// deadlineRunner records which labs it destroyed and how long each destroy was given.
+type deadlineRunner struct {
+	*fakeRunner
+	mu   sync.Mutex
+	left map[string]time.Duration
+}
+
+func (d *deadlineRunner) Destroy(ctx context.Context, in *Instance) error {
+	dl, _ := ctx.Deadline()
+	d.mu.Lock()
+	d.left[in.ID] = time.Until(dl)
+	d.mu.Unlock()
+	return d.fakeRunner.Destroy(ctx, in)
+}
+
+// An agent reconnecting with a cluster lab that ended while it was offline removes it through the cluster runner, with
+// a cluster destroy's time; a running cluster lab it no longer has ends.
+func TestReconcileAgentWithClusterLabs(t *testing.T) {
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	mk := func(st State) *Instance {
+		in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+			Runtime: "cluster", State: st, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		return in
+	}
+	ended, lost := mk(Destroyed), mk(Ready)
+	run := &deadlineRunner{fakeRunner: &fakeRunner{}, left: map[string]time.Duration{}}
+	f.s.Runners["cluster"] = run
+	f.s.ReconcileAgent(ctx, f.u.ID, []string{ended.ID})
+	f.waitState(t, f.u, lost.ID, Destroyed)
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if d, ok := run.left[ended.ID]; !ok || d < 6*time.Minute {
+		t.Fatalf("the ended lab's removal: called %v with %v", ok, d)
+	}
+	if _, ok := run.left[lost.ID]; !ok {
+		t.Fatal("the lost lab was not destroyed through the cluster runner")
+	}
+	f.run.mu.Lock()
+	defer f.run.mu.Unlock()
+	if slices.Contains(f.run.destroyed, ended.ID) {
+		t.Fatal("a cluster lab went to the laptop runner")
+	}
+}

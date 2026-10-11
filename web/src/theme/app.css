@@ -608,6 +608,12 @@ button.icon-btn:hover { background: var(--surface-2); color: var(--text); }
     radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--accent-2) 7%, transparent), transparent 70%), var(--bg); }
 .gate-inner { position: relative; z-index: 1; width: min(560px, 100%); display: grid; justify-items: center; gap: 0.6rem; text-align: center; animation: gate-in 0.6s ease-out backwards; }
 @keyframes gate-in { from { opacity: 0; transform: translateY(10px); } }
+.gate-title, .gate-way { display: grid; justify-items: center; gap: 0.6rem; }
+/* None: no animation; the title holds the centre of the screen, the way in sits under it */
+.gate.plain .gate-inner { min-height: calc(100dvh - 4rem); grid-template-rows: 1fr auto 1fr; gap: 1.5rem; }
+.gate.plain .gate-title { grid-row: 2; }
+.gate.plain .gate-way { grid-row: 3; align-self: start; }
+.gate.plain .gate-brand { font-size: clamp(3rem, 11vw, 5.5rem); }
 .gate-brand { margin: 0; font-family: Cinzel, Georgia, serif; font-weight: 700; font-size: clamp(2.4rem, 7vw, 3.6rem); letter-spacing: 0.06em; line-height: 1.1; }
 .gate-brand .brand-mark { color: var(--accent); text-shadow: var(--glow); }
 .gate-motto { margin: 0; color: var(--muted); font-style: italic; }

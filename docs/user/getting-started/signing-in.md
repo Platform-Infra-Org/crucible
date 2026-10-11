@@ -14,7 +14,8 @@ provider (Keycloak or AWS Cognito, depending on how Crucible was set up).
 1. Open Crucible. If you are not signed in, you see the forge's gate, with an animation of the six forge ranks. Choose
    it with the switch at the bottom: **Anvil**, a hammer forging ore into a masterwork, or **Rune sword**, a legendary
    sword whose six engraved runes light one by one, each in its own colour, until all six are lit and the sword stays
-   enchanted, a blue-violet aura round it, motes circling it and lightning running about it. Your browser remembers the choice.
+   enchanted, a blue-violet aura round it, motes circling it and lightning running about it. **None** shows no animation, just the Crucible title in the middle of the screen. Your
+   browser remembers the choice.
    (With your system's reduced motion, the finished masterwork rests instead.)
 2. Choose **Enter the forge**. Crucible sends you to your company sign-in page.
 3. Sign in there. You come back to the Hearth.

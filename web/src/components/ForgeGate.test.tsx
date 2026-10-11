@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ForgeGate } from './ForgeGate'
 
@@ -27,4 +27,18 @@ test('two animations to choose from; the anvil when nothing is remembered', () =
   expect(h).toContain('role="group" aria-label="Animation"')
   expect(h).toContain('aria-pressed="true">Anvil')
   expect(h).toContain('aria-pressed="false">Rune sword')
+})
+
+test('None shows no animation: the title takes the centre, no drawing, no embers', () => {
+  vi.stubGlobal('localStorage', { getItem: () => 'none', setItem: () => {} })
+  try {
+    const h = renderToStaticMarkup(<ForgeGate calm={false} />)
+    expect(h).toContain('class="gate plain"')
+    expect(h).toContain('aria-pressed="true">None')
+    expect(h).not.toContain('<svg')
+    expect(h).not.toContain('class="embers"')
+    expect(h).toContain('Enter the forge')
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })

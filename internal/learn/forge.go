@@ -115,7 +115,6 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 		return nil, err
 	}
 	titles := map[string]string{}
-	work := 0.0
 	for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(email) {
 		sd, err := s.Standing(ctx, userID, e.Team.ID, e.Program.Training)
 		if err != nil {
@@ -126,13 +125,17 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 		}
 		id := sd.Training.ID
 		titles[id] = sd.Training.Title
-		work += sd.Done * smith.PerPoint
 		pct := forgePercent(sd.Done, sd.Total)
 		// A new row is shown unless it is the first computation or only Ore; an existing one is raised, never lowered.
+		// Its points (the work done on it) are a high-water too, so a training taken away keeps its work.
 		lvl := RankFor(pct, v.SwordLadder)
-		if _, err := s.DB.Exec(ctx, `INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (user_id, training) DO UPDATE SET level = EXCLUDED.level, earned_at = now(), seen = false
-			WHERE sword_ranks.level < EXCLUDED.level`, userID, id, lvl, first || lvl == 0); err != nil {
+		if _, err := s.DB.Exec(ctx, `INSERT INTO sword_ranks (user_id, training, level, seen, points) VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (user_id, training) DO UPDATE SET points = GREATEST(sword_ranks.points, EXCLUDED.points),
+				level = GREATEST(sword_ranks.level, EXCLUDED.level),
+				earned_at = CASE WHEN sword_ranks.level < EXCLUDED.level THEN now() ELSE sword_ranks.earned_at END,
+				seen = sword_ranks.seen AND sword_ranks.level >= EXCLUDED.level
+			WHERE sword_ranks.level < EXCLUDED.level OR sword_ranks.points < EXCLUDED.points`,
+			userID, id, lvl, first || lvl == 0, sd.Done); err != nil {
 			return nil, err
 		}
 		v.Swords = append(v.Swords, Sword{Training: id, Title: sd.Training.Title, Percent: pct})
@@ -143,18 +146,19 @@ func (s *Service) UpdateForge(ctx context.Context, userID int64) (*ForgeView, er
 			}
 		}
 	}
-	// Stored swords, the ones of trainings no longer taken included: their milestones are kept.
-	rows, err := s.DB.Query(ctx, `SELECT training, level, NOT seen FROM sword_ranks WHERE user_id = $1 ORDER BY training`, userID)
+	// Stored swords, the ones of trainings no longer taken included: their work and milestones are kept.
+	rows, err := s.DB.Query(ctx, `SELECT training, level, NOT seen, points FROM sword_ranks WHERE user_id = $1 ORDER BY training`, userID)
 	if err != nil {
 		return nil, err
 	}
-	stored, milestones := map[string]int{}, 0
+	stored, milestones, work := map[string]int{}, 0, 0.0
 	var tr string
 	var lvl int
 	var unseen bool
-	if _, err := pgx.ForEachRow(rows, []any{&tr, &lvl, &unseen}, func() error {
+	var points float64
+	if _, err := pgx.ForEachRow(rows, []any{&tr, &lvl, &unseen, &points}, func() error {
 		lvl = min(lvl, len(v.SwordLadder)-1)
-		stored[tr], milestones = lvl, milestones+smith.MilestoneXP(lvl)
+		stored[tr], milestones, work = lvl, milestones+smith.MilestoneXP(lvl), work+points*smith.PerPoint
 		if unseen && titles[tr] != "" {
 			v.RankUp.Swords = append(v.RankUp.Swords, SwordUp{Training: tr, Title: titles[tr], Level: lvl, Rank: v.SwordLadder[lvl].Name})
 		}

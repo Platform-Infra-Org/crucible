@@ -368,22 +368,34 @@ func TestSmithRisesNameTheirOwnLevel(t *testing.T) {
 	}
 }
 
-func TestMilestonesOfADroppedTrainingStillCount(t *testing.T) {
+// A training taken away keeps its work and milestones: new work on another training adds to the experience at once,
+// never absorbed under the old peak (final review, item 2).
+func TestWorkOfADroppedTrainingStillCounts(t *testing.T) {
 	ctx := context.Background()
 	s, u, _ := fixture(t)
-	completeAll(t, s, u.ID, "01-welcome", "02-first-lab")
+	completeAll(t, s, u.ID, "01-welcome", "02-first-lab", "03-cluster-heat")
 	v, err := s.UpdateForge(ctx, u.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fl := sword(v, "forge-101").Level
+	xp := v.Smith.XP
+	if fl := sword(v, "forge-101").Level; fl != 5 {
+		t.Fatalf("forge-101 is mastered: %d", fl)
+	}
 	s.State().Platform.Teams["forge"].Programs["forge-101"].Enrolled = nil
 	enrolExtra(s, 5)
 	if err := s.SetItem(ctx, u.ID, "forge", "extra", "x1", "lab", "complete", 1); err != nil {
 		t.Fatal(err)
 	}
-	if v, err = s.UpdateForge(ctx, u.ID); err != nil || v.Smith.XP != 50+smith.MilestoneXP(5)+smith.MilestoneXP(fl) {
-		t.Fatalf("forge-101's milestones are kept (level %d): %+v %v", fl, v.Smith, err)
+	if v, err = s.UpdateForge(ctx, u.ID); err != nil || v.Smith.XP != xp+50+smith.MilestoneXP(5) {
+		t.Fatalf("the extra 5 points and their milestones add to %d: %+v %v", xp, v.Smith, err)
+	}
+	xp = v.Smith.XP
+	if _, err := s.DB.Exec(ctx, `DELETE FROM item_progress WHERE user_id = $1`, u.ID); err != nil { // as an admin reset would
+		t.Fatal(err)
+	}
+	if v, err = s.UpdateForge(ctx, u.ID); err != nil || v.Smith.XP != xp {
+		t.Fatalf("a reset never lowers experience from %d: %+v %v", xp, v.Smith, err)
 	}
 }
 

@@ -249,3 +249,35 @@ func TestImportIgnoresTheOldRanksTable(t *testing.T) {
 		t.Errorf("old ranks must not become new ones, got %d rows", n)
 	}
 }
+
+// A file from before 00027 has no smith thresholds in its settings row, and one from before 00029 no points on its
+// sword ranks: both import, with the column defaults.
+func TestImportFillsColumnsAnOlderFileLacks(t *testing.T) {
+	_, file := exported(t)
+	var x map[string]json.RawMessage
+	var tables map[string][]map[string]any
+	if json.Unmarshal(file, &x) != nil || json.Unmarshal(x["tables"], &tables) != nil {
+		t.Fatal("unreadable export")
+	}
+	for _, k := range []string{"smith_apprentice", "smith_journeyman", "smith_smith", "smith_master", "smith_grandmaster"} {
+		delete(tables["settings"][0], k)
+	}
+	for _, r := range tables["sword_ranks"] {
+		delete(r, "points")
+	}
+	x["tables"], _ = json.Marshal(tables)
+	old, _ := json.Marshal(x)
+	dst := &Store{DB: dbtest.New(t)}
+	if err := dst.Import(context.Background(), "a@x", old); err != nil {
+		t.Fatal(err)
+	}
+	var j, g int
+	var points float64
+	if err := dst.DB.QueryRow(context.Background(), `SELECT smith_journeyman, smith_grandmaster, (SELECT points FROM sword_ranks)
+		FROM settings`).Scan(&j, &g, &points); err != nil {
+		t.Fatal(err)
+	}
+	if j != 500 || g != 5000 || points != 0 {
+		t.Errorf("defaults: journeyman %d, grandmaster %d, points %v", j, g, points)
+	}
+}

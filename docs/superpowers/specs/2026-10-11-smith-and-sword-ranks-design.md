@@ -31,8 +31,9 @@ any rank-up); raising one never lowers a rank already reached.
 Experience = **work + milestones**, kept as a high-water mark: it never drops, whatever happens to progress (an admin
 reset, a training taken away).
 
-- **Work:** 10 experience per item point done, summed over every training the person takes (the same done/total the
-  sword rank uses).
+- **Work:** 10 experience per item point done, summed over every training the person has taken (the same done/total
+  the sword rank uses). Work is counted per training at its highest, so a training taken away keeps its work and new
+  work elsewhere adds to the experience at once.
 - **Milestones:** a bonus for each sword level reached, per training: Ingot +20, Tempered +40, Blade +60, Sword +80,
   Masterwork +150 (350 for a finished sword). Milestones come from the stored sword ranks, so they are never lost and
   never counted twice.

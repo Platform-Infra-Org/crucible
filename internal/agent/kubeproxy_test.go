@@ -306,3 +306,32 @@ func TestProxyPresentsAClientCertificateUpstream(t *testing.T) {
 		t.Fatalf("upgrade: %q", st)
 	}
 }
+
+// A server address with no path ("https://127.0.0.1:6443", kind's) made the proxy answer every GET with a 301 to the
+// path plus "/": the API server has no /openapi/v3/api/v1/, so helm's validation failed ("failed to download openapi").
+func TestProxyPassesPathsAsTheyAre(t *testing.T) {
+	var seen []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		fmt.Fprint(w, `{"major":"1","minor":"34"}`)
+	}))
+	defer srv.Close()
+	p, err := StartProxy(context.Background(), kubeconfigFor(t, srv, "{token: t}"), "lab", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	seen = nil
+	c := clientFor(p)
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, _ := http.NewRequest("GET", "https://"+p.Addr+"/openapi/v3/api/v1?hash=x", nil)
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	res, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 || len(seen) != 1 || seen[0] != "/openapi/v3/api/v1" {
+		t.Fatalf("status %d (Location %q), upstream saw %v", res.StatusCode, res.Header.Get("Location"), seen)
+	}
+}

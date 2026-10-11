@@ -173,6 +173,9 @@ func apiHandler(cfg *rest.Config) (http.Handler, *http.Transport, error) {
 	if target.Scheme == "" {
 		return nil, nil, errors.New("the cluster's server address has no scheme")
 	}
+	if target.Path == "" { // with no path, the handler 301s every GET to path+"/" (there is no /openapi/v3/api/v1/)
+		target.Path = "/"
+	}
 	rt, err := rest.TransportFor(cfg)
 	if err != nil {
 		return nil, nil, err

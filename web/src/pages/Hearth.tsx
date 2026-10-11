@@ -4,6 +4,7 @@ import { useMe } from '../App'
 import { useFetch } from '../useFetch'
 import type { Forge, ProgramCard } from '../types'
 import { randomQuote } from '../lib/quotes'
+import { nextBanner } from '../lib/forge'
 import { Embers } from '../components/Embers'
 import { Loader } from '../components/Loader'
 import { MoltenBar } from '../components/MoltenBar'
@@ -18,12 +19,11 @@ export function Hearth() {
   const quote = useMemo(randomQuote, [])
   const first = (me.user.name || me.user.email).split(/[ @]/)[0]
   // One banner at a time: the smith rise first, then each sword's, in order; dismissing shows the next.
-  const up = forge.data?.rank_up
-  const finish = (k: string) => () => { setDone((d) => [...d, k]); h1.current?.focus() }
-  const sword = up?.swords.find((w) => !done.includes(`sword:${w.training}`))
-  const banner = up?.smith && !done.includes('smith')
-    ? <RankUp kind="smith" title={up.smith.title} level={up.smith.level} onDone={finish('smith')} />
-    : sword && <RankUp key={sword.training} kind="sword" training={{ id: sword.training, title: sword.title }} title={sword.rank} level={sword.level} onDone={finish(`sword:${sword.training}`)} />
+  const b = nextBanner(forge.data?.rank_up, new Set(done))
+  const banner = b && (
+    <RankUp key={b.key} kind={b.kind} training={b.trainingId ? { id: b.trainingId, title: b.trainingTitle ?? '' } : undefined} title={b.title} level={b.level}
+      onDone={() => { setDone((d) => [...d, b.key]); h1.current?.focus() }} />
+  )
   return (
     <section className="page">
       <Embers count={12} />

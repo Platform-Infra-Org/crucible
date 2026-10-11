@@ -761,6 +761,7 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 /* A person's smith rank beside their name: the hammer's metal deepens with the rank, the title says it in words. */
 .smith-mark { display: inline-flex; gap: 0.25em; align-items: center; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 .smith-mark > span[aria-hidden] { color: color-mix(in srgb, var(--accent) 35%, var(--muted)); }
+.smith-mark.l0 > span[aria-hidden] { color: var(--muted); }
 .smith-mark.l2 > span[aria-hidden] { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
 .smith-mark.l3 > span[aria-hidden] { color: var(--accent); }
 .smith-mark.l4 > span[aria-hidden] { color: var(--accent-2); }
@@ -773,3 +774,9 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .user-card .molten-bar { margin-top: 0.6rem; }
 /* On the craft card the smith rank is the headline, not a footnote. */
 .rank-name .smith-mark { font-size: inherit; color: var(--text); }
+/* Phone width: the user card spans the page gutter instead of hanging off a button that may sit at the left. */
+@media (max-width: 640px) {
+  .nav { position: relative; }
+  .user-menu { position: static; }
+  .user-card { left: 1rem; right: 1rem; width: auto; }
+}

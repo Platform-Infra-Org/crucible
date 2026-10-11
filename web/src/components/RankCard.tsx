@@ -3,7 +3,7 @@ import { motion } from 'motion/react'
 import { api } from '../api'
 import { useCalm } from '../me'
 import type { Forge } from '../types'
-import { article } from '../lib/forge'
+import { article, seenBody } from '../lib/forge'
 import { MoltenBar } from './MoltenBar'
 import { SmithMark } from './SmithMark'
 
@@ -51,7 +51,7 @@ export function SwordList({ forge }: { forge: Forge }) {
 export function RankUp({ kind, training, title, level, onDone }: { kind: 'smith' | 'sword'; training?: { id: string; title: string }; title: string; level: number; onDone: () => void }) {
   const calm = useCalm()
   useEffect(() => {
-    api('/api/me/forge/seen', { method: 'POST', json: { kind, training: training?.id ?? '', level } }).catch(() => {})
+    api('/api/me/forge/seen', { method: 'POST', json: seenBody({ key: '', kind, trainingId: training?.id, title, level }) }).catch(() => {})
   }, [kind, training?.id, level])
   return (
     <section className="rank-up" aria-label="Rank up">

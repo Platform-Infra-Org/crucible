@@ -1487,6 +1487,8 @@ func (l *loader) chartDeps(labDir, chartDir string) {
 	}
 	for _, d := range c.Dependencies {
 		switch {
+		case strings.HasPrefix(d.Repository, "file://") && strings.HasPrefix(strings.TrimPrefix(d.Repository, "file://"), "/"):
+			l.add(p, "dependency %q: file:// must stay inside the lab", d.Name) // Helm reads file:///x as the absolute path /x
 		case strings.HasPrefix(d.Repository, "file://"):
 			target, err := filepath.Rel(labDir, filepath.Join(chartDir, filepath.FromSlash(strings.TrimPrefix(d.Repository, "file://"))))
 			if err != nil || !filepath.IsLocal(target) {

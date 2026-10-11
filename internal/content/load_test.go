@@ -322,6 +322,8 @@ func TestClusterLabRules(t *testing.T) {
 			"https://, oci:// or file://"},
 		"undeclared cluster-wide": {map[string]string{"modules/m1/lab/charts/shop/templates/role.yaml": "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata: {name: r}\n"},
 			"ClusterRole is cluster-wide: set cluster_wide: true"},
+		"absolute file dep": {map[string]string{"modules/m1/lab/charts/shop/Chart.yaml": "apiVersion: v2\nname: shop\nversion: 0.1.0\ndependencies:\n  - {name: lib, version: 0.1.0, repository: \"file:///etc\"}\n"},
+			"file:// must stay inside the lab"},
 		"crds folder": {map[string]string{"modules/m1/lab/charts/shop/crds/x.yaml": "kind: CustomResourceDefinition\n"}, "crds/ installs cluster-wide"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -15,7 +15,7 @@ const (
 	TPTYResize = "pty_resize" // API → agent
 	TPTYClose  = "pty_close"  // both ways
 	TResult    = "result"     // agent → API: answer to a request with the same ID
-	THello     = "hello"      // agent → API right after connecting: Data = JSON array of lab IDs present on the laptop
+	THello     = "hello"      // agent → API right after connecting: Data = JSON array of lab IDs present on the laptop, Contexts = the kubeconfig's contexts
 	TContexts  = "contexts"   // agent → API whenever the kubeconfig's contexts change: Contexts
 )
 

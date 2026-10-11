@@ -31,6 +31,7 @@ type Client struct {
 	Token  string
 	Exec   Executor
 	Log    *slog.Logger
+	Kube   *Watcher // nil: this agent offers no cluster labs
 }
 
 // Run keeps the agent connected until ctx ends. It tears down local labs on start (crash leftovers) and on exit.
@@ -77,7 +78,23 @@ func (c *Client) runOnce(ctx context.Context) error {
 	s := &session{ws: ws, exec: c.Exec, ptys: map[string]*ptyEntry{}}
 	defer s.closeAll()
 	live, _ := json.Marshal(c.Exec.Labs()) // lets the server reconcile labs that drifted while we were away
-	s.send(ctx, ap.Msg{Type: ap.THello, Data: live})
+	hello := ap.Msg{Type: ap.THello, Data: live}
+	if c.Kube != nil {
+		hello.Contexts = c.Kube.Current()
+		wctx, stop := context.WithCancel(ctx)
+		defer stop() // the goroutine ends with this connection, not only with the agent
+		go func() { // while connected, every change of the kubeconfig's contexts reaches Crucible
+			for {
+				select {
+				case <-wctx.Done():
+					return
+				case cs := <-c.Kube.Changes():
+					s.send(wctx, ap.Msg{Type: ap.TContexts, Contexts: cs})
+				}
+			}
+		}()
+	}
+	s.send(ctx, hello)
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {

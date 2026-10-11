@@ -21,8 +21,13 @@ import (
 	ap "crucible/internal/agentproto"
 )
 
-// clusterMarker holds a cluster lab's spec (JSON) in its folder; its presence is what makes the folder a cluster lab.
-const clusterMarker = ".crucible-cluster"
+// clusterSuffix names a cluster lab's spec file, Dir/<id>.cluster (JSON), a sibling of the lab's folder: a bundle
+// unpacks into the folder and can never forge it. Its presence is what makes a lab a cluster lab.
+const clusterSuffix = ".cluster"
+
+func markerPath(dir, id string) string { return filepath.Join(dir, id+clusterSuffix) }
+
+var safePath = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
 
 var chartName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,51}[a-z0-9])?$`)
 var kindLine = regexp.MustCompile(`(?m)^kind:\s*["']?([A-Za-z]+)`)
@@ -64,12 +69,13 @@ func releases(s ap.ClusterSpec) string {
 }
 
 func checkSpec(s ap.ClusterSpec) error {
-	if s.Context == "" || s.Toolbox == "" || len(s.Charts) == 0 {
+	if s.Context == "" || s.Toolbox == "" || strings.HasPrefix(s.Toolbox, "-") || len(s.Charts) == 0 {
 		return errors.New("invalid cluster lab: context, toolbox and charts are required")
 	}
 	for _, ch := range s.Charts {
-		if !chartName.MatchString(ch.Name) || !filepath.IsLocal(filepath.FromSlash(ch.Path)) ||
-			(ch.Values != "" && !filepath.IsLocal(filepath.FromSlash(ch.Values))) || ch.TimeoutS <= 0 {
+		if !chartName.MatchString(ch.Name) || !safePath.MatchString(ch.Path) || !filepath.IsLocal(filepath.FromSlash(ch.Path)) ||
+			(ch.Values != "" && (!safePath.MatchString(ch.Values) || !filepath.IsLocal(filepath.FromSlash(ch.Values)) ||
+				slices.Contains([]string{"kubeconfig", ".crucible-cluster"}, filepath.Clean(ch.Values)))) || ch.TimeoutS <= 0 {
 			return fmt.Errorf("invalid chart %q", ch.Name)
 		}
 	}
@@ -103,6 +109,9 @@ current-context: %q
 	if c.proxies == nil {
 		c.proxies = map[string]*Proxy{}
 	}
+	if old := c.proxies[id]; old != nil {
+		_ = old.Close()
+	}
 	c.proxies[id] = p
 	c.mu.Unlock()
 	return nil
@@ -123,7 +132,7 @@ func (c *Cluster) startToolbox(ctx context.Context, id string, s ap.ClusterSpec)
 	return nil
 }
 
-// userFlag runs the toolbox as this user where Docker maps uids (Linux), so it can read the 0600 kubeconfig.
+// userFlag runs the toolbox as this user (any non-root uid, macOS included), so it can read the 0600 kubeconfig.
 func userFlag() string {
 	if uid, gid := os.Getuid(), os.Getgid(); uid > 0 {
 		return fmt.Sprintf("%d:%d", uid, gid)
@@ -151,14 +160,23 @@ func (c *Cluster) Provision(ctx context.Context, id string, bundle []byte, s ap.
 		return err
 	}
 	spec, _ := json.Marshal(s)
-	if err := os.WriteFile(filepath.Join(dir, clusterMarker), spec, 0o600); err != nil {
+	if err := os.WriteFile(markerPath(c.Dir, id), spec, 0o600); err != nil {
+		_ = os.RemoveAll(dir)
 		return err
 	}
+	onCluster := false // set once the namespace step is attempted: before it, nothing of ours is on the cluster
 	defer func() {
 		if err != nil { // leave nothing behind: what was installed is uninstalled, the namespace goes
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 			defer cancel()
-			_ = c.Destroy(cctx, id)
+			if onCluster {
+				_ = c.Destroy(cctx, id)
+				return
+			}
+			_, _ = c.run(cctx, "rm", "-f", container(id))
+			c.closeProxy(id)
+			_ = os.RemoveAll(dir)
+			_ = os.Remove(markerPath(c.Dir, id))
 		}
 	}()
 	if err := c.openProxy(ctx, id, s); err != nil {
@@ -168,6 +186,7 @@ func (c *Cluster) Provision(ctx context.Context, id string, bundle []byte, s ap.
 		return err
 	}
 	ns := namespace(id)
+	onCluster = true
 	if out, err := c.inToolbox(ctx, id, "kubectl create namespace "+ns+" && kubectl label namespace "+ns+
 		" app.kubernetes.io/managed-by=crucible crucible.lab="+id); err != nil {
 		return fmt.Errorf("creating namespace %s: %w: %s", ns, err, tail(out))
@@ -179,7 +198,7 @@ func (c *Cluster) Provision(ctx context.Context, id string, bundle []byte, s ap.
 		}
 		work := "/tmp/charts/" + ch.Name // /lab is read-only; helm dependency build writes into the chart
 		out, err := c.inToolbox(ctx, id, "rm -rf "+work+" && mkdir -p /tmp/charts && cp -r /lab/"+ch.Path+" "+work+
-			" && helm dependency build "+work+" >/dev/null && helm template "+ch.Name+" "+work+" -n "+ns+values)
+			" && helm dependency build "+work+" >/dev/null && helm template --include-crds "+ch.Name+" "+work+" -n "+ns+values)
 		if err != nil {
 			return fmt.Errorf("rendering chart %s: %w: %s", ch.Name, err, tail(out))
 		}
@@ -205,13 +224,13 @@ func (c *Cluster) Destroy(ctx context.Context, id string) error {
 		return err
 	}
 	dir := filepath.Join(c.Dir, id)
-	raw, err := os.ReadFile(filepath.Join(dir, clusterMarker))
+	raw, err := os.ReadFile(markerPath(c.Dir, id))
 	if errors.Is(err, fs.ErrNotExist) {
 		return os.RemoveAll(dir)
 	}
 	var s ap.ClusterSpec
-	if err != nil || json.Unmarshal(raw, &s) != nil {
-		return fmt.Errorf("lab %s: unreadable cluster spec", id)
+	if err != nil || json.Unmarshal(raw, &s) != nil || checkSpec(s) != nil {
+		return fmt.Errorf("lab %s: unreadable or invalid cluster spec", id)
 	}
 	if c.proxy(id) == nil {
 		if err := c.openProxy(ctx, id, s); err != nil {
@@ -232,21 +251,28 @@ func (c *Cluster) Destroy(ctx context.Context, id string) error {
 		return fmt.Errorf("removing lab %s from %s: %w: %s", id, s.Context, err, tail(out))
 	}
 	_, _ = c.run(ctx, "rm", "-f", container(id))
+	c.closeProxy(id)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return os.Remove(markerPath(c.Dir, id))
+}
+
+func (c *Cluster) closeProxy(id string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if p := c.proxies[id]; p != nil {
 		_ = p.Close()
 		delete(c.proxies, id)
 	}
-	c.mu.Unlock()
-	return os.RemoveAll(dir)
 }
 
 func (c *Cluster) Labs() []string {
 	entries, _ := os.ReadDir(c.Dir)
 	ids := []string{}
 	for _, e := range entries {
-		if _, err := os.Stat(filepath.Join(c.Dir, e.Name(), clusterMarker)); e.IsDir() && validID(e.Name()) == nil && err == nil {
-			ids = append(ids, e.Name())
+		if id, ok := strings.CutSuffix(e.Name(), clusterSuffix); ok && e.Type().IsRegular() && validID(id) == nil {
+			ids = append(ids, id)
 		}
 	}
 	return ids

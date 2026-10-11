@@ -176,3 +176,82 @@ func readKubeconfig(t *testing.T, c *Cluster, id string) string {
 	b, _ := os.ReadFile(filepath.Join(c.Dir, id, "kubeconfig"))
 	return string(b)
 }
+
+func TestComposeLabCannotMasqueradeAsClusterLab(t *testing.T) {
+	c := testCluster(t, &fakeDocker{})
+	id := "0123456789ab"
+	dir := filepath.Join(c.Dir, id)
+	_ = os.MkdirAll(dir, 0o755)
+	for _, n := range []string{".crucible-cluster", "x.cluster", id + ".cluster"} {
+		_ = os.WriteFile(filepath.Join(dir, n), []byte(`{"Context":"lab","Toolbox":"evil","Charts":[{"Name":"a","Path":"p","TimeoutS":1}]}`), 0o600)
+	}
+	l := &Labs{Compose: Compose{Dir: c.Dir}, Cluster: c}
+	if l.isCluster(id) {
+		t.Fatal("a bundle's files made a compose lab a cluster lab")
+	}
+	if got := l.Labs(); len(got) != 1 || got[0] != id || len(c.Labs()) != 0 {
+		t.Fatalf("Labs %v cluster %v", got, c.Labs())
+	}
+}
+
+func TestDestroyRefusesAnInvalidSavedSpec(t *testing.T) {
+	f := &fakeDocker{}
+	c := testCluster(t, f)
+	id := "0123456789ab"
+	_ = os.MkdirAll(filepath.Join(c.Dir, id), 0o755)
+	_ = os.WriteFile(markerPath(c.Dir, id), []byte(`{"Context":"lab","Toolbox":"t","Charts":[{"Name":"a;id","Path":"p","TimeoutS":1}]}`), 0o600)
+	if err := c.Destroy(context.Background(), id); err == nil || f.joined() != "" {
+		t.Fatalf("err %v calls %q", err, f.joined())
+	}
+}
+
+func TestCRDsInChartsNeedClusterWide(t *testing.T) {
+	f := &fakeDocker{template: "kind: CustomResourceDefinition\n"}
+	err := testCluster(t, f).Provision(context.Background(), "0123456789ab", chartBundle(t), spec)
+	if err == nil || !strings.Contains(err.Error(), "CustomResourceDefinition") || !strings.Contains(f.joined(), "helm template --include-crds") {
+		t.Fatalf("err %v\n%s", err, f.joined())
+	}
+}
+
+func TestUnsafeSpecsAreRefused(t *testing.T) {
+	bad := []ap.ClusterSpec{}
+	for _, mut := range []func(*ap.ClusterSpec){
+		func(s *ap.ClusterSpec) { s.Charts = []ap.Chart{{Name: "x", Path: "charts/x;id", TimeoutS: 5}} },
+		func(s *ap.ClusterSpec) {
+			s.Charts = []ap.Chart{{Name: "x", Path: "charts/x", Values: "kubeconfig", TimeoutS: 5}}
+		},
+		func(s *ap.ClusterSpec) {
+			s.Charts = []ap.Chart{{Name: "x", Path: "c", Values: ".crucible-cluster", TimeoutS: 5}}
+		},
+		func(s *ap.ClusterSpec) { s.Toolbox = "--privileged" },
+	} {
+		s := spec
+		mut(&s)
+		bad = append(bad, s)
+	}
+	for i, s := range bad {
+		f := &fakeDocker{template: "kind: Deployment\n"}
+		if err := testCluster(t, f).Provision(context.Background(), "0123456789ab", chartBundle(t), s); err == nil || f.joined() != "" {
+			t.Errorf("%d: err %v calls %q", i, err, f.joined())
+		}
+	}
+}
+
+func TestEarlyFailureLeavesNothingBehind(t *testing.T) {
+	f := &fakeDocker{}
+	c := testCluster(t, f)
+	c.Bind = func(context.Context) (string, error) { return "", errors.New("no bind") }
+	id := "0123456789ab"
+	if err := c.Provision(context.Background(), id, chartBundle(t), spec); err == nil {
+		t.Fatal("want error")
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, id)); !os.IsNotExist(err) {
+		t.Error("folder left")
+	}
+	if _, err := os.Stat(markerPath(c.Dir, id)); !os.IsNotExist(err) {
+		t.Error("marker left")
+	}
+	if len(c.Labs()) != 0 || strings.Contains(f.joined(), "delete namespace") {
+		t.Fatalf("labs %v\n%s", c.Labs(), f.joined())
+	}
+}

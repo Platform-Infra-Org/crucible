@@ -104,7 +104,7 @@ func (c Compose) Labs() []string {
 	entries, _ := os.ReadDir(c.Dir)
 	ids := []string{}
 	for _, e := range entries {
-		if e.IsDir() && validID(e.Name()) == nil && !exists(filepath.Join(c.Dir, e.Name(), clusterMarker)) {
+		if e.IsDir() && validID(e.Name()) == nil && !exists(markerPath(c.Dir, e.Name())) {
 			ids = append(ids, e.Name())
 		}
 	}

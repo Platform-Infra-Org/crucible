@@ -2,23 +2,20 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"time"
 
 	ap "crucible/internal/agentproto"
 )
 
 // Labs runs every lab on this laptop: compose labs (runtime local) and cluster labs, told apart by the cluster
-// marker in the lab's folder. Both share one labs folder.
+// spec file beside the lab's folder. Both share one labs folder.
 type Labs struct {
 	Compose Compose
 	Cluster *Cluster // nil: no kubeconfig support
 }
 
 func (l *Labs) isCluster(id string) bool {
-	_, err := os.Stat(filepath.Join(l.Compose.Dir, id, clusterMarker))
-	return l.Cluster != nil && err == nil
+	return l.Cluster != nil && exists(markerPath(l.Cluster.Dir, id))
 }
 
 func (l *Labs) Provision(ctx context.Context, id string, bundle []byte, compose string) error {

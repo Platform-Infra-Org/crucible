@@ -56,12 +56,17 @@ test('a content edit is reviewed and merged; the trainee earns a badge; senior a
   await trainee.getByRole('link', { name: 'Hearth', exact: true }).click()
   await expect(trainee.getByTestId('badges')).toContainText('Forge 102: Sparks')
   // CARRY (M4): Forge 101's cluster module can't be finished in local-check, so never assert a particular rank.
-  await expect(trainee.getByTestId('rank')).toHaveText(/^(Ore|Ingot|Tempered|Blade|Sword|Masterwork)$/)
+  const nice = trainee.getByRole('button', { name: 'Nice' }) // a rank-up banner may be showing
+  if (await nice.first().isVisible()) await nice.first().click()
+  await expect(trainee.getByRole('heading', { name: 'Your craft' })).toBeVisible()
+  await expect(trainee.locator('.craft .smith-mark')).toBeVisible()
+  await expect(trainee.locator('.sword-list')).toContainText('Forge 102')
 
   // The team's senior and leader see Forge 102 forged on the Journey; there is no mentor page any more.
   await expect(senior.getByRole('link', { name: 'Mentor', exact: true })).toHaveCount(0)
   await senior.goto('/teams/forge/journey')
   await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').getByRole('listitem').filter({ hasText: 'Sparks' })).toContainText(/Sparks\s*:\s*forged/)
+  await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').locator('.smith-mark')).toContainText(/\S/) // the smith rank in words beside the name
   // The leader reaches the team from their user card: their icon, name, email and teams.
   await leader.getByRole('button', { name: /Leo Leader/ }).click()
   const card = leader.getByRole('dialog', { name: 'Your user card' })
@@ -70,6 +75,7 @@ test('a content edit is reviewed and merged; the trainee earns a badge; senior a
   await expect(card.getByRole('button', { name: 'Anvil' })).toHaveAttribute('aria-pressed', 'true')
   await card.getByRole('link', { name: 'The Forge' }).click()
   await expect(leader.getByRole('heading', { name: 'The Forge' })).toBeVisible()
+  await expect(leader.getByRole('row').filter({ hasText: 'trainee@crucible.local' }).locator('.smith-mark')).toContainText(/\S/) // the Team page too
   await leader.getByRole('link', { name: 'Journey', exact: true }).click()
   await expect(leader.getByTestId('journey-trainee@crucible.local-forge-102').getByRole('listitem').filter({ hasText: 'Sparks' })).toContainText(/Sparks\s*:\s*forged/)
 

@@ -1,4 +1,4 @@
-// Command crucible-agent runs local labs on a trainee's laptop (macOS, Linux, or Windows via WSL2).
+// Command crucible-agent runs laptop labs (Docker compose) and cluster labs (Helm on a cluster of your kubeconfig).
 package main
 
 import (
@@ -12,8 +12,10 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"crucible/internal/agent"
 )
@@ -23,6 +25,7 @@ func main() {
 	server := flag.String("server", os.Getenv("CRUCIBLE_SERVER"), "Crucible URL, e.g. https://crucible.example.com")
 	token := flag.String("token", os.Getenv("CRUCIBLE_TOKEN"), "pairing token (prefer the CRUCIBLE_TOKEN env var: flags are visible to other local users)")
 	labs := flag.String("labs-dir", filepath.Join(home, ".crucible", "labs"), "where lab files are unpacked")
+	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for cluster labs (default: $KUBECONFIG, else ~/.kube/config)")
 	flag.Parse()
 	if *server == "" || *token == "" {
 		fmt.Fprintln(os.Stderr, "usage: CRUCIBLE_TOKEN=TOKEN crucible-agent --server URL")
@@ -38,7 +41,16 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	c := &agent.Client{Server: strings.TrimRight(*server, "/"), Token: *token, Exec: agent.Compose{Dir: *labs}, Log: slog.Default()}
+	run := func(ctx context.Context, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, "docker", args...).Output()
+	}
+	cluster := &agent.Cluster{Dir: *labs, Kubeconfig: *kubeconfig, Bind: func(ctx context.Context) (string, error) {
+		return agent.BindAddr(ctx, runtime.GOOS, run)
+	}}
+	kube := &agent.Watcher{Kubeconfig: *kubeconfig, Every: 5 * time.Second}
+	go kube.Run(ctx)
+	c := &agent.Client{Server: strings.TrimRight(*server, "/"), Token: *token, Exec: &agent.Labs{Compose: agent.Compose{Dir: *labs}, Cluster: cluster},
+		Kube: kube, Log: slog.Default()}
 	if err := c.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("agent stopped", "err", err)
 		os.Exit(1)

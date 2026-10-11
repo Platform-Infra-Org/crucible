@@ -1,0 +1,178 @@
+package agent
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	ap "crucible/internal/agentproto"
+)
+
+// fakeDocker records docker calls and answers helm template with whatever the test set.
+type fakeDocker struct {
+	mu       sync.Mutex
+	calls    []string
+	template string
+	failOn   string // a substring: the call containing it fails
+}
+
+func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	call := strings.Join(args, " ")
+	f.calls = append(f.calls, call)
+	if f.failOn != "" && strings.Contains(call, f.failOn) {
+		return []byte("Error: context deadline exceeded"), errors.New("exit status 1")
+	}
+	if strings.Contains(call, "helm template") {
+		return []byte(f.template), nil
+	}
+	return nil, nil
+}
+
+func (f *fakeDocker) joined() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.calls, "\n")
+}
+
+func chartBundle(t *testing.T) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string]string{"charts/shop/Chart.yaml": "name: shop\n", "values/shop.yaml": "x: 1\n"} {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write([]byte(body))
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	return buf.Bytes()
+}
+
+func testCluster(t *testing.T, f *fakeDocker) *Cluster {
+	srv, _ := upstream(t)
+	return &Cluster{Dir: t.TempDir(), Kubeconfig: kubeconfigFor(t, srv, "{token: real}"), Run: f.run,
+		Bind: func(context.Context) (string, error) { return "127.0.0.1", nil }}
+}
+
+var spec = ap.ClusterSpec{Context: "lab", Toolbox: "toolbox@sha256:abc", Charts: []ap.Chart{
+	{Name: "shop", Path: "charts/shop", Values: "values/shop.yaml", TimeoutS: 300}, {Name: "db", Path: "charts/shop", TimeoutS: 60}}}
+
+func TestProvisionInstallsInOrderThroughTheToolbox(t *testing.T) {
+	f := &fakeDocker{template: "kind: Deployment\n"}
+	c := testCluster(t, f)
+	id := "0123456789ab"
+	if err := c.Provision(context.Background(), id, chartBundle(t), spec); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.joined()
+	for _, want := range []string{
+		"run -d --name crucible-lab-0123456789ab --label crucible.lab=0123456789ab",
+		"-e LAB_NAMESPACE=lab-0123456789ab", "-e LAB_RELEASES=shop db", "--add-host host.docker.internal:host-gateway",
+		"toolbox@sha256:abc",
+		"exec crucible-lab-0123456789ab sh -c kubectl create namespace lab-0123456789ab",
+		"helm upgrade --install shop /tmp/charts/shop -n lab-0123456789ab -f /lab/values/shop.yaml --wait --timeout 300s",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("missing %q in\n%s", want, calls)
+		}
+	}
+	if strings.Index(calls, "helm upgrade --install shop") > strings.Index(calls, "helm upgrade --install db") {
+		t.Error("charts install in order")
+	}
+	kc, err := os.ReadFile(filepath.Join(c.Dir, id, "kubeconfig"))
+	if err != nil || strings.Contains(string(kc), "real") || !strings.Contains(string(kc), "http://host.docker.internal:") || !strings.Contains(string(kc), "namespace: lab-0123456789ab") {
+		t.Fatalf("toolbox kubeconfig: %s %v", kc, err)
+	}
+	if st, _ := os.Stat(filepath.Join(c.Dir, id, "kubeconfig")); st.Mode().Perm() != 0o600 {
+		t.Fatalf("kubeconfig mode %v", st.Mode())
+	}
+	if got := c.Labs(); len(got) != 1 || got[0] != id {
+		t.Fatalf("Labs %v", got)
+	}
+}
+
+func TestUndeclaredClusterWideKindsAreRefused(t *testing.T) {
+	f := &fakeDocker{template: "---\nkind: ClusterRole\nmetadata: {name: r}\n"}
+	err := testCluster(t, f).Provision(context.Background(), "0123456789ab", chartBundle(t), spec)
+	if err == nil || !strings.Contains(err.Error(), "creates a ClusterRole") || strings.Contains(f.joined(), "helm upgrade") {
+		t.Fatalf("err %v\n%s", err, f.joined())
+	}
+	wide := spec
+	wide.ClusterWide = true
+	if err := testCluster(t, &fakeDocker{template: "kind: ClusterRole\n"}).Provision(context.Background(), "0123456789ab", chartBundle(t), wide); err != nil {
+		t.Fatalf("declared: %v", err)
+	}
+}
+
+func TestFailedInstallCleansUp(t *testing.T) {
+	f := &fakeDocker{template: "kind: Deployment\n", failOn: "helm upgrade --install db"}
+	c := testCluster(t, f)
+	err := c.Provision(context.Background(), "0123456789ab", chartBundle(t), spec)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("err %v", err)
+	}
+	calls := f.joined()
+	for _, want := range []string{"helm uninstall db", "helm uninstall shop", "kubectl delete namespace lab-0123456789ab", "rm -f crucible-lab-0123456789ab"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("cleanup missing %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(c.Dir, "0123456789ab")); !os.IsNotExist(err) {
+		t.Error("lab folder left behind")
+	}
+}
+
+func TestTwoClusterLabsAreIndependent(t *testing.T) {
+	f := &fakeDocker{template: "kind: Deployment\n"}
+	c := testCluster(t, f)
+	a, b := "0123456789ab", "ba9876543210"
+	for _, id := range []string{a, b} {
+		if err := c.Provision(context.Background(), id, chartBundle(t), spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pb := c.proxy(b)
+	if err := c.Destroy(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	if c.proxy(a) != nil || c.proxy(b) != pb || pb == nil {
+		t.Fatal("destroying one lab touched the other's proxy")
+	}
+	if strings.Contains(f.joined(), "delete namespace lab-"+b) {
+		t.Fatal("the other lab's namespace was deleted")
+	}
+	if pa, pb2 := readKubeconfig(t, c, a), readKubeconfig(t, c, b); pb2 == "" || pa != "" {
+		t.Fatal("lab folders")
+	}
+}
+
+func TestDestroyAfterRestartReopensTheProxy(t *testing.T) {
+	f := &fakeDocker{template: "kind: Deployment\n"}
+	c := testCluster(t, f)
+	id := "0123456789ab"
+	if err := c.Provision(context.Background(), id, chartBundle(t), spec); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Cluster{Dir: c.Dir, Kubeconfig: c.Kubeconfig, Run: f.run, Bind: c.Bind} // a new process: no proxies
+	f.calls = nil
+	if err := restarted.Destroy(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.joined()
+	if !strings.Contains(calls, "helm uninstall shop") || !strings.Contains(calls, "kubectl delete namespace lab-0123456789ab") {
+		t.Fatalf("no uninstall after restart:\n%s", calls)
+	}
+}
+
+func readKubeconfig(t *testing.T, c *Cluster, id string) string {
+	b, _ := os.ReadFile(filepath.Join(c.Dir, id, "kubeconfig"))
+	return string(b)
+}

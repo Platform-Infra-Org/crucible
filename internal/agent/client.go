@@ -215,6 +215,10 @@ func (s *session) closeAll() {
 func (s *session) handle(ctx context.Context, m ap.Msg) {
 	switch m.Type {
 	case ap.TProvision:
+		if m.Cluster != nil {
+			s.reply(ctx, m.ID, ap.Msg{}, s.exec.ProvisionCluster(ctx, m.LabID, m.Data, *m.Cluster))
+			return
+		}
 		s.reply(ctx, m.ID, ap.Msg{}, s.exec.Provision(ctx, m.LabID, m.Data, m.Compose))
 	case ap.TDestroy:
 		s.reply(ctx, m.ID, ap.Msg{}, s.exec.Destroy(ctx, m.LabID))

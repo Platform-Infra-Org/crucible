@@ -52,12 +52,19 @@ type fakeExec struct {
 	mu              sync.Mutex
 	provisioned     map[string]string
 	destroyAllCalls int
+	clusterSpecs    []ap.ClusterSpec
 }
 
 func (f *fakeExec) Provision(_ context.Context, labID string, _ []byte, compose string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.provisioned[labID] = compose
+	return nil
+}
+func (f *fakeExec) ProvisionCluster(_ context.Context, labID string, _ []byte, s ap.ClusterSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clusterSpecs = append(f.clusterSpecs, s)
 	return nil
 }
 func (f *fakeExec) Destroy(context.Context, string) error { return nil }
@@ -292,4 +299,20 @@ func TestAgentContextsReachTheHub(t *testing.T) {
 	waitCtx(1)
 	write("one", "two")
 	waitCtx(2)
+}
+
+func TestClusterProvisionReachesTheClusterExecutor(t *testing.T) {
+	fx := &fakeExec{provisioned: map[string]string{}}
+	hub, stop := startAgent(t, fx)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := hub.Call(ctx, 1, ap.Msg{Type: ap.TProvision, LabID: "0123456789ab", Cluster: &ap.ClusterSpec{Context: "kind-dev"}}); err != nil {
+		t.Fatal(err)
+	}
+	fx.mu.Lock()
+	defer fx.mu.Unlock()
+	if len(fx.clusterSpecs) != 1 || fx.clusterSpecs[0].Context != "kind-dev" || len(fx.provisioned) != 0 {
+		t.Fatalf("cluster %+v, compose %v", fx.clusterSpecs, fx.provisioned)
+	}
 }

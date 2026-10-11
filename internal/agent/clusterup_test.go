@@ -88,3 +88,15 @@ func TestClusterDownRemovesEmptyKubeconfig(t *testing.T) {
 		t.Fatal("empty kubeconfig left behind")
 	}
 }
+
+func TestClusterDownOfAMissingClusterSaysSo(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := &fakeKind{}
+	var out strings.Builder
+	if err := ClusterDown(f, "crucible", &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.delete) != 0 || !strings.Contains(out.String(), "There is no cluster called crucible") {
+		t.Fatalf("deleted %v, said %q", f.delete, out.String())
+	}
+}

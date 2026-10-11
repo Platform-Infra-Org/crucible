@@ -17,11 +17,12 @@ func TestCheckServer(t *testing.T) {
 	}
 }
 
-type fakeKind struct{ calls []string }
+type fakeKind struct{ calls, have []string }
 
-func (f *fakeKind) List() ([]string, error) { return nil, nil }
+func (f *fakeKind) List() ([]string, error) { return f.have, nil }
 func (f *fakeKind) Create(name, image, kc string) error {
 	f.calls = append(f.calls, "create "+name)
+	f.have = append(f.have, name)
 	return nil
 }
 func (f *fakeKind) Delete(name, kc string) error {
@@ -36,10 +37,13 @@ func TestClusterCmd(t *testing.T) {
 	if c := clusterCmd([]string{"up", "--name", "x"}, f, &out, &errw); c != 0 {
 		t.Fatal(c, errw.String())
 	}
-	if c := clusterCmd([]string{"down"}, f, &out, &errw); c != 0 {
+	if c := clusterCmd([]string{"down"}, f, &out, &errw); c != 0 { // no cluster called crucible: nothing to delete
 		t.Fatal(c, errw.String())
 	}
-	if strings.Join(f.calls, ",") != "create x,delete crucible" {
+	if c := clusterCmd([]string{"down", "--name", "x"}, f, &out, &errw); c != 0 {
+		t.Fatal(c, errw.String())
+	}
+	if strings.Join(f.calls, ",") != "create x,delete x" {
 		t.Fatal(f.calls)
 	}
 	if clusterCmd([]string{"sideways"}, f, &out, &errw) != 2 {

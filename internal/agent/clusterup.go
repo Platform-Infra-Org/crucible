@@ -61,6 +61,14 @@ func ClusterUp(k Kind, name string, out io.Writer) error {
 
 // ClusterDown deletes the cluster and its entries in ~/.crucible/kubeconfig (the file too, once empty).
 func ClusterDown(k Kind, name string, out io.Writer) error {
+	have, err := k.List()
+	if err != nil {
+		return fmt.Errorf("asking Docker for clusters: %w", err)
+	}
+	if !slices.Contains(have, name) {
+		fmt.Fprintf(out, "There is no cluster called %s on this laptop.\n", name)
+		return nil
+	}
 	path := crucibleKubeconfig()
 	if err := k.Delete(name, path); err != nil {
 		return fmt.Errorf("deleting the cluster: %w", err)

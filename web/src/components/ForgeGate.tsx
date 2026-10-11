@@ -15,7 +15,7 @@ function storedLook(): Look {
 // ForgeGate is what someone who isn't signed in sees: the forge at work, and the way in. Signing in itself happens at
 // the company's identity provider (Keycloak or Cognito); Enter the forge goes there and comes back to the Hearth.
 // Two animations tell the ranks, the anvil's hammer or the rune sword; None shows neither and puts the title at the
-// centre of the screen, still. The switch at the bottom picks one, for now.
+// centre of the screen, the embers still drifting behind it. The switch at the bottom picks one, for now.
 export function ForgeGate({ calm }: { calm: boolean }) {
   const [going, setGoing] = useState(false)
   const [look, setLook] = useState<Look>(storedLook)
@@ -25,7 +25,7 @@ export function ForgeGate({ calm }: { calm: boolean }) {
   }
   return (
     <main className={look === 'none' ? 'gate plain' : 'gate'}>
-      {!calm && look !== 'none' && <Embers count={24} />}
+      {!calm && <Embers count={24} />}
       <div className="gate-inner">
         <div className="gate-title">
           <p className="gate-brand"><span className="brand-mark" aria-hidden="true">⚒</span> Crucible</p>

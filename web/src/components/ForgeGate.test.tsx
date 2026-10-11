@@ -29,14 +29,14 @@ test('two animations to choose from; the anvil when nothing is remembered', () =
   expect(h).toContain('aria-pressed="false">Rune sword')
 })
 
-test('None shows no animation: the title takes the centre, no drawing, no embers', () => {
+test('None shows no ranks animation: the title takes the centre, the embers still drift behind it', () => {
   vi.stubGlobal('localStorage', { getItem: () => 'none', setItem: () => {} })
   try {
     const h = renderToStaticMarkup(<ForgeGate calm={false} />)
     expect(h).toContain('class="gate plain"')
     expect(h).toContain('aria-pressed="true">None')
     expect(h).not.toContain('<svg')
-    expect(h).not.toContain('class="embers"')
+    expect(h).toContain('class="embers"')
     expect(h).toContain('Enter the forge')
   } finally {
     vi.unstubAllGlobals()

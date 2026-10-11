@@ -4,6 +4,7 @@ import { NavLink, useLocation } from 'react-router'
 export const adminItems = [
   { to: '/admin', label: 'Forge Status', end: true },
   { to: '/admin/settings', label: 'Forge settings', end: false },
+  { to: '/admin/repos', label: 'Repositories', end: false },
   { to: '/trainings/manage', label: 'Trainings', end: false },
 ]
 

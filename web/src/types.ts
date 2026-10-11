@@ -145,3 +145,12 @@ export type Conflict = { path: string; base: string; head: string; head_missing:
 export type Problem = { file: string; line: number; msg: string }
 export type BlockField = { name: string; type: string; required?: boolean; enum?: string[]; default?: string; description: string; min?: number; max?: number }
 export type BlockInfo = { id: string; group: string; title: string; summary: string; doc?: string; file_kind: string; fields: BlockField[]; example: string; git_only?: boolean }
+
+// A connected repository: where training content comes from. The credential is never sent to the browser; has_secret
+// says only that one is set.
+export type Repo = {
+  id: number; url: string; auth: 'none' | 'token'; username: string; has_secret: boolean
+  status: 'unknown' | 'ok' | 'failed'; can_write: boolean | null; last_error: string
+  checked_at: string | null; version: number; trainings: string[]
+}
+export type ReposView = { repos: Repo[]; can_keep_secrets: boolean }

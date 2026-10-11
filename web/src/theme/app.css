@@ -753,3 +753,10 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .docs-nav li a:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .docs-nav li a[aria-current='page'] { color: var(--text); border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .docs-nav h2:not(.docs-search-title) { font-family: inherit; font-size: 0.72rem; letter-spacing: 0.1em; margin: 1.2rem 0 0.4rem; }
+
+/* Repositories: a connection is a long URL and a few actions, so one per row — in a 280px tile the URL breaks
+   mid-word and the buttons wrap onto three lines. */
+.repos { grid-template-columns: 1fr; }
+.repos h2 { font-size: 1rem; margin: 0 0 0.5rem; overflow-wrap: anywhere; }
+.repos .facts { margin: 0.5rem 0 0; }
+.repos .row { margin: 0.75rem 0 0; }

@@ -284,3 +284,84 @@ func TestEarlyFailureLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("labs %v\n%s", c.Labs(), f.joined())
 	}
 }
+
+// A lab may ship a root-level kubeconfig file (0644); the toolbox kubeconfig replaces it, 0600, with only the proxy's
+// token. os.WriteFile alone keeps an existing file's mode.
+func TestToolboxKubeconfigIsPrivateEvenOverABundleFile(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string]string{"charts/shop/Chart.yaml": "name: shop\n", "kubeconfig": "token: from-the-bundle\n"} {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write([]byte(body))
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	c := testCluster(t, &fakeDocker{template: "kind: Deployment\n"})
+	id := "0123456789ab"
+	if err := c.Provision(context.Background(), id, buf.Bytes(), spec); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(filepath.Join(c.Dir, id, "kubeconfig"))
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("kubeconfig mode %v %v", st.Mode(), err)
+	}
+	if kc := readKubeconfig(t, c, id); strings.Contains(kc, "from-the-bundle") || !strings.Contains(kc, c.proxy(id).Token) {
+		t.Fatalf("kubeconfig: %s", kc)
+	}
+}
+
+// A lab whose context was deleted (kind delete cluster) or whose folder is gone can't be reached to uninstall: Destroy
+// forgets it on this laptop instead of failing at every hello forever.
+func TestDestroyForgetsALabItCanNoLongerReach(t *testing.T) {
+	for name, breakIt := range map[string]func(c *Cluster, id string){
+		"context deleted": func(c *Cluster, _ string) {
+			if err := os.WriteFile(c.Kubeconfig, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"folder gone": func(c *Cluster, id string) { _ = os.RemoveAll(filepath.Join(c.Dir, id)) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeDocker{template: "kind: Deployment\n"}
+			c := testCluster(t, f)
+			id := "0123456789ab"
+			if err := c.Provision(context.Background(), id, chartBundle(t), spec); err != nil {
+				t.Fatal(err)
+			}
+			breakIt(c, id)
+			restarted := &Cluster{Dir: c.Dir, Kubeconfig: c.Kubeconfig, Run: f.run, Bind: c.Bind}
+			f.calls = nil
+			if err := restarted.Destroy(context.Background(), id); err != nil {
+				t.Fatal(err)
+			}
+			calls := f.joined()
+			if strings.Contains(calls, "helm uninstall") || !strings.Contains(calls, "rm -f crucible-lab-"+id) {
+				t.Fatalf("calls:\n%s", calls)
+			}
+			if _, err := os.Stat(filepath.Join(c.Dir, id)); !os.IsNotExist(err) {
+				t.Error("folder left")
+			}
+			if len(restarted.Labs()) != 0 {
+				t.Errorf("still reported: %v", restarted.Labs())
+			}
+		})
+	}
+}
+
+// An unreachable cluster is different: the lab stays so a later destroy retries.
+func TestDestroyKeepsALabWhoseClusterIsDown(t *testing.T) {
+	f := &fakeDocker{template: "kind: Deployment\n"}
+	srv, _ := upstream(t)
+	c := &Cluster{Dir: t.TempDir(), Kubeconfig: kubeconfigFor(t, srv, "{token: real}"), Run: f.run,
+		Bind: func(context.Context) (string, error) { return "127.0.0.1", nil }}
+	id := "0123456789ab"
+	if err := c.Provision(context.Background(), id, chartBundle(t), spec); err != nil {
+		t.Fatal(err)
+	}
+	srv.Close()
+	restarted := &Cluster{Dir: c.Dir, Kubeconfig: c.Kubeconfig, Run: f.run, Bind: c.Bind}
+	if err := restarted.Destroy(context.Background(), id); err == nil || len(restarted.Labs()) != 1 {
+		t.Fatalf("err %v labs %v", err, restarted.Labs())
+	}
+}

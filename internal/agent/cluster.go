@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -102,7 +103,9 @@ users: [{name: lab, user: {token: %q}}]
 contexts: [{name: %q, context: {cluster: lab, user: lab, namespace: %s}}]
 current-context: %q
 `, port, base64.StdEncoding.EncodeToString(p.CA), p.Token, s.Context, namespace(id), s.Context)
-	if err := os.WriteFile(filepath.Join(c.Dir, id, "kubeconfig"), []byte(kc), 0o600); err != nil {
+	path := filepath.Join(c.Dir, id, "kubeconfig")
+	_ = os.RemoveAll(path) // a lab's own root-level kubeconfig would keep its mode through WriteFile
+	if err := os.WriteFile(path, []byte(kc), 0o600); err != nil {
 		_ = p.Close()
 		return err
 	}
@@ -233,6 +236,15 @@ func (c *Cluster) Destroy(ctx context.Context, id string) error {
 	if err != nil || json.Unmarshal(raw, &s) != nil || checkSpec(s) != nil {
 		return fmt.Errorf("lab %s: unreadable or invalid cluster spec", id)
 	}
+	if gone := c.unreachable(id, s); gone != "" { // nothing left to uninstall through: forget the lab on this laptop
+		slog.Warn("forgetting a cluster lab: its namespace and releases may remain on the cluster", "lab", id, "context", s.Context, "why", gone)
+		_, _ = c.run(ctx, "rm", "-f", container(id))
+		c.closeProxy(id)
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+		return os.Remove(markerPath(c.Dir, id))
+	}
 	if c.proxy(id) == nil {
 		if err := c.openProxy(ctx, id, s); err != nil {
 			return err // keep the folder: a later destroy retries once the cluster is reachable
@@ -257,6 +269,18 @@ func (c *Cluster) Destroy(ctx context.Context, id string) error {
 		return err
 	}
 	return os.Remove(markerPath(c.Dir, id))
+}
+
+// unreachable says why a lab can't be reached any more ("" when it can): its folder is gone, or its context is no
+// longer in the kubeconfig. A cluster that is down or refuses the credentials is not this: a later destroy retries.
+func (c *Cluster) unreachable(id string, s ap.ClusterSpec) string {
+	if _, err := os.Stat(filepath.Join(c.Dir, id)); errors.Is(err, fs.ErrNotExist) {
+		return "lab folder is gone"
+	}
+	if raw, err := LoadingRules(c.Kubeconfig).Load(); err == nil && raw.Contexts[s.Context] == nil {
+		return "context is no longer in the kubeconfig"
+	}
+	return ""
 }
 
 func (c *Cluster) closeProxy(id string) {

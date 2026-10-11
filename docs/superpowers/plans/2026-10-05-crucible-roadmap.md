@@ -92,6 +92,7 @@ Proof names Go tests, Vitest files (`web/src/...`) and Playwright specs (`author
 | §9 Security: enrolled users without editing rights refused (editors keep editing while enrolled: `TestEnrolledEditorsKeepEditing`), isolated checks, editor-only answer marks, CSP unchanged, ops path tricks | `TestAuthoringRefusesEnrolledAndBadInput`; `TestReadRefusesOversizeBodies`; `TestCSPStaysStrict`; `TestCheckOps`; `TestPushEditOpsRefusals`; Preview.test.tsx; docs.spec.ts and authoring.spec.ts (zero CSP violations) | P |
 | §10 Testing: Go, web and end-to-end as listed | `go test -race ./...`; `npm test`; `make local-check` | P |
 | Cluster labs on your own cluster (2026-10-11 spec) | 2026-10 | TestClusterLabRules; TestJudge; TestProxy*; TestProvisionInstallsInOrderThroughTheToolbox; TestFailedInstallCleansUp; TestTwoClusterLabsAreIndependent; TestDestroyAfterRestartReopensTheProxy; TestClusterProvisionSendsChartsNeverChecks; TestClusterLabStartsOnAPickedContextForFree; TestMigration00026EndsCrucibleClusterLabs; cluster-lab.spec.ts | P |
+| Smith and sword ranks (2026-10-11 spec) | 2026-10 | TestSwordRankPerTraining; TestExperienceIsWorkPlusMilestones; TestExperienceNeverDrops; TestSmithRankUpNotifiesOnceUnderConcurrency; TestSmithThresholdChanges; TestJourneyRowsCarrySmithAndSword; SmithMark.test.tsx; forge-101.spec.ts | P |
 
 ## Deviations (accepted)
 

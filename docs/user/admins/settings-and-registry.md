@@ -29,7 +29,7 @@ Also here: the **hours before a waiting request escalates**. The tiers go in as 
 **Sword ranks** — the percentage of a training a trainee must finish to reach each sword rank. Ranks only ever rise.
 
 **Smith ranks** — the experience a smith needs for each rank: Apprentice, Journeyman, Smith, Master Smith and
-Grandmaster. Each must be higher than the one before; Bellows Hand is always 0.
+Grandmaster. Each must be higher than the one before; Bellows Hand is always 0. Lowering a threshold can raise people's rank; raising one never lowers anyone.
 
 **Admins** — add an admin by email, remove one with **Remove**. The last admin can't be removed, and the page says
 so: losing that account would lock the forge with nobody able to let anyone back in. If there is only one admin, the

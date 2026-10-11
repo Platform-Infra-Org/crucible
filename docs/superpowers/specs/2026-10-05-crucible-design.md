@@ -62,7 +62,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Snapshots | Separate persistent S3 bucket (own terraform stack, never touched by teardown) |
 | Escalation default | 4 business hours (counted inside schedule window) |
 | Cost tiers | No defaults — set at install in `platform.yaml` |
-| Forge ranks | % of assigned (enrolled) training completed |
+| Ranks | A sword per training (% of that training) and a smith rank across Crucible (experience); see 2026-10-11-smith-and-sword-ranks-design.md |
 
 ---
 
@@ -271,7 +271,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - **Reading:** Markdown rendered with syntax highlighting, mermaid, callouts; "mark as read" + scroll tracking.
 - **Instant quizzes:** scored server-side; answers never sent to the client before submission. Attempts limit and cooldown configurable per quiz (default unlimited, no cooldown); best score counts.
 - **Human scoring:** submissions land in the program's **Scoring Queue** (Anvil view): filter by training/trainee/type, rubric shown, score + written feedback, return-for-rework. Lab submissions show the check results, a terminal transcript (recorded PTY output), and uploaded artifacts; scorers can override auto-check results with a reason (audited). Live **sign-offs** are created by a scorer ("Mark passed after live demo") with notes.
-- **Forge ranks:** rank = % of the trainee's enrolled programs completed (weighted by item points) — **Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Sword 90% → Masterwork 100%** (defaults; overridable in `platform.yaml`). Enrolling in a new program can lower the %, but a rank once earned is never lost. Per-training completion grants a badge. Rank-up triggers the hammer-strike animation. Ranks are personal; no leaderboards.
+- **Ranks:** a sword rank per training (Ore to Masterwork, by % of that training) and a smith rank across Crucible (Bellows Hand to Grandmaster, by experience); ranks only rise. Smith ranks show with people's names, sword ranks to the trainee and on Journey rows the viewer can see. No leaderboards. See `2026-10-11-smith-and-sword-ranks-design.md`.
 
 ---
 
@@ -390,7 +390,7 @@ For comparison, an EKS-based setup (control plane ~73 + ALB ~20 + NAT ~35 + RDS 
 ---
 
 ## 10. Notifications
-Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to the trainee). Users can mute per event type (email) in settings.
+Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; smith rank-up (to the trainee). Users can mute per event type (email) in settings.
 
 ## 11. Journey view
 - Mentors and the mentor dashboard were removed on 2026-10-11.
@@ -411,7 +411,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 - **Accessibility:** keyboard-navigable everything (including terminal tab switching), focus rings, ARIA live regions for check results, contrast checked per theme.
 
 ## 13. Data model (Postgres, core tables)
-`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
+`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `sword_ranks` · `smiths`.
 Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 
 ## 14. Errors, security, testing

@@ -11,7 +11,7 @@ import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
 import { advanceFocus } from '../lib/advanceFocus'
 import { ClusterPick } from '../components/ClusterPick'
 import { ReleaseHealth } from '../components/ReleaseHealth'
-import { pickContext, rememberContext, rememberedContext } from '../lib/cluster'
+import { clusterReady, keepAsking, keepPick, rememberContext, rememberedContext } from '../lib/cluster'
 import { Embers } from '../components/Embers'
 import { FeedbackBox } from '../components/Feedback'
 import { ErrorBox } from '../components/ErrorBox'
@@ -54,11 +54,13 @@ export function LabPage() {
   const [consent, setConsent] = useState(false)
   useEffect(() => {
     if (!info) return
-    // Preselect once; the info refetches while the agent is offline and must not undo a pick.
-    setKubeContext((k) => k || pickContext(info.contexts ?? [], rememberedContext()))
+    // The info refetches while waiting on the agent: keep the pick unless the agent stopped reporting it.
+    setKubeContext((k) => keepPick(info.contexts ?? [], k, rememberedContext()))
     setLab(info.lab)
-    setPoll(info.runtime_ready ? undefined : 3000)
   }, [info])
+  useEffect(() => {
+    if (info) setPoll(keepAsking(info, kubeContext) ? 3000 : undefined)
+  }, [info, kubeContext])
   useEffect(() => {
     if (!lab || ['destroyed', 'failed', 'rejected', 'expired'].includes(lab.state)) return
     const id = setInterval(async () => {
@@ -78,7 +80,7 @@ export function LabPage() {
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
   const cluster = info.runtime === 'cluster'
-  const clusterReady = !cluster || (kubeContext !== '' && (!info.cluster_wide || consent))
+  const canStart = !cluster || clusterReady(info.contexts ?? [], kubeContext, !!info.cluster_wide, consent)
   const start = async () => {
     setStarting(true)
     setStartErr(undefined)
@@ -143,14 +145,14 @@ export function LabPage() {
       )}
       {!info.runtime_ready && (
         <p className="warn">
-          {info.runtime_message} {info.runtime === 'local' && <Link to="/connect">Connect your laptop</Link>}
+          {info.runtime_message} {(info.runtime === 'local' || info.runtime === 'cluster') && <Link to="/connect">Connect your laptop</Link>}
         </p>
       )}
       {info.blocked && <p className="warn">{info.blocked}</p>}
       {startErr && <p className="error">{startErr}</p>}
       {!pending && cluster && <ClusterPick contexts={info.contexts ?? []} value={kubeContext} onChange={setKubeContext} clusterWide={!!info.cluster_wide} consent={consent} onConsent={setConsent} />}
       {!pending && (
-        <button className="primary big" disabled={!info.runtime_ready || !!info.blocked || starting || !clusterReady} onClick={start}>
+        <button className="primary big" disabled={!info.runtime_ready || !!info.blocked || starting || !canStart} onClick={start}>
           {info.needs_approval ? `Request approval (${usd(info.estimate_usd)})` : cooled ? 'Ignite again' : 'Ignite the forge'}
         </button>
       )}

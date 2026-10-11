@@ -15,6 +15,10 @@ a remote one you can use. Pick it under **Run it on** before you start; the list
 The lab installs into its own namespace there, your terminals open in a toolbox pointed at it, and ending the lab
 removes it. It costs nothing in Crucible: the cluster is yours.
 
+The list follows your kubeconfig while the page is open: start the agent, or create a cluster (`kind create
+cluster`), and it shows up without a reload. If the agent isn't running, **Connect your laptop** says how to start it.
+A context you delete drops out of the list, and the lab can't start until you pick another.
+
 While it runs, **On your cluster** on the lab page shows each release as Ready, Starting or Failing. Results are
 self-reported, as for laptop labs.
 

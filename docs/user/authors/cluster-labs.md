@@ -9,6 +9,10 @@ A cluster lab installs Helm charts on a Kubernetes cluster the trainee picks fro
 laptop agent: a kind cluster on the laptop or a remote one. It costs nothing in Crucible. Add one with the **Cluster
 lab** block, then fill in the charts.
 
+To try a lab you are writing, `crucible-agent cluster up` makes a kind cluster called `crucible` on your laptop (it
+needs only Docker), and the agent offers it under **Run it on**. `crucible-agent cluster down` removes it. Trainees
+without a cluster are pointed to the same command.
+
 ## The lab file
 
 ```yaml
@@ -35,7 +39,7 @@ tasks:
   least `1s`, and a lab's timeouts add up to at most `12m` (three charts at the default 5m are too many: shorten them).
 - **The namespace.** Each lab gets its own, `lab-<id>`. Charts use `.Release.Namespace` as usual. The lab acts with
   the trainee's rights on the cluster they pick, so they need to be able to create namespaces and install into them
-  (a kind cluster on their laptop gives them everything). A `cluster_wide` lab needs rights to create its cluster-wide
+  (a cluster from `crucible-agent cluster up` gives them everything). A `cluster_wide` lab needs rights to create its cluster-wide
   resources too; say so in the lab's instructions for trainees using a shared cluster.
 - **The toolbox.** Terminals, setup scripts and checks run in a container with `kubectl`, `helm`, `k9s`, `jq` and
   `crucible-ready`, pointed at the trainee's cluster, with `LAB_NAMESPACE`, `LAB_ID` and `LAB_RELEASES` set. There

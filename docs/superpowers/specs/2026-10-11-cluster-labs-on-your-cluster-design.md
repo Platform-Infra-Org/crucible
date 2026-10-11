@@ -85,9 +85,14 @@ labs; rubrics never leave the server.
 
 ## 2. The agent
 
-**Contexts.** The agent reads the kubeconfig (`--kubeconfig`, else `$KUBECONFIG`, else `~/.kube/config`) at start and
-whenever the file changes, and reports `[{name, server_host}]` to Crucible, in the hello message and in a new
-`contexts` message. No credentials, tokens or certificates leave the laptop.
+**Contexts.** The agent reads the kubeconfig (`--kubeconfig` alone; else `$KUBECONFIG`, else `~/.kube/config`, plus
+`~/.crucible/kubeconfig`) at start and whenever the file changes, and reports `[{name, server_host}]` to Crucible, in the
+hello message and in a new `contexts` message. No credentials, tokens or certificates leave the laptop.
+
+**A cluster of their own.** `crucible-agent cluster up [--name crucible]` makes a kind cluster through Docker (kind's
+library, pinned node image) and writes its kubeconfig to `~/.crucible/kubeconfig` only, never `~/.kube/config`; the
+agent offers it within its next read. `cluster down` deletes it and its entries. Both are no-ops with a message when
+there is nothing to do.
 
 **Per-lab proxy.** For each running cluster lab the agent opens a Kubernetes API proxy for the chosen context:
 

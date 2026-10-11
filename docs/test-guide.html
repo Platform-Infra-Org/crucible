@@ -503,10 +503,11 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <div class="cmd"><pre><code>KEEP=1 KEYCLOAK_PORT=8081 make cluster-check</code></pre></div>
               <p class="expect"><b>Expect</b>it ends with <i>Cluster check passed. The crucible holds.</i> and leaves the stack running with AWS dry run on (used in 9a).</p></div></li>
           <li class="item" data-id="cl-kind"><label><input type="checkbox" id="c-cl-kind"><span class="t">Make a throwaway cluster</span></label>
-            <div class="body"><div class="cmd"><pre><code>kind create cluster --name crucible-try --kubeconfig ~/crucible-try.kubeconfig</code></pre></div>
-              <p>Then run the agent against that file, with the token from <b>Connect your laptop</b>:</p>
-              <div class="cmd"><pre><code>crucible-agent --kubeconfig ~/crucible-try.kubeconfig</code></pre></div>
-              <p class="expect"><b>Expect</b>the Connect page shows the agent connected and lists the context <code>kind-crucible-try</code> without any credentials.</p></div></li>
+            <div class="body"><p>The agent makes one itself; it needs only Docker.</p>
+              <div class="cmd"><pre><code>crucible-agent cluster up --name crucible-try</code></pre></div>
+              <p>Then run the agent, with the token from <b>Connect your laptop</b>. No <code>--kubeconfig</code> is needed: it also reads <code>~/.crucible/kubeconfig</code>, where the cluster's kubeconfig went.</p>
+              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; crucible-agent --server http://localhost:8080</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Ready. Your agent sees it as kind-crucible-try</i>; <code>~/.kube/config</code> is unchanged; the Connect page lists the context <code>kind-crucible-try</code> without any credentials. Running <code>cluster up</code> again says the cluster already exists.</p></div></li>
           <li class="item" data-id="cl-pick"><label><input type="checkbox" id="c-cl-pick"><span class="t">Pick the cluster</span></label>
             <div class="body"><p>As trainee open Forge 101 → <i>Into the Crucible</i>. Under <b>Run it on</b> choose <code>kind-crucible-try</code>, then <b>Ignite the forge</b>.</p>
               <p class="expect"><b>Expect</b>no estimate and no approval: it starts at once, free.</p></div></li>
@@ -515,13 +516,12 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>the panel <b>On your cluster</b> shows the release as <i>Starting</i> or <i>Failing</i> while broken and <i>Ready</i> once fixed; both tasks pass. Results are marked self-reported.</p></div></li>
           <li class="item" data-id="cl-end"><label><input type="checkbox" id="c-cl-end"><span class="t">End it</span></label>
             <div class="body"><p><b>End lab</b>, then list the namespaces on the throwaway cluster.</p>
-              <div class="cmd"><pre><code>kubectl --kubeconfig ~/crucible-try.kubeconfig get ns</code></pre></div>
+              <div class="cmd"><pre><code>kubectl --kubeconfig ~/.crucible/kubeconfig --context kind-crucible-try get ns</code></pre></div>
               <p class="expect"><b>Expect</b>no <code>lab-&lt;id&gt;</code> namespace is left.</p></div></li>
           <li class="item" data-id="cl-clean"><label><input type="checkbox" id="c-cl-clean"><span class="t">Clean up</span></label>
-            <div class="body"><div class="cmd"><pre><code>kind delete cluster --name crucible-try --kubeconfig ~/crucible-try.kubeconfig
-kind delete cluster --name crucible-m4
-rm ~/crucible-try.kubeconfig</code></pre></div>
-              <p class="expect"><b>Expect</b>only those two clusters are removed. Leave any other kind cluster (such as <code>platform</code>) alone.</p></div></li>
+            <div class="body"><div class="cmd"><pre><code>crucible-agent cluster down --name crucible-try
+kind delete cluster --name crucible-m4</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Removed the cluster crucible-try from this laptop.</i>, and <code>~/.crucible/kubeconfig</code> is gone if it held nothing else. Only those two clusters are removed. Leave any other kind cluster (such as <code>platform</code>) alone; a second <code>cluster down</code> says there is no such cluster.</p></div></li>
         </ul>
       </section>
 

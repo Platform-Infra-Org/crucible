@@ -56,8 +56,10 @@ training makes a Journeyman.
 - **Smith rank** is shown with a person's name: the user's own card, and wherever people are the subject — the Team
   roster, the people picker on Manage trainings, Journey (person headers and rows), the Anvil (the trainee), Approvals
   (the requester), content edits (author and reviewer). Not on money pages (the Ledger).
-- **Sword ranks** are seen by the trainee, and on Journey by the people who already follow that training there (its
-  admins and editors, the owning team's leaders and seniors). Nobody else.
+- **Sword ranks** are seen by the trainee, and on Journey by whoever already sees that person's row for the training
+  there (who may view their progress: the training's admins and scorers, the owning team's leaders, seniors and
+  juniors, the person's own team's leaders and seniors). They already see the module-by-module progress the sword rank
+  sums up. Nobody else.
 - **No leaderboards:** nothing is ordered, numbered or compared by smith rank or experience.
 
 ## Where it shows
@@ -94,7 +96,7 @@ training makes a Journeyman.
   threshold raising a rank, a raised one never lowering it); experience arithmetic; experience and ranks never drop (admin reset, a
   training removed); each milestone counted once; silent backfill; a smith rank-up notifies exactly once under
   concurrent saves and a two-level jump announces the top; a sword rank-up never emails; `seen` clears only the named
-  banner; sword ranks only reach Journey viewers who follow the training; every person payload above carries `smith`;
+  banner; sword ranks reach Journey only on rows the viewer may already see; every person payload above carries `smith`;
   nothing sorts by rank.
 - Web: render tests for the user card meter, Your craft / Your swords, the training-page line, the smith mark (every
   theme, phone width, calm motion; title always in text).

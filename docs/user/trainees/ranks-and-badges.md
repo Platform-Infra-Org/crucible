@@ -25,11 +25,12 @@ one needs.
 ## Ranks only rise
 
 Neither a sword nor your smith rank is ever lowered, and experience never goes down, even if a training is reset or
-taken away. When you reach a new rank, the Hearth celebrates it once.
+taken away: the work you did there still counts. When you reach a new rank, the Hearth celebrates it once. A new smith
+rank also reaches you as a notification, by email unless you untick "I reached a new smith rank" in Settings.
 
 ## Badges
 
-Finish a training completely and you earn its badge, shown on your Hearth.
+Finish a training completely and you earn its badge, shown on your Hearth with the date you earned it.
 
 ## Who sees them
 

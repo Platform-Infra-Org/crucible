@@ -38,4 +38,4 @@ A quiz can also hold questions you answer inside the module's lab. You'll meet t
 
 A score a person gave you stands: you can't retry that answer. Only an answer returned to you for rework can be sent
 again. If you are truly stuck, for example out of attempts, ask an admin: they can reset a quiz, and your ranks
-never drops because of it.
+never drop because of it.

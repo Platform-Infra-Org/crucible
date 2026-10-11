@@ -172,10 +172,10 @@ body.hide-done .item.done { display: none; }
         <div class="caps">
           <div class="cap"><span class="who">Trainees</span><h3>Learn</h3>
             <ul>
-              <li>The Hearth: your trainings, progress, rank and badges</li>
+              <li>The Hearth: your trainings, progress, your craft (smith rank), your swords and badges</li>
               <li>Readings, then quizzes scored at once (choice, exact, pattern, order, match) or by a person (written, upload, live sign-off)</li>
               <li>Modules in order or free, as the training sets</li>
-              <li>Ranks from Ore to Masterwork, which only ever rise; a badge per finished training</li>
+              <li>A sword per training, from Ore to Masterwork, and a smith rank from experience, from Bellows Hand to Grandmaster; both only ever rise; a badge per finished training</li>
             </ul></div>
           <div class="cap"><span class="who">Trainees</span><h3>Labs</h3>
             <ul>
@@ -340,8 +340,8 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
             <div class="body"><p>With one admin, note the warning. Add <code>senior@crucible.local</code>, then remove them again.</p>
               <p class="expect"><b>Expect</b>the warning goes once there are two; the last admin can't be removed.</p></div></li>
           <li class="item" data-id="cfg-ranks"><label><input type="checkbox" id="c-cfg-ranks"><span class="t">Ranks, quotes and default theme</span></label>
-            <div class="body"><p>Change a rank threshold, edit the loading quotes, change the default theme.</p>
-              <p class="expect"><b>Expect</b>quotes appear on the Hearth and loading screens; a person who never picked a theme gets the new default.</p></div></li>
+            <div class="body"><p>In Settings, change a threshold under <b>Sword ranks</b> (% of a training) and one under <b>Smith ranks</b> (experience); edit the loading quotes, change the default theme.</p>
+              <p class="expect"><b>Expect</b>each threshold must be higher than the one before; quotes appear on the Hearth and loading screens; a person who never picked a theme gets the new default.</p></div></li>
           <li class="item" data-id="cfg-status"><label><input type="checkbox" id="c-cfg-status"><span class="t">Forge Status and the audit trail</span></label>
             <div class="body"><p>Administrator → Forge Status.</p>
               <p class="expect"><b>Expect</b>every training synced with a head commit and no problems; your changes above listed under <b>Recent privileged actions</b>.</p></div></li>
@@ -455,8 +455,8 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>As senior: score one, return the other with feedback; mark a live sign-off passed.</p>
               <p class="expect"><b>Expect</b>the trainee sees the feedback; a returned answer can be sent again; a scored one is final (an admin can reset it from the Journey).</p></div></li>
           <li class="item" data-id="ln-rank"><label><input type="checkbox" id="c-ln-rank"><span class="t">Ranks and badges</span></label>
-            <div class="body"><p>Finish Forge 102 as trainee.</p>
-              <p class="expect"><b>Expect</b>a badge on the Hearth and a rank-up moment when a threshold is passed; ranks never drop.</p></div></li>
+            <div class="body"><p>Finish Forge 102 as trainee. Then sign in as leader and open Team and Journey.</p>
+              <p class="expect"><b>Expect</b>the Hearth shows <b>Your craft</b> (smith rank and experience) and <b>Your swords</b>, with a badge for Forge 102; the training page reads "Your sword: …"; the user card (your name, top right) shows the smith title and its meter; a rank-up moment on the Hearth when a sword or the smith rank rises, and a new smith rank also sends the rank-up notification. The leader sees the trainee's smith mark on Team and Journey, and the sword rank on each Journey row. Ranks never drop.</p></div></li>
           <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Journey</span></label>
             <div class="body"><p>As leader and as senior: the team's Journey.</p>
               <p class="expect"><b>Expect</b>the heat map for the team's people, and flags for someone stuck or quiet. There is no <b>Mentor</b> link anywhere.</p></div></li>

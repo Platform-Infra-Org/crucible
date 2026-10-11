@@ -162,3 +162,22 @@ func TestLedgerShowsFailedAWSLabsWithActualsAndDestroyingOnes(t *testing.T) {
 		t.Fatalf("a destroying aws lab still has live resources: %v", got)
 	}
 }
+
+// Spec 2026-10-11 §3: cluster labs run on the trainee's own cluster for $0 and are not in the Ledger.
+func TestLedgerLeavesOutClusterLabs(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	now := f.clk.Now()
+	in := &Instance{ID: "ccccccccccc1", UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+		Runtime: "cluster", State: Ready, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+	if err := f.s.insert(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET ready_at = $2 WHERE id = $1`, in.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	l, err := f.s.Ledger(ctx, f.admin)
+	if err != nil || len(l.Running) != 0 || len(l.Labs) != 0 {
+		t.Fatalf("running %+v labs %+v %v", l.Running, l.Labs, err)
+	}
+}

@@ -86,8 +86,8 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 	return false
 }
 
-// oversees: actor is subject's mentor, or a leader or senior of subject's own team (who follow their people's
-// progress in trainings other teams own).
+// oversees: actor is a leader or senior of subject's own team (who follow their people's progress in trainings other
+// teams own).
 func (c Checker) oversees(actor, subject string) bool {
 	if subject == "" {
 		return false
@@ -97,7 +97,7 @@ func (c Checker) oversees(actor, subject string) bool {
 		return false
 	}
 	r := st.RoleOf(actor)
-	return st.Mentors[subject] == actor || r == "leader" || r == "senior"
+	return r == "leader" || r == "senior"
 }
 
 // CanCreateTraining: admins, and every leader, senior and junior (their team owns what they register).

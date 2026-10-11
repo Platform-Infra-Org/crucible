@@ -3,5 +3,3 @@ leaders: [leader@crucible.local]
 seniors: [senior@crucible.local]
 juniors: []
 trainees: [trainee@crucible.local]
-mentors:
-  trainee@crucible.local: senior@crucible.local

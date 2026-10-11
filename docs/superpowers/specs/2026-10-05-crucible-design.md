@@ -50,7 +50,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Human-scored items | free text, file/link uploads, lab submissions (incl. override), live sign-offs |
 | FinOps v1 | TTL + idle destroy, schedules, budgets + hard caps, infracost estimate, in-app dashboard |
 | Teardown | Global lab kill switch **and** full platform hibernate/restore |
-| Extras approved | Forge ranks, `crucible lint`/preview CLI, email + Slack/Teams notifications, mentor pairing + journey view |
+| Extras approved | Forge ranks, `crucible lint`/preview CLI, email + Slack/Teams notifications, journey view (mentor pairing removed 2026-10-11) |
 | Themes | Built-in set, per-user choice, admin default |
 | Motion | Rich, fully disabled under `prefers-reduced-motion` or user toggle |
 | Release | Everything in one release (built in dependency order, §15) |
@@ -117,7 +117,7 @@ crucible-platform/
   trainings.yaml         # registry: training id → content repo URL + ref (branch, tag or commit) + folder (default: root)
   teams/
     <team-id>/
-      team.yaml          # name, leader, seniors, members, trainees, mentor pairs
+      team.yaml          # name, leaders, seniors, juniors, trainees
       budget.yaml        # monthly budget + hard cap (USD), per-training sub-budgets
       programs/
         <training-id>.yaml   # team's enrollment of a global training (see 4.3)
@@ -231,14 +231,14 @@ Superseded on 2026-10-11 by `2026-10-11-teams-and-training-roles-design.md`, whi
 - **Team tags:** `leader`, `senior`, `junior`, `trainee`; one team per person, one tag each, one or more leaders.
 - **Per training (owned by one team):** `participant`, `editor`, `admin`, each given to people or groups
   (`all`, `all_<tag>s`, `<team>`, `<team>_<tag>s`). The owning team's leaders, seniors and juniors manage it.
-- **Mentor:** a pairing (leader/senior/junior → trainee) within a team, not a role.
+- **Mentors:** removed (2026-10-11); a team's leaders and seniors follow its people.
 
 ### 5.3 Permission matrix
 
 | Action | admin | team leader | senior / junior (owning team) | trainee | training admin | editor | participant |
 |---|---|---|---|---|---|---|---|
 | Add, remove, move people; create/delete teams | ✓ | | | | | | |
-| Change tags and mentor pairs in own team | ✓ | ✓ | | | | | |
+| Change tags in own team | ✓ | ✓ | | | | | |
 | Register a training (for own team) | ✓ | ✓ | ✓ | | | | |
 | Give a training's roles, source, pin, schedule/TTL, delete it | ✓ | ✓ (owning team) | ✓ | | ✓ | | |
 | Give a training to another team | ✓ | | | | | | |
@@ -249,7 +249,7 @@ Superseded on 2026-10-11 by `2026-10-11-teams-and-training-roles-design.md`, whi
 
 `maintainers` in `training.yaml` grant nothing.
 
-Rules: nobody approves their own lab request or scores their own submission. A trainee sees only their own scores; mentors see their mentees.
+Rules: nobody approves their own lab request or scores their own submission. A trainee sees only their own scores.
 
 ---
 
@@ -390,11 +390,11 @@ For comparison, an EKS-based setup (control plane ~73 + ALB ~20 + NAT ~35 + RDS 
 ---
 
 ## 10. Notifications
-Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to trainee + mentor). Users can mute per event type (email) in settings.
+Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to the trainee). Users can mute per event type (email) in settings.
 
-## 11. Mentor & journey view
-- Each trainee may have a mentor (in `team.yaml`). Mentor dashboard: mentees' progress, pending submissions, recent lab failures.
-- **Journey view** (leader/mentor/manager): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, the final (solution) hint revealed, no activity for 5 business days, or a submission returned twice.
+## 11. Journey view
+- Mentors and the mentor dashboard were removed on 2026-10-11.
+- **Journey view** (leaders, seniors, a training's managers, editors and admins): per trainee, a module-by-module **heat map** — cold (not started) → glowing (in progress) → forged (completed) — with "stuck" flags: ≥3 failed checks on the same task, the final (solution) hint revealed, no activity for 5 business days, or a submission returned twice.
 
 ---
 

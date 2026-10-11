@@ -16,7 +16,7 @@ async function login(browser: Browser, user: string): Promise<Page> {
 // Idempotent on a KEEP=1 stack: titles and the appended line carry a run id, and addParticipant tolerates an existing role.
 const run = Date.now().toString(36)
 
-test('a content edit is reviewed and merged; the trainee earns a badge; mentor and leader see the journey', async ({ browser }) => {
+test('a content edit is reviewed and merged; the trainee earns a badge; senior and leader see the journey', async ({ browser }) => {
   // The leader makes the trainee a participant of Forge 102 (a no-op on a KEEP=1 rerun).
   const leader = await login(browser, 'leader')
   await addParticipant(leader, 'forge-102', 'trainee@crucible.local')
@@ -58,9 +58,10 @@ test('a content edit is reviewed and merged; the trainee earns a badge; mentor a
   // CARRY (M4): Forge 101's cluster module can't be finished in local-check, so never assert a particular rank.
   await expect(trainee.getByTestId('rank')).toHaveText(/^(Ore|Ingot|Tempered|Blade|Sword|Masterwork)$/)
 
-  // The trainee's mentor (the senior) and the team leader see Forge 102 forged.
-  await senior.getByRole('link', { name: 'Mentor', exact: true }).click()
-  await expect(senior.getByTestId('mentee-trainee@crucible.local').getByTestId('journey-trainee@crucible.local-forge-102').getByRole('listitem').filter({ hasText: 'Sparks' })).toContainText(/Sparks\s*:\s*forged/)
+  // The team's senior and leader see Forge 102 forged on the Journey; there is no mentor page any more.
+  await expect(senior.getByRole('link', { name: 'Mentor', exact: true })).toHaveCount(0)
+  await senior.goto('/teams/forge/journey')
+  await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').getByRole('listitem').filter({ hasText: 'Sparks' })).toContainText(/Sparks\s*:\s*forged/)
   // The leader reaches the team from their user card: their icon, name, email and teams.
   await leader.getByRole('button', { name: /Leo Leader/ }).click()
   const card = leader.getByRole('dialog', { name: 'Your user card' })

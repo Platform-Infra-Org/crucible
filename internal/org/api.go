@@ -373,7 +373,7 @@ func (a *api) putWebhook(w http.ResponseWriter, r *http.Request, actor string, _
 
 // putRoster saves a team's members and tags. An admin may change anything: add people (moving them from another
 // team), remove them, rename the team. A leader only changes the tags of the people already on it (any tag, leader
-// included) and the mentor pairs. The permission check runs on the team snapshot at body.Version, and the store only
+// included). The permission check runs on the team snapshot at body.Version, and the store only
 // writes when the stored version is still that one, so the check and the write see the same team.
 func (a *api) putRoster(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	id := chi.URLParam(r, "id")

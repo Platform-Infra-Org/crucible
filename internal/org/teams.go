@@ -22,12 +22,11 @@ type TeamBody struct {
 	Version int64             `json:"version"`
 	Name    string            `json:"name"`
 	Members map[string]string `json:"members"` // email → leader, senior, junior or trainee
-	Mentors map[string]string `json:"mentors"` // trainee → mentor
 }
 
 // BodyOf is t as a TeamBody: every member with their tag.
 func BodyOf(t *config.Team) TeamBody {
-	b := TeamBody{Version: t.Version, Name: t.Name, Members: map[string]string{}, Mentors: t.Mentors}
+	b := TeamBody{Version: t.Version, Name: t.Name, Members: map[string]string{}}
 	for _, tag := range config.Tags {
 		for _, e := range t.Tagged(tag) {
 			b.Members[e] = tag
@@ -46,18 +45,17 @@ func checkTeamID(id string) error {
 	return nil
 }
 
-// roster is a validated body: addresses normalised, a known tag each, at least one leader, mentors checked.
+// roster is a validated body: addresses normalised, a known tag each, at least one leader.
 type roster struct {
-	name    string
-	roles   map[string]string // email -> tag
-	mentors map[string]string
+	name  string
+	roles map[string]string // email -> tag
 }
 
 func (b TeamBody) roster() (*roster, error) {
 	if strings.TrimSpace(b.Name) == "" {
 		return nil, apperr.Wrap(apperr.Invalid, "a team needs a name")
 	}
-	r := &roster{name: strings.TrimSpace(b.Name), roles: map[string]string{}, mentors: map[string]string{}}
+	r := &roster{name: strings.TrimSpace(b.Name), roles: map[string]string{}}
 	for e, tag := range b.Members {
 		e = em(e)
 		if err := config.CheckEmail("member", e); err != nil {
@@ -74,19 +72,6 @@ func (b TeamBody) roster() (*roster, error) {
 	if !slices.Contains(slices.Collect(maps.Values(r.roles)), "leader") {
 		return nil, apperr.Wrap(apperr.Invalid, "a team needs at least one leader")
 	}
-	for t, m := range b.Mentors {
-		t, m = em(t), em(m)
-		if t == m {
-			return nil, apperr.Wrap(apperr.Invalid, t+" cannot mentor themselves")
-		}
-		if r.roles[t] != "trainee" {
-			return nil, apperr.Wrap(apperr.Invalid, t+" is mentored but is not a trainee on this team")
-		}
-		if tag := r.roles[m]; tag == "" || tag == "trainee" {
-			return nil, apperr.Wrap(apperr.Invalid, m+" mentors "+t+" but is not a leader, senior or junior on this team")
-		}
-		r.mentors[t] = m
-	}
 	return r, nil
 }
 
@@ -96,7 +81,7 @@ func (r *roster) detail(version int64) map[string]any {
 	for e, tag := range r.roles {
 		by[tag] = append(by[tag], e)
 	}
-	d := map[string]any{"version": version, "name": r.name, "mentors": r.mentors}
+	d := map[string]any{"version": version, "name": r.name}
 	for _, tag := range config.Tags {
 		slices.Sort(by[tag])
 		d[tag+"s"] = nonNil(by[tag])
@@ -104,8 +89,8 @@ func (r *roster) detail(version int64) map[string]any {
 	return d
 }
 
-// write replaces the team's members and mentors. Someone on another team moves here: they leave that team and its
-// mentor pairs, and that team's version moves on. A move that would leave a team with no leader is refused.
+// write replaces the team's members. Someone on another team moves here: they leave that team, and that team's version
+// moves on. A move that would leave a team with no leader is refused.
 func (r *roster) write(ctx context.Context, tx pgx.Tx, id string, detail map[string]any) error {
 	rows, err := tx.Query(ctx, `SELECT email, team FROM team_members WHERE email = ANY($1) AND team <> $2 ORDER BY email`,
 		slices.Collect(maps.Keys(r.roles)), id)
@@ -129,9 +114,6 @@ func (r *roster) write(ctx context.Context, tx pgx.Tx, id string, detail map[str
 		if _, err := tx.Exec(ctx, `DELETE FROM team_members WHERE team = $1 AND email = $2`, from, e); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM mentors WHERE team = $1 AND (trainee = $2 OR mentor = $2)`, from, e); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(ctx, `UPDATE teams SET version = version + 1 WHERE id = $1`, from); err != nil {
 			return err
 		}
@@ -151,16 +133,8 @@ func (r *roster) write(ctx context.Context, tx pgx.Tx, id string, detail map[str
 	if _, err := tx.Exec(ctx, `DELETE FROM team_members WHERE team = $1`, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM mentors WHERE team = $1`, id); err != nil {
-		return err
-	}
 	for e, tag := range r.roles {
 		if _, err := tx.Exec(ctx, `INSERT INTO team_members (team, email, role) VALUES ($1, $2, $3)`, id, e, tag); err != nil {
-			return err
-		}
-	}
-	for t, m := range r.mentors {
-		if _, err := tx.Exec(ctx, `INSERT INTO mentors (team, trainee, mentor) VALUES ($1, $2, $3)`, id, t, m); err != nil {
 			return err
 		}
 	}
@@ -213,7 +187,7 @@ func (s *Store) SetTeam(ctx context.Context, actor, id string, b TeamBody) error
 	})
 }
 
-// DeleteTeam removes the team and its members, mentors, webhooks and budget (cascade). A team that still owns
+// DeleteTeam removes the team and its members, webhooks and budget (cascade). A team that still owns
 // trainings is refused, so no training loses its run settings by accident. Learning history
 // (item_progress, submissions, badges, ranks) has no foreign key to teams and is kept.
 func (s *Store) DeleteTeam(ctx context.Context, actor, id string) error {

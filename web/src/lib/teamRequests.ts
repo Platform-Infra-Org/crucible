@@ -9,14 +9,14 @@ export const tagPlural: Record<Tag, string> = { leader: 'Leaders', senior: 'Seni
 export const teamPath = (id: string) => `/api/org/teams/${id}`
 const programPath = (team: string, training: string) => `${teamPath(team)}/programs/${training}`
 
-type Roster = { id: string; name: string; version: number; members: Member[]; mentors: Record<string, string> }
+type Roster = { id: string; name: string; version: number; members: Member[] }
 
 export const membersOf = (t: { members: Member[] }) => Object.fromEntries(t.members.map((m) => [m.email, m.tag])) as Record<string, Tag>
 
-// rosterRequest saves the team with its members (email → tag) and mentor pairs changed; the rest as it stands.
-export const rosterRequest = (t: Roster, change: { members?: Record<string, Tag>; mentors?: Record<string, string> }) => ({
+// rosterRequest saves the team with its members (email → tag); the name as it stands.
+export const rosterRequest = (t: Roster, members: Record<string, Tag>) => ({
   path: `${teamPath(t.id)}/roster`,
-  json: { version: t.version, name: t.name, members: change.members ?? membersOf(t), mentors: change.mentors ?? t.mentors },
+  json: { version: t.version, name: t.name, members },
 })
 
 // retag gives email a new tag, or explains why not: only people already on the team, and a team keeps a leader.

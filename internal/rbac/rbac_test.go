@@ -32,7 +32,7 @@ func TestMatrix(t *testing.T) {
 		{other, TakeTraining, "", false},
 		{trainee, ViewProgress, trainee, true},
 		{trainee, ViewProgress, senior, false},
-		{senior, ViewProgress, trainee, true}, // senior + mentor
+		{senior, ViewProgress, trainee, true}, // a senior of the trainee's team
 		{leader, ManageProgram, "", true},
 		{senior, ManageProgram, "", true}, // the owning team's seniors and juniors manage its trainings too
 		{trainee, ManageProgram, "", false},
@@ -161,9 +161,8 @@ func TestSpendTeams(t *testing.T) {
 // to people and groups from any team.
 func TestTeamsAndTrainingRoles(t *testing.T) {
 	p := &config.Platform{Teams: map[string]*config.Team{
-		"platform": {ID: "platform", Leaders: []string{"pl@x", "pl2@x"}, Seniors: []string{"ps@x"}, Juniors: []string{"pj@x"}, Trainees: []string{"pt@x"},
-			Mentors: map[string]string{"pt@x": "pj@x"}},
-		"data": {ID: "data", Leaders: []string{"dl@x"}, Seniors: []string{"ds@x"}, Trainees: []string{"dt@x"}, Programs: map[string]*config.Program{}},
+		"platform": {ID: "platform", Leaders: []string{"pl@x", "pl2@x"}, Seniors: []string{"ps@x"}, Juniors: []string{"pj@x"}, Trainees: []string{"pt@x"}},
+		"data":     {ID: "data", Leaders: []string{"dl@x"}, Seniors: []string{"ds@x"}, Trainees: []string{"dt@x"}, Programs: map[string]*config.Program{}},
 	}}
 	p.Teams["platform"].Programs = map[string]*config.Program{"k8s": {Training: "k8s", Access: config.Access{
 		Participants: []string{"all_trainees"}, Editors: []string{"data_seniors"}, Admins: []string{"dl@x"}}}}
@@ -196,10 +195,10 @@ func TestTeamsAndTrainingRoles(t *testing.T) {
 			t.Errorf("%s %v subject=%s: got %v want %v", tc.actor, tc.action, tc.subject, got, tc.want)
 		}
 	}
-	// A team's leaders and seniors, and a mentor, follow their own people in trainings other teams own.
+	// A team's leaders and seniors follow their own people in trainings other teams own; its juniors don't.
 	p.Teams["data"].Programs["etl"] = &config.Program{Training: "etl", Access: config.Access{Participants: []string{"pt@x"}}}
 	p.Resolve()
-	for actor, want := range map[string]bool{"pl@x": true, "ps@x": true, "pj@x": true /* mentor */, "dt@x": false} {
+	for actor, want := range map[string]bool{"pl@x": true, "ps@x": true, "pj@x": false, "dt@x": false} {
 		if got := c.Can(actor, ViewProgress, "data", "etl", "pt@x"); got != want {
 			t.Errorf("%s follows pt@x in data's etl: got %v want %v", actor, got, want)
 		}

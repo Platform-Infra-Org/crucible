@@ -26,7 +26,6 @@ func TestCreateTeamStoresTags(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
 	b := body("Platform", "lead@x:leader", "lead2@x:leader", "senior@x:senior", "jun@x:junior", "new@x:trainee")
-	b.Mentors = map[string]string{"new@x": "jun@x"}
 	if err := s.CreateTeam(ctx, "admin@x", "platform", b); err != nil {
 		t.Fatalf("CreateTeam: %v", err)
 	}
@@ -35,9 +34,6 @@ func TestCreateTeamStoresTags(t *testing.T) {
 	if team == nil || !slices.Equal(team.Leaders, []string{"lead2@x", "lead@x"}) || team.Name != "Platform" ||
 		!slices.Equal(team.Juniors, []string{"jun@x"}) || team.RoleOf("new@x") != "trainee" {
 		t.Fatalf("team = %+v", team)
-	}
-	if team.Mentors["new@x"] != "jun@x" {
-		t.Errorf("mentors = %v", team.Mentors)
 	}
 	if err := s.CreateTeam(ctx, "admin@x", "platform", b); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("duplicate id = %v, want Conflict", err)
@@ -86,13 +82,12 @@ func TestTeamNeedsALeaderAndValidAddresses(t *testing.T) {
 	}
 }
 
-// A person is on one team. An admin who adds them to another moves them: they leave the old team and its mentor
-// pairs, and the old team's version moves on. Taking a team's last leader is refused.
+// A person is on one team. An admin who adds them to another moves them: they leave the old team, and the old team's
+// version moves on. Taking a team's last leader is refused.
 func TestAddingSomeoneMovesThemBetweenTeams(t *testing.T) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
 	a := body("A", "la@x:leader", "mover@x:senior", "ta@x:trainee")
-	a.Mentors = map[string]string{"ta@x": "mover@x"}
 	if err := s.CreateTeam(ctx, "admin@x", "a", a); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +95,7 @@ func TestAddingSomeoneMovesThemBetweenTeams(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
-	if p.TeamOf("mover@x").ID != "b" || p.Teams["a"].RoleOf("mover@x") != "" || len(p.Teams["a"].Mentors) != 0 || p.Teams["a"].Version != 2 {
+	if p.TeamOf("mover@x").ID != "b" || p.Teams["a"].RoleOf("mover@x") != "" || p.Teams["a"].Version != 2 {
 		t.Fatalf("mover@x should now be on b only: a=%+v", p.Teams["a"])
 	}
 	var detail string
@@ -143,30 +138,6 @@ func TestStaleTeamVersionIsRefused(t *testing.T) {
 	}
 	if err := s.SetTeam(ctx, "a@x", "ghost", first); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("unknown team = %v, want NotFound", err)
-	}
-}
-
-func TestMentorIsANonTraineeOfTheTeam(t *testing.T) {
-	s := &Store{DB: dbtest.New(t)}
-	ctx := context.Background()
-	base := func(m map[string]string) TeamBody {
-		b := body("P", "lead@x:leader", "s@x:senior", "t@x:trainee", "t2@x:trainee")
-		b.Mentors = m
-		return b
-	}
-	for name, m := range map[string]map[string]string{
-		"unknown mentor":  {"t@x": "stranger@x"},
-		"unknown trainee": {"stranger@x": "s@x"},
-		"self":            {"t@x": "T@x"},
-		"trainee mentor":  {"t@x": "t2@x"},
-		"senior mentee":   {"s@x": "lead@x"},
-	} {
-		if err := s.CreateTeam(ctx, "a@x", "p", base(m)); !errors.Is(err, apperr.Invalid) {
-			t.Errorf("%s = %v, want Invalid", name, err)
-		}
-	}
-	if err := s.CreateTeam(ctx, "a@x", "p", base(map[string]string{"T@x": "lead@x"})); err != nil {
-		t.Errorf("the leader may mentor: %v", err)
 	}
 }
 
@@ -224,7 +195,7 @@ func TestDeleteTeamKeepsLearningHistory(t *testing.T) {
 		t.Errorf("progress rows = %d, want 1: deleting a team must not delete learning history", n)
 	}
 	var rows int
-	s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM team_members) + (SELECT count(*) FROM mentors)`).Scan(&rows)
+	s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM team_members)`).Scan(&rows)
 	if rows != 0 {
 		t.Errorf("roster rows left behind = %d", rows)
 	}

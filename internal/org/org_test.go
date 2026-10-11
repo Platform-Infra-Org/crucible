@@ -55,7 +55,6 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
 	mustExec(t, pool, `INSERT INTO team_members (team, email, role) VALUES
 		('forge','leader@x','leader'), ('forge','senior@x','senior'), ('forge','trainee@x','trainee')`)
-	mustExec(t, pool, `INSERT INTO mentors (team, trainee, mentor) VALUES ('forge','trainee@x','senior@x')`)
 	mustExec(t, pool, `INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('forge', 200, 250)`)
 	mustExec(t, pool, `INSERT INTO trainings (id, repo, ref) VALUES ('forge-101','https://git/x.git','main')`)
 	mustExec(t, pool, `INSERT INTO schedules (name, timezone, windows) VALUES
@@ -71,9 +70,6 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	team := p.Teams["forge"]
 	if team == nil || !slices.Equal(team.Leaders, []string{"leader@x"}) || len(team.Trainees) != 1 || team.Version != 1 {
 		t.Fatalf("team = %+v", team)
-	}
-	if team.Mentors["trainee@x"] != "senior@x" {
-		t.Errorf("mentors = %v", team.Mentors)
 	}
 	if team.Budget.MonthlyUSD != 200 || team.Budget.HardCapUSD != 250 || team.Budget.Version != 1 {
 		t.Errorf("budget = %+v", team.Budget)
@@ -195,8 +191,6 @@ func TestMixedCaseEmailsAreRejected(t *testing.T) {
 		`INSERT INTO admins VALUES ('A@x')`,
 		`INSERT INTO team_members VALUES ('t','A@x','junior')`,
 		`INSERT INTO team_members VALUES ('t',' a@x','junior')`,
-		`INSERT INTO mentors VALUES ('t','a@x','B@x')`,
-		`INSERT INTO mentors VALUES ('t','A@x','b@x')`,
 		`INSERT INTO training_roles VALUES ('tr','A@x','editor')`,
 		`INSERT INTO training_roles VALUES ('tr','',  'editor')`,
 		`INSERT INTO training_roles VALUES ('tr','a@x','scorer')`,
@@ -258,7 +252,6 @@ leaders: [l@x]
 seniors: [s1@x, s2@x]
 juniors: [m@x]
 trainees: [tr@x]
-mentors: { tr@x: s1@x }
 notifications: { slack_webhook: "https://hooks/s", teams_webhook: "https://hooks/t" }
 `)
 	write("teams/t/budget.yaml", "monthly_usd: 200\nhard_cap_usd: 250\n")
@@ -291,7 +284,6 @@ func TestPlatformMatchesConfigLoad(t *testing.T) {
 		`INSERT INTO trainings VALUES ('a','https://git/a.git','dev'),('b','https://git/b.git','main')`,
 		`INSERT INTO teams (id, name) VALUES ('t','T')`,
 		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','junior'),('t','tr@x','trainee')`,
-		`INSERT INTO mentors VALUES ('t','tr@x','s1@x')`,
 		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s'),('t','teams','https://hooks/t')`,
 		`INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('t',200,250)`,
 		`INSERT INTO programs (team, training, pinned_ref, schedule_name, ttl, idle_timeout, max_extension, budget_usd_month, review_self_reported)

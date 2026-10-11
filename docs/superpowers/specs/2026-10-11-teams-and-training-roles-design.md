@@ -6,12 +6,13 @@ Replaces spec §5.2–5.3 (team roles, program roles) and the per-team *program*
 
 - **Crucible admins** (unchanged): every permission. They create and delete teams, add people to a team, remove them,
   and move them between teams, and run the instance.
-- **One team per person.** Moving someone to another team takes them out of the old one (and out of its mentor pairs).
+- **One team per person.** Moving someone to another team takes them out of the old one.
 - **Tags.** Every member holds exactly one tag in their team: `leader`, `senior`, `junior` or `trainee` (*member* is
   now *junior*). A team has one or more leaders and never none.
-- **Leaders** change the tags of their own team's members, including making another leader, and set mentor pairs.
-  They pick only from people already on the team; they never add or remove people. Moving or removing the last leader
+- **Leaders** change the tags of their own team's members, including making another leader, by choosing the tag next
+  to a person on the team page. They pick only from people already on the team; they never add or remove people. Moving or removing the last leader
   of a team is refused.
+- **No mentors** (removed 2026-10-11): a team's leaders and seniors follow its people's progress on the Journey.
 
 ## Groups
 

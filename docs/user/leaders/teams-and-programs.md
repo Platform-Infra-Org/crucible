@@ -20,14 +20,14 @@ after. Your save is permission-checked again before it lands.
 
 Everyone on a team holds one **tag**:
 
-- **Leaders** run the team: they change its people's tags and mentor pairs, and approve its trainings' paid labs up
+- **Leaders** run the team: they change its people's tags, and approve its trainings' paid labs up
   to the second cost line. A team can have several leaders, and always has at least one.
 - **Seniors** and **juniors** run the trainings the team owns, with the leaders: they register trainings and give
   out their roles (see [Manage trainings](/docs/leaders/manage-trainings)).
 - **Trainees** take trainings.
 
-A person is on one team. **Mentors** pair a trainee with a leader, senior or junior of the same team who looks out for
-them.
+A person is on one team. The team's leaders and seniors follow its people's progress on the
+[Journey](/docs/leaders/journey), whichever team owns the training they take.
 
 ## Groups
 
@@ -45,16 +45,22 @@ do changes with it.
 
 ## People
 
-**People** shows everyone by tag, and each mentor pair as *trainee → mentor*.
+**People** lists everyone on the team, with their name (once they have signed in), email and tag. Above the list:
 
-- A **leader** changes a tag under **Change a tag**: start typing, pick a member of the team from the suggestions,
-  choose the new tag and **Set tag**. Any tag, leader included, so a leader can make someone else leader too. Crucible
-  refuses a change that would leave the team with no leader. **Mentor pairs** holds the pairs, one
-  `trainee = mentor` per line.
+- **Find** narrows it to the people whose name or email matches what you type.
+- **Tag** keeps one tag, or **Every tag**.
+- **Sort by** orders the list by tag (leaders first) or by name.
+- **List** or **By tag**: one list, or a section for each tag with how many people hold it.
+
+The page's address keeps these choices, so you can bookmark a view or send it to someone.
+
+- A **leader** changes someone's tag by choosing the tag next to their name: a small menu offers the four tags (the
+  arrow keys move between them, Escape closes it). Any tag, leader included, so a leader can make someone else leader
+  too. Crucible refuses a change that would leave the team with no leader.
 - An **admin** also adds people under **Add someone**: an email (the box suggests everyone Crucible knows), their tag,
-  then **Add to team**. Someone on another team moves: they leave it and its mentor pairs, and Crucible asks first. If
-  they were that team's only leader, Crucible refuses; make someone else its leader first. **×** next to a name takes
-  someone off the team; their progress is kept.
+  then **Add to team**. Someone on another team moves: they leave it, and Crucible asks first. If they were that team's
+  only leader, Crucible refuses; make someone else its leader first. **Remove** next to a name takes someone off the
+  team; their progress is kept.
 
 Everyone else on the team sees the list read-only.
 
@@ -63,7 +69,7 @@ leader's email, and choose **Create team**. The id names the team's groups too, 
 `_leaders`, `_seniors`, `_juniors` or `_trainees` are refused.
 
 An admin deletes a team with **Delete team** at the bottom of its page. Crucible asks first. A team that still owns
-trainings can't be deleted: give them to another team, or delete them, first. The team, its tags, mentors and budget
+trainings can't be deleted: give them to another team, or delete them, first. The team, its tags and budget
 go; everyone's progress, scores and badges are kept.
 
 ## Trainings it owns

@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"crucible/internal/apperr"
 	"crucible/internal/config"
@@ -41,24 +42,24 @@ type ProgramView struct {
 	CanManage          bool              `json:"can_manage"`
 }
 
-// Member is someone on a team and their tag.
+// Member is someone on a team, their name ("" until they first sign in) and their tag.
 type Member struct {
 	Email string `json:"email"`
+	Name  string `json:"name"`
 	Tag   string `json:"tag"`
 }
 
 // TeamView is the team as the page needs it. It has no field for a webhook URL, on purpose.
 type TeamView struct {
-	ID          string            `json:"id"`
-	Version     int64             `json:"version"`
-	Name        string            `json:"name"`
-	Members     []Member          `json:"members"` // by tag, strongest first, then email
-	Mentors     map[string]string `json:"mentors"`
-	Budget      *BudgetView       `json:"budget,omitempty"`
-	Programs    []ProgramView     `json:"programs"` // the trainings it owns
-	Schedules   []string          `json:"schedules"`
-	CanEditTeam bool              `json:"can_edit_team"` // a leader or an admin: may change tags and mentors
-	IsAdmin     bool              `json:"is_admin"`      // may add, remove and move people
+	ID          string        `json:"id"`
+	Version     int64         `json:"version"`
+	Name        string        `json:"name"`
+	Members     []Member      `json:"members"` // by tag, strongest first, then email
+	Budget      *BudgetView   `json:"budget,omitempty"`
+	Programs    []ProgramView `json:"programs"` // the trainings it owns
+	Schedules   []string      `json:"schedules"`
+	CanEditTeam bool          `json:"can_edit_team"` // a leader or an admin: may change tags
+	IsAdmin     bool          `json:"is_admin"`      // may add, remove and move people
 }
 
 func dur(d yamlx.Duration) string {
@@ -69,14 +70,24 @@ func dur(d yamlx.Duration) string {
 	return s.(string)
 }
 
-func members(t *config.Team) []Member {
+// members lists t's people by tag, strongest first, then email, with the name each signed in with.
+func (a *api) members(r *http.Request, t *config.Team) ([]Member, error) {
+	rows, err := a.s.DB.Query(r.Context(), `SELECT lower(email), max(name) FROM users WHERE lower(email) = ANY($1) GROUP BY lower(email)`, t.People())
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{}
+	var e, n string
+	if _, err := pgx.ForEachRow(rows, []any{&e, &n}, func() error { names[e] = n; return nil }); err != nil {
+		return nil, err
+	}
 	out := []Member{}
 	for _, tag := range config.Tags {
 		for _, e := range slices.Sorted(slices.Values(t.Tagged(tag))) {
-			out = append(out, Member{Email: e, Tag: tag})
+			out = append(out, Member{Email: e, Name: names[e], Tag: tag})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // getTeam: its members and admins may read it; everyone else gets a 404 so team ids are not probed. The budget goes
@@ -87,12 +98,13 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 	if t == nil || (t.RoleOf(actor) == "" && !c.IsAdmin(actor)) {
 		return apperr.Wrap(apperr.NotFound, "team not found")
 	}
-	v := TeamView{ID: id, Version: t.Version, Name: t.Name, Members: members(t), Mentors: t.Mentors, Programs: []ProgramView{},
+	people, err := a.members(r, t)
+	if err != nil {
+		return err
+	}
+	v := TeamView{ID: id, Version: t.Version, Name: t.Name, Members: people, Programs: []ProgramView{},
 		Schedules:   nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))),
 		CanEditTeam: c.Can(actor, rbac.EditTeam, id, "", ""), IsAdmin: c.IsAdmin(actor)}
-	if v.Mentors == nil {
-		v.Mentors = map[string]string{}
-	}
 	spend := c.Can(actor, rbac.ViewSpend, id, "", "")
 	for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
 		title, running, head := tr, "", ""

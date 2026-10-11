@@ -185,8 +185,7 @@ type Team struct {
 	Seniors  []string            `yaml:"seniors"`
 	Juniors  []string            `yaml:"juniors"`
 	Trainees []string            `yaml:"trainees"`
-	Mentors  map[string]string   `yaml:"mentors"` // trainee email → mentor email
-	Programs map[string]*Program `yaml:"-"`       // the trainings this team owns, by training id: one run each
+	Programs map[string]*Program `yaml:"-"` // the trainings this team owns, by training id: one run each
 
 	Notifications TeamNotifications `yaml:"notifications" json:"-"` // webhook URLs are secrets: never marshalled
 	Budget        Budget            `yaml:"-"`                      // from budget.yaml
@@ -612,11 +611,6 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 		bad("the id reads as a group (all, or a name ending in _leaders, _seniors, _juniors or _trainees)")
 	}
 	t.Leaders, t.Seniors, t.Juniors, t.Trainees = lower(t.Leaders), lower(t.Seniors), lower(t.Juniors), lower(t.Trainees)
-	mentors := map[string]string{}
-	for trainee, mentor := range t.Mentors {
-		mentors[strings.ToLower(trainee)] = strings.ToLower(mentor)
-	}
-	t.Mentors = mentors
 	for _, u := range []string{t.Notifications.SlackWebhook, t.Notifications.TeamsWebhook} {
 		if u != "" && !strings.HasPrefix(u, "https://") {
 			bad("notifications: webhook URLs must start with https://")
@@ -637,14 +631,6 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 			bad("%s has more than one tag", e)
 		}
 		seen[e] = true
-	}
-	for trainee, mentor := range t.Mentors {
-		if t.RoleOf(trainee) != "trainee" {
-			bad("mentor pairing: %s is not a trainee", trainee)
-		}
-		if !t.Manages(mentor) {
-			bad("mentor pairing: %s must be a non-trainee team member", mentor)
-		}
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "programs", "*.yaml"))
 	for _, f := range files {

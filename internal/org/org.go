@@ -1,5 +1,5 @@
 // Package org owns Crucible's configuration and org data: settings, schedules, quotes, admins, the
-// training registry, teams and their tags, mentors, budgets, trainings' runs and their roles.
+// training registry, teams and their tags, budgets, trainings' runs and their roles.
 // It returns config.Platform so every consumer of the old git-loaded config is unchanged.
 package org
 
@@ -151,7 +151,7 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 		return err
 	}
 	for rows.Next() {
-		t := &config.Team{Programs: map[string]*config.Program{}, Mentors: map[string]string{}}
+		t := &config.Team{Programs: map[string]*config.Program{}}
 		if err := rows.Scan(&t.ID, &t.Name, &t.Version); err != nil {
 			rows.Close()
 			return err
@@ -190,22 +190,6 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 	}
 	for _, t := range p.Teams { // writes keep a leader; a team without one (an old row) is shown so an admin can fix it
 		t.Leaders, t.Seniors, t.Juniors, t.Trainees = nonNil(t.Leaders), nonNil(t.Seniors), nonNil(t.Juniors), nonNil(t.Trainees)
-	}
-
-	if rows, err = s.DB.Query(ctx, `SELECT team, trainee, mentor FROM mentors`); err != nil {
-		return err
-	}
-	for rows.Next() {
-		var team, trainee, mentor string
-		if err := rows.Scan(&team, &trainee, &mentor); err != nil {
-			rows.Close()
-			return err
-		}
-		p.Teams[team].Mentors[em(trainee)] = em(mentor)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
 	}
 
 	if rows, err = s.DB.Query(ctx, `SELECT team, kind, url FROM team_webhooks`); err != nil {

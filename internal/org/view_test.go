@@ -151,11 +151,12 @@ func TestGetThenPutBackKeepsGroups(t *testing.T) {
 	}
 }
 
-// The team page lists members with their tags, strongest first.
+// The team page lists members with their names and tags, strongest first.
 func TestTeamPageListsMembersByTag(t *testing.T) {
 	f := newAPI(t)
+	mustExec(t, f.s.DB, `INSERT INTO users (sub, email, name) VALUES ('s1', 'Senior@x', 'Sen Smith')`)
 	m, _, _ := f.teamJSON("new@x", "platform")
-	if got := fmt.Sprint(m["members"]); got != "[map[email:lead@x tag:leader] map[email:senior@x tag:senior] map[email:new@x tag:trainee]]" {
+	if got := fmt.Sprint(m["members"]); got != "[map[email:lead@x name: tag:leader] map[email:senior@x name:Sen Smith tag:senior] map[email:new@x name: tag:trainee]]" {
 		t.Errorf("members = %s", got)
 	}
 	if m["can_edit_team"] != false || m["is_admin"] != false {

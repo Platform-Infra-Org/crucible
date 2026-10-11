@@ -14,7 +14,7 @@ const prog: ProgramConfig = {
   can_manage: true, running_sha: '', head_sha: '', pinned_ref: '',
 }
 const team: TeamView = {
-  id: 'platform', name: 'Platform', members: [{ email: 'l@x', tag: 'leader' }, { email: 'a@x', tag: 'trainee' }], mentors: {}, version: 3,
+  id: 'platform', name: 'Platform', members: [{ email: 'l@x', name: 'Lee', tag: 'leader' }, { email: 'a@x', name: '', tag: 'trainee' }], version: 3,
   budget: { version: 5, monthly_usd: 10, hard_cap_usd: 20 }, programs: [prog], schedules: [], can_edit_team: true, is_admin: true,
 }
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ team: 'platform', training: 'forge-101' }) }))
@@ -31,9 +31,9 @@ vi.mock('../me', () => ({ useMe: () => ({ me: { is_admin: true, can_manage_train
 
 describe('requests', () => {
   test('go to /api/org and echo the version the page read', () => {
-    const r = rosterRequest(team, {})
+    const r = rosterRequest(team, { 'l@x': 'leader', 'a@x': 'junior' })
     expect(r.path).toBe('/api/org/teams/platform/roster')
-    expect(r.json).toEqual({ version: 3, name: 'Platform', members: { 'l@x': 'leader', 'a@x': 'trainee' }, mentors: {} })
+    expect(r.json).toEqual({ version: 3, name: 'Platform', members: { 'l@x': 'leader', 'a@x': 'junior' } })
     expect(budgetRequest(team, '10', '').json).toEqual({ version: 5, monthly_usd: 10, hard_cap_usd: 0 })
     expect(budgetRequest({ ...team, budget: undefined }, '4', '').json).toMatchObject({ version: 0 }) // no budget row yet
     const p = programRequest(prog, programFields(prog))
@@ -81,28 +81,44 @@ describe('a stale save', () => {
 })
 
 describe('pages', () => {
-  test('team page: members by tag, the tag changer autocompletes the team, admins add people from everyone', () => {
+  test('team page: everyone in a list with a tag to choose, a toolbar, and admins add people from everyone', () => {
     fetched.length = 0
     const h = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
     expect(fetched).toEqual(['/api/org/teams/platform', '/api/org/people'])
     expect(h).toContain('Led by l@x')
-    expect(h).toContain('aria-label="Leaders"')
-    expect(h).toMatch(/<datalist id="members-platform"><option value="l@x">leader<\/option><option value="a@x">trainee<\/option><\/datalist>/)
-    expect(h).toContain('Set tag')
+    expect(h).toContain('<td><strong>Lee</strong> <span class="muted">l@x</span></td>')
+    expect(h).toContain('aria-label="Lee is a leader. Change their tag"') // a button for those who may change it
+    expect(h).toContain('aria-haspopup="menu"')
+    expect(h).toContain('aria-label="a@x is a trainee. Change their tag"')
+    for (const tool of ['Find', 'Every tag', 'Sort by', 'aria-label="Show people"', '>By tag<']) expect(h).toContain(tool)
     expect(h).toContain('Add to team')
     expect(h).toContain('<option value="mover@x">Mo · senior on apps</option>')
     expect(h).toContain('aria-label="Take a@x off the team"')
+    expect(h).not.toContain('entor') // no mentors anywhere
     expect(h).toContain('Save budget')
     expect(h).toContain('href="/trainings/manage/forge-101"')
-    expect(h).toContain('Trainings it owns')
     expect(h).toContain('Delete team') // admins only: the server refuses everyone else
+  })
+  test('a leader changes tags but adds nobody; everyone else reads the tags', () => {
     team.is_admin = false
     fetched.length = 0
     const leader = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
-    team.is_admin = true
-    expect(fetched).toEqual(['/api/org/teams/platform']) // a leader picks only from the team
-    expect(leader).toContain('Set tag')
+    expect(fetched).toEqual(['/api/org/teams/platform'])
+    expect(leader).toContain('Change their tag')
     for (const admin of ['Delete team', 'Add to team', 'Take a@x off']) expect(leader).not.toContain(admin)
+    team.can_edit_team = false
+    const reader = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
+    team.is_admin = true
+    team.can_edit_team = true
+    expect(reader).toContain('<span class="tag-pill tag-leader">leader</span>')
+    expect(reader).not.toContain('Change their tag')
+  })
+  test('grouped by tag, from the URL', () => {
+    const h = renderToStaticMarkup(<MemoryRouter initialEntries={['/teams/platform?by=tag&q=a@']}><TeamPage /></MemoryRouter>)
+    expect(h).toContain('<section class="tag-group" aria-label="Trainees"><h3>Trainees <span class="muted">1</span></h3>')
+    expect(h).not.toContain('aria-label="Leaders"') // nobody left there after the search
+    expect(h).toContain('1 of 2')
+    expect(h).toMatch(/<button type="button" aria-pressed="true">By tag<\/button>/)
   })
   test('the team list shows cards and keeps the create form behind + Start a team', () => {
     const h = renderToStaticMarkup(<MemoryRouter><TeamsIndex /></MemoryRouter>)

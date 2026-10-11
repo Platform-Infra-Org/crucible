@@ -2,7 +2,6 @@ package journey
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -278,12 +277,6 @@ func TestRoutes(t *testing.T) {
 	if code, body := get(t, f.s, admin, "/api/teams/forge/journey"); code != 200 || !strings.Contains(body, "trainee@crucible.local") {
 		t.Fatalf("admin: %d %s", code, body)
 	}
-	if code, body := get(t, f.s, f.senior, "/api/mentor"); code != 200 || !strings.Contains(body, "trainee@crucible.local") {
-		t.Fatalf("mentor: %d %s", code, body)
-	}
-	if code, body := get(t, f.s, f.leader, "/api/mentor"); code != 200 || strings.TrimSpace(body) != "[]" {
-		t.Fatalf("non-mentor: %d %s", code, body)
-	}
 }
 
 func TestScorerSeesOnlyTheirProgram(t *testing.T) {
@@ -338,21 +331,14 @@ func TestNeverSignedIn(t *testing.T) {
 	}
 }
 
-func TestJourneyVisibilityAndMentees(t *testing.T) {
+func TestJourneyVisibility(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t)
 	if rows, err := f.s.Team(ctx, f.trainee, "forge"); err != nil || len(rows) != 0 {
 		t.Fatalf("a trainee sees no one else's journey (and not their own here): %+v %v", rows, err)
 	}
 	if rows, _ := f.s.Team(ctx, f.senior, "forge"); len(rows) != 1 {
-		t.Fatal("a senior (and mentor) sees the trainee")
-	}
-	ms, err := f.s.Mentees(ctx, f.senior)
-	if err != nil || len(ms) != 1 || ms[0].Email != "trainee@crucible.local" || ms[0].Rank != "Ore" || len(ms[0].Programs) != 1 {
-		t.Fatalf("mentor dashboard: %+v %v", ms, err)
-	}
-	if ms, _ := f.s.Mentees(ctx, f.leader); len(ms) != 0 {
-		t.Fatal("the leader mentors no one in the fixture")
+		t.Fatal("a senior sees the trainee")
 	}
 }
 
@@ -360,53 +346,16 @@ func TestTeamScopedToCaller(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t)
 	team := f.st.Platform.Teams["forge"]
-	// a junior manages the team's trainings, so they follow every participant; their mentees are only their own
+	// a junior manages the team's trainings, so they follow every participant
 	team.Juniors = append(team.Juniors, "member@crucible.local")
 	team.Trainees = append(team.Trainees, "other@crucible.local")
 	team.Programs["forge-101"].Enrolled = append(team.Programs["forge-101"].Enrolled, "other@crucible.local")
-	team.Mentors["other@crucible.local"] = "member@crucible.local"
 	member := &auth.User{Email: "member@crucible.local"}
 	rows, err := f.s.Team(ctx, member, "forge")
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("a junior follows the team training's participants: %+v %v", rows, err)
 	}
-	ms, err := f.s.Mentees(ctx, member)
-	if err != nil || len(ms) != 1 || ms[0].Email != "other@crucible.local" || len(ms[0].Pending) != 0 {
-		t.Fatalf("member's mentees: %+v %v", ms, err)
-	}
 	if _, err := f.s.Team(ctx, f.leader, "no-such-team"); err == nil {
 		t.Fatal("unknown team is an error")
-	}
-}
-
-func TestMenteeDetail(t *testing.T) {
-	ctx := context.Background()
-	f := setup(t)
-	db := f.s.DB
-	if _, err := db.Exec(ctx, `INSERT INTO submissions (user_id, team, training, module, sha, kind, item, qtype, prompt, rubric, answer, max_points, status)
-		VALUES ($1, 'forge', 'forge-101', '02-first-lab', 'abc', 'task', 't9', 'review', 'p', 'SECRET-RUBRIC', 'SECRET-ANSWER', 1, 'pending')`, f.trainee.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(ctx, `INSERT INTO ranks (user_id, level, seen) VALUES ($1, 2, true)`, f.trainee.ID); err != nil {
-		t.Fatal(err)
-	}
-	insertLab(t, db, "bbbbbbbbbbbb", f.trainee.ID, "02-first-lab", "failed", f.now.Add(-time.Hour))
-	if _, err := db.Exec(ctx, `UPDATE lab_instances SET error = 'boom' WHERE id = 'bbbbbbbbbbbb'`); err != nil {
-		t.Fatal(err)
-	}
-	ms, err := f.s.Mentees(ctx, f.senior)
-	if err != nil || len(ms) != 1 {
-		t.Fatal(ms, err)
-	}
-	m := ms[0]
-	if m.Rank != "Tempered" || m.Name != "Tara" || len(m.Pending) != 1 || m.Pending[0].Item != "t9" || m.Pending[0].Type != "review" {
-		t.Fatalf("mentee detail: %+v", m)
-	}
-	if len(m.Failures) != 1 || m.Failures[0].Kind != "lab_failed" || m.Failures[0].Detail != "boom" {
-		t.Fatalf("failures: %+v", m.Failures)
-	}
-	b, _ := json.Marshal(ms)
-	if strings.Contains(string(b), "SECRET") {
-		t.Fatalf("rubric or answer leaked: %s", b)
 	}
 }

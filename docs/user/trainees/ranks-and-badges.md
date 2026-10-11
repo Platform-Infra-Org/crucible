@@ -21,7 +21,7 @@ Quizzes and labs weigh as much as their points, a reading counts for one, and a 
 A rank you have earned is yours. If you start a new training, or an admin resets a quiz, your share may
 drop, but your rank does not.
 
-When you reach a new rank, the Hearth celebrates it once, and your mentors hear about it too.
+When you reach a new rank, the Hearth celebrates it once, and Crucible emails you about it.
 
 ## Badges
 

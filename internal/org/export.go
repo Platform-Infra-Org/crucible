@@ -25,7 +25,7 @@ import (
 // The file is personal data: names, emails, answers, scores, webhook URLs and rubrics.
 
 // ExportVersion is the file format this build writes and reads.
-const ExportVersion = 2 // 2: team tags and training roles (training_roles replaces enrollments and program_roles)
+const ExportVersion = 3 // 2: team tags and training roles (training_roles replaces enrollments and program_roles); 3: no mentors
 
 type exportFile struct {
 	Version     int                        `json:"crucible_export"`
@@ -42,7 +42,7 @@ type table struct {
 
 var exportTables = []table{
 	{name: "settings"}, {name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "trainings"},
-	{name: "teams"}, {name: "team_members"}, {name: "mentors"}, {name: "team_webhooks"}, {name: "team_budgets"},
+	{name: "teams"}, {name: "team_members"}, {name: "team_webhooks"}, {name: "team_budgets"},
 	{name: "programs"}, {name: "training_roles"},
 	{name: "users"},
 	{name: "item_progress", byUser: true}, {name: "lab_task_progress", byUser: true}, {name: "quiz_attempts", byUser: true},

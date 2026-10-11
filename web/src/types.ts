@@ -1,5 +1,5 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean; avatar: string }
-export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
+export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
 export type Tag = 'leader' | 'senior' | 'junior' | 'trainee'
 // A training's roles: emails and group refs (all, all_seniors, <team>, <team>_seniors, …).
@@ -21,9 +21,9 @@ export type TrainingsAdmin = {
 export type Person = { email: string; name: string; team: string; tag: Tag | '' }
 export type People = { people: Person[]; groups: string[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
-export type Member = { email: string; tag: Tag }
+export type Member = { email: string; name: string; tag: Tag }
 export type TeamView = {
-  id: string; name: string; members: Member[]; mentors: Record<string, string>
+  id: string; name: string; members: Member[]
   budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]; schedules: string[]; version: number
   can_edit_team: boolean; is_admin: boolean
 }
@@ -121,11 +121,6 @@ export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
 export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
-export type Mentee = {
-  email: string; name: string; team: string; rank: string; programs: JourneyRow[]
-  pending: { id: number; training: string; module: string; item: string; type: string; created_at: string }[]
-  failures: { training: string; module: string; task?: string; kind: 'lab_failed' | 'check_failed'; detail: string; at: string }[]
-}
 export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
 export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
 export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'

@@ -45,7 +45,7 @@ deleted; change the training first. See
 test install to the real one, or from one identity provider to another.
 
 **Download an export** saves one JSON file with everything people set up here: settings, admins, schedules, quotes,
-trainings with their roles and settings, teams with their people and tags, mentors, budgets and webhooks, and
+trainings with their roles and settings, teams with their people and tags, budgets and webhooks, and
 everyone's progress, quiz attempts, scored work, ranks and badges. Each export is written to the audit log.
 
 The file is personal data: names, emails, answers, scores and webhook URLs. Keep it somewhere private, delete it when

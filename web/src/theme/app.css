@@ -113,6 +113,25 @@ button.danger-text { color: var(--danger); border-color: var(--danger); }
 .enroll { margin: 0.25rem 0 0; }
 .enroll input { min-width: min(18rem, 100%); }
 .enroll [role='alert'] { flex-basis: 100%; margin: 0; }
+/* A team's people: the tag next to each person is a pill; for a leader or an admin it opens a menu of the four tags. The
+   pill's text stays --text; the tag's colour is only its edge and tint, and the word says the tag. */
+.people td { vertical-align: middle; }
+.people td .muted { margin-left: 0.35rem; }
+.tag-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.7rem; border-radius: 999px; font-size: 0.85rem;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text); line-height: 1.5; }
+.tag-pill.tag-leader { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); }
+.tag-pill.tag-senior { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 14%, var(--surface-2)); }
+.tag-pill.tag-junior { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, var(--surface-2)); }
+button.tag-pill { cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+button.tag-pill:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.tag-picker { position: relative; display: inline-block; }
+.tag-menu { position: absolute; top: calc(100% + 0.3rem); left: 0; z-index: 20; display: grid; gap: 0.3rem; padding: 0.45rem;
+  min-width: 8rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--glow);
+  animation: card-cast 0.22s ease-out; }
+.tag-menu .tag-pill { justify-content: space-between; }
+.tag-menu [aria-checked='true']::after { content: '✓'; }
+.people-tools .segmented { align-self: flex-end; height: 2.5rem; align-items: center; }
+.tag-group h3 { margin: 1rem 0 0.25rem; font-size: 1rem; }
 /* A team's tag changer and an admin's add-someone row: a caption, the picker, the tag, the action. */
 .retag { margin: 0.75rem 0 0; }
 .retag .role-name { min-width: 7rem; }

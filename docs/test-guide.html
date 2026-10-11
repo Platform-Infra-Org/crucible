@@ -184,11 +184,11 @@ body.hide-done .item.done { display: none; }
               <li>A timer, an idle prompt, one extension, recorded terminals</li>
               <li>Three places to run: laptop, cluster, AWS (below)</li>
             </ul></div>
-          <div class="cap"><span class="who">Scorers, mentors, leaders</span><h3>Score and follow</h3>
+          <div class="cap"><span class="who">Scorers, leaders</span><h3>Score and follow</h3>
             <ul>
               <li>The Anvil: written answers, uploads, lab reviews and self-reported labs, with rubrics; return for rework</li>
               <li>Journey: each person and training as heat cells, with flags for who may be stuck</li>
-              <li>Mentor page; email and Slack/Teams notifications</li>
+              <li>Journey; email and Slack/Teams notifications</li>
             </ul></div>
           <div class="cap"><span class="who">Approvers, leaders, admins</span><h3>Spend safely</h3>
             <ul>
@@ -287,7 +287,7 @@ body.hide-done .item.done { display: none; }
         </div>
         <div class="users" aria-label="Local accounts">
           <div><code>trainee</code><br><span class="where">takes trainings</span></div>
-          <div><code>senior</code><br><span class="where">scores, mentors, maintains</span></div>
+          <div><code>senior</code><br><span class="where">scores and edits</span></div>
           <div><code>leader</code><br><span class="where">leads The Forge, approves</span></div>
           <div><code>admin</code><br><span class="where">runs the forge</span></div>
         </div>
@@ -316,7 +316,7 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
               <p class="expect"><b>Expect</b>the Crucible title in the middle of the screen with embers drifting behind it (none with reduced motion), and the button under it; the button goes on to the Keycloak sign-in. After <b>Log out</b> you land back on the gate.</p></div></li>
           <li class="item" data-id="stack-roles"><label><input type="checkbox" id="c-stack-roles"><span class="t">Sign in as each role</span></label>
             <div class="body"><p>Use a private window per person. Compare the top bar.</p>
-              <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; mentors see <b>Mentor</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
+              <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
           <li class="item" data-id="stack-card"><label><input type="checkbox" id="c-stack-card"><span class="t">User card, themes and calm motion</span></label>
             <div class="body"><ol class="how"><li>Choose your icon and name at the top right: check your name, email and teams; pick a forge icon.</li><li>Settings: switch through all eight themes (Forge, Anvil, Quench, Damascus, Verdigris, Starmetal, Parchment, High Contrast), then log out: the gate wears the theme you left on; tick <b>Calm forge</b>.</li></ol>
               <p class="expect"><b>Expect</b>the icon survives a reload and another browser; team names link to their pages; Calm forge stops every animation.</p></div></li>
@@ -360,13 +360,13 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
           <li class="item" data-id="team-create"><label><input type="checkbox" id="c-team-create"><span class="t">Start a team</span></label>
             <div class="body"><p>As admin: <b>Teams</b> → <b>+ Start a team</b> → id <code>anvil</code>, a name, leader <code>leader@crucible.local</code>.</p>
               <p class="expect"><b>Expect</b>you land on the new team's page; a duplicate id is refused.</p></div></li>
-          <li class="item" data-id="team-roster"><label><input type="checkbox" id="c-team-roster"><span class="t">People, tags and mentors</span></label>
-            <div class="body"><ol class="how"><li>As admin on <i>anvil</i>: <b>Add someone</b> <code>senior@crucible.local</code> as a senior (Crucible asks: they move from The Forge), then a new email as a trainee.</li><li>As the leader: <b>Change a tag</b>, start typing a member's email, pick them, make them a junior; then try a stranger's email, and try making yourself a trainee while you are the only leader.</li><li>Under <b>Mentor pairs</b> add <code>trainee = junior</code>; then name a mentor who isn't on the team.</li><li>Move <code>senior@crucible.local</code> back to The Forge.</li></ol>
-              <p class="expect"><b>Expect</b>the suggestions list only the team's members; tags show as chips by tag; the stranger, the leaderless team and the outside mentor are each refused with the reason; a leader has no <b>Add someone</b>.</p></div></li>
+          <li class="item" data-id="team-roster"><label><input type="checkbox" id="c-team-roster"><span class="t">People and tags</span></label>
+            <div class="body"><ol class="how"><li>As admin on <i>anvil</i>: <b>Add someone</b> <code>senior@crucible.local</code> as a senior (Crucible asks: they move from The Forge), then a new email as a trainee.</li><li>As the leader: choose a member's tag in the list and pick <i>junior</i> from the menu (try the arrow keys and Escape); then try making yourself a trainee while you are the only leader.</li><li>Use <b>Find</b>, <b>Tag</b>, <b>Sort by</b> and <b>By tag</b>; reload the page.</li><li>Move <code>senior@crucible.local</code> back to The Forge.</li></ol>
+              <p class="expect"><b>Expect</b>the tag changes at once; the leaderless team is refused with the reason; the list filters, sorts and groups, and the view survives the reload; a leader has no <b>Add someone</b> or <b>Remove</b>; a trainee sees the tags without menus.</p></div></li>
           <li class="item" data-id="team-budget"><label><input type="checkbox" id="c-team-budget"><span class="t">Team budget</span></label>
             <div class="body"><p>As admin, set a monthly budget and hard cap on the team page.</p>
               <p class="expect"><b>Expect</b>the summary updates; leaders see it read-only; the Ledger shows the meter.</p></div></li>
-          <li class="item" data-id="team-journey"><label><input type="checkbox" id="c-team-journey"><span class="t">Mentor and Journey</span></label>
+          <li class="item" data-id="team-journey"><label><input type="checkbox" id="c-team-journey"><span class="t">Journey</span></label>
             <div class="body"><p>Team page → <b>Journey</b>. Switch <b>By person / By training</b>; filter by a person, a training, and <b>Only those who need a look</b>.</p>
               <p class="expect"><b>Expect</b>the numbers follow the filters, the address keeps them, and flags such as <i>Not started yet</i> appear.</p></div></li>
           <li class="item" data-id="team-delete"><label><input type="checkbox" id="c-team-delete"><span class="t">Delete a team</span></label>
@@ -460,9 +460,9 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
           <li class="item" data-id="ln-rank"><label><input type="checkbox" id="c-ln-rank"><span class="t">Ranks and badges</span></label>
             <div class="body"><p>Finish Forge 102 as trainee.</p>
               <p class="expect"><b>Expect</b>a badge on the Hearth and a rank-up moment when a threshold is passed; ranks never drop.</p></div></li>
-          <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Mentor and Journey</span></label>
-            <div class="body"><p>As senior: <b>Mentor</b>. As leader: the team's Journey.</p>
-              <p class="expect"><b>Expect</b>the mentee's rank, heat map, work waiting on a scorer and recent lab trouble; Journey flags someone stuck or quiet.</p></div></li>
+          <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Journey</span></label>
+            <div class="body"><p>As leader and as senior: the team's Journey.</p>
+              <p class="expect"><b>Expect</b>the heat map for the team's people, and flags for someone stuck or quiet. There is no <b>Mentor</b> link anywhere.</p></div></li>
           <li class="item" data-id="ln-notify"><label><input type="checkbox" id="c-ln-notify"><span class="t">Notifications</span></label>
             <div class="body"><p>Settings → <b>Email notifications</b>: untick one kind.</p>
               <p class="expect"><b>Expect</b>locally the page says email isn't configured; the choice is kept and applies once SMTP is set.</p></div></li>

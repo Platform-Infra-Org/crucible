@@ -67,7 +67,7 @@ func history(t *testing.T, s *Store) string {
 func TestExportImportRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	src, file := exported(t)
-	if !json.Valid(file) || !strings.HasPrefix(string(file), `{"crucible_export":2,`) {
+	if !json.Valid(file) || !strings.HasPrefix(string(file), `{"crucible_export":3,`) {
 		t.Fatalf("the file opens with its version: %.80s", file)
 	}
 	if strings.Contains(string(file), "kc-1") || strings.Contains(string(file), `"sess"`) {

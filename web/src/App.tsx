@@ -24,7 +24,6 @@ import { AnvilDetailPage, AnvilPage } from './pages/Anvil'
 import { ForgeStatusPage } from './pages/ForgeStatus'
 import { AdminSettingsPage } from './pages/AdminSettings'
 import { JourneyPage } from './pages/Journey'
-import { MentorPage } from './pages/Mentor'
 import { TrainingsPage } from './pages/Trainings'
 import { ManageTrainingsPage } from './pages/ManageTrainings'
 import { LabsPage } from './pages/Labs'
@@ -101,7 +100,6 @@ export default function App() {
           <Route path="/teams" element={<TeamsIndex />} />
           <Route path="/teams/:team" element={<TeamPage />} />
           <Route path="/teams/:team/journey" element={<JourneyPage />} />
-          <Route path="/mentor" element={<MentorPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
           <Route path="/ledger" element={<LedgerPage />} />
           <Route path="/anvil" element={<AnvilPage />} />

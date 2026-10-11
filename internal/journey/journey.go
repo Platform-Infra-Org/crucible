@@ -1,5 +1,5 @@
-// Package journey answers "how are my people doing?" for leaders, managers, scorers and mentors (spec §11): a module
-// heat map per trainee and program, with stuck flags, and a mentor dashboard. It only reads. It lists people one by
+// Package journey answers "how are my people doing?" for leaders, seniors and the people who run a training (spec §11):
+// a module heat map per participant and training, with stuck flags. It only reads. It lists people one by
 // one, sorted by email, and never ranks or compares them (spec §1).
 package journey
 
@@ -51,34 +51,6 @@ type Row struct {
 	Cells      []Cell     `json:"cells"`
 	Flags      []Flag     `json:"flags"`
 	LastActive *time.Time `json:"last_active,omitempty"`
-}
-
-type Pending struct {
-	ID        int64     `json:"id"`
-	Training  string    `json:"training"`
-	Module    string    `json:"module"`
-	Item      string    `json:"item"`
-	Type      string    `json:"type"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type Failure struct {
-	Training string    `json:"training"`
-	Module   string    `json:"module"`
-	Task     string    `json:"task,omitempty"`
-	Kind     string    `json:"kind"` // lab_failed | check_failed
-	Detail   string    `json:"detail"`
-	At       time.Time `json:"at"`
-}
-
-type Mentee struct {
-	Email    string    `json:"email"`
-	Name     string    `json:"name"`
-	Team     string    `json:"team"`
-	Rank     string    `json:"rank"`
-	Programs []Row     `json:"programs"`
-	Pending  []Pending `json:"pending"`
-	Failures []Failure `json:"failures"`
 }
 
 // want is one (training, person) pair a page shows; team owns the training.
@@ -217,124 +189,4 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, ws []want, people
 		out = append(out, r)
 	}
 	return out, nil
-}
-
-// Mentees is the mentor dashboard (spec §11): each mentee's trainings (whichever team owns them), rank, submissions
-// waiting for a scorer, and recent lab failures. Only people whose mentor on their team is the caller.
-func (s *Service) Mentees(ctx context.Context, u *auth.User) ([]Mentee, error) {
-	st, err := s.state()
-	if err != nil {
-		return nil, err
-	}
-	me, out := strings.ToLower(u.Email), []Mentee{}
-	ladder := learn.Ladder(st.Platform.Settings.Ranks)
-	for _, teamID := range slices.Sorted(maps.Keys(st.Platform.Teams)) {
-		t := st.Platform.Teams[teamID]
-		var mentees []string
-		var ws []want
-		for _, trainee := range slices.Sorted(maps.Keys(t.Mentors)) {
-			if t.Mentors[trainee] != me || trainee == me {
-				continue
-			}
-			mentees = append(mentees, trainee)
-			for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(trainee) {
-				ws = append(ws, want{e.Team.ID, e.Program.Training, trainee})
-			}
-		}
-		if len(mentees) == 0 {
-			continue
-		}
-		all := ws
-		for _, e := range mentees {
-			all = append(all, want{"", "", e}) // mentees enrolled in nothing still get a name and rank
-		}
-		people, err := s.people(ctx, all)
-		if err != nil {
-			return nil, err
-		}
-		rows, err := s.rows(ctx, st, ws, people)
-		if err != nil {
-			return nil, err
-		}
-		d, err := s.details(ctx, people)
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range mentees {
-			m := Mentee{Email: e, Team: teamID, Rank: ladder[0].Name, Programs: []Row{}, Pending: []Pending{}, Failures: []Failure{}}
-			for _, r := range rows {
-				if r.Email == e {
-					m.Programs = append(m.Programs, r)
-				}
-			}
-			if p, ok := people[e]; ok {
-				m.Name = p.name
-				if lvl, ok := d.level[p.id]; ok {
-					m.Rank = ladder[min(lvl, len(ladder)-1)].Name // the persisted, never-lowered rank
-				}
-				m.Pending = append(m.Pending, d.pending[p.id]...)
-				m.Failures = append(m.Failures, d.failures[p.id]...)
-			}
-			out = append(out, m)
-		}
-	}
-	return out, nil
-}
-
-type details struct {
-	level    map[int64]int
-	pending  map[int64][]Pending
-	failures map[int64][]Failure
-}
-
-// details loads ranks, pending submissions and recent failures for mentees, in any training, one query each. Only ids, item
-// names and types leave here: never prompts, rubrics, answers or check output.
-func (s *Service) details(ctx context.Context, people map[string]person) (*details, error) {
-	d := &details{level: map[int64]int{}, pending: map[int64][]Pending{}, failures: map[int64][]Failure{}}
-	uids := []int64{}
-	for _, p := range people {
-		uids = append(uids, p.id)
-	}
-	var uid int64
-	var lvl int
-	rows, err := s.DB.Query(ctx, `SELECT user_id, level FROM ranks WHERE user_id = ANY($1)`, uids)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := pgx.ForEachRow(rows, []any{&uid, &lvl}, func() error { d.level[uid] = lvl; return nil }); err != nil {
-		return nil, err
-	}
-	var p Pending
-	rows, err = s.DB.Query(ctx, `SELECT user_id, id, training, module, item, qtype, created_at FROM submissions
-		WHERE user_id = ANY($1) AND status = 'pending' ORDER BY created_at, id`, uids)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := pgx.ForEachRow(rows, []any{&uid, &p.ID, &p.Training, &p.Module, &p.Item, &p.Type, &p.CreatedAt}, func() error {
-		d.pending[uid] = append(d.pending[uid], p)
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	var f Failure
-	rows, err = s.DB.Query(ctx, `
-		SELECT user_id, training, module, task, kind, detail, at FROM (
-		  SELECT *, row_number() OVER (PARTITION BY user_id ORDER BY at DESC) AS n FROM (
-		    SELECT user_id, training, module, '' AS task, 'lab_failed' AS kind, left(error, 200) AS detail, created_at AS at
-		      FROM lab_instances WHERE user_id = ANY($1) AND state = 'failed'
-		       AND created_at > $2::timestamptz - interval '14 days'
-		    UNION ALL
-		    SELECT li.user_id, li.training, li.module, cr.task, 'check_failed', count(*)::text || ' failed checks', max(cr.at)
-		      FROM check_runs cr JOIN lab_instances li ON li.id = cr.lab_id
-		     WHERE li.user_id = ANY($1) AND cr.exit_code <> 0 AND cr.at > $2::timestamptz - interval '7 days'
-		     GROUP BY li.user_id, li.training, li.module, cr.task) f) x
-		WHERE n <= 20 ORDER BY user_id, at DESC`, uids, s.Now())
-	if err != nil {
-		return nil, err
-	}
-	_, err = pgx.ForEachRow(rows, []any{&uid, &f.Training, &f.Module, &f.Task, &f.Kind, &f.Detail, &f.At}, func() error {
-		d.failures[uid] = append(d.failures[uid], f)
-		return nil
-	})
-	return d, err
 }

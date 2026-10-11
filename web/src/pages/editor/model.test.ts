@@ -68,8 +68,8 @@ test('go to file matches in order, best name first', () => {
 
 test('languages and themes', () => {
   expect([languageOf('a.md'), languageOf('a.sh'), languageOf('a.yml'), languageOf('a.yaml')]).toEqual(['markdown', 'shell', 'yaml', 'yaml'])
-  expect([monacoTheme('forge'), monacoTheme('quench'), monacoTheme('contrast'), monacoTheme('anvil'), monacoTheme(undefined)])
-    .toEqual(['crucible-forge', 'crucible-quench', 'crucible-contrast', 'crucible-anvil', 'crucible-forge'])
+  expect([monacoTheme('forge'), monacoTheme('quench'), monacoTheme('contrast'), monacoTheme('anvil'), monacoTheme('verdigris'), monacoTheme('neon'), monacoTheme(undefined)])
+    .toEqual(['crucible-forge', 'crucible-quench', 'crucible-contrast', 'crucible-anvil', 'crucible-verdigris', 'crucible-forge', 'crucible-forge'])
 })
 
 test('css colours become the hex Monaco wants', () => {
@@ -93,6 +93,8 @@ test('a Monaco theme takes its colours from the app theme tokens', () => {
   expect(t.rules).toContainEqual({ token: 'type', foreground: 'ffc24b' })
   expect(t.rules).toContainEqual({ token: 'comment', foreground: 'b5a596', fontStyle: 'italic' })
   expect(monacoThemeData('anvil', (v) => forge[v] ?? '').base).toBe('vs')
+  expect(monacoThemeData('parchment', (v) => forge[v] ?? '').base).toBe('vs') // every light theme
+  expect(monacoThemeData('starmetal', (v) => forge[v] ?? '').base).toBe('vs-dark')
   expect(monacoThemeData('contrast', (v) => forge[v] ?? '').base).toBe('hc-black')
   // No tokens (not loaded yet): Monaco's own colours stay, nothing invalid reaches defineTheme.
   const bare = monacoThemeData('quench', () => '')

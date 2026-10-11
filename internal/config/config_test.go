@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -204,5 +205,21 @@ func TestClusterRateFromConfig(t *testing.T) {
 	}
 	if p, err := load("cluster_usd_per_hour: 0\n"); err != nil || p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0 {
 		t.Fatalf("0: %v", err)
+	}
+}
+
+// The server accepts exactly the themes the web app offers (web/src/theme/theme.ts), so a theme added on one side only
+// fails here rather than as a refused save or a missing choice in Settings.
+func TestThemeListMatchesTheWebApp(t *testing.T) {
+	b, err := os.ReadFile("../../web/src/theme/theme.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var web []string
+	for _, m := range regexp.MustCompile(`\{ id: '([a-z]+)'`).FindAllStringSubmatch(string(b), -1) {
+		web = append(web, m[1])
+	}
+	if !slices.Equal(web, Themes) {
+		t.Errorf("web themes %v, server themes %v", web, Themes)
 	}
 }

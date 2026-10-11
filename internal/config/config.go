@@ -18,7 +18,7 @@ import (
 	"crucible/internal/yamlx"
 )
 
-var Themes = []string{"forge", "anvil", "quench", "contrast"}
+var Themes = []string{"forge", "anvil", "quench", "damascus", "verdigris", "starmetal", "parchment", "contrast"}
 
 type Platform struct {
 	Settings  Settings

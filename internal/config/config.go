@@ -36,6 +36,7 @@ type Settings struct {
 	CostTiers       *CostTiers           `yaml:"cost_tiers"`
 	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
 	Schedules       map[string]*Schedule `yaml:"schedules"`
+	Smith           SmithThresholds      `yaml:"smith"` // smith rank experience thresholds; missing keys take DefaultSmith
 	Ranks           RankThresholds       `yaml:"ranks"` // forge rank thresholds; missing keys take DefaultRanks
 	Quotes          []string             `yaml:"-"`
 }
@@ -65,6 +66,43 @@ type RankThresholds struct {
 	Blade      float64 `yaml:"blade" json:"blade"`
 	Sword      float64 `yaml:"sword" json:"sword"`
 	Masterwork float64 `yaml:"masterwork" json:"masterwork"`
+}
+
+// SmithThresholds are the experience at which each smith rank is earned (spec 2026-10-11). Bellows Hand is 0.
+type SmithThresholds struct {
+	Apprentice  int `yaml:"apprentice" json:"apprentice"`
+	Journeyman  int `yaml:"journeyman" json:"journeyman"`
+	Smith       int `yaml:"smith" json:"smith"`
+	MasterSmith int `yaml:"master_smith" json:"master_smith"`
+	Grandmaster int `yaml:"grandmaster" json:"grandmaster"`
+}
+
+var DefaultSmith = SmithThresholds{Apprentice: 150, Journeyman: 500, Smith: 1200, MasterSmith: 2500, Grandmaster: 5000}
+
+// Steps lists the thresholds from Bellows Hand to Grandmaster.
+func (s SmithThresholds) Steps() []int {
+	return []int{0, s.Apprentice, s.Journeyman, s.Smith, s.MasterSmith, s.Grandmaster}
+}
+
+// Fill applies the defaults to unset keys and checks that every rank needs more than the one before.
+func (s *SmithThresholds) Fill() error {
+	d := DefaultSmith
+	for _, f := range []struct {
+		v   *int
+		def int
+	}{{&s.Apprentice, d.Apprentice}, {&s.Journeyman, d.Journeyman}, {&s.Smith, d.Smith},
+		{&s.MasterSmith, d.MasterSmith}, {&s.Grandmaster, d.Grandmaster}} {
+		if *f.v == 0 {
+			*f.v = f.def
+		}
+	}
+	st := s.Steps()
+	for i := 1; i < len(st); i++ {
+		if st[i] <= st[i-1] {
+			return fmt.Errorf("each smith rank must need more than the one before (0 < apprentice < journeyman < smith < master_smith < grandmaster), got %v", st[1:])
+		}
+	}
+	return nil
 }
 
 // DefaultRanks are spec §7's thresholds: Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Sword 90% → Masterwork 100%.
@@ -484,6 +522,9 @@ func Load(dir string) (*Platform, error) {
 	}
 	if err := p.Settings.Ranks.fill(); err != nil {
 		errs = append(errs, fmt.Errorf("platform.yaml: ranks: %w", err))
+	}
+	if err := p.Settings.Smith.Fill(); err != nil {
+		errs = append(errs, fmt.Errorf("platform.yaml: smith: %w", err))
 	}
 	for name, s := range p.Settings.Schedules {
 		if s == nil {

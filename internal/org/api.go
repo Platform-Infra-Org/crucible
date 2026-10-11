@@ -151,7 +151,7 @@ func (a *api) getSettings(w http.ResponseWriter, r *http.Request, _ string, _ rb
 		return err
 	}
 	httpx.JSON(w, http.StatusOK, SettingsBody{Version: v, DefaultTheme: st.DefaultTheme, CostTiers: st.CostTiers,
-		EscalationHours: st.EscalationHours, Ranks: st.Ranks})
+		EscalationHours: st.EscalationHours, Ranks: st.Ranks, Smith: st.Smith})
 	return nil
 }
 

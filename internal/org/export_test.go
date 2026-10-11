@@ -36,7 +36,8 @@ func exported(t *testing.T) (*Store, []byte) {
 		answer, files, file_keys, status, points, feedback, scored_by, scored_at)
 		SELECT id, 't', 'a', 'm1', 'abc', 'task', 't1', 'lab1', 'upload', 'Show it', 'secret rubric', 5, 'done', '[{"name":"a.png","size":3}]',
 		'{k1}', 'scored', 4, 'good', 's1@x', now() FROM users WHERE email = 'tr@x'`)
-	mustExec(t, s.DB, `INSERT INTO ranks (user_id, level, seen) SELECT id, 2, true FROM users WHERE email = 'tr@x'`)
+	mustExec(t, s.DB, `INSERT INTO sword_ranks (user_id, training, level, seen) SELECT id, 'a', 2, true FROM users WHERE email = 'tr@x'`)
+	mustExec(t, s.DB, `INSERT INTO smiths (user_id, xp, level, seen) SELECT id, 600, 2, true FROM users WHERE email = 'tr@x'`)
 	mustExec(t, s.DB, `INSERT INTO badges (user_id, training, team) SELECT id, 'a', 't' FROM users WHERE email = 'tr@x'`)
 	mustExec(t, s.DB, `INSERT INTO notification_mutes (user_id, kind) SELECT id, 'digest' FROM users WHERE email = 'l@x'`)
 	mustExec(t, s.DB, `INSERT INTO sessions (id, user_id, expires_at) SELECT 'sess', id, now() + interval '1 day' FROM users WHERE email = 'tr@x'`)
@@ -56,7 +57,8 @@ func history(t *testing.T, s *Store) string {
 		'items', (SELECT jsonb_agg(to_jsonb(x) - 'user_id' - 'updated_at' || jsonb_build_object('email', u.email)) FROM item_progress x JOIN users u ON u.id = x.user_id),
 		'quiz', (SELECT jsonb_agg(to_jsonb(x) - 'user_id' - 'id' - 'created_at' || jsonb_build_object('email', u.email)) FROM quiz_attempts x JOIN users u ON u.id = x.user_id),
 		'subs', (SELECT jsonb_agg(to_jsonb(x) - 'user_id' - 'id' - 'lab_id' - 'created_at' - 'scored_at' || jsonb_build_object('email', u.email)) FROM submissions x JOIN users u ON u.id = x.user_id),
-		'ranks', (SELECT jsonb_agg(jsonb_build_array(u.email, x.level, x.seen)) FROM ranks x JOIN users u ON u.id = x.user_id),
+		'swords', (SELECT jsonb_agg(jsonb_build_array(u.email, x.training, x.level, x.seen)) FROM sword_ranks x JOIN users u ON u.id = x.user_id),
+		'smiths', (SELECT jsonb_agg(jsonb_build_array(u.email, x.xp, x.level, x.seen)) FROM smiths x JOIN users u ON u.id = x.user_id),
 		'badges', (SELECT jsonb_agg(jsonb_build_array(u.email, x.training, x.team)) FROM badges x JOIN users u ON u.id = x.user_id),
 		'mutes', (SELECT jsonb_agg(jsonb_build_array(u.email, x.kind)) FROM notification_mutes x JOIN users u ON u.id = x.user_id))::text`, &out)
 	return out
@@ -213,5 +215,37 @@ func TestImportReadsAFileFromBeforeAvatars(t *testing.T) {
 	mustScan(t, dst.DB, `SELECT avatar FROM users WHERE email = 'tr@x'`, &avatar)
 	if avatar != "" {
 		t.Errorf("avatar = %q, want initials", avatar)
+	}
+}
+
+// A file from before 00027 carries one personal "ranks" table and no sword_ranks or smiths: it still imports.
+func TestImportIgnoresTheOldRanksTable(t *testing.T) {
+	_, file := exported(t)
+	var x map[string]json.RawMessage
+	var tables map[string]json.RawMessage
+	if json.Unmarshal(file, &x) != nil || json.Unmarshal(x["tables"], &tables) != nil {
+		t.Fatal("unreadable export")
+	}
+	for _, n := range []string{"sword_ranks", "smiths"} {
+		if tables[n] == nil {
+			t.Fatalf("a fresh export must list %s", n)
+		}
+	}
+	if tables["ranks"] != nil {
+		t.Fatal("a fresh export must not list ranks")
+	}
+	tables["ranks"] = json.RawMessage(`[{"email":"tr@x","level":2,"earned_at":"2026-01-01T00:00:00Z","seen":true}]`)
+	delete(tables, "sword_ranks")
+	delete(tables, "smiths")
+	x["tables"], _ = json.Marshal(tables)
+	old, _ := json.Marshal(x)
+	dst := &Store{DB: dbtest.New(t)}
+	if err := dst.Import(context.Background(), "a@x", old); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	mustScan(t, dst.DB, `SELECT (SELECT count(*) FROM sword_ranks) + (SELECT count(*) FROM smiths)`, &n)
+	if n != 0 {
+		t.Errorf("old ranks must not become new ones, got %d rows", n)
 	}
 }

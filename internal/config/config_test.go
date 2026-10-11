@@ -289,3 +289,17 @@ func TestGroupsResolve(t *testing.T) {
 		t.Error("reserved team ids")
 	}
 }
+
+func TestSmithThresholdsDefaultAndValidate(t *testing.T) {
+	var s SmithThresholds
+	if err := s.Fill(); err != nil || !slices.Equal(s.Steps(), []int{0, 150, 500, 1200, 2500, 5000}) {
+		t.Fatalf("defaults: %v %v", s.Steps(), err)
+	}
+	bad := SmithThresholds{Apprentice: 500, Journeyman: 400}
+	if err := bad.Fill(); err == nil || !strings.Contains(err.Error(), "more than the one before") {
+		t.Fatalf("must rise: %v", err)
+	}
+	if err := (&SmithThresholds{Apprentice: -1}).Fill(); err == nil {
+		t.Fatal("negative refused")
+	}
+}

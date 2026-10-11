@@ -309,3 +309,28 @@ func TestSettingsHaveNoClusterRate(t *testing.T) {
 		t.Fatalf("the retired cluster rate must be refused by name: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestSmithThresholdsAreStoredAndAudited(t *testing.T) {
+	pool := dbtest.New(t)
+	s := &Store{DB: pool}
+	ctx := context.Background()
+	b := SettingsBody{Version: 1, DefaultTheme: "forge", CostTiers: okTiers(),
+		Smith: config.SmithThresholds{Apprentice: 100, Journeyman: 400, Smith: 1000, MasterSmith: 2000, Grandmaster: 4000}}
+	if err := s.SetSettings(ctx, "admin@x", b); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Platform(ctx)
+	if p.Settings.Smith != b.Smith {
+		t.Fatalf("stored: %+v", p.Settings.Smith)
+	}
+	var detail string
+	pool.QueryRow(ctx, `SELECT detail::text FROM audit_log WHERE action = 'settings.update'`).Scan(&detail)
+	if !strings.Contains(detail, `"smith"`) || !strings.Contains(detail, "4000") {
+		t.Errorf("audit detail = %s", detail)
+	}
+	b.Version = 2
+	b.Smith = config.SmithThresholds{Apprentice: 600, Journeyman: 500}
+	if err := s.SetSettings(ctx, "admin@x", b); !errors.Is(err, apperr.Invalid) {
+		t.Fatalf("falling thresholds refused: %v", err)
+	}
+}

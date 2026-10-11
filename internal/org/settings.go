@@ -19,11 +19,12 @@ import (
 
 // SettingsBody is what an admin saves. Version is the one the page read; a mismatch means someone else saved first.
 type SettingsBody struct {
-	Version         int64                 `json:"version"`
-	DefaultTheme    string                `json:"default_theme"`
-	CostTiers       *config.CostTiers     `json:"cost_tiers"`
-	EscalationHours float64               `json:"escalation_hours"`
-	Ranks           config.RankThresholds `json:"ranks"`
+	Version         int64                  `json:"version"`
+	DefaultTheme    string                 `json:"default_theme"`
+	CostTiers       *config.CostTiers      `json:"cost_tiers"`
+	EscalationHours float64                `json:"escalation_hours"`
+	Ranks           config.RankThresholds  `json:"ranks"`
+	Smith           config.SmithThresholds `json:"smith"`
 }
 
 // inTx runs fn and the audit row in one transaction: both land or neither does.
@@ -66,18 +67,24 @@ func (s *Store) SetSettings(ctx context.Context, actor string, b SettingsBody) e
 	if err := r.Fill(); err != nil {
 		return apperr.Wrap(apperr.Invalid, "ranks: "+err.Error())
 	}
+	sm := b.Smith
+	if err := sm.Fill(); err != nil {
+		return apperr.Wrap(apperr.Invalid, "smith ranks: "+err.Error())
+	}
 	// The audit log is the only history of money changes: record what the settings became.
 	detail := map[string]any{"version": b.Version, "default_theme": b.DefaultTheme, "escalation_hours": b.EscalationHours,
-		"ranks": r, "cost_tiers_cleared": b.CostTiers == nil}
+		"ranks": r, "smith": sm, "cost_tiers_cleared": b.CostTiers == nil}
 	if b.CostTiers != nil {
 		detail["cost_tiers"] = *b.CostTiers
 	}
 	return s.inTx(ctx, actor, "settings.update", "settings", detail, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE settings SET default_theme = $1, auto_approve_usd = $2, tier1_usd = $3, tier2_usd = $4,
 			escalation_hours = $5, rank_ingot = $6, rank_tempered = $7, rank_blade = $8,
-			rank_sword = $9, rank_masterwork = $10, version = version + 1 WHERE id = 1 AND version = $11`,
+			rank_sword = $9, rank_masterwork = $10, smith_apprentice = $11, smith_journeyman = $12, smith_smith = $13,
+			smith_master = $14, smith_grandmaster = $15, version = version + 1 WHERE id = 1 AND version = $16`,
 			b.DefaultTheme, auto, t1, t2, b.EscalationHours,
-			r.Ingot, r.Tempered, r.Blade, r.Sword, r.Masterwork, b.Version)
+			r.Ingot, r.Tempered, r.Blade, r.Sword, r.Masterwork,
+			sm.Apprentice, sm.Journeyman, sm.Smith, sm.MasterSmith, sm.Grandmaster, b.Version)
 		if err != nil {
 			return err
 		}

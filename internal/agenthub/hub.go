@@ -43,11 +43,12 @@ type Hub struct {
 func New() *Hub { return &Hub{agents: map[int64]*conn{}} }
 
 type conn struct {
-	ws      *websocket.Conn
-	ctx     context.Context
-	mu      sync.Mutex
-	pending map[string]chan ap.Msg
-	ptys    map[string]*PTY
+	ws       *websocket.Conn
+	ctx      context.Context
+	mu       sync.Mutex
+	pending  map[string]chan ap.Msg
+	ptys     map[string]*PTY
+	contexts []ap.KubeContext // the agent's kubeconfig contexts; guarded by mu
 }
 
 func newID() string {
@@ -122,9 +123,12 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request, userID int64) {
 		if json.Unmarshal(data, &m) != nil {
 			continue
 		}
-		if m.Type == ap.THello {
+		if m.Type == ap.THello || m.Type == ap.TContexts {
+			c.mu.Lock()
+			c.contexts = m.Contexts
+			c.mu.Unlock()
 			var ids []string
-			if h.OnHello != nil && json.Unmarshal(m.Data, &ids) == nil {
+			if m.Type == ap.THello && h.OnHello != nil && json.Unmarshal(m.Data, &ids) == nil {
 				go h.OnHello(userID, ids) // it may Call this agent, which needs this read loop running
 			}
 			continue
@@ -306,4 +310,15 @@ func (p *PTY) Close() error {
 	p.c.mu.Unlock()
 	p.closeRemote()
 	return p.c.send(ap.Msg{Type: ap.TPTYClose, ID: p.id})
+}
+
+// Contexts are the kubeconfig contexts the user's agent last reported; none when it is offline.
+func (h *Hub) Contexts(userID int64) []ap.KubeContext {
+	c, err := h.get(userID)
+	if err != nil {
+		return []ap.KubeContext{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ap.KubeContext{}, c.contexts...)
 }

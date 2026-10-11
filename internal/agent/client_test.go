@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -154,12 +156,17 @@ func TestClientServesHubRequests(t *testing.T) {
 
 func startAgent(t *testing.T, fx *fakeExec) (*agenthub.Hub, func()) {
 	t.Helper()
+	return startAgentKube(t, fx, nil)
+}
+
+func startAgentKube(t *testing.T, fx *fakeExec, kube *agent.Watcher) (*agenthub.Hub, func()) {
+	t.Helper()
 	hub := agenthub.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.Serve(w, r, 1) }))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: fx, Log: slog.Default()}).Run(ctx)
+		_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: fx, Log: slog.Default(), Kube: kube}).Run(ctx)
 		close(done)
 	}()
 	for i := 0; i < 200 && !hub.Online(1); i++ {
@@ -254,4 +261,35 @@ func TestRevokedAgentStopsWithItsOwnMessage(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the revoked agent kept running")
 	}
+}
+
+func TestAgentContextsReachTheHub(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "config")
+	write := func(names ...string) {
+		y := "clusters:\n- name: c\n  cluster: {server: 'https://127.0.0.1:6443'}\nusers:\n- name: u\n  user: {}\ncontexts:\n"
+		for _, n := range names {
+			y += "- name: " + n + "\n  context: {cluster: c, user: u}\n"
+		}
+		if err := os.WriteFile(kc, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("one")
+	w := &agent.Watcher{Kubeconfig: kc, Every: 20 * time.Millisecond}
+	wctx, stopW := context.WithCancel(context.Background())
+	defer stopW()
+	go w.Run(wctx)
+	hub, stop := startAgentKube(t, &fakeExec{provisioned: map[string]string{}}, w)
+	defer stop()
+	waitCtx := func(n int) {
+		for i := 0; i < 200 && len(hub.Contexts(1)) != n; i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got := hub.Contexts(1); len(got) != n {
+			t.Fatalf("want %d contexts, got %v", n, got)
+		}
+	}
+	waitCtx(1)
+	write("one", "two")
+	waitCtx(2)
 }

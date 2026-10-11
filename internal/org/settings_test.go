@@ -29,7 +29,6 @@ func TestSetSettingsRefusesBadValues(t *testing.T) {
 		"unknown theme":       {Version: 1, DefaultTheme: "chrome", CostTiers: okTiers()},
 		"negative escalation": {Version: 1, DefaultTheme: "forge", EscalationHours: -1, CostTiers: okTiers()},
 		"masterwork not 100":  {Version: 1, DefaultTheme: "forge", CostTiers: okTiers(), Ranks: config.RankThresholds{Ingot: 20, Tempered: 45, Blade: 75, Sword: 90, Masterwork: 99}},
-		"negative rate":       {Version: 1, DefaultTheme: "forge", CostTiers: okTiers(), ClusterUSDPerHour: ptr(-1.0)},
 	} {
 		if err := s.SetSettings(ctx, "admin@x", b); !errors.Is(err, apperr.Invalid) {
 			t.Errorf("%s: want an Invalid refusal, got %v", name, err)
@@ -51,7 +50,7 @@ func TestSetSettingsStoresAndAudits(t *testing.T) {
 	s := &Store{DB: pool}
 	ctx := context.Background()
 	b := SettingsBody{Version: 1, DefaultTheme: "anvil", EscalationHours: 6,
-		CostTiers: okTiers(), ClusterUSDPerHour: ptr(0.0)}
+		CostTiers: okTiers()}
 	if err := s.SetSettings(ctx, "Admin@x", b); err != nil {
 		t.Fatalf("SetSettings: %v", err)
 	}
@@ -61,9 +60,6 @@ func TestSetSettingsStoresAndAudits(t *testing.T) {
 	}
 	if p.Settings.Ranks != config.DefaultRanks {
 		t.Errorf("unset ranks must take the defaults, got %+v", p.Settings.Ranks)
-	}
-	if p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0 {
-		t.Error("an explicit 0 cluster rate means free on the node, and must survive as 0, not NULL")
 	}
 	var n, v int
 	pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'settings.update' AND actor = 'admin@x'`).Scan(&n)
@@ -244,7 +240,7 @@ func TestSettingsAuditRecordsNewValuesAndDistinguishesClearedFromZero(t *testing
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
 	steps := []SettingsBody{
-		{Version: 1, DefaultTheme: "anvil", CostTiers: &config.CostTiers{AutoApproveUSD: 2, Tier1USD: 5, Tier2USD: 25}, ClusterUSDPerHour: ptr(0.0)},
+		{Version: 1, DefaultTheme: "anvil", CostTiers: &config.CostTiers{AutoApproveUSD: 2, Tier1USD: 5, Tier2USD: 25}},
 		{Version: 2, DefaultTheme: "anvil", CostTiers: &config.CostTiers{Tier1USD: 5, Tier2USD: 25}},
 		{Version: 3, DefaultTheme: "anvil"},
 	}
@@ -257,12 +253,6 @@ func TestSettingsAuditRecordsNewValuesAndDistinguishesClearedFromZero(t *testing
 	tiers, _ := d0["cost_tiers"].(map[string]any)
 	if d0["default_theme"] != "anvil" || tiers["tier2_usd"] != 25.0 || tiers["auto_approve_usd"] != 2.0 || d0["cost_tiers_cleared"] != false {
 		t.Errorf("tier change detail = %v", d0)
-	}
-	if v, ok := d0["cluster_usd_per_hour"]; !ok || v != 0.0 {
-		t.Errorf("an explicit 0 rate must be recorded as 0, got %v", d0["cluster_usd_per_hour"])
-	}
-	if v, ok := settingsAuditDetail(t, s, 1)["cluster_usd_per_hour"]; !ok || v != nil {
-		t.Errorf("an unset rate must be recorded as null, got %v", v)
 	}
 	d1, d2 := settingsAuditDetail(t, s, 1), settingsAuditDetail(t, s, 2)
 	zero, _ := d1["cost_tiers"].(map[string]any)
@@ -309,5 +299,13 @@ func TestScheduleAuditRowsCarryDetail(t *testing.T) {
 		if err := s.DB.QueryRow(ctx, `SELECT detail->>'timezone', (detail->>'windows')::int FROM audit_log WHERE action = $1`, action).Scan(&tz, &n); err != nil || tz != "Europe/Bucharest" || n != 2 {
 			t.Errorf("%s detail = %q, %d, %v", action, tz, n, err)
 		}
+	}
+}
+
+func TestSettingsHaveNoClusterRate(t *testing.T) {
+	f := newAPI(t)
+	w := f.do("admin@x", "PUT", "/api/admin/settings", fmt.Sprintf(`{"version":%d,"default_theme":"anvil","cluster_usd_per_hour":1}`, 1))
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "cluster_usd_per_hour") {
+		t.Fatalf("the retired cluster rate must be refused by name: %d %s", w.Code, w.Body)
 	}
 }

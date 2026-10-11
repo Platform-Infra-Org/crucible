@@ -46,6 +46,7 @@ type Service struct {
 	DB         *pgxpool.Pool
 	Learn      *learn.Service
 	Runners    map[string]Runner
+	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
 	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
 	Now        func() time.Time
 	Log        *slog.Logger
@@ -1550,8 +1551,8 @@ func (s *Service) retryDestroy(ctx context.Context, inst *Instance) {
 // the API restarted mid-provision, or a leftover from a deleted database. Namespaces of labs that are provisioning,
 // ready or being destroyed are never touched.
 func (s *Service) reconcileCluster(ctx context.Context) {
-	cr, ok := s.Runners["cluster"].(*ClusterRunner)
-	if !ok {
+	cr := s.Kube
+	if cr == nil {
 		return
 	}
 	ids, err := cr.Live(ctx)

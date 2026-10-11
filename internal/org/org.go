@@ -74,12 +74,12 @@ func (s *Store) strings(ctx context.Context, q string, args ...any) ([]string, e
 }
 
 func (s *Store) settings(ctx context.Context, st *config.Settings) error {
-	var auto, t1, t2, cluster *float64
+	var auto, t1, t2 *float64
 	r := &st.Ranks
 	err := s.DB.QueryRow(ctx, `SELECT default_theme, auto_approve_usd::float8, tier1_usd::float8, tier2_usd::float8,
-		cluster_usd_per_hour::float8, escalation_hours::float8, rank_ingot::float8, rank_tempered::float8,
+		escalation_hours::float8, rank_ingot::float8, rank_tempered::float8,
 		rank_blade::float8, rank_sword::float8, rank_masterwork::float8 FROM settings WHERE id = 1`).
-		Scan(&st.DefaultTheme, &auto, &t1, &t2, &cluster, &st.EscalationHours, &r.Ingot, &r.Tempered, &r.Blade, &r.Sword, &r.Masterwork)
+		Scan(&st.DefaultTheme, &auto, &t1, &t2, &st.EscalationHours, &r.Ingot, &r.Tempered, &r.Blade, &r.Sword, &r.Masterwork)
 	if err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
@@ -95,10 +95,6 @@ func (s *Store) settings(ctx context.Context, st *config.Settings) error {
 			return fmt.Errorf("settings: %w", err)
 		}
 	}
-	if cluster != nil && *cluster < 0 {
-		return fmt.Errorf("settings: cluster_usd_per_hour must be >= 0")
-	}
-	st.ClusterUSDPerHour = cluster
 	if st.EscalationHours == 0 {
 		st.EscalationHours = 4
 	}

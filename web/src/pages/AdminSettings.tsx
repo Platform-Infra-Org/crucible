@@ -76,7 +76,6 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
   const [auto, setAuto] = useState(t ? String(t.auto_approve_usd) : '')
   const [t1, setT1] = useState(t ? String(t.tier1_usd) : '')
   const [t2, setT2] = useState(t ? String(t.tier2_usd) : '')
-  const [rate, setRate] = useState(s.cluster_usd_per_hour === null ? '' : String(s.cluster_usd_per_hour))
   const [esc, setEsc] = useState(String(s.escalation_hours))
   const [ranks, setRanks] = useState(() => Object.fromEntries(Object.entries(s.ranks).map(([k, v]) => [k, String(v)])))
   const { run, fail, note, busy } = useSave(reload)
@@ -87,7 +86,7 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
     void run(async () => {
       await api('/api/admin/settings', { method: 'PUT', json: {
         version: s.version, default_theme: theme, cost_tiers: r.tiers,
-        cluster_usd_per_hour: rate.trim() === '' ? null : Number(rate), escalation_hours: Number(esc) || 0,
+        escalation_hours: Number(esc) || 0,
         ranks: Object.fromEntries(Object.entries(ranks).map(([k, v]) => [k, Number(v)])) } })
     }, 'Settings saved.')
   }
@@ -104,7 +103,6 @@ function Main({ s, reload }: { s: AdminSettings; reload: () => void }) {
       <label>Auto-approve under (USD) <input type="number" min={0} step="0.01" value={auto} onChange={(e) => setAuto(e.target.value)} /></label>
       <label>Training admins approve up to (USD) <input type="number" min={0} step="0.01" value={t1} onChange={(e) => setT1(e.target.value)} /></label>
       <label>Admin approval above (USD) <input type="number" min={0} step="0.01" value={t2} onChange={(e) => setT2(e.target.value)} /></label>
-      <label>Cluster lab rate (USD per hour, empty = cluster labs unavailable) <input type="number" min={0} step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} /></label>
       <label>Hours before a waiting request escalates <input type="number" min={0} step="0.5" value={esc} onChange={(e) => setEsc(e.target.value)} /></label>
       <h2>Forge ranks</h2>
       <p className="muted">The percent of a training a trainee must complete to reach each rank.</p>

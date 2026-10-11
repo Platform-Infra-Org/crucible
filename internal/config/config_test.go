@@ -83,19 +83,20 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 			"training: forge-999\n", "must match the file name"},
 		"unknown group": {"teams/forge/programs/forge-101.yaml",
 			"training: forge-101\nroles: {participants: [nope_seniors]}\n", "neither an email nor a group"},
-		"two teams":         {"teams/other/team.yaml", "name: O\nleaders: [senior@crucible.local]\n", "already on team"},
-		"reserved team":     {"teams/all_seniors/team.yaml", "name: O\nleaders: [x@x]\n", "reads as a group"},
-		"training id dots":  {"trainings.yaml", "trainings:\n  \"..\": {repo: file:///x}\n", "invalid training id"},
-		"training id slash": {"trainings.yaml", "trainings:\n  a/b: {repo: file:///x}\n", "invalid training id"},
-		"bad theme":         {"platform.yaml", "default_theme: neon\n", "default_theme"},
-		"unknown key":       {"platform.yaml", "default_theme: forge\ncolour: red\n", "colour"},
-		"no cost tiers":     {"platform.yaml", "default_theme: forge\n", "cost_tiers is required"},
-		"bad cost tiers":    {"platform.yaml", "cost_tiers: {auto_approve_usd: 9, tier1_usd: 5, tier2_usd: 25}\n", "cost_tiers must satisfy"},
-		"bad schedule":      {"platform.yaml", "cost_tiers: {tier1_usd: 5, tier2_usd: 25}\nschedules:\n  night: {timezone: UTC, windows: [{days: [mon], start: \"22:00\", end: \"02:00\"}]}\n", "schedules.night"},
-		"unknown sched":     {"teams/forge/programs/forge-101.yaml", "training: forge-101\nschedule: night\n", `unknown schedule "night"`},
-		"negative budget":   {"teams/forge/programs/forge-101.yaml", "training: forge-101\nbudget_usd_month: -1\n", "budget_usd_month"},
-		"http webhook":      {"teams/forge/team.yaml", "name: F\nleaders: [a@x]\nnotifications: {slack_webhook: \"http://hooks.example\"}\n", "https://"},
-		"cap below budget":  {"teams/forge/budget.yaml", "monthly_usd: 100\nhard_cap_usd: 50\n", "hard_cap_usd"},
+		"two teams":            {"teams/other/team.yaml", "name: O\nleaders: [senior@crucible.local]\n", "already on team"},
+		"reserved team":        {"teams/all_seniors/team.yaml", "name: O\nleaders: [x@x]\n", "reads as a group"},
+		"training id dots":     {"trainings.yaml", "trainings:\n  \"..\": {repo: file:///x}\n", "invalid training id"},
+		"training id slash":    {"trainings.yaml", "trainings:\n  a/b: {repo: file:///x}\n", "invalid training id"},
+		"bad theme":            {"platform.yaml", "default_theme: neon\n", "default_theme"},
+		"retired cluster rate": {"platform.yaml", "default_theme: forge\ncost_tiers: {tier1_usd: 5, tier2_usd: 25}\ncluster_usd_per_hour: 1\n", "cluster_usd_per_hour"},
+		"unknown key":          {"platform.yaml", "default_theme: forge\ncolour: red\n", "colour"},
+		"no cost tiers":        {"platform.yaml", "default_theme: forge\n", "cost_tiers is required"},
+		"bad cost tiers":       {"platform.yaml", "cost_tiers: {auto_approve_usd: 9, tier1_usd: 5, tier2_usd: 25}\n", "cost_tiers must satisfy"},
+		"bad schedule":         {"platform.yaml", "cost_tiers: {tier1_usd: 5, tier2_usd: 25}\nschedules:\n  night: {timezone: UTC, windows: [{days: [mon], start: \"22:00\", end: \"02:00\"}]}\n", "schedules.night"},
+		"unknown sched":        {"teams/forge/programs/forge-101.yaml", "training: forge-101\nschedule: night\n", `unknown schedule "night"`},
+		"negative budget":      {"teams/forge/programs/forge-101.yaml", "training: forge-101\nbudget_usd_month: -1\n", "budget_usd_month"},
+		"http webhook":         {"teams/forge/team.yaml", "name: F\nleaders: [a@x]\nnotifications: {slack_webhook: \"http://hooks.example\"}\n", "https://"},
+		"cap below budget":     {"teams/forge/budget.yaml", "monthly_usd: 100\nhard_cap_usd: 50\n", "hard_cap_usd"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -191,25 +192,6 @@ func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
 		"teams/a/programs/t1.yaml": "roles: {participants: [u@x]}\nschedule: bh\n"}))
 	if err != nil || named.Teams["a"].Programs["t1"].Schedule != "bh" || named.ProgramSchedule("a", "t1") == nil {
 		t.Fatalf("named schedule still works: %v", err)
-	}
-}
-
-func TestClusterRateFromConfig(t *testing.T) {
-	tiers := "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n"
-	load := func(extra string) (*Platform, error) {
-		return Load(platformDir(t, map[string]string{"platform.yaml": tiers + extra}))
-	}
-	if p, err := load(""); err != nil || p.Settings.ClusterUSDPerHour != nil {
-		t.Fatalf("unset stays nil (cluster labs unavailable): %v", err)
-	}
-	if _, err := load("cluster_usd_per_hour: -1\n"); err == nil || !strings.Contains(err.Error(), "cluster_usd_per_hour") {
-		t.Fatalf("negative: %v", err)
-	}
-	if p, err := load("cluster_usd_per_hour: 0.5\n"); err != nil || p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0.5 {
-		t.Fatalf("0.5: %v", err)
-	}
-	if p, err := load("cluster_usd_per_hour: 0\n"); err != nil || p.Settings.ClusterUSDPerHour == nil || *p.Settings.ClusterUSDPerHour != 0 {
-		t.Fatalf("0: %v", err)
 	}
 }
 

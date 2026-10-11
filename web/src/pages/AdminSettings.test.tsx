@@ -10,7 +10,7 @@ let admins = ['a@x']
 vi.mock('../useFetch', () => ({
   useFetch: (path: string) => {
     const data: Record<string, unknown> = {
-      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, cluster_usd_per_hour: null, escalation_hours: 4, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 } },
+      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, escalation_hours: 4, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 } },
       '/api/admin/admins': { admins },
       '/api/admin/platform': { schedules: {}, programs: [{ team: 't', training: 'forge-101' }, { team: 'u', training: 'forge-101' }] },
       '/api/meta': { quotes: [] },

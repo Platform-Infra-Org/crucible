@@ -81,3 +81,57 @@ func TestMigration00023ConvertsTeamsAndRoles(t *testing.T) {
 		t.Fatalf("up again: %v", err)
 	}
 }
+
+// 00026 ends the cluster labs still running on Crucible's cluster and drops the cluster rate.
+func TestMigration00026EndsCrucibleClusterLabs(t *testing.T) {
+	pool := dbtest.New(t)
+	ctx := t.Context()
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer sqlDB.Close()
+	goose.SetBaseFS(os.DirFS("."))
+	goose.SetLogger(goose.NopLogger())
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.DownTo(sqlDB, "migrations", 25); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (sub, email) VALUES ('s', 'u@x')`,
+		`INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at, last_activity_at,
+			ttl_s, idle_timeout_s, idle_warning_s, max_extension_s)
+			SELECT 'c1', id, 't', 'k', 'm1', 'x', 'cluster', 'ready', now(), now(), 1, 1, 1, 1 FROM users`,
+		`INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at, last_activity_at,
+			ttl_s, idle_timeout_s, idle_warning_s, max_extension_s)
+			SELECT 'l1', id, 't', 'k', 'm2', 'x', 'local', 'ready', now(), now(), 1, 1, 1, 1 FROM users`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := goose.UpTo(sqlDB, "migrations", 26); err != nil {
+		t.Fatal(err)
+	}
+	var state, reason string
+	var ended bool
+	if err := pool.QueryRow(ctx, `SELECT state, end_reason, destroyed_at IS NOT NULL FROM lab_instances WHERE id = 'c1'`).Scan(&state, &reason, &ended); err != nil {
+		t.Fatal(err)
+	}
+	if state != "destroyed" || reason != "cluster labs moved to your own cluster" || !ended {
+		t.Errorf("cluster lab = %s %q %v", state, reason, ended)
+	}
+	if err := pool.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = 'l1'`).Scan(&state); err != nil || state != "ready" {
+		t.Errorf("local lab = %s %v: must be untouched", state, err)
+	}
+	var n int
+	pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'settings' AND column_name = 'cluster_usd_per_hour'`).Scan(&n)
+	if n != 0 {
+		t.Error("settings must have no cluster_usd_per_hour column")
+	}
+	if err := goose.DownTo(sqlDB, "migrations", 25); err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if err := goose.Up(sqlDB, "migrations"); err != nil {
+		t.Fatal(err)
+	}
+}

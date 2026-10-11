@@ -28,7 +28,7 @@ need 'pods/exec'
 need 'kind: ValidatingAdmissionPolicy'
 need "system:serviceaccount:default:crucible"
 need 'pod-security.kubernetes.io/enforce'
-need 'name: CRUCIBLE_CLUSTER_LABS'
+need 'name: CRUCIBLE_LAB_CLUSTER'
 need 'requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: 500m, memory: 1Gi }'   # postgres: Guaranteed QoS
 need 'requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: 250m, memory: 512Mi }'  # api: Guaranteed QoS
 base="--set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso"
@@ -46,7 +46,10 @@ dev=$(helm template t "$chart" $base --set clusterLabs.unsafePrivileged=true --s
 grep -q 'name: CRUCIBLE_CLUSTER_PRIVILEGED' <<<"$dev" || { echo "missing: dev privileged env"; exit 1; }
 if grep -q 'pod-security.kubernetes.io/enforce' <<<"$dev"; then echo "dev policy must allow privileged lab pods"; exit 1; fi
 off=$(helm template t "$chart" $base --set clusterLabs.enabled=false)
-if grep -qE 'kind: ClusterRole|CRUCIBLE_CLUSTER_LABS' <<<"$off"; then echo "clusterLabs.enabled=false must not grant cluster access"; exit 1; fi
+if grep -qE 'kind: ClusterRole|CRUCIBLE_LAB_CLUSTER' <<<"$off"; then echo "clusterLabs.enabled=false must not grant cluster access"; exit 1; fi
+if grep -q CRUCIBLE_TOOLBOX_IMAGE <<<"$out"; then echo "cluster labs on trainees' clusters are opt-in (toolboxImage)"; exit 1; fi
+tb=$(helm template t "$chart" $base --set toolboxImage=x@sha256:y)
+grep -q 'name: CRUCIBLE_TOOLBOX_IMAGE' <<<"$tb" || { echo "missing: toolbox image env"; exit 1; }
 grep -q 'automountServiceAccountToken: false' <<<"$off" || { echo "no API token without cluster labs"; exit 1; }
 if grep -q 'hostNetwork: true' <<<"$out"; then echo "hostNetwork must not be used"; exit 1; fi
 need 'CRUCIBLE_BLOB_BUCKET, value: "b"'                    # uploads go to the data bucket, not the emptyDir

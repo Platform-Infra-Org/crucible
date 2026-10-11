@@ -76,10 +76,13 @@ spec:
             - name: CRUCIBLE_SMTP_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SMTP_PASSWORD, optional: true } }
             {{- if .Values.clusterLabs.enabled }}
-            - { name: CRUCIBLE_CLUSTER_LABS, value: "1" }
+            - { name: CRUCIBLE_LAB_CLUSTER, value: "1" }
             {{- if .Values.clusterLabs.unsafePrivileged }}
             - { name: CRUCIBLE_CLUSTER_PRIVILEGED, value: "1" }
             {{- end }}
+            {{- end }}
+            {{- with .Values.toolboxImage }}
+            - { name: CRUCIBLE_TOOLBOX_IMAGE, value: {{ . | quote }} }
             {{- end }}
             {{- if .Values.awsLabs.enabled }}
             {{- if not .Values.clusterLabs.enabled }}{{ fail "awsLabs.enabled needs clusterLabs.enabled: the workspace and terraform pods run in the cluster" }}{{ end }}

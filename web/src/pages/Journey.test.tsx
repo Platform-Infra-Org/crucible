@@ -29,6 +29,7 @@ test('by person: a panel each, with the molten bar, the cells, the flags and the
   expect(h).toContain('Sparks<span class="sr-only">: forged</span>')
   expect(h).toContain('Gone quiet: no activity for 5 business days')
   expect(h).toContain('data-testid="journey-t@x-f101"')
+  expect(h).toMatch(/data-testid="journey-person-t@x".*<span class="smith-mark l3">/) // the mark sits in the person's header
   expect(h).toContain('aria-pressed="true">By person')
 })
 
@@ -37,6 +38,7 @@ test('by training: one panel for the training, everyone in it', () => {
   expect(h).toContain('aria-pressed="true">By training')
   expect(h.match(/class="panel journey-group"/g)).toHaveLength(1)
   expect(h).toContain('2 people')
+  expect(h).not.toContain('journey-person-')
 })
 
 test('filters come from the address: one person, the numbers follow, and a way back to everyone', () => {

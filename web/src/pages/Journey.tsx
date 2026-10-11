@@ -101,7 +101,8 @@ function JourneyGroup({ g, by }: { g: Group; by: By }) {
   const first = g.rows[0]
   const look = g.rows.reduce((n, r) => n + r.flags.length, 0)
   return (
-    <section className="panel journey-group" aria-label={by === 'person' ? first.name || first.email : first.title}>
+    <section className="panel journey-group" aria-label={by === 'person' ? first.name || first.email : first.title}
+      data-testid={by === 'person' ? `journey-person-${first.email}` : undefined}>
       <div className="journey-group-head">
         {by === 'person' ? <Avatar user={{ name: first.name, email: first.email, avatar: first.avatar ?? '' }} /> : <span className="journey-mark" aria-hidden="true">⚒</span>}
         <div>

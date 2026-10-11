@@ -66,7 +66,8 @@ test('a content edit is reviewed and merged; the trainee earns a badge; senior a
   await expect(senior.getByRole('link', { name: 'Mentor', exact: true })).toHaveCount(0)
   await senior.goto('/teams/forge/journey')
   await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').getByRole('listitem').filter({ hasText: 'Sparks' })).toContainText(/Sparks\s*:\s*forged/)
-  await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').locator('.smith-mark')).toContainText(/\S/) // the smith rank in words beside the name
+  await expect(senior.getByTestId('journey-person-trainee@crucible.local').locator('.journey-group-head .smith-mark')).toContainText(/\S/) // the smith rank in words in the person's header
+  await expect(senior.getByTestId('journey-trainee@crucible.local-forge-102').locator('.badge')).toContainText(/\S/) // the row's sword rank
   // The leader reaches the team from their user card: their icon, name, email and teams.
   await leader.getByRole('button', { name: /Leo Leader/ }).click()
   const card = leader.getByRole('dialog', { name: 'Your user card' })

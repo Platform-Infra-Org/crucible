@@ -4,10 +4,10 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: crucible }
-automountServiceAccountToken: false   # the Deployment opts in only when cluster labs are on
+automountServiceAccountToken: false   # the Deployment opts in only when Crucible's lab cluster is on (AWS lab workspaces)
 {{- if .Values.clusterLabs.enabled }}
 ---
-# What the cluster runner does (internal/labs/cluster.go). RBAC cannot be scoped by namespace label, so the
+# What the AWS lab workspace runner does on Crucible's own cluster (internal/labs/cluster.go). RBAC cannot be scoped by namespace label, so the
 # ValidatingAdmissionPolicy below confines every write to lab-<id> namespaces.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

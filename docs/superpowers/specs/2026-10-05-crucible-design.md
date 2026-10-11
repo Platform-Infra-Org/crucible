@@ -286,7 +286,7 @@ requested ─► pending_approval ─► approved ─► provisioning ─► rea
 Every transition is a River job, idempotent, recorded in `lab_events`. `failed` always attempts destroy; stuck destroys alert admins.
 
 ### 8.2 Runtimes
-- **cluster:** namespace `lab-<id>` with ResourceQuota + default-deny NetworkPolicy (egress allowlist from lab.yaml). One pod using the **sysbox** runtime class runs dockerd and `docker compose up` on the lab's compose file. Terminals = `docker exec` into named services, proxied over WebSocket. Checks run via exec in `run_in` service — tamper-resistant.
+- **cluster** — Helm charts installed by the trainee's agent on a cluster of their kubeconfig (spec `2026-10-11-cluster-labs-on-your-cluster-design.md`); free, self-reported.
 - **local:** trainee installs `crucible-agent` (macOS, Linux, Windows/WSL2; requires Docker). Agent logs in (device code), holds an outbound WebSocket to the API, receives the compose bundle, runs it, streams PTYs, runs checks. Check results from local labs are flagged **self-reported**; a program can require human review for them. No cloud cost → always auto-approved.
 - **aws:** a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
 
@@ -339,9 +339,9 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 ## 9. FinOps
 
 ### 9.1 Request & approval
-1. Trainee requests a lab → Crucible computes **estimate**: `cluster` = pod resources × internal rate card from `platform.yaml`; `aws` = infracost on the module × requested TTL; `local` = $0.
+1. Trainee requests a lab → Crucible computes **estimate**: `aws` = infracost on the module × requested TTL; `local` and `cluster` = $0.
 2. **Cost tiers** (`platform.yaml`; no built-in defaults — install fails validation until set):
-   - `local`, `cluster` under `auto_approve_usd` → auto-approved.
+   - `local`, `cluster` → always auto-approved.
    - Estimate ≤ `tier1_usd` → program **approver**.
    - Estimate ≤ `tier2_usd` → team **leader**.
    - Above → global **admin**.

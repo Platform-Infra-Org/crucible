@@ -12,7 +12,7 @@ order: 30
 
 Every lab request is routed by its estimate, using the tiers your admins set:
 
-- **Auto**: laptop and cluster labs up to the auto-approve amount start at once. AWS labs never do.
+- **Auto**: laptop and cluster labs always start at once (they cost nothing in Crucible). AWS labs never do.
 - **Approver**: up to tier 1, the training's admins decide.
 - **Leader**: up to tier 2, the leaders of the team that owns the training.
 - **Admin**: anything above, and anything that would pass a budget cap.

@@ -31,7 +31,7 @@ variable "k3s_version" {
 variable "sysbox_version" {
   type        = string
   default     = "0.7.1"
-  description = "Sysbox CE release for cluster labs (needs containerd >= 2.0.5, i.e. k3s >= 1.32; 0.7.1 fixes sysfs mounts on Ubuntu 24.04 + containerd 2.x)"
+  description = "Sysbox CE release for AWS lab workspace pods (needs containerd >= 2.0.5, i.e. k3s >= 1.32; 0.7.1 fixes sysfs mounts on Ubuntu 24.04 + containerd 2.x)"
 }
 variable "sysbox_sha256_amd64" {
   type        = string

@@ -10,9 +10,16 @@ Not every lab runs on your laptop. The badge in the lab's header tells you where
 
 ## Cluster labs
 
-A cluster lab runs in Crucible's Kubernetes cluster. You need nothing installed: open it, choose **Ignite the
-forge**, and work in the browser terminals as usual. If the cluster has no room right now, the lab fails to start;
-try again a little later.
+A cluster lab runs on a Kubernetes cluster you choose, through your laptop agent: a kind cluster on your laptop, or
+a remote one you can use. Pick it under **Run it on** before you start; the list is the contexts in your kubeconfig.
+The lab installs into its own namespace there, your terminals open in a toolbox pointed at it, and ending the lab
+removes it. It costs nothing in Crucible: the cluster is yours.
+
+While it runs, **On your cluster** on the lab page shows each release as Ready, Starting or Failing. Results are
+self-reported, as for laptop labs.
+
+If a lab creates cluster-wide resources, it says so, and you tick a box to go ahead. Some of those (CRDs) may stay
+on the cluster afterwards.
 
 ## AWS labs
 
@@ -22,8 +29,6 @@ An AWS lab builds real cloud resources in a shared AWS account, so it costs mone
   leaders of the team that owns it, or an admin, depending on the amount, and moves up a tier if nobody answers in time. The page shows who it
   is waiting for. **Withdraw request** cancels it.
 - Once it is approved, the lab starts on its own. If it was rejected, the page says who rejected it and why.
-
-Cluster labs can need an approval too, when your Crucible prices them high enough.
 
 ## When you can't start a lab
 

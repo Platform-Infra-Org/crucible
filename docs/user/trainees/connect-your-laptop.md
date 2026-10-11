@@ -30,3 +30,9 @@ laptop disconnects this one.
 **Revoke pairing** on the same page disconnects your agent and voids its token. Labs already running on your laptop
 keep running until they go idle or reach their time limit. When someone leaves the company, an admin can revoke their
 pairing too.
+
+## Cluster labs
+
+The agent also reads your kubeconfig (`--kubeconfig`, else `KUBECONFIG`, else `~/.kube/config`) and tells Crucible
+the names of its contexts and their servers, never your credentials. A cluster lab connects through the agent, so
+your cloud logins (`aws`, `gcloud`) work as they do for `kubectl`. No cluster yet? `kind create cluster` makes one.

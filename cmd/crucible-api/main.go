@@ -43,6 +43,7 @@ import (
 	"crucible/internal/notify"
 	"crucible/internal/org"
 	"crucible/internal/scoring"
+	"crucible/internal/secrets"
 )
 
 func main() {
@@ -134,6 +135,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 	orgStore := &org.Store{DB: pool}
+	// CRUCIBLE_SECRET_KEY seals the credentials of connected repositories. Unset, public repositories still work and
+	// connecting one with a token is refused: a credential is never written in the clear.
+	if key := os.Getenv("CRUCIBLE_SECRET_KEY"); key != "" {
+		box, err := secrets.New(key)
+		if err != nil {
+			return err
+		}
+		orgStore.Secrets = box
+	} else {
+		slog.Warn("CRUCIBLE_SECRET_KEY is not set: repositories that need a credential cannot be connected")
+	}
 	if err := seed(ctx, orgStore, os.Getenv("CRUCIBLE_SEED_DIR")); err != nil {
 		return err
 	}
@@ -180,7 +192,7 @@ func run(ctx context.Context) error {
 		quizSecret = "crucible-dev-quiz-secret"
 	}
 	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Changes: syncer.Changes}
-	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, CheckRepo: orgStore.Check, Platform: func() *config.Platform {
 		if st := syncer.Current(); st != nil {
 			return st.Platform
 		}

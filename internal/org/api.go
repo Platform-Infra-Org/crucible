@@ -30,6 +30,9 @@ type APIDeps struct {
 	CheckPin func(ctx context.Context, training, sha string) error
 	// Content names a training and the commits it runs and tracks, for the team page. Nil: the id, no commits.
 	Content func(team, training string) (title, running, head string)
+	// CheckRepo tries a connected repository and records what it found (Store.RecordCheck). Nil: no test is run and
+	// a repository stays "unknown" until something reads from it.
+	CheckRepo func(ctx context.Context, id int64)
 }
 
 type api struct {
@@ -51,6 +54,11 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Get("/api/admin/admins", a.admin(a.getAdmins))
 	r.Post("/api/admin/admins", a.admin(a.postAdmin))
 	r.Delete("/api/admin/admins/{email}", a.admin(a.deleteAdmin))
+	r.Get("/api/admin/repos", a.admin(a.getRepos))
+	r.Post("/api/admin/repos", a.admin(a.postRepo))
+	r.Put("/api/admin/repos/{id}", a.admin(a.putRepo))
+	r.Post("/api/admin/repos/{id}/check", a.admin(a.checkRepoNow))
+	r.Delete("/api/admin/repos/{id}", a.admin(a.deleteRepo))
 	r.Get("/api/admin/trainings", a.admin(a.getTrainings))
 	r.Put("/api/admin/trainings/{id}/owner", a.admin(a.putOwner))
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))

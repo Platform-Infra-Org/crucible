@@ -60,7 +60,8 @@ func TestSeedLeavesAConfiguredInstanceAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := dbtest.New(t)
-	mustExec(t, pool, `INSERT INTO trainings VALUES ('mine','https://git/mine.git','main')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('https://git/mine.git') RETURNING id)
+		INSERT INTO trainings (id, repository, ref) SELECT 'mine', id, 'main' FROM r`)
 	if ok, err := (&Store{DB: pool}).Seed(ctx, p); err != nil || ok {
 		t.Fatalf("an instance with a training must not be seeded: %v %v", ok, err)
 	}

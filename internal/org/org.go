@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"crucible/internal/config"
+	"crucible/internal/secrets"
 	"crucible/internal/yamlx"
 )
 
@@ -27,7 +28,13 @@ type DB interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-type Store struct{ DB DB }
+// Secrets opens the credentials of connected repositories (internal/secrets). It is nil when CRUCIBLE_SECRET_KEY is
+// unset: repositories that need no credential still work, and connecting one with a token is refused rather than
+// stored in the clear.
+type Store struct {
+	DB      DB
+	Secrets *secrets.Box
+}
 
 // Platform reads every table into the struct config.Load returns.
 func (s *Store) Platform(ctx context.Context) (*config.Platform, error) {
@@ -129,20 +136,39 @@ func (s *Store) settings(ctx context.Context, st *config.Settings) error {
 }
 
 func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
-	rows, err := s.DB.Query(ctx, `SELECT id, repo, ref, path FROM trainings`)
+	rows, err := s.DB.Query(ctx, `SELECT t.id, r.url, r.auth, r.username, r.secret, t.ref, t.path
+		FROM trainings t JOIN repositories r ON r.id = t.repository`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+	type row struct {
+		id, url, auth, username, secret string
+		ref                             config.TrainingRef
+	}
+	var found []row
 	for rows.Next() {
-		var id string
-		var ref config.TrainingRef
-		if err := rows.Scan(&id, &ref.Repo, &ref.Ref, &ref.Path); err != nil {
+		var x row
+		if err := rows.Scan(&x.id, &x.url, &x.auth, &x.username, &x.secret, &x.ref.Ref, &x.ref.Path); err != nil {
 			return err
 		}
-		p.Trainings[id] = ref
+		found = append(found, x)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// The credential goes back into the URL here, in memory, for git to use. It is not stored this way.
+	for _, x := range found {
+		url, err := fetchURL(x.url, x.auth, x.username, x.secret, s.Secrets)
+		if err != nil {
+			// One unreadable credential must not hide every other training: this one is reported as unavailable.
+			slog.Warn("repository credential cannot be read; its trainings will not load", "training", x.id, "repo", redactRepo(x.url), "err", err)
+			continue
+		}
+		x.ref.Repo = url
+		p.Trainings[x.id] = x.ref
+	}
+	return nil
 }
 
 func (s *Store) teams(ctx context.Context, p *config.Platform) error {

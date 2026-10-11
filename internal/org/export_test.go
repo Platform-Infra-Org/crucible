@@ -170,8 +170,8 @@ func TestImportIsAllOrNothing(t *testing.T) {
 	for name, f := range map[string][]byte{
 		"truncated":       file[:len(file)/2],
 		"unknown person":  broken("badges", `"tr@x"`, `"ghost@x"`),
-		"local repo":      broken("trainings", `https://git/a.git`, `/etc`),
-		"option as repo":  broken("trainings", `https://git/a.git`, `--upload-pack=touch`),
+		"local repo":      broken("repositories", `https://git/a.git`, `/etc`),
+		"option as repo":  broken("repositories", `https://git/a.git`, `--upload-pack=touch`),
 		"bad email":       broken("team_members", `"m@x"`, `"not an email"`),
 		"no leader":       broken("team_members", `"leader"`, `"member"`),
 		"plain http hook": broken("team_webhooks", `https://hooks/s`, `http://hooks/s`),

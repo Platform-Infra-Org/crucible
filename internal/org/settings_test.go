@@ -148,7 +148,8 @@ func TestDeleteScheduleRefusedWhileAProgramUsesIt(t *testing.T) {
 	}
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
 	mustExec(t, pool, `INSERT INTO team_members (team, email, role) VALUES ('forge','leader@x','leader')`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('forge-101','https://git/x.git')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('https://git/x.git') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository) SELECT 'forge-101', id FROM r`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, schedule_name) VALUES ('forge','forge-101','days')`)
 	err := s.DeleteSchedule(ctx, "admin@x", "days")
 	if !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "forge") || !strings.Contains(err.Error(), "forge-101") {
@@ -203,7 +204,8 @@ func TestScheduleForeignKeyIsTheRealGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge')`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('forge-101','https://git/x.git')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('https://git/x.git') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository) SELECT 'forge-101', id FROM r`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, schedule_name) VALUES ('forge','forge-101','days')`)
 	_, err := pool.Exec(ctx, `DELETE FROM schedules WHERE name = 'days'`)
 	var pg *pgconn.PgError

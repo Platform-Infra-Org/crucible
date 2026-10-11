@@ -55,3 +55,19 @@ func TestJudge(t *testing.T) {
 		t.Fatalf("missing: %+v", r)
 	}
 }
+
+// A rollout stuck on a broken image keeps the old replicas available: "2 of 2 ready" would read as healthy, so the
+// message names the updated count instead.
+func TestStuckRolloutSaysUpdated(t *testing.T) {
+	cs := fake.NewClientset(
+		&appsv1.Deployment{ObjectMeta: meta("forge"), Spec: appsv1.DeploymentSpec{Replicas: ptr.To[int32](2)},
+			Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, AvailableReplicas: 2}},
+		&appsv1.StatefulSet{ObjectMeta: meta("db"), Spec: appsv1.StatefulSetSpec{Replicas: ptr.To[int32](2)},
+			Status: appsv1.StatefulSetStatus{UpdatedReplicas: 0, ReadyReplicas: 2}},
+		&appsv1.DaemonSet{ObjectMeta: meta("agent"), Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 3, UpdatedNumberScheduled: 1, NumberReady: 3}},
+	)
+	r := Judge(context.Background(), cs, ns, "a", []Object{{"Deployment", "forge"}, {"StatefulSet", "db"}, {"DaemonSet", "agent"}})
+	if got := strings.Join(r.Unready, "; "); got != "deployment/forge: 1 of 2 updated; statefulset/db: 0 of 2 updated; daemonset/agent: 1 of 3 updated" {
+		t.Fatalf("%q", got)
+	}
+}

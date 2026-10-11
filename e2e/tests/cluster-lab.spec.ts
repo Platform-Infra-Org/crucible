@@ -51,7 +51,7 @@ test('Forge 101 cluster lab: Helm on your own kind cluster through the agent', a
   // Task 2: the setup breaks the image; a ready: check passes once it is fixed.
   await expect(page.getByText('Relight the forge')).toBeVisible({ timeout: 90_000 })
   await page.getByRole('button', { name: 'Check' }).click()
-  await expect(page.locator('.check-output.bad')).toContainText(/deployment\/forge: \d of 2 ready/) // the failed check names what is not ready
+  await expect(page.locator('.check-output.bad')).toContainText(/deployment\/forge: \d of 2 (ready|updated)/) // the failed check names what is not ready
   await typeIn(page, 'shell', 'kubectl set image deploy/forge web=nginx:1.27-alpine && kubectl rollout status deploy/forge')
   await checkUntil(page, /Lab forged/)
 

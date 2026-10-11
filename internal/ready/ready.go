@@ -93,7 +93,7 @@ func judge(ctx context.Context, cs kubernetes.Interface, ns string, o Object) (m
 			want = *d.Spec.Replicas
 		}
 		if d.Status.ObservedGeneration < d.Generation || d.Status.UpdatedReplicas < want || d.Status.AvailableReplicas < want {
-			return fmt.Sprintf("%d of %d ready", d.Status.AvailableReplicas, want), false
+			return rollout(d.Status.UpdatedReplicas, d.Status.AvailableReplicas, want), false
 		}
 	case "StatefulSet":
 		s, err := cs.AppsV1().StatefulSets(ns).Get(ctx, o.Name, get)
@@ -105,7 +105,7 @@ func judge(ctx context.Context, cs kubernetes.Interface, ns string, o Object) (m
 			want = *s.Spec.Replicas
 		}
 		if s.Status.ReadyReplicas < want || s.Status.UpdatedReplicas < want {
-			return fmt.Sprintf("%d of %d ready", s.Status.ReadyReplicas, want), false
+			return rollout(s.Status.UpdatedReplicas, s.Status.ReadyReplicas, want), false
 		}
 	case "DaemonSet":
 		d, err := cs.AppsV1().DaemonSets(ns).Get(ctx, o.Name, get)
@@ -113,7 +113,7 @@ func judge(ctx context.Context, cs kubernetes.Interface, ns string, o Object) (m
 			return notFound(err)
 		}
 		if d.Status.NumberReady < d.Status.DesiredNumberScheduled || d.Status.UpdatedNumberScheduled < d.Status.DesiredNumberScheduled {
-			return fmt.Sprintf("%d of %d ready", d.Status.NumberReady, d.Status.DesiredNumberScheduled), false
+			return rollout(d.Status.UpdatedNumberScheduled, d.Status.NumberReady, d.Status.DesiredNumberScheduled), false
 		}
 	case "Job":
 		j, err := cs.BatchV1().Jobs(ns).Get(ctx, o.Name, get)
@@ -173,4 +173,13 @@ func judge(ctx context.Context, cs kubernetes.Interface, ns string, o Object) (m
 		return "no ready endpoints", false
 	}
 	return "", false
+}
+
+// rollout names what holds a workload back: replicas not yet updated (a stuck rollout keeps the old ones ready), else
+// replicas not yet ready.
+func rollout(updated, ready, want int32) string {
+	if updated < want {
+		return fmt.Sprintf("%d of %d updated", updated, want)
+	}
+	return fmt.Sprintf("%d of %d ready", ready, want)
 }

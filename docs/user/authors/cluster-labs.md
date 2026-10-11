@@ -37,7 +37,8 @@ tasks:
   is no `service` or `run_in` to name.
 - **Ready checks.** `check: { ready: [shop] }` passes when every resource of the release is ready: deployments,
   stateful sets and daemon sets rolled out, jobs complete, pods ready, volume claims bound, services with a ready
-  endpoint. A failing one says what isn't ready. Scripts can run `crucible-ready shop` too.
+  endpoint. A failing one says what isn't ready: `deployment/shop: 1 of 3 updated` while a rollout is stuck (on a bad
+  image, say), `deployment/shop: 2 of 3 ready` while pods start. Scripts can run `crucible-ready shop` too.
 - **Release health.** The lab page shows each release under **On your cluster** as Ready, Starting or Failing.
 - **Dependencies.** A chart may depend on others pinned to an exact version from `https://`, `oci://` or a
   `file://` folder in the lab; they are fetched when the lab starts.

@@ -2,6 +2,7 @@ package edits
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -657,5 +658,44 @@ func TestNoEditsOffBranch(t *testing.T) {
 	}
 	if got := f.s.Trainings(f.leader); len(got) != 0 {
 		t.Fatalf("a training on a tag is offered for edits: %v", got)
+	}
+}
+
+func TestEditsCarryAuthorAndReviewerSmithRanks(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	mustUser := func(sub, email string, level int) {
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO users (sub, email, name) VALUES ($1, $2, '')`, sub, email); err != nil {
+			t.Fatal(err)
+		}
+		if level > 0 {
+			if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) SELECT id, 600, $2, true FROM users WHERE email = $1`, email, level); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mustUser("s-l", "leader@crucible.local", 0)
+	mustUser("s-s", "senior@crucible.local", 2)
+	e, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nA.\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Reject(ctx, f.senior, e.ID, "no"); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := f.s.List(ctx, f.senior)
+	got, err := f.s.Get(ctx, f.senior, e.ID)
+	if err != nil || len(list) != 1 {
+		t.Fatal(list, err)
+	}
+	for name, v := range map[string]*Edit{"list": &list[0], "detail": got} {
+		b, _ := json.Marshal(v)
+		if !strings.Contains(string(b), `"author_smith":{"level":0,"title":"Bellows Hand"}`) || !strings.Contains(string(b), `"reviewer_smith":{"level":2,"title":"Journeyman"}`) {
+			t.Errorf("%s: %s", name, b)
+		}
+	}
+	pending, _ := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nB.\n"})
+	if b, _ := json.Marshal(pending); strings.Contains(string(b), "reviewer_smith") {
+		t.Errorf("no reviewer, no reviewer_smith: %s", b)
 	}
 }

@@ -4,6 +4,7 @@ package edits
 
 import (
 	"context"
+	"crucible/internal/smith"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -47,23 +48,25 @@ type Service struct {
 }
 
 type Edit struct {
-	ID          int64        `json:"id"`
-	Training    string       `json:"training"`
-	Title       string       `json:"title"`
-	Author      string       `json:"author"`
-	BaseSHA     string       `json:"base_sha"`
-	HeadSHA     string       `json:"head_sha"`
-	Branch      string       `json:"branch"`
-	Status      string       `json:"status"`
-	Reviewer    string       `json:"reviewer,omitempty"`
-	Note        string       `json:"note,omitempty"`
-	MergeSHA    string       `json:"merge_sha,omitempty"`
-	CreatedAt   time.Time    `json:"created_at"`
-	DecidedAt   *time.Time   `json:"decided_at,omitempty"`
-	Ops         []gitsync.Op `json:"ops,omitempty"`  // detail only
-	Diff        string       `json:"diff,omitempty"` // detail only: git's unified diff, as is
-	CanReview   bool         `json:"can_review"`
-	CanWithdraw bool         `json:"can_withdraw"`
+	ID            int64        `json:"id"`
+	Training      string       `json:"training"`
+	Title         string       `json:"title"`
+	Author        string       `json:"author"`
+	AuthorSmith   smith.Ref    `json:"author_smith"`
+	BaseSHA       string       `json:"base_sha"`
+	HeadSHA       string       `json:"head_sha"`
+	Branch        string       `json:"branch"`
+	Status        string       `json:"status"`
+	Reviewer      string       `json:"reviewer,omitempty"`
+	ReviewerSmith *smith.Ref   `json:"reviewer_smith,omitempty"`
+	Note          string       `json:"note,omitempty"`
+	MergeSHA      string       `json:"merge_sha,omitempty"`
+	CreatedAt     time.Time    `json:"created_at"`
+	DecidedAt     *time.Time   `json:"decided_at,omitempty"`
+	Ops           []gitsync.Op `json:"ops,omitempty"`  // detail only
+	Diff          string       `json:"diff,omitempty"` // detail only: git's unified diff, as is
+	CanReview     bool         `json:"can_review"`
+	CanWithdraw   bool         `json:"can_withdraw"`
 }
 
 type NewEdit struct {
@@ -490,6 +493,26 @@ func (s *Service) notify(ctx context.Context, ev notify.Event) {
 	}
 }
 
+// AddSmiths sets the author's and reviewer's smith ranks on edits headed for a client, in one query.
+func (s *Service) AddSmiths(ctx context.Context, list ...*Edit) error {
+	var emails []string
+	for _, e := range list {
+		emails = append(emails, e.Author, e.Reviewer)
+	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return err
+	}
+	for _, e := range list {
+		e.AuthorSmith = refs.Of(e.Author)
+		if e.Reviewer != "" {
+			r := refs.Of(e.Reviewer)
+			e.ReviewerSmith = &r
+		}
+	}
+	return nil
+}
+
 func scan(row pgx.Row) (*Edit, error) {
 	var e Edit
 	err := row.Scan(&e.ID, &e.Training, &e.Title, &e.Author, &e.BaseSHA, &e.HeadSHA, &e.Branch, &e.Status, &e.Reviewer, &e.Note,
@@ -532,7 +555,14 @@ func (s *Service) List(ctx context.Context, u *auth.User) ([]Edit, error) {
 			out = append(out, *e)
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ptrs := make([]*Edit, len(out))
+	for i := range out {
+		ptrs[i] = &out[i]
+	}
+	return out, s.AddSmiths(ctx, ptrs...)
 }
 
 func (s *Service) Get(ctx context.Context, u *auth.User, id int64) (*Edit, error) {
@@ -547,7 +577,7 @@ func (s *Service) Get(ctx context.Context, u *auth.User, id int64) (*Edit, error
 	if !visible(st, u, e) {
 		return nil, apperr.Wrap(apperr.NotFound, "edit not found")
 	}
-	return e, nil
+	return e, s.AddSmiths(ctx, e)
 }
 
 func (s *Service) Approve(ctx context.Context, u *auth.User, id int64, note string) (*Edit, error) {

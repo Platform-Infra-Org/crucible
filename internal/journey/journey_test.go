@@ -2,6 +2,7 @@ package journey
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -383,5 +384,31 @@ func TestRunningClusterLabShowsContextAndHealth(t *testing.T) {
 	if len(cl) != 1 || cl[0].Module != "03-cluster-heat" || cl[0].Context != "kind-dev" || cl[0].Health == nil ||
 		cl[0].Health.Releases[0].Status != "failing" || cl[0].Health.Releases[0].Unready == nil {
 		t.Fatalf("cluster labs %+v", cl)
+	}
+}
+
+func TestJourneyRowsCarrySmithAndSword(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	before, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(before) != 1 {
+		t.Fatal(before, err)
+	}
+	if b, _ := json.Marshal(before[0]); !strings.Contains(string(b), `"smith":{"level":0,"title":"Bellows Hand"}`) || strings.Contains(string(b), `"sword"`) {
+		t.Fatalf("no stored ranks: %s", b)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, 600, 2, true)`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, 'forge-101', 3, true)`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(after) != len(before) || after[0].Email != before[0].Email {
+		t.Fatalf("same rows in the same order: %+v %v", after, err)
+	}
+	b, _ := json.Marshal(after[0])
+	if !strings.Contains(string(b), `"smith":{"level":2,"title":"Journeyman"}`) || !strings.Contains(string(b), `"sword":{"level":3,"rank":"Blade"}`) {
+		t.Fatalf("ranks: %s", b)
 	}
 }

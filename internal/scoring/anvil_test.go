@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -328,5 +329,33 @@ func TestDownloadEncodesNonASCIINames(t *testing.T) {
 	w := serve(f, f.senior, http.MethodGet, fmt.Sprintf("/api/submissions/%d/files/0", sub.ID), "")
 	if cd := w.Header().Get("Content-Disposition"); w.Code != 200 || !strings.HasPrefix(cd, "attachment; filename*=utf-8''h%C3%A4rte") {
 		t.Fatalf("%d %q", w.Code, cd)
+	}
+}
+
+func TestAnvilNamesCarrySmithRanks(t *testing.T) {
+	ctx := context.Background()
+	f := fixture(t)
+	const want = `"trainee_smith":{"level":2,"title":"Journeyman"}`
+	const none = `"trainee_smith":{"level":0,"title":"Bellows Hand"}`
+	signoffs := func() string { l, _ := f.s.SignOffs(ctx, f.senior); b, _ := json.Marshal(l); return string(b) }
+	if got := signoffs(); !strings.Contains(got, none) {
+		t.Fatalf("no smith row is a Bellows Hand: %s", got)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, 600, 2, true)`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	sub := f.submitText(t)
+	queue, err := f.s.Queue(ctx, f.senior, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := f.s.Detail(ctx, f.senior, sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]any{"signoffs": json.RawMessage(signoffs()), "queue": queue, "detail": d.Submission} {
+		if b, _ := json.Marshal(v); !strings.Contains(string(b), want) {
+			t.Errorf("%s: %s", name, b)
+		}
 	}
 }

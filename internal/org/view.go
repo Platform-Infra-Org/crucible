@@ -1,6 +1,7 @@
 package org
 
 import (
+	"crucible/internal/smith"
 	"fmt"
 	"maps"
 	"net/http"
@@ -44,9 +45,10 @@ type ProgramView struct {
 
 // Member is someone on a team, their name ("" until they first sign in) and their tag.
 type Member struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Tag   string `json:"tag"`
+	Email string    `json:"email"`
+	Name  string    `json:"name"`
+	Tag   string    `json:"tag"`
+	Smith smith.Ref `json:"smith"`
 }
 
 // TeamView is the team as the page needs it. It has no field for a webhook URL, on purpose.
@@ -81,10 +83,14 @@ func (a *api) members(r *http.Request, t *config.Team) ([]Member, error) {
 	if _, err := pgx.ForEachRow(rows, []any{&e, &n}, func() error { names[e] = n; return nil }); err != nil {
 		return nil, err
 	}
+	refs, err := smith.Lookup(r.Context(), a.s.DB, t.People())
+	if err != nil {
+		return nil, err
+	}
 	out := []Member{}
 	for _, tag := range config.Tags {
 		for _, e := range slices.Sorted(slices.Values(t.Tagged(tag))) {
-			out = append(out, Member{Email: e, Name: names[e], Tag: tag})
+			out = append(out, Member{Email: e, Name: names[e], Tag: tag, Smith: refs.Of(e)})
 		}
 	}
 	return out, nil
@@ -172,10 +178,11 @@ func (a *api) putBudget(w http.ResponseWriter, r *http.Request, actor string, _ 
 
 // Person is someone Crucible knows: signed in at least once, on a team, or an admin.
 type Person struct {
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Team  string `json:"team"` // "" when on no team
-	Tag   string `json:"tag"`
+	Email string    `json:"email"`
+	Name  string    `json:"name"`
+	Team  string    `json:"team"` // "" when on no team
+	Tag   string    `json:"tag"`
+	Smith smith.Ref `json:"smith"`
 }
 
 // getPeople lists everyone and every group, for picking who holds a training's roles. Leaders, seniors, juniors and
@@ -213,9 +220,14 @@ func (a *api) getPeople(w http.ResponseWriter, r *http.Request, actor string, c 
 			names[e] = ""
 		}
 	}
+	keys := slices.Sorted(maps.Keys(names))
+	refs, err := smith.Lookup(r.Context(), a.s.DB, keys)
+	if err != nil {
+		return err
+	}
 	people := []Person{}
-	for _, e := range slices.Sorted(maps.Keys(names)) {
-		p := Person{Email: e, Name: names[e]}
+	for _, e := range keys {
+		p := Person{Email: e, Name: names[e], Smith: refs.Of(e)}
 		if t := c.P.TeamOf(e); t != nil {
 			p.Team, p.Tag = t.ID, t.RoleOf(e)
 		}

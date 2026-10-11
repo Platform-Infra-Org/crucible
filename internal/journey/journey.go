@@ -5,6 +5,7 @@ package journey
 
 import (
 	"context"
+	"crucible/internal/smith"
 	"maps"
 	"slices"
 	"strings"
@@ -52,7 +53,14 @@ type Row struct {
 	Cells       []Cell       `json:"cells"`
 	Flags       []Flag       `json:"flags"`
 	LastActive  *time.Time   `json:"last_active,omitempty"`
+	Smith       smith.Ref    `json:"smith"`
+	Sword       *SwordRef    `json:"sword,omitempty"` // the stored sword rank for this training, if any
 	ClusterLabs []ClusterLab `json:"cluster_labs,omitempty"`
+}
+
+type SwordRef struct {
+	Level int    `json:"level"`
+	Rank  string `json:"rank"`
 }
 
 // ClusterLab is a running cluster lab: the context of the trainee's kubeconfig it runs on (Crucible never connects to
@@ -198,6 +206,26 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, ws []want, people
 			}
 		}
 		out = append(out, r)
+	}
+	emails := make([]string, len(out))
+	for i, r := range out {
+		emails[i] = r.Email
+	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return nil, err
+	}
+	swords, err := s.Learn.SwordRanks(ctx, uids)
+	if err != nil {
+		return nil, err
+	}
+	ladder := learn.Ladder(st.Platform.Settings.Ranks)
+	for i := range out {
+		r := &out[i]
+		r.Smith = refs.Of(r.Email)
+		if lvl, ok := swords[people[r.Email].id][r.Training]; ok && lvl < len(ladder) {
+			r.Sword = &SwordRef{Level: lvl, Rank: ladder[lvl].Name}
+		}
 	}
 	return out, nil
 }

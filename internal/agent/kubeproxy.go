@@ -2,11 +2,18 @@ package agent
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,12 +28,13 @@ import (
 	"k8s.io/client-go/transport"
 )
 
-// Proxy serves one context of the trainee's kubeconfig to one lab's toolbox, on a local address, behind a random
-// token. It authenticates upstream with the kubeconfig itself (exec plugins, OIDC, refresh), so credentials never
+// Proxy serves one context of the trainee's kubeconfig to one lab's toolbox, on a local address, over TLS, behind a
+// random token. It authenticates upstream with the kubeconfig itself (exec plugins, OIDC, refresh), so credentials never
 // reach the container. Close it when the lab ends.
 type Proxy struct {
 	Addr  string
 	Token string
+	CA    []byte // PEM: the proxy's own self-signed certificate, for the toolbox kubeconfig's certificate-authority-data
 	srv   *http.Server
 	base  *http.Transport
 	mu    sync.Mutex
@@ -69,11 +77,18 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
 	tok := hex.EncodeToString(b)
+	cert, ca, err := selfSigned(bind)
+	if err != nil {
+		return nil, err
+	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(bind, "0"))
 	if err != nil {
 		return nil, err
 	}
-	p := &Proxy{Addr: ln.Addr().String(), Token: tok, base: base, conns: map[net.Conn]struct{}{}}
+	// TLS because kubectl and helm (clientcmd) send a kubeconfig's token only over https. HTTP/1.1 only: exec, attach
+	// and port-forward upgrade the connection.
+	ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
+	p := &Proxy{Addr: ln.Addr().String(), Token: tok, CA: ca, base: base, conns: map[net.Conn]struct{}{}}
 	p.srv = &http.Server{Handler: requireToken(tok, h), ReadHeaderTimeout: 10 * time.Second,
 		ConnState: func(c net.Conn, st http.ConnState) {
 			p.mu.Lock()
@@ -91,6 +106,24 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 		}}
 	go func() { _ = p.srv.Serve(ln) }()
 	return p, nil
+}
+
+// selfSigned makes the proxy's certificate: for host.docker.internal (the toolbox's name for this machine) and the
+// address it listens on, valid for the lab's lifetime at most (a proxy lives as long as its lab).
+func selfSigned(bind string) (tls.Certificate, []byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "crucible lab proxy"},
+		DNSNames: []string{"host.docker.internal"}, IPAddresses: []net.IP{net.ParseIP(bind)},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(7 * 24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
 }
 
 // probe asks the API server for its version, so a cluster that is down or a credential plugin that fails is reported

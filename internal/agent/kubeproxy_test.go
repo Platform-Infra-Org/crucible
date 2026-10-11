@@ -3,10 +3,17 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +54,19 @@ func upstream(t *testing.T) (*httptest.Server, *string) {
 	return srv, seen
 }
 
+// clientFor and dial trust the proxy's own certificate, as the toolbox kubeconfig does.
+func tlsFor(p *Proxy) *tls.Config {
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(p.CA)
+	return &tls.Config{RootCAs: pool}
+}
+
+func clientFor(p *Proxy) *http.Client {
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsFor(p)}}
+}
+
+func dial(p *Proxy) (net.Conn, error) { return tls.Dial("tcp", p.Addr, tlsFor(p)) }
+
 func kubeconfigFor(t *testing.T, srv *httptest.Server, user string) string {
 	ca := base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
 	p := filepath.Join(t.TempDir(), "config")
@@ -70,11 +90,11 @@ func TestProxyAddsTheRealCredentialsAndNeedsItsToken(t *testing.T) {
 	}
 	defer p.Close()
 	get := func(path, token string) (*http.Response, string) {
-		req, _ := http.NewRequest("GET", "http://"+p.Addr+path, nil)
+		req, _ := http.NewRequest("GET", "https://"+p.Addr+path, nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		res, err := http.DefaultClient.Do(req)
+		res, err := clientFor(p).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +126,7 @@ func TestProxyPassesUpgradedStreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	nc, err := net.Dial("tcp", p.Addr)
+	nc, err := dial(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +135,7 @@ func TestProxyPassesUpgradedStreams(t *testing.T) {
 	if st, _ := bufio.NewReader(nc).ReadString('\n'); !strings.Contains(st, "401") {
 		t.Fatalf("tokenless upgrade: %q", st)
 	}
-	c, err := net.Dial("tcp", p.Addr)
+	c, err := dial(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +184,9 @@ func TestProxyHonoursAServerPathPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	req, _ := http.NewRequest("GET", "http://"+p.Addr+"/api/v1/pods", nil)
+	req, _ := http.NewRequest("GET", "https://"+p.Addr+"/api/v1/pods", nil)
 	req.Header.Set("Authorization", "Bearer "+p.Token)
-	res, err := http.DefaultClient.Do(req)
+	res, err := clientFor(p).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +194,7 @@ func TestProxyHonoursAServerPathPrefix(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Fatalf("plain: %d, upstream saw %v", res.StatusCode, paths)
 	}
-	c, err := net.Dial("tcp", p.Addr)
+	c, err := dial(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +212,7 @@ func TestProxyCloseEndsOpenStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := net.Dial("tcp", p.Addr)
+	c, err := dial(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +250,59 @@ func TestProxyClosesAndUnknownContextFails(t *testing.T) {
 	_ = p.Close()
 	if _, err := net.DialTimeout("tcp", p.Addr, time.Second); err == nil {
 		t.Fatal("still listening after Close")
+	}
+}
+
+// A kubeconfig that authenticates with a client certificate (kind's admin.kubeconfig): the proxy presents it upstream on
+// plain requests and on upgrades alike.
+func TestProxyPresentsAClientCertificateUpstream(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "kubernetes-admin"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	leaf, _ := x509.ParseCertificate(der)
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/exec" {
+			conn, buf, _ := w.(http.Hijacker).Hijack()
+			defer conn.Close()
+			buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n")
+			buf.Flush()
+			return
+		}
+		fmt.Fprint(w, `{"major":"1","minor":"34"}`)
+	}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
+	srv.StartTLS()
+	defer srv.Close()
+	b64 := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+	p, err := StartProxy(context.Background(), kubeconfigFor(t, srv, fmt.Sprintf("{client-certificate-data: %s, client-key-data: %s}", b64(certPEM), b64(keyPEM))), "lab", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	req, _ := http.NewRequest("GET", "https://"+p.Addr+"/api/v1/pods", nil)
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	res, err := clientFor(p).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("plain: %d", res.StatusCode)
+	}
+	c, err := dial(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "POST /exec HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n", p.Token)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if st, _ := bufio.NewReader(c).ReadString('\n'); !strings.Contains(st, "101") {
+		t.Fatalf("upgrade: %q", st)
 	}
 }

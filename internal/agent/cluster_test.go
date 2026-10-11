@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/tools/clientcmd"
+
 	ap "crucible/internal/agentproto"
 )
 
@@ -88,7 +91,7 @@ func TestProvisionInstallsInOrderThroughTheToolbox(t *testing.T) {
 		t.Error("charts install in order")
 	}
 	kc, err := os.ReadFile(filepath.Join(c.Dir, id, "kubeconfig"))
-	if err != nil || strings.Contains(string(kc), "real") || !strings.Contains(string(kc), "http://host.docker.internal:") || !strings.Contains(string(kc), "namespace: lab-0123456789ab") {
+	if err != nil || strings.Contains(string(kc), "real") || !strings.Contains(string(kc), "https://host.docker.internal:") || !strings.Contains(string(kc), "namespace: lab-0123456789ab") {
 		t.Fatalf("toolbox kubeconfig: %s %v", kc, err)
 	}
 	if st, _ := os.Stat(filepath.Join(c.Dir, id, "kubeconfig")); st.Mode().Perm() != 0o600 {
@@ -96,6 +99,32 @@ func TestProvisionInstallsInOrderThroughTheToolbox(t *testing.T) {
 	}
 	if got := c.Labs(); len(got) != 1 || got[0] != id {
 		t.Fatalf("Labs %v", got)
+	}
+}
+
+// kubectl and helm in the toolbox read this kubeconfig with clientcmd, which sends a user's token only over TLS: over
+// plain http every call was 401 "You must be logged in to the server" (the first e2e on kind).
+func TestToolboxKubeconfigReachesTheClusterThroughTheProxy(t *testing.T) {
+	srv, seen := upstream(t)
+	c := &Cluster{Dir: t.TempDir(), Kubeconfig: kubeconfigFor(t, srv, "{token: real}"), Bind: func(context.Context) (string, error) { return "127.0.0.1", nil }}
+	id := "0123456789ab"
+	_ = os.MkdirAll(filepath.Join(c.Dir, id), 0o755)
+	if err := c.openProxy(context.Background(), id, spec); err != nil {
+		t.Fatal(err)
+	}
+	defer c.closeProxy(id)
+	kc := strings.Replace(readKubeconfig(t, c, id), "host.docker.internal", "127.0.0.1", 1) // what the name resolves to here
+	rc, err := clientcmd.RESTConfigFromKubeConfig([]byte(kc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dc, err := discovery.NewDiscoveryClientForConfig(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	*seen = "" // the proxy's own probe at start
+	if _, err := dc.ServerVersion(); err != nil || *seen != "Bearer real" {
+		t.Fatalf("through the proxy: %v, upstream saw %q", err, *seen)
 	}
 }
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,8 +83,8 @@ func checkSpec(s ap.ClusterSpec) error {
 	return nil
 }
 
-// openProxy starts the lab's proxy and writes the toolbox's kubeconfig: the proxy's address, its token, the lab's
-// namespace as the default. Mode 0600: the toolbox runs as this user.
+// openProxy starts the lab's proxy and writes the toolbox's kubeconfig: the proxy's address and certificate, its token,
+// the lab's namespace as the default. Mode 0600: the toolbox runs as this user.
 func (c *Cluster) openProxy(ctx context.Context, id string, s ap.ClusterSpec) error {
 	bind, err := c.Bind(ctx)
 	if err != nil {
@@ -96,11 +97,11 @@ func (c *Cluster) openProxy(ctx context.Context, id string, s ap.ClusterSpec) er
 	_, port, _ := net.SplitHostPort(p.Addr)
 	kc := fmt.Sprintf(`apiVersion: v1
 kind: Config
-clusters: [{name: lab, cluster: {server: "http://host.docker.internal:%s"}}]
+clusters: [{name: lab, cluster: {server: "https://host.docker.internal:%s", certificate-authority-data: %s}}]
 users: [{name: lab, user: {token: %q}}]
 contexts: [{name: %q, context: {cluster: lab, user: lab, namespace: %s}}]
 current-context: %q
-`, port, p.Token, s.Context, namespace(id), s.Context)
+`, port, base64.StdEncoding.EncodeToString(p.CA), p.Token, s.Context, namespace(id), s.Context)
 	if err := os.WriteFile(filepath.Join(c.Dir, id, "kubeconfig"), []byte(kc), 0o600); err != nil {
 		_ = p.Close()
 		return err

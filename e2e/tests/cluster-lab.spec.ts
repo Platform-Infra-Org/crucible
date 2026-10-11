@@ -8,6 +8,14 @@ async function typeIn(page: Page, tab: string, command: string) {
   await page.keyboard.press('Enter')
 }
 
+// Check again until it passes, as a trainee does while the rollout they started in the terminal finishes.
+async function checkUntil(page: Page, passed: string | RegExp) {
+  await expect(async () => {
+    await page.getByRole('button', { name: 'Check' }).click()
+    await expect(page.getByText(passed)).toBeVisible({ timeout: 5_000 })
+  }).toPass({ timeout: 90_000 })
+}
+
 const labAPI = '/api/programs/forge/forge-101/modules/03-cluster-heat/lab'
 let agent: ChildProcess | undefined
 test.afterAll(() => { agent?.kill('SIGTERM') })
@@ -32,22 +40,20 @@ test('Forge 101 cluster lab: Helm on your own kind cluster through the agent', a
   await page.getByTestId('module-03-cluster-heat').getByRole('link', { name: 'Lab', exact: true }).click()
   await expect(page.getByRole('option', { name: /kind-crucible-m4/ })).toBeAttached({ timeout: 30_000 })
   await page.getByLabel('Run it on').selectOption('kind-crucible-m4')
-  await page.getByRole('button', { name: 'Ignite the forge' }).click()
+  await page.getByRole('button', { name: /^Ignite (the forge|again)$/ }).click() // again: a KEEP=1 stack's earlier lab
   await expect(page.getByRole('tab', { name: 'shell', exact: true })).toBeVisible({ timeout: 5 * 60_000 })
   await expect(page.getByText('on kind-crucible-m4')).toBeVisible()
 
   // Task 1: kubectl in the toolbox, a script check.
   await typeIn(page, 'shell', 'kubectl scale deploy/forge --replicas=2 && kubectl rollout status deploy/forge')
-  await page.getByRole('button', { name: 'Check' }).click()
-  await expect(page.getByText('Two fires burn in the forge.')).toBeVisible({ timeout: 60_000 })
+  await checkUntil(page, 'Two fires burn in the forge.') // the second replica takes a few seconds to be ready
 
   // Task 2: the setup breaks the image; a ready: check passes once it is fixed.
   await expect(page.getByText('Relight the forge')).toBeVisible({ timeout: 90_000 })
   await page.getByRole('button', { name: 'Check' }).click()
-  await expect(page.getByText(/deployment\/forge: \d of 2 ready/)).toBeVisible() // health names what is not ready
+  await expect(page.locator('.check-output.bad')).toContainText(/deployment\/forge: \d of 2 ready/) // the failed check names what is not ready
   await typeIn(page, 'shell', 'kubectl set image deploy/forge web=nginx:1.27-alpine && kubectl rollout status deploy/forge')
-  await page.getByRole('button', { name: 'Check' }).click()
-  await expect(page.getByText(/Lab forged/)).toBeVisible({ timeout: 60_000 })
+  await checkUntil(page, /Lab forged/)
 
   const info = await (await page.request.get(labAPI)).json()
   expect(info.runtime).toBe('cluster')

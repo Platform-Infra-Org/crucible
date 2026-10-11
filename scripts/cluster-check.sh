@@ -106,6 +106,11 @@ CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_PROBE_IP="
   CRUCIBLE_TEST_NODE_IP="$node_ip" CRUCIBLE_TEST_DNS_POD="$dns_pod" CRUCIBLE_CLUSTER_PRIVILEGED=1 \
   go test -tags cluster -run 'TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
 
+echo "== toolbox image for cluster labs"
+make toolbox TOOLBOX_TAG=e2e
+# the agent the spec spawns uses the kind cluster's own kubeconfig, never ~/.kube/config
+export CRUCIBLE_E2E_KUBECONFIG="$root/.local/kind/admin.kubeconfig"
+
 echo "== browser: Forge 101 end to end, including the cluster lab"
 CLUSTER=1 ./scripts/local-check.sh
 

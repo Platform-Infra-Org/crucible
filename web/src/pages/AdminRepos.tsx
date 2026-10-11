@@ -40,8 +40,9 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
   const s = statusOf(repo)
-  // A credential is only ever used over http(s); a file:// or ssh:// repository has nothing to type here.
+  // What a URL can authenticate with: a token over http(s), a deploy key over ssh, nothing for a local path.
   const takesToken = /^https?:\/\//i.test(repo.url)
+  const takesKey = isSSH(repo.url)
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     if (busy) return
     setBusy(true)
@@ -61,7 +62,7 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
         <h2><code>{repo.url}</code></h2>
         <span className="spacer" />
         <span className={s.cls}>{s.text}</span>
-        <span className="badge">{repo.auth === 'token' ? 'Token' : 'No credential'}</span>
+        <span className="badge">{repo.auth === 'token' ? 'Token' : repo.auth === 'ssh' ? 'Deploy key' : 'No credential'}</span>
       </div>
       {repo.last_error && <p className="error">{repo.last_error}</p>}
       <p className="repo-trainings">
@@ -74,7 +75,7 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
       <div className="row repo-actions">
         <button type="button" className="ghost small" disabled={busy}
           onClick={() => act(() => api(`/api/admin/repos/${repo.id}/check`, { method: 'POST', json: {} }), `Checked ${repo.url}.`)}>Test connection</button>
-        {takesToken && (
+        {(takesToken || takesKey) && (
           <button type="button" className="ghost small" onClick={() => setOpen(!open)} aria-expanded={open}>
             {repo.has_secret ? 'Replace credential' : 'Add a credential'}
           </button>
@@ -84,6 +85,7 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
           onClick={() => window.confirm(`Disconnect ${repo.url}? Crucible stops reading from it. The repository itself is not touched.`)
             && act(() => api(`/api/admin/repos/${repo.id}`, { method: 'DELETE' }), `${repo.url} is disconnected.`)}>Disconnect</button>
       </div>
+      {repo.auth === 'ssh' && repo.public_key && <DeployKey repo={repo} />}
       {open && <Credential repo={repo} canKeepSecrets={canKeepSecrets} onDone={() => { setOpen(false); onChange() }} />}
     </li>
   )
@@ -101,7 +103,8 @@ function Credential({ repo, canKeepSecrets, onDone }: { repo: Repo; canKeepSecre
     if (busy) return
     setBusy(true)
     try {
-      await api(`/api/admin/repos/${repo.id}`, { method: 'PUT', json: { url: repo.url, auth, username, secret, version: repo.version } })
+      const body = { url: repo.url, auth, username, secret: auth === 'ssh' ? 'new' : secret, version: repo.version }
+      await api(`/api/admin/repos/${repo.id}`, { method: 'PUT', json: body })
       toast(auth === 'none' ? 'Credential removed.' : 'Credential saved.')
       onDone()
     } catch (e) {
@@ -112,15 +115,43 @@ function Credential({ repo, canKeepSecrets, onDone }: { repo: Repo; canKeepSecre
   }
   return (
     <form className="stack" onSubmit={save}>
-      <label>How Crucible signs in
-        <select value={auth} onChange={(e) => setAuth(e.target.value as Repo['auth'])}>
-          <option value="none">Nothing — the repository is public</option>
-          <option value="token" disabled={!canKeepSecrets}>An access token</option>
-        </select>
-      </label>
+      <Kinds url={repo.url} auth={auth} setAuth={setAuth} canKeepSecrets={canKeepSecrets} />
       {auth === 'token' && <TokenFields username={username} setUsername={setUsername} secret={secret} setSecret={setSecret} hasSecret={repo.has_secret} />}
+      {auth === 'ssh' && <p className="muted">Crucible makes the keypair and keeps the private half; you add the
+        public half to the repository. {repo.auth === 'ssh' && 'Saving again makes a new pair, so the old key stops working.'}</p>}
       <button className="primary" disabled={busy}>Save credential</button>
     </form>
+  )
+}
+
+// isSSH matches what the server will accept as an SSH repository (org.IsSSH).
+export function isSSH(url: string) {
+  return /^ssh:\/\//i.test(url) || (!url.includes('://') && /^[^@/:\s]+@/.test(url))
+}
+
+function Kinds({ url, auth, setAuth, canKeepSecrets }: { url: string; auth: Repo['auth']; setAuth: (a: Repo['auth']) => void; canKeepSecrets: boolean }) {
+  return (
+    <label>How Crucible signs in
+      <select value={auth} onChange={(e) => setAuth(e.target.value as Repo['auth'])}>
+        <option value="none">Nothing — the repository is public</option>
+        <option value="token" disabled={!canKeepSecrets || !/^https?:\/\//i.test(url)}>An access token</option>
+        <option value="ssh" disabled={!canKeepSecrets || !isSSH(url)}>A deploy key Crucible makes</option>
+      </select>
+    </label>
+  )
+}
+
+// DeployKey shows the public half, which is not a secret: it is what goes into the repository as a deploy key, and
+// it can be shown again at any time — unlike a token, which a host shows once.
+function DeployKey({ repo }: { repo: Repo }) {
+  return (
+    <div className="deploy-key">
+      <p className="muted">Add this to <code>{repo.url}</code> as a deploy key <strong>with write access</strong>, then
+        choose Test connection. On GitHub: Settings → Deploy keys → Add deploy key, and tick <em>Allow write
+        access</em>. On GitLab: Settings → Repository → Deploy keys, with <em>Grant write permissions</em>.</p>
+      <pre className="key"><code>{repo.public_key}</code></pre>
+      <button type="button" className="ghost small" onClick={() => { void navigator.clipboard?.writeText(repo.public_key); toast('Public key copied.') }}>Copy the key</button>
+    </div>
   )
 }
 
@@ -168,13 +199,10 @@ function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChan
       <h2>Connect a repository</h2>
       <label>Repository URL <input required value={url} placeholder="https://github.com/your-org/trainings.git"
         onChange={(e) => setUrl(e.target.value)} /></label>
-      <label>How Crucible signs in
-        <select value={auth} onChange={(e) => setAuth(e.target.value as Repo['auth'])}>
-          <option value="none">Nothing — the repository is public</option>
-          <option value="token" disabled={!canKeepSecrets}>An access token</option>
-        </select>
-      </label>
+      <Kinds url={url} auth={auth} setAuth={setAuth} canKeepSecrets={canKeepSecrets} />
       {auth === 'token' && <TokenFields username={username} setUsername={setUsername} secret={secret} setSecret={setSecret} hasSecret={false} />}
+      {auth === 'ssh' && <p className="muted">Crucible makes a keypair for this repository and shows the public half
+        once it is connected; you add that to the repository as a deploy key with write access.</p>}
       <button className="primary" disabled={busy}>Connect repository</button>
     </form>
   )

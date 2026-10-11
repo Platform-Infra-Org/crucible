@@ -766,3 +766,7 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .repo-trainings .chips { margin: 0; }
 .repo .hint { margin: 0.4rem 0 0; }
 .repo-actions { margin: 0.9rem 0 0; }
+.deploy-key { margin: 0.75rem 0 0; }
+.deploy-key .key { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem;
+  overflow-x: auto; margin: 0.5rem 0; }
+.deploy-key .key code { background: none; padding: 0; font-size: 0.8rem; white-space: pre; }

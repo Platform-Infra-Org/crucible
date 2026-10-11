@@ -16,7 +16,10 @@ Give the repository's URL and say how Crucible should sign in:
 
 - **Nothing — the repository is public.** Anyone can read it, so Crucible needs no credential. Note that Crucible
   still cannot *write* to it, so approved edits will not merge.
-- **An access token.** For a private repository, or any repository whose content people will edit in Crucible.
+- **An access token.** For a private `https://` repository, or any whose content people will edit in Crucible.
+- **A deploy key Crucible makes.** For an `ssh://` or `git@host:path` repository. Crucible generates the pair,
+  keeps the private half and shows you the public half to add at your host. Nothing secret ever leaves your side,
+  the key can be shown again whenever you need it, and unlike a token it does not expire.
 
 The token needs to **read and write** the repository's contents. Write matters: merging an approved edit pushes a
 commit. A read-only token looks fine until the first edit is approved, and then the merge fails.
@@ -26,6 +29,19 @@ commit. A read-only token looks fine until the first edit is approved, and then 
   most, and sooner if your organisation says so.
 - **GitLab**: a project access token with `write_repository`.
 - The user name is optional: GitHub ignores it, GitLab wants any non-empty name.
+
+## Deploy keys
+
+Choose **A deploy key Crucible makes** and connect. The repository then shows a public key with **Copy the key**.
+Add it at your host **with write access** — GitHub: Settings → Deploy keys → Add deploy key, tick *Allow write
+access*; GitLab: Settings → Repository → Deploy keys, with *Grant write permissions*. Then **Test connection**.
+
+A deploy key belongs to one repository, which is what Crucible wants: each connection gets its own key, and you
+revoke it by deleting it at the host. Choosing **Replace credential** and saving again makes a fresh pair, so the
+old key stops working — add the new one.
+
+The first time Crucible reaches a host it records that host's fingerprint and refuses it if it ever changes
+afterwards.
 
 Crucible stores the token encrypted and never shows it again — not on this page, not through its API, not in the
 audit log, which records only that a credential was set. To change it, choose **Replace credential** and type a new

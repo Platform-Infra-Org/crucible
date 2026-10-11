@@ -34,6 +34,9 @@ type DB interface {
 type Store struct {
 	DB      DB
 	Secrets *secrets.Box
+	// SSHDir holds the keys Crucible generated for repositories connected over SSH, and the hosts it has pinned.
+	// Empty: such a repository cannot be reached.
+	SSHDir sshDir
 }
 
 // Platform reads every table into the struct config.Load returns.
@@ -136,7 +139,7 @@ func (s *Store) settings(ctx context.Context, st *config.Settings) error {
 }
 
 func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
-	rows, err := s.DB.Query(ctx, `SELECT t.id, r.url, r.auth, r.username, r.secret, t.ref, t.path
+	rows, err := s.DB.Query(ctx, `SELECT t.id, r.id, r.url, r.auth, r.username, r.secret, t.ref, t.path
 		FROM trainings t JOIN repositories r ON r.id = t.repository`)
 	if err != nil {
 		return err
@@ -144,12 +147,13 @@ func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
 	defer rows.Close()
 	type row struct {
 		id, url, auth, username, secret string
+		repo                            int64
 		ref                             config.TrainingRef
 	}
 	var found []row
 	for rows.Next() {
 		var x row
-		if err := rows.Scan(&x.id, &x.url, &x.auth, &x.username, &x.secret, &x.ref.Ref, &x.ref.Path); err != nil {
+		if err := rows.Scan(&x.id, &x.repo, &x.url, &x.auth, &x.username, &x.secret, &x.ref.Ref, &x.ref.Path); err != nil {
 			return err
 		}
 		found = append(found, x)
@@ -159,7 +163,7 @@ func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
 	}
 	// The credential goes back into the URL here, in memory, for git to use. It is not stored this way.
 	for _, x := range found {
-		url, err := fetchURL(x.url, x.auth, x.username, x.secret, s.Secrets)
+		url, err := s.fetchURL(x.repo, x.url, x.auth, x.username, x.secret)
 		if err != nil {
 			// One unreadable credential must not hide every other training: this one is reported as unavailable.
 			slog.Warn("repository credential cannot be read; its trainings will not load", "training", x.id, "repo", redactRepo(x.url), "err", err)

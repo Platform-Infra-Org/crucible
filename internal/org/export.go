@@ -71,7 +71,7 @@ func (s *Store) Export(ctx context.Context, actor string) ([]byte, error) {
 		case t.name == "repositories": // the connection, never its credential: it is sealed with this instance's
 			// CRUCIBLE_SECRET_KEY, which the new instance does not have. Each one is reconnected there.
 			q = `SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'), count(*) FROM (SELECT id, url, 'none' AS auth, username,
-				'' AS secret, 'unknown' AS status, NULL::boolean AS can_write, '' AS last_error,
+				'' AS secret, '' AS public_key, 'unknown' AS status, NULL::boolean AS can_write, '' AS last_error,
 				NULL::timestamptz AS checked_at, version, created_at FROM repositories) x`
 		case t.name == "users": // one row per email: the oldest, as UpsertUser links a login to
 			q = `SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'), count(*) FROM (SELECT DISTINCT ON (email) email, name, theme,

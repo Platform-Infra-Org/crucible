@@ -151,6 +151,13 @@ func run(ctx context.Context) error {
 	}
 	seedBootstrapAdmin(ctx, pool, os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
 	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
+	// Repositories connected over SSH get a generated key and a Host alias each, in one ssh config the bot's git
+	// reads. GIT_SSH_COMMAND is inherited by every git the API runs (gitsync.git builds its env from this process).
+	if dir, err := orgStore.UseSSHDir(filepath.Join(dataDir, "ssh")); err != nil {
+		slog.Warn("cannot prepare the SSH key directory; repositories connected that way will not be reachable", "err", err)
+	} else {
+		os.Setenv("GIT_SSH_COMMAND", "ssh -F "+dir)
+	}
 	syncer := gitsync.New(dataDir, orgStore.Platform, slog.Default())
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial sync failed; retrying in the background", "err", err)

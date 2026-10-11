@@ -149,7 +149,7 @@ export type BlockInfo = { id: string; group: string; title: string; summary: str
 // A connected repository: where training content comes from. The credential is never sent to the browser; has_secret
 // says only that one is set.
 export type Repo = {
-  id: number; url: string; auth: 'none' | 'token'; username: string; has_secret: boolean
+  id: number; url: string; auth: 'none' | 'token' | 'ssh'; username: string; has_secret: boolean; public_key: string
   status: 'unknown' | 'ok' | 'failed'; can_write: boolean | null; last_error: string
   checked_at: string | null; version: number; trainings: string[]
 }

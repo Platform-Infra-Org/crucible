@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router'
 import type { Repo, ReposView } from '../types'
 
 const repo = (over: Partial<Repo> = {}): Repo => ({
-  id: 1, url: 'https://github.com/org/trainings.git', auth: 'none', username: '', has_secret: false,
+  id: 1, url: 'https://github.com/org/trainings.git', auth: 'none', username: '', has_secret: false, public_key: '',
   status: 'unknown', can_write: null, last_error: '', checked_at: null, version: 1, trainings: ['kubernetes'], ...over,
 })
 
@@ -38,6 +38,21 @@ describe('Repositories', () => {
     expect(out).toContain('Token')
     expect(out).toContain('Replace credential')
     expect(out).not.toMatch(/ghp_|glpat-/)
+  })
+
+  test('an ssh repository shows the public key to add as a deploy key, never the private one', () => {
+    view = {
+      repos: [repo({
+        url: 'git@github.com:org/trainings.git', auth: 'ssh', has_secret: true, status: 'ok',
+        public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest crucible-git@github.com:org/trainings.git',
+      })],
+      can_keep_secrets: true,
+    }
+    const out = html()
+    expect(out).toContain('Deploy key')
+    expect(out).toContain('ssh-ed25519 AAAAC3')
+    expect(out).toContain('write access')
+    expect(out).not.toContain('PRIVATE KEY')
   })
 
   test('without a secret key the page says so and offers no token option', () => {

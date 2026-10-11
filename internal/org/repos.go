@@ -39,6 +39,7 @@ type RepoView struct {
 	Auth      string     `json:"auth"`
 	Username  string     `json:"username"`
 	HasSecret bool       `json:"has_secret"`
+	PublicKey string     `json:"public_key"` // the deploy key to add at the host; not a secret
 	Status    string     `json:"status"`
 	CanWrite  *bool      `json:"can_write"`
 	LastError string     `json:"last_error"`
@@ -52,8 +53,8 @@ func cleanRepoBody(b RepoBody) (RepoBody, error) {
 	if b.Auth == "" {
 		b.Auth = "none"
 	}
-	if b.Auth != "none" && b.Auth != "token" {
-		return b, apperr.Wrap(apperr.Invalid, "auth must be none or token")
+	if b.Auth != "none" && b.Auth != "token" && b.Auth != "ssh" {
+		return b, apperr.Wrap(apperr.Invalid, "auth must be none, token or ssh")
 	}
 	if err := checkRepo(b.URL); err != nil {
 		return b, err
@@ -63,6 +64,9 @@ func cleanRepoBody(b RepoBody) (RepoBody, error) {
 	}
 	if b.Auth == "token" && !strings.HasPrefix(strings.ToLower(b.URL), "http") {
 		return b, apperr.Wrap(apperr.Invalid, "a token is only used for http:// and https:// repositories")
+	}
+	if b.Auth == "ssh" && !IsSSH(b.URL) {
+		return b, apperr.Wrap(apperr.Invalid, "a deploy key is only used for ssh:// and git@host:path repositories")
 	}
 	return b, nil
 }
@@ -75,6 +79,21 @@ func (s *Store) ConnectRepo(ctx context.Context, actor string, id int64, b RepoB
 	}
 	if b.Auth == "token" && b.Secret == "" && id == 0 {
 		return 0, apperr.Wrap(apperr.Invalid, "a token is needed to connect with one")
+	}
+	// Crucible makes the SSH keypair itself, so no private key ever travels to it: only the public half is shown,
+	// to be added to the repository as a deploy key. Reconnecting keeps the pair unless a new one is asked for.
+	public := ""
+	if b.Auth == "ssh" && (id == 0 || b.Secret == "new") {
+		if s.Secrets == nil {
+			return 0, apperr.Wrap(apperr.Unavailable, "this instance cannot keep credentials: CRUCIBLE_SECRET_KEY is not set")
+		}
+		key, pub, err := newKeyPair("crucible-" + b.URL)
+		if err != nil {
+			return 0, err
+		}
+		b.Secret, public = key, pub
+	} else if b.Secret == "new" {
+		b.Secret = ""
 	}
 	sealed := ""
 	if b.Secret != "" {
@@ -93,8 +112,8 @@ func (s *Store) ConnectRepo(ctx context.Context, actor string, id int64, b RepoB
 	detail := map[string]any{"url": redactRepo(b.URL), "auth": b.Auth, "secret_set": b.Secret != ""}
 	err = s.inTx(ctx, actor, action, target, detail, func(tx pgx.Tx) error {
 		if id == 0 {
-			err := tx.QueryRow(ctx, `INSERT INTO repositories (url, auth, username, secret) VALUES ($1, $2, $3, $4) RETURNING id`,
-				b.URL, b.Auth, b.Username, sealed).Scan(&id)
+			err := tx.QueryRow(ctx, `INSERT INTO repositories (url, auth, username, secret, public_key)
+				VALUES ($1, $2, $3, $4, $5) RETURNING id`, b.URL, b.Auth, b.Username, sealed, public).Scan(&id)
 			var pg *pgconn.PgError
 			if errors.As(err, &pg) && pg.Code == "23505" {
 				return apperr.Wrap(apperr.Conflict, fmt.Sprintf("%s is already connected; reconnect that one instead", redactRepo(b.URL)))
@@ -116,8 +135,9 @@ func (s *Store) ConnectRepo(ctx context.Context, actor string, id int64, b RepoB
 		// A reconnect without a new secret keeps the stored one; switching to none clears it.
 		_, err := tx.Exec(ctx, `UPDATE repositories SET url = $2, auth = $3, username = $4,
 			secret = CASE WHEN $3 = 'none' THEN '' WHEN $5 <> '' THEN $5 ELSE secret END,
+			public_key = CASE WHEN $3 <> 'ssh' THEN '' WHEN $6 <> '' THEN $6 ELSE public_key END,
 			status = 'unknown', can_write = NULL, last_error = '', checked_at = NULL, version = version + 1
-			WHERE id = $1`, id, b.URL, b.Auth, b.Username, sealed)
+			WHERE id = $1`, id, b.URL, b.Auth, b.Username, sealed, public)
 		return err
 	})
 	return id, err
@@ -142,13 +162,18 @@ func (s *Store) DeleteRepo(ctx context.Context, actor string, id int64) error {
 			return apperr.Wrap(apperr.NotFound, "no such repository")
 		}
 		detail["url"] = redactRepo(url)
+		if s.SSHDir != "" {
+			if err := s.SSHDir.forget(id); err != nil {
+				return err
+			}
+		}
 		return err
 	})
 }
 
 // Repos lists the connected repositories with the trainings that depend on each.
 func (s *Store) Repos(ctx context.Context) ([]RepoView, error) {
-	rows, err := s.DB.Query(ctx, `SELECT r.id, r.url, r.auth, r.username, r.secret <> '', r.status, r.can_write,
+	rows, err := s.DB.Query(ctx, `SELECT r.id, r.url, r.auth, r.username, r.secret <> '', r.public_key, r.status, r.can_write,
 		r.last_error, r.checked_at, r.version, coalesce(array_agg(t.id ORDER BY t.id) FILTER (WHERE t.id IS NOT NULL), '{}')
 		FROM repositories r LEFT JOIN trainings t ON t.repository = r.id GROUP BY r.id ORDER BY r.url`)
 	if err != nil {
@@ -158,7 +183,7 @@ func (s *Store) Repos(ctx context.Context) ([]RepoView, error) {
 	out := []RepoView{}
 	for rows.Next() {
 		var v RepoView
-		if err := rows.Scan(&v.ID, &v.URL, &v.Auth, &v.Username, &v.HasSecret, &v.Status, &v.CanWrite, &v.LastError,
+		if err := rows.Scan(&v.ID, &v.URL, &v.Auth, &v.Username, &v.HasSecret, &v.PublicKey, &v.Status, &v.CanWrite, &v.LastError,
 			&v.CheckedAt, &v.Version, &v.Trainings); err != nil {
 			return nil, err
 		}
@@ -182,17 +207,24 @@ func (s *Store) RecordCheck(ctx context.Context, id int64, canWrite *bool, failu
 // fetchURL is the URL git is given for a repository: the stored URL with the credential put back in, in memory only.
 // The credential is never stored in the URL, never returned by a route and never logged — gitsync.redact strips
 // userinfo from git's own output, so a failure cannot carry it either.
-func fetchURL(raw, auth, username, sealed string, box *secrets.Box) (string, error) {
-	if auth != "token" || sealed == "" || box == nil {
+func (s *Store) fetchURL(id int64, raw, auth, username, sealed string) (string, error) {
+	box := s.Secrets
+	if auth == "none" || sealed == "" || box == nil {
 		return raw, nil
 	}
 	token, err := box.Open(sealed)
 	if err != nil {
 		return "", err
 	}
-	u, err := url.Parse(raw)
+	if auth == "ssh" {
+		if s.SSHDir == "" {
+			return "", apperr.Wrap(apperr.Unavailable, "this instance has nowhere to keep SSH keys")
+		}
+		return s.SSHDir.write(id, token, raw)
+	}
+	u, err := parseURL(raw)
 	if err != nil {
-		return "", apperr.Wrap(apperr.Invalid, "this repository's URL cannot be parsed")
+		return "", err
 	}
 	if username == "" {
 		username = "crucible" // GitHub ignores the username with a token; GitLab wants any non-empty one
@@ -211,7 +243,7 @@ func (s *Store) Check(ctx context.Context, id int64) {
 		return
 	}
 	failure := ""
-	url, err := fetchURL(raw, auth, username, sealed, s.Secrets)
+	url, err := s.fetchURL(id, raw, auth, username, sealed)
 	if err != nil {
 		failure = err.Error()
 	} else if err := gitsync.CheckRemote(ctx, url); err != nil {

@@ -778,13 +778,20 @@ func provisionTimeout(runtime string) time.Duration {
 }
 
 // destroyTimeout bounds one destroy: terraform destroy for aws labs (the namespace delete and the tag sweep get
-// their own few minutes afterwards), a namespace or a compose project otherwise.
+// their own few minutes afterwards), helm uninstall and a namespace delete through the agent for cluster labs (5m on
+// the agent), a compose project otherwise.
 func destroyTimeout(runtime string) time.Duration {
-	if runtime == "aws" {
+	switch runtime {
+	case "aws":
 		return 55 * time.Minute // sweep: stuck after 70
+	case "cluster":
+		return 7 * time.Minute // sweep: stuck after 12
 	}
 	return 2 * time.Minute // sweep: stuck after 10
 }
+
+// slowDestroy: a destroy that takes minutes runs in the background, so End, the sweep and the kill switch don't wait.
+func slowDestroy(runtime string) bool { return runtime == "aws" || runtime == "cluster" }
 
 func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.Lab) {
 	ctx, cancel := context.WithTimeout(ctx, provisionTimeout(inst.Runtime))
@@ -1404,7 +1411,7 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 				Text:    "Your lab ended before anyone decided on its extension, so the request lapsed.", Link: labLink(inst)})
 		}
 	}
-	if inst.Runtime == "aws" { // terraform destroy takes minutes: End, the sweep and the kill switch must not wait
+	if slowDestroy(inst.Runtime) {
 		if !s.once(inst.ID, func() { defer cancel(); s.finishDestroy(ctx, inst, reason) }) {
 			cancel()
 		}
@@ -1468,7 +1475,7 @@ func (s *Service) Sweep(ctx context.Context) {
 		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 -
 		       CASE WHEN runtime = 'aws' THEN interval '65 minutes' ELSE interval '15 minutes' END)
 		   OR (state = 'destroying' AND destroyed_at < $1 -
-		       CASE WHEN runtime = 'aws' THEN interval '70 minutes' ELSE interval '10 minutes' END)
+		       CASE runtime WHEN 'aws' THEN interval '70 minutes' WHEN 'cluster' THEN interval '12 minutes' ELSE interval '10 minutes' END)
 		   OR (state = 'pending_approval' AND escalate_at <= $1)`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)
@@ -1492,7 +1499,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
 			s.alertStuck(ctx, inst)
-			if inst.Runtime == "aws" {
+			if slowDestroy(inst.Runtime) {
 				s.once(inst.ID, func() { s.retryDestroy(context.WithoutCancel(ctx), inst) }) // never hold up the sweep
 			} else {
 				s.retryDestroy(ctx, inst)

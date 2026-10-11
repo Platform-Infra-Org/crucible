@@ -74,6 +74,7 @@ export function LabPage() {
   if (!info) return <Loader label="Opening the workshop…" />
   if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" lines={lab.log} />
   if (lab?.state === 'destroying' && lab.runtime === 'aws') return <Loader label="Quenching: terraform is tearing down your cloud resources…" />
+  if (lab?.state === 'destroying' && lab.runtime === 'cluster') return <Loader label="Quenching: removing the lab from your cluster…" />
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
   const cluster = info.runtime === 'cluster'

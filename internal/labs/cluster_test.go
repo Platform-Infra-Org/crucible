@@ -298,10 +298,7 @@ func TestSweepSkipsClusterRowsWithoutRunner(t *testing.T) {
 	c, l := mk("03-cluster-heat", "cluster"), mk("02-first-lab", "local")
 	f.s.Sweep(ctx)
 	for _, id := range []string{c.ID, l.ID} {
-		var st string
-		if err := f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, id).Scan(&st); err != nil || st != string(Destroyed) {
-			t.Fatalf("%s: %q %v", id, st, err)
-		}
+		f.waitState(t, f.u, id, Destroyed) // a cluster destroy runs in the background
 	}
 }
 
@@ -392,5 +389,59 @@ func TestClusterLabHealthAfterProvisionAndChecks(t *testing.T) {
 	}
 	if !slices.ContainsFunc(scripts, func(s string) bool { return strings.Contains(s, "crucible-ready --json all") }) {
 		t.Fatalf("no health run: %q", scripts)
+	}
+}
+
+// slowCluster is a cluster runner whose destroy (helm uninstall --wait, a namespace delete) takes until hold closes.
+type slowCluster struct {
+	AgentClusterRunner
+	hold chan struct{}
+}
+
+func (s slowCluster) Destroy(context.Context, *Instance) error { <-s.hold; return nil }
+
+// A cluster destroy can take minutes on the agent: End, the sweep and the kill switch (which holds up AWS destroys)
+// must not wait for it.
+func TestClusterDestroyDoesNotHoldUpTheCaller(t *testing.T) {
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	ctx := context.Background()
+	run := slowCluster{AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return []ap.KubeContext{{Name: "k"}} },
+		online: func(int64) bool { return true }, call: func(context.Context, int64, ap.Msg) (ap.Msg, error) { return ap.Msg{}, nil }},
+		make(chan struct{})}
+	f.s.Runners["cluster"] = run
+	f.s.Estimators["cluster"] = FixedRates{}
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+	done := make(chan *View, 1)
+	go func() { ended, _ := f.s.End(ctx, f.u, v.ID); done <- ended }()
+	select {
+	case ended := <-done:
+		if ended == nil || ended.State != Destroying {
+			t.Fatalf("End: %+v", ended)
+		}
+	case <-time.After(5 * time.Second):
+		close(run.hold)
+		t.Fatal("End waited for the cluster destroy")
+	}
+	// a stuck destroy's retry in the sweep doesn't wait either
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET destroyed_at = $2 WHERE id = $1`, v.ID, f.clk.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	swept := make(chan struct{})
+	go func() { f.s.Sweep(ctx); close(swept) }()
+	select {
+	case <-swept:
+	case <-time.After(5 * time.Second):
+		close(run.hold)
+		t.Fatal("the sweep waited for the cluster destroy")
+	}
+	close(run.hold)
+	f.waitState(t, f.u, v.ID, Destroyed)
+	if destroyTimeout("cluster") < 7*time.Minute {
+		t.Fatal("the server gives up before the agent's helm uninstall and namespace delete (5m) can finish")
 	}
 }

@@ -19,7 +19,7 @@ export function ConnectPage() {
       <p className="muted">
         Cluster labs run on a cluster from your kubeconfig. {status?.contexts?.length
           ? <>Your agent sees: {status.contexts.map((c) => c.name).join(', ')}.</>
-          : <>No clusters yet: <code>kind create cluster</code> makes one on this laptop.</>}
+          : <>No cluster? Run <code>crucible-agent cluster up</code> to make one on this laptop (needs Docker), or point the agent at your kubeconfig with <code>--kubeconfig</code>.</>}
       </p>
       <ol>
         <li>Get <code>crucible-agent</code> for your platform from your admin (or build it with <code>make build</code>).</li>

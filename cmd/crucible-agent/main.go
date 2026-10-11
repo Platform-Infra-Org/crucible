@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -21,6 +22,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "cluster" {
+		os.Exit(clusterCmd(os.Args[2:], agent.NewKind(), os.Stdout, os.Stderr))
+	}
 	home, _ := os.UserHomeDir()
 	server := flag.String("server", os.Getenv("CRUCIBLE_SERVER"), "Crucible URL, e.g. https://crucible.example.com")
 	token := flag.String("token", os.Getenv("CRUCIBLE_TOKEN"), "pairing token (prefer the CRUCIBLE_TOKEN env var: flags are visible to other local users)")
@@ -70,4 +74,27 @@ func checkServer(server string) error {
 		return nil
 	}
 	return errors.New("--server must use https:// (plain http:// is only allowed for localhost)")
+}
+
+// clusterCmd runs `cluster up|down [--name crucible]` and returns the exit code.
+func clusterCmd(args []string, k agent.Kind, out, errw io.Writer) int {
+	if len(args) == 0 || (args[0] != "up" && args[0] != "down") {
+		fmt.Fprintln(errw, "usage: crucible-agent cluster up|down [--name crucible]")
+		return 2
+	}
+	fs := flag.NewFlagSet("cluster "+args[0], flag.ContinueOnError)
+	fs.SetOutput(errw)
+	name := fs.String("name", "crucible", "cluster name")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	do := agent.ClusterUp
+	if args[0] == "down" {
+		do = agent.ClusterDown
+	}
+	if err := do(k, *name, out); err != nil {
+		fmt.Fprintln(errw, err)
+		return 1
+	}
+	return 0
 }

@@ -35,4 +35,7 @@ pairing too.
 
 The agent also reads your kubeconfig (`--kubeconfig`, else `KUBECONFIG`, else `~/.kube/config`) and tells Crucible
 the names of its contexts and their servers, never your credentials. A cluster lab connects through the agent, so
-your cloud logins (`aws`, `gcloud`) work as they do for `kubectl`. No cluster yet? `kind create cluster` makes one.
+your cloud logins (`aws`, `gcloud`) work as they do for `kubectl`. The agent also reads `~/.crucible/kubeconfig`.
+No cluster yet? Run `crucible-agent cluster up` to make a Kubernetes cluster called `crucible` on this laptop (it
+needs Docker). It shows up as `kind-crucible` within a few seconds, and it never touches `~/.kube/config`.
+`crucible-agent cluster down` removes it. `--name` picks another name.

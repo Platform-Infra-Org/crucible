@@ -78,3 +78,29 @@ func fmtContexts(cs []ap.KubeContext) string {
 	}
 	return b.String()
 }
+
+func TestLoadingRulesAlsoReadCrucibleKubeconfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KUBECONFIG", "")
+	_ = os.Unsetenv("KUBECONFIG")
+	_ = os.MkdirAll(filepath.Join(home, ".kube"), 0o700)
+	_ = os.MkdirAll(filepath.Join(home, ".crucible"), 0o700)
+	_ = os.WriteFile(filepath.Join(home, ".kube", "config"), []byte(twoContexts), 0o600)
+	own := strings.NewReplacer("kind-dev", "kind-crucible", "prod-eks", "other").Replace(twoContexts)
+	_ = os.WriteFile(filepath.Join(home, ".crucible", "kubeconfig"), []byte(own), 0o600)
+
+	names := func(cs []ap.KubeContext) string {
+		s := []string{}
+		for _, c := range cs {
+			s = append(s, c.Name)
+		}
+		return strings.Join(s, ",")
+	}
+	if got := names(ReadContexts("")); got != "kind-crucible,kind-dev,other,prod-eks" {
+		t.Fatalf("both files: %s", got)
+	}
+	if got := names(ReadContexts(filepath.Join(home, ".kube", "config"))); got != "kind-dev,prod-eks" {
+		t.Fatalf("explicit: %s", got)
+	}
+}

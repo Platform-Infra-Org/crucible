@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -13,11 +15,32 @@ import (
 	ap "crucible/internal/agentproto"
 )
 
-// LoadingRules finds the kubeconfig as kubectl does: the explicit file, else $KUBECONFIG, else ~/.kube/config.
+// LoadingRules finds the kubeconfig as kubectl does: the explicit file (only), else $KUBECONFIG or ~/.kube/config,
+// then ~/.crucible/kubeconfig (where `crucible-agent cluster up` writes), which loses to the former on a name clash.
 func LoadingRules(explicit string) *clientcmd.ClientConfigLoadingRules {
 	r := clientcmd.NewDefaultClientConfigLoadingRules()
 	r.ExplicitPath = explicit
+	if explicit == "" {
+		// clientcmd fixes ~/.kube/config when the process starts; follow $HOME as it is now.
+		if os.Getenv("KUBECONFIG") == "" {
+			r.Precedence = nil
+			if home, err := os.UserHomeDir(); err == nil {
+				r.Precedence = []string{filepath.Join(home, ".kube", "config")}
+			}
+		}
+		if p := crucibleKubeconfig(); p != "" {
+			r.Precedence = append(r.Precedence, p)
+		}
+	}
 	return r
+}
+
+func crucibleKubeconfig() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".crucible", "kubeconfig")
 }
 
 // ReadContexts lists the kubeconfig's contexts, sorted, with their API server's host. A missing or broken file is no

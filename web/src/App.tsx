@@ -4,7 +4,7 @@ import { MotionConfig } from 'motion/react'
 import { api, whoAmI } from './api'
 import { CalmContext, MeContext, osCalm, useMe } from './me'
 import type { Me } from './types'
-import { applyTheme } from './theme/theme'
+import { applyTheme, lastLook, rememberLook } from './theme/theme'
 import { addQuotes } from './lib/quotes'
 import { Loader } from './components/Loader'
 import { ForgeGate } from './components/ForgeGate'
@@ -46,18 +46,21 @@ export default function App() {
     meta.then((m) => addQuotes(m.quotes ?? [])).catch(() => {})
     whoAmI()
       .then((m) => {
-        if (!m) { // nobody signed in: the gate, in the forge's default theme
+        if (!m) { // nobody signed in: the gate, in the look last used in this browser, else the forge's default theme
           setSignedOut(true)
-          meta.then((x) => applyTheme(x.default_theme || 'forge', false)).catch(() => {})
+          const last = lastLook()
+          if (last) applyTheme(last.theme, last.calm)
+          else meta.then((x) => applyTheme(x.default_theme || 'forge', false)).catch(() => {})
           return
         }
         setMe(m)
         applyTheme(m.user.theme || m.default_theme, m.user.calm_motion)
+        rememberLook(m.user.theme || m.default_theme, m.user.calm_motion)
       })
       .catch((e: Error) => setError(e.message))
   }, [])
 
-  const calm = !!me?.user.calm_motion || osCalm()
+  const calm = (me ? me.user.calm_motion : !!lastLook()?.calm) || osCalm()
   const wrap = (children: React.ReactNode) => (
     <CalmContext.Provider value={calm}>
       <MotionConfig reducedMotion={calm ? 'always' : 'never'} transition={calm ? { duration: 0 } : undefined}>
@@ -74,6 +77,7 @@ export default function App() {
     await api('/api/me/prefs', { method: 'PUT', json: { theme, calm_motion: calm } })
     setMe({ ...me, user: { ...me.user, theme, calm_motion: calm } })
     applyTheme(theme, calm)
+    rememberLook(theme, calm)
   }
   const setAvatar = async (avatar: string) => {
     await api('/api/me/avatar', { method: 'PUT', json: { avatar } })

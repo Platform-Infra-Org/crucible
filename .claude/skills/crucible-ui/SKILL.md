@@ -84,7 +84,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Identity | `Avatar` (an icon from `lib/avatars.ts` drawn as poured metal, or initials) in a turning crucible ring. New icons: add to `AVATARS` and to `auth.Avatars` in Go (a test checks they match). |
 | Heat | Journey heat cells: glyph + text carry the meaning (`·` cold, `◐` glowing, `●` forged); colour only reinforces it. |
 | Ambient | `Embers` and `SparkBurst` for moments (Hearth, a passed check); never as constant decoration on working pages. |
-| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. The Crucible title holds the centre of the screen (`.gate-inner` is a `1fr auto 1fr` grid, the title group in the middle row), the way in sits under it, and `Embers` drift behind (none under calm motion). |
+| Sign-in gate | `ForgeGate` (full screen, no nav) is shown when `whoAmI()` finds nobody signed in; logout lands on it. The Crucible title holds the centre of the screen (`.gate-inner` is a `1fr auto 1fr` grid, the title group in the middle row), the way in sits under it, and `Embers` drift behind (none under calm motion). It wears the look last used in this browser (`rememberLook`/`lastLook` in `theme/theme.ts`; the account stays the source of truth), else the instance default. |
 
 ## Motion
 

@@ -19,7 +19,8 @@ order: 30
 - **Parchment**: light, like the smith's ledger: warm vellum, oxblood ink and brass.
 - **High Contrast**: maximum legibility.
 
-Until you pick one, you get the theme your admins chose for this Crucible.
+Until you pick one, you get the theme your admins chose for this Crucible. Your browser also remembers the last theme
+and calm setting used there, so the sign-in page wears them too.
 
 ## Calm forge
 

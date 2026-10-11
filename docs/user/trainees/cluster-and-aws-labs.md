@@ -19,6 +19,11 @@ The list follows your kubeconfig while the page is open: start the agent, or mak
 `crucible-agent cluster up` (remove it later with `crucible-agent cluster down`), and it shows up without a reload. If the agent isn't running, **Connect your laptop** says how to start it.
 A context you delete drops out of the list, and the lab can't start until you pick another.
 
+On a cluster you didn't make yourself, you need to be able to create namespaces and install into them; a cluster from
+`crucible-agent cluster up` gives you that. Your login must work without a prompt (run `aws sso login` or the like
+first). Whoever runs a shared cluster can find the details in
+[Clusters for cluster labs](/docs/admins/clusters-for-cluster-labs).
+
 While it runs, **On your cluster** on the lab page shows each release as Ready, Starting or Failing. Results are
 self-reported, as for laptop labs.
 

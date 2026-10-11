@@ -55,11 +55,18 @@ describe('Repositories', () => {
     expect(out).not.toContain('PRIVATE KEY')
   })
 
-  test('without a secret key the page says so and offers no token option', () => {
+  test('without a secret key the page says so', () => {
     view = { repos: [], can_keep_secrets: false }
     const out = html()
     expect(out).toContain('CRUCIBLE_SECRET_KEY')
     expect(out).toContain('No repositories yet')
-    expect(out).toContain('disabled=""') // the token choice cannot be picked
+  })
+
+  // The form to connect one lives in a dialog, so the page itself is the list plus the way in.
+  test('the way to connect one is a button, not a form on the page', () => {
+    view = { repos: [repo()], can_keep_secrets: true }
+    const out = html()
+    expect(out).toContain('Connect a repository')
+    expect(out).not.toContain('Repository URL') // only inside the dialog, which is closed
   })
 })

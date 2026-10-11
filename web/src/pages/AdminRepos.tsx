@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
 import type { ReposView, Repo } from '../types'
@@ -10,11 +10,16 @@ import { toast } from '../lib/alerts'
 // once. The page never shows a credential: it says whether one is set, and lets you replace it.
 export function AdminReposPage() {
   const { data, error, reload } = useFetch<ReposView>('/api/admin/repos')
+  const [connecting, setConnecting] = useState(false)
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Counting the forge's sources…" />
   return (
     <section className="page">
-      <h1>Repositories</h1>
+      <div className="row page-head">
+        <h1>Repositories</h1>
+        <span className="spacer" />
+        <button type="button" className="primary" onClick={() => setConnecting(true)}>Connect a repository</button>
+      </div>
       <p className="lede">Where training content comes from. Connect a repository once; every training that reads
         from it shares the connection, so a credential is entered once and rotated in one place.</p>
       {!data.can_keep_secrets && (
@@ -24,9 +29,28 @@ export function AdminReposPage() {
       <ul className="cards repos">
         {data.repos.map((r) => <RepoCard key={r.id} repo={r} canKeepSecrets={data.can_keep_secrets} onChange={reload} />)}
       </ul>
-      {data.repos.length === 0 && <p className="muted empty">No repositories yet. Connect one below, then register a training from it.</p>}
-      <Connect canKeepSecrets={data.can_keep_secrets} onChange={reload} />
+      {data.repos.length === 0 && <p className="muted empty">No repositories yet. Connect one, then register a training from it.</p>}
+      {connecting && <Connect canKeepSecrets={data.can_keep_secrets} onClose={() => setConnecting(false)} onChange={reload} />}
     </section>
+  )
+}
+
+// Sheet is a modal: a native dialog, so Escape closes it and focus stays inside without any of that in our code.
+// A click on the backdrop closes it too, and closing by any route tells the caller.
+function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => { ref.current?.showModal() }, [])
+  return (
+    <dialog className="sheet" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === ref.current) ref.current?.close() }}>
+      <div className="sheet-body">
+        <div className="row sheet-head">
+          <h2>{title}</h2>
+          <span className="spacer" />
+          <button type="button" className="ghost small" onClick={() => ref.current?.close()} aria-label="Close">Close</button>
+        </div>
+        {children}
+      </div>
+    </dialog>
   )
 }
 
@@ -174,7 +198,7 @@ function TokenFields({ username, setUsername, secret, setSecret, hasSecret }: {
   )
 }
 
-function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChange: () => void }) {
+function Connect({ canKeepSecrets, onClose, onChange }: { canKeepSecrets: boolean; onClose: () => void; onChange: () => void }) {
   const [url, setUrl] = useState('')
   const [auth, setAuth] = useState<Repo['auth']>('none')
   const [username, setUsername] = useState('')
@@ -187,8 +211,8 @@ function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChan
     try {
       await api('/api/admin/repos', { method: 'POST', json: { url: url.trim(), auth, username, secret } })
       toast(`${url.trim()} is connected.`)
-      setUrl(''); setSecret(''); setUsername(''); setAuth('none')
       onChange()
+      onClose()
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e))
     } finally {
@@ -196,8 +220,8 @@ function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChan
     }
   }
   return (
-    <form className="stack panel" onSubmit={save}>
-      <h2>Connect a repository</h2>
+    <Sheet title="Connect a repository" onClose={onClose}>
+    <form className="stack" onSubmit={save}>
       <label>Repository URL <input required value={url} placeholder="https://github.com/your-org/trainings.git"
         onChange={(e) => setUrl(e.target.value)} /></label>
       <Kinds url={url} auth={auth} setAuth={setAuth} canKeepSecrets={canKeepSecrets} />
@@ -207,5 +231,6 @@ function Connect({ canKeepSecrets, onChange }: { canKeepSecrets: boolean; onChan
         {!isSSH(url) && ' An https:// URL is stored as the git@ form of the same repository.'}</p>}
       <button className="primary" disabled={busy}>Connect repository</button>
     </form>
+    </Sheet>
   )
 }

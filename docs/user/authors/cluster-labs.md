@@ -33,7 +33,10 @@ tasks:
 
 - **Paths and timeouts.** Chart paths and values files use only letters, digits, `.`, `_`, `-` and `/`. A timeout is at
   least `1s`, and a lab's timeouts add up to at most `12m` (three charts at the default 5m are too many: shorten them).
-- **The namespace.** Each lab gets its own, `lab-<id>`. Charts use `.Release.Namespace` as usual.
+- **The namespace.** Each lab gets its own, `lab-<id>`. Charts use `.Release.Namespace` as usual. The lab acts with
+  the trainee's rights on the cluster they pick, so they need to be able to create namespaces and install into them
+  (a kind cluster on their laptop gives them everything). A `cluster_wide` lab needs rights to create its cluster-wide
+  resources too; say so in the lab's instructions for trainees using a shared cluster.
 - **The toolbox.** Terminals, setup scripts and checks run in a container with `kubectl`, `helm`, `k9s`, `jq` and
   `crucible-ready`, pointed at the trainee's cluster, with `LAB_NAMESPACE`, `LAB_ID` and `LAB_RELEASES` set. There
   is no `service` or `run_in` to name.

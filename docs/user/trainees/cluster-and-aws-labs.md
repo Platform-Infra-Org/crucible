@@ -25,6 +25,10 @@ self-reported, as for laptop labs.
 If a lab creates cluster-wide resources, it says so, and you tick a box to go ahead. Some of those (CRDs) may stay
 on the cluster afterwards.
 
+A lab that ends while your agent isn't running (its time ran out, say) stays on your cluster until the agent connects
+again; then it is removed. If you deleted its cluster or its context in the meantime, the agent forgets the lab, and
+whatever is left on a cluster you still have (the `lab-<id>` namespace) is yours to delete.
+
 ## AWS labs
 
 An AWS lab builds real cloud resources in a shared AWS account, so it costs money. The lab page shows the estimate.

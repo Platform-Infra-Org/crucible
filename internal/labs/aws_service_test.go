@@ -60,7 +60,7 @@ func TestAWSLabFromRequestToTagSweep(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
 	run, cloud := f.withAWS(t)
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-401", "01-cloud-heat")
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-401", "01-cloud-heat", StartOptions{})
 	if err != nil || v.State != PendingApproval || v.EstimateUSD != 0.04 {
 		t.Fatalf("an aws lab always waits for an approver: %+v %v", v, err)
 	}
@@ -242,7 +242,7 @@ func (f *fx) settled(t *testing.T, id string) {
 
 func (f *fx) approvedAWS(t *testing.T) string {
 	t.Helper()
-	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-401", "01-cloud-heat")
+	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-401", "01-cloud-heat", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

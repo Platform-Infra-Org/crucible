@@ -26,6 +26,10 @@ Each line in a panel has a molten bar showing how much of that training is forge
 - **◐** glowing: in progress, or a lab running in it;
 - **●** forged: complete.
 
+A running cluster lab is named under the cells: the module, the cluster it runs on (a context of the trainee's
+kubeconfig) and each Helm release as **Ready**, **Starting** or **Failing**, as of the trainee's last check. Crucible
+never connects to that cluster; the trainee's agent reports it.
+
 ## Who may be stuck
 
 Crucible flags a row when someone may need help:

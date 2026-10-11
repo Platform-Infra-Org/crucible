@@ -18,10 +18,10 @@ export type ManagedTraining = {
 export type TrainingsAdmin = {
   is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
 }
-export type Person = { email: string; name: string; team: string; tag: Tag | '' }
+export type Person = { email: string; name: string; team: string; tag: Tag | ''; smith?: SmithRef }
 export type People = { people: Person[]; groups: string[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
-export type Member = { email: string; name: string; tag: Tag }
+export type Member = { email: string; name: string; tag: Tag; smith?: SmithRef }
 export type TeamView = {
   id: string; name: string; members: Member[]
   budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]; schedules: string[]; version: number
@@ -49,13 +49,16 @@ export type LabView = {
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number
   can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
-  log?: string[]
+  log?: string[]; cluster_context?: string; health?: Health
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
 export type HintResult = { index: number; text: string; cost: number; lab: LabView }
 export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null
-  estimate_usd: number; needs_approval: boolean; blocked?: string }
+  estimate_usd: number; needs_approval: boolean; blocked?: string; contexts?: KubeContext[]; cluster_wide?: boolean }
+export type KubeContext = { name: string; server: string }
+export type ReleaseStatus = 'healthy' | 'progressing' | 'failing'
+export type Health = { releases: { name: string; status: ReleaseStatus; unready: string[] }[] }
 
 export type NotificationPrefs = { email_enabled: boolean; kinds: { kind: string; label: string; muted: boolean }[] }
 
@@ -66,7 +69,7 @@ export type Approval = {
   id: string; requester: string; requester_name: string; team: string; training: string; module: string; lab_title: string
   runtime: string; hourly_usd: number; estimate_usd: number; ttl_s: number; tier: Tier; over_cap: boolean
   requested_at: string; escalate_at?: string; team_spend: Spend; program_spend: Spend; recent: RecentLab[]; schedule: ScheduleInfo
-  kind: 'request' | 'extension'; extend_until?: string
+  kind: 'request' | 'extension'; extend_until?: string; requester_smith?: SmithRef
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
@@ -77,7 +80,7 @@ export type PlatformView = {
   escalation_hours: number; schedules: Record<string, string>; admins: string[]; trainings: TrainingStatus[]; audit: AuditEntry[]
   pending_edits: number; attention: AttentionLab[]; programs: ProgramPin[]
 }
-export type AttentionLab = { id: string; trainee: string; team: string; training: string; module: string; state: string; error?: string; since: string }
+export type AttentionLab = { id: string; trainee: string; team: string; training: string; module: string; state: string; error?: string; since: string; cluster_context?: string }
 export type ProgramPin = { team: string; training: string; running: string; head: string; pinned_ref?: string }
 
 export type SubmissionType = 'text' | 'upload' | 'signoff' | 'review' | 'self_reported'
@@ -90,7 +93,7 @@ export type Submission = {
   id: number; trainee: string; trainee_name: string; team: string; training: string; module: string
   kind: 'question' | 'task' | 'lab'; item: string; lab_id?: string; type: SubmissionType; prompt: string; rubric: string
   max_points: number; answer: string; files: SubmissionFile[]; status: Feedback['status']; points: number
-  feedback: string; scored_by?: string; scored_at?: string; created_at: string
+  feedback: string; scored_by?: string; scored_at?: string; created_at: string; trainee_smith?: SmithRef
 }
 export type CheckRun = { lab_id: string; at: string; exit_code: number; output: string; answer?: string; self_reported: boolean }
 export type TaskEvidence = {
@@ -100,7 +103,7 @@ export type TaskEvidence = {
 export type TranscriptInfo = { id: number; lab_id: string; terminal: string; bytes: number; truncated: boolean; started_at: string; ended_at: string }
 export type LabEvidence = { runtime: string; self_reported: boolean; tasks: TaskEvidence[]; transcripts: TranscriptInfo[] }
 export type AnvilDetail = { submission: Submission; history: Submission[]; lab?: LabEvidence }
-export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string }
+export type SignOff = { team: string; training: string; module: string; question: string; prompt: string; points: number; trainee: string; trainee_name: string; trainee_smith?: SmithRef }
 
 export type LedgerLab = {
   id: string; team: string; training: string; module: string; requester: string; runtime: string; state: LabState
@@ -116,26 +119,37 @@ export type Ledger = {
   accuracy: Accuracy; findings?: Finding[]
 }
 
-export type Forge = { percent: number; level: number; rank: string; ladder: { name: string; at: number }[]; badges: { training: string; title: string; earned_at: string }[]; rank_up: boolean }
+export type SmithRef = { level: number; title: string }
+export type Sword = { training: string; title: string; level: number; rank: string; percent: number; next: { name: string; at: number } | null }
+export type Forge = {
+  smith: { xp: number; level: number; title: string; next: { title: string; at: number } | null }
+  swords: Sword[]
+  badges: { training: string; title: string; earned_at: string }[]
+  sword_ladder: { name: string; at: number }[]
+  smith_ladder: { title: string; at: number }[]
+  rank_up: { smith: SmithRef | null; swords: { training: string; title: string; level: number; rank: string }[] }
+}
 export type Heat = 'cold' | 'glowing' | 'forged'
 export type JourneyCell = { module: string; title: string; heat: Heat }
 export type JourneyFlag = { kind: 'failed_checks' | 'final_hint' | 'inactive' | 'returned_twice' | 'not_started'; module?: string; item?: string; detail: string; at?: string }
-export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string }
+export type JourneyRow = { email: string; name: string; avatar?: string; team: string; training: string; title: string; percent: number; cells: JourneyCell[]; flags: JourneyFlag[]; last_active?: string; smith?: SmithRef; sword?: { level: number; rank: string }
+  cluster_labs?: { module: string; context: string; health?: Health }[] }
 export type EditOp = { op: 'put'; path: string; content: string } | { op: 'rename'; from: string; to: string } | { op: 'delete'; path: string }
 export type FileEntry = { path: string; size: number; editable: boolean; reason?: string }
 export type EditStatus = 'pending' | 'merged' | 'rejected' | 'withdrawn' | 'stale'
 export type ContentEdit = {
   id: number; training: string; title: string; author: string; base_sha: string; head_sha?: string; branch: string; status: EditStatus
   reviewer?: string; note?: string; merge_sha?: string; created_at: string; decided_at?: string; ops?: EditOp[]; diff?: string
-  can_review: boolean; can_withdraw: boolean
+  can_review: boolean; can_withdraw: boolean; author_smith?: SmithRef; reviewer_smith?: SmithRef
 }
 
 export type CatalogEntry = { id: string; title: string; description: string; estimated_hours: number; modules: number; enrolled: { id: string; name: string }[]; available: boolean }
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
 export type AdminSettings = {
   version: number; default_theme: string; cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
-  cluster_usd_per_hour: number | null; escalation_hours: number
+  escalation_hours: number
   ranks: { ingot: number; tempered: number; blade: number; sword: number; masterwork: number }
+  smith: { apprentice: number; journeyman: number; smith: number; master_smith: number; grandmaster: number }
 }
 export type Schedule = { timezone: string; windows: { days: string[]; start: string; end: string }[] }
 

@@ -17,7 +17,7 @@ import (
 )
 
 var contentTypes = []any{content.Training{}, content.Module{}, content.Quiz{}, content.Question{}, content.Lab{},
-	content.AWSConfig{}, content.Terminal{}, content.Script{}, content.Task{}, content.Hint{}}
+	content.AWSConfig{}, content.ClusterLab{}, content.ClusterChart{}, content.Terminal{}, content.Script{}, content.Task{}, content.Hint{}}
 
 // Adding a content field without describing it fails here: the editor's hover text and the Docs reference come from Fields.
 func TestEveryContentFieldIsDescribed(t *testing.T) {

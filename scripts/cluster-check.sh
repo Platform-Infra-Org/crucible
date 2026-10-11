@@ -28,6 +28,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+echo "== stop a stack an earlier KEEP=1 run left up"
+# Its api watches this kind cluster and reaps lab namespaces it has no row for: the integration tests' labs below.
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/cluster.yml down -v >/dev/null 2>&1 || true
+
 echo "== kind cluster"
 kind get clusters 2>/dev/null | grep -qx "$name" || kind create cluster --name "$name" --image "${KIND_NODE_IMAGE:-kindest/node:v1.34.11}" --wait 180s
 
@@ -104,7 +108,12 @@ echo "denied outside lab namespaces, allowed inside"
 echo "== cluster runner against kind (and an aws lab's workspace and terraform pod cannot reach IMDS)"
 CRUCIBLE_TEST_KUBECONFIG="$root/.local/kind/kubeconfig" CRUCIBLE_TEST_PROBE_IP="$probe_ip" CRUCIBLE_TEST_API_IP="$api_ip" \
   CRUCIBLE_TEST_NODE_IP="$node_ip" CRUCIBLE_TEST_DNS_POD="$dns_pod" CRUCIBLE_CLUSTER_PRIVILEGED=1 \
-  go test -tags cluster -run 'TestClusterLabOnKind|TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
+  go test -tags cluster -run 'TestAWSLabEgressOnKind' -count=1 -timeout 20m -v ./internal/labs/
+
+echo "== toolbox image for cluster labs"
+make toolbox TOOLBOX_TAG=e2e
+# the agent the spec spawns uses the kind cluster's own kubeconfig, never ~/.kube/config
+export CRUCIBLE_E2E_KUBECONFIG="$root/.local/kind/admin.kubeconfig"
 
 echo "== browser: Forge 101 end to end, including the cluster lab"
 CLUSTER=1 ./scripts/local-check.sh

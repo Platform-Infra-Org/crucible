@@ -41,8 +41,7 @@ would reach the cap. Budgets fail closed: if Crucible can't read the spend, it s
 ## How labs are priced
 
 - **Laptop labs** are free.
-- **Cluster labs** cost the platform's hourly rate. If your admins haven't set one, cluster labs can't be started at
-  all, rather than run for free.
+- **Cluster labs** are free: they run on the trainee's own cluster.
 - **AWS labs** are estimated from their Terraform with infracost. A lab priced above its own hourly limit, or in a
   region this Crucible doesn't allow, can't be requested.
 

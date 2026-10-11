@@ -2,6 +2,7 @@ package journey
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -357,5 +358,57 @@ func TestTeamScopedToCaller(t *testing.T) {
 	}
 	if _, err := f.s.Team(ctx, f.leader, "no-such-team"); err == nil {
 		t.Fatal("unknown team is an error")
+	}
+}
+
+// Spec 2026-10-11 §3/§4: a leader sees a running cluster lab's context and its releases' health on the Journey.
+func TestRunningClusterLabShowsContextAndHealth(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	db := f.s.DB
+	insertLab(t, db, "cccccccccccc", f.trainee.ID, "03-cluster-heat", "ready", f.now.Add(-time.Minute))
+	insertLab(t, db, "dddddddddddd", f.trainee.ID, "03-cluster-heat", "destroyed", f.now.Add(-time.Hour))
+	if _, err := db.Exec(ctx, `UPDATE lab_instances SET runtime = 'cluster', cluster_context = 'kind-dev'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{`{"releases":[{"name":"forge","status":"progressing","unready":["x"]}]}`, `{"releases":[{"name":"forge","status":"failing"}]}`} {
+		if _, err := db.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail) VALUES ('cccccccccccc', 'health', $1)`, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	cl := rows[0].ClusterLabs
+	if len(cl) != 1 || cl[0].Module != "03-cluster-heat" || cl[0].Context != "kind-dev" || cl[0].Health == nil ||
+		cl[0].Health.Releases[0].Status != "failing" || cl[0].Health.Releases[0].Unready == nil {
+		t.Fatalf("cluster labs %+v", cl)
+	}
+}
+
+func TestJourneyRowsCarrySmithAndSword(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	before, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(before) != 1 {
+		t.Fatal(before, err)
+	}
+	if b, _ := json.Marshal(before[0]); !strings.Contains(string(b), `"smith":{"level":0,"title":"Bellows Hand"}`) || strings.Contains(string(b), `"sword"`) {
+		t.Fatalf("no stored ranks: %s", b)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, 600, 2, true)`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO sword_ranks (user_id, training, level, seen) VALUES ($1, 'forge-101', 3, true)`, f.trainee.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := f.s.Team(ctx, f.leader, "forge")
+	if err != nil || len(after) != len(before) || after[0].Email != before[0].Email {
+		t.Fatalf("same rows in the same order: %+v %v", after, err)
+	}
+	b, _ := json.Marshal(after[0])
+	if !strings.Contains(string(b), `"smith":{"level":2,"title":"Journeyman"}`) || !strings.Contains(string(b), `"sword":{"level":3,"rank":"Blade"}`) {
+		t.Fatalf("ranks: %s", b)
 	}
 }

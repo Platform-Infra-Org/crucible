@@ -29,7 +29,7 @@ func (s *Store) Seed(ctx context.Context, p *config.Platform) (bool, error) {
 		return false, err
 	}
 	if err := s.SetSettings(ctx, actor, SettingsBody{Version: v, DefaultTheme: st.DefaultTheme, CostTiers: st.CostTiers,
-		ClusterUSDPerHour: st.ClusterUSDPerHour, EscalationHours: st.EscalationHours, Ranks: st.Ranks}); err != nil {
+		EscalationHours: st.EscalationHours, Ranks: st.Ranks, Smith: st.Smith}); err != nil {
 		return false, fmt.Errorf("settings: %w", err)
 	}
 	for _, name := range slices.Sorted(maps.Keys(st.Schedules)) {

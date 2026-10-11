@@ -14,7 +14,7 @@ const prog: ProgramConfig = {
   can_manage: true, running_sha: '', head_sha: '', pinned_ref: '',
 }
 const team: TeamView = {
-  id: 'platform', name: 'Platform', members: [{ email: 'l@x', name: 'Lee', tag: 'leader' }, { email: 'a@x', name: '', tag: 'trainee' }], version: 3,
+  id: 'platform', name: 'Platform', members: [{ email: 'l@x', name: 'Lee', tag: 'leader', smith: { level: 3, title: 'Smith' } }, { email: 'a@x', name: '', tag: 'trainee' }], version: 3,
   budget: { version: 5, monthly_usd: 10, hard_cap_usd: 20 }, programs: [prog], schedules: [], can_edit_team: true, is_admin: true,
 }
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ team: 'platform', training: 'forge-101' }) }))
@@ -86,7 +86,9 @@ describe('pages', () => {
     const h = renderToStaticMarkup(<MemoryRouter><TeamPage /></MemoryRouter>)
     expect(fetched).toEqual(['/api/org/teams/platform', '/api/org/people'])
     expect(h).toContain('Led by l@x')
-    expect(h).toContain('<td><strong>Lee</strong> <span class="muted">l@x</span></td>')
+    expect(h).toContain('<td><strong>Lee</strong> <span class="muted">l@x</span> <span class="smith-mark l3">')
+    expect(h).toContain('Smith</span></td>')
+    expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
     expect(h).toContain('aria-label="Lee is a leader. Change their tag"') // a button for those who may change it
     expect(h).toContain('aria-haspopup="menu"')
     expect(h).toContain('aria-label="a@x is a trainee. Change their tag"')

@@ -2,8 +2,10 @@ package labs
 
 import (
 	"context"
+	ap "crucible/internal/agentproto"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +32,7 @@ import (
 	"crucible/internal/learn"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/ready"
 	"crucible/internal/scoring"
 )
 
@@ -43,6 +46,7 @@ type Service struct {
 	DB         *pgxpool.Pool
 	Learn      *learn.Service
 	Runners    map[string]Runner
+	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
 	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
 	Now        func() time.Time
 	Log        *slog.Logger
@@ -116,6 +120,7 @@ type View struct {
 	CanExtend        bool               `json:"can_extend"`
 	ExtensionPending bool               `json:"extension_pending"`
 	SelfReported     bool               `json:"self_reported"`
+	Health           *ready.Report      `json:"health,omitempty"`
 	LabReview        *scoring.Feedback  `json:"lab_review,omitempty"` // a scorer's review of the whole self-reported lab
 	Complete         bool               `json:"complete"`
 	Score            float64            `json:"score"`
@@ -126,6 +131,7 @@ type View struct {
 	EscalateAt       *time.Time         `json:"escalate_at,omitempty"`
 	DecidedBy        string             `json:"decided_by,omitempty"`
 	DecisionNote     string             `json:"decision_note,omitempty"`
+	ClusterContext   string             `json:"cluster_context,omitempty"`
 	Log              []string           `json:"log,omitempty"` // provisioning only: the lab's latest events (spec §8.3)
 }
 
@@ -152,20 +158,22 @@ type HintResult struct {
 }
 
 type ModuleLab struct {
-	Title          string  `json:"title"`
-	Runtime        string  `json:"runtime"`
-	RuntimeReady   bool    `json:"runtime_ready"`
-	RuntimeMessage string  `json:"runtime_message,omitempty"`
-	EstimateUSD    float64 `json:"estimate_usd"`
-	NeedsApproval  bool    `json:"needs_approval"`
-	Blocked        string  `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
-	Lab            *View   `json:"lab"`
+	Title          string           `json:"title"`
+	Runtime        string           `json:"runtime"`
+	RuntimeReady   bool             `json:"runtime_ready"`
+	RuntimeMessage string           `json:"runtime_message,omitempty"`
+	EstimateUSD    float64          `json:"estimate_usd"`
+	NeedsApproval  bool             `json:"needs_approval"`
+	Blocked        string           `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
+	Lab            *View            `json:"lab"`
+	ClusterWide    bool             `json:"cluster_wide,omitempty"`
+	Contexts       []ap.KubeContext `json:"contexts,omitempty"`
 }
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
 	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
 	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note,
-	ext_until, ext_estimate_usd, ext_tier, ext_requested_at`
+	ext_until, ext_estimate_usd, ext_tier, ext_requested_at, cluster_context`
 
 func scanInst(row pgx.Row) (*Instance, error) {
 	var in Instance
@@ -173,7 +181,7 @@ func scanInst(row pgx.Row) (*Instance, error) {
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
 		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
 		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
-		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt)
+		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt, &in.ClusterContext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
 	}
@@ -400,7 +408,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
-		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true,
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SelfReported: selfReported(inst.Runtime), Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -441,6 +449,9 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		v.IdleDeadline = &dl
 		v.ExtensionPending = inst.ExtUntil != nil
 		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
+	}
+	if inst.Runtime == "cluster" && inst.State == Ready {
+		v.Health = s.health(ctx, inst.ID)
 	}
 	return v, nil
 }
@@ -491,6 +502,10 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 		return nil, apperr.Wrap(apperr.NotFound, "this module has no lab")
 	}
 	out := &ModuleLab{Title: m.Title, Runtime: m.Lab.Runtime, RuntimeReady: true}
+	if cr, ok := s.Runners[m.Lab.Runtime].(contextRunner); ok {
+		out.Contexts = cr.Contexts(u.ID)
+		out.ClusterWide = m.Lab.Cluster != nil && m.Lab.Cluster.ClusterWide
+	}
 	if r := s.Runners[m.Lab.Runtime]; r == nil {
 		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
 	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
@@ -630,16 +645,26 @@ func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, trai
 func (s *Service) insert(ctx context.Context, in *Instance) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
 		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s,
-		hourly_usd, estimate_usd, tier, over_cap, escalate_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		hourly_usd, estimate_usd, tier, over_cap, escalate_at, cluster_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		in.ID, in.UserID, in.Team, in.Training, in.Module, in.SHA, in.Runtime, in.State, in.CreatedAt,
 		int(in.TTL.Seconds()), int(in.IdleTimeout.Seconds()), int(in.IdleWarning.Seconds()), int(in.MaxExtension.Seconds()),
-		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt)
+		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt, in.ClusterContext)
 	return err
 }
 
+// StartOptions are the trainee's choices at start: the kubeconfig context for a cluster lab.
+type StartOptions struct {
+	Context string `json:"context"`
+}
+
+type contextRunner interface {
+	CheckContext(userID int64, name string) error
+	Contexts(userID int64) []ap.KubeContext
+}
+
 // Start requests a lab: free labs within auto_approve_usd start at once; others wait for an approver (spec §9.1).
-func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string) (*View, error) {
+func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string, opt StartOptions) (*View, error) {
 	st, t, sha, err := s.Learn.Program(u, team, training)
 	if err != nil {
 		return nil, err
@@ -660,6 +685,15 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	} else if inst != nil && (inst.State == PendingApproval || inst.State == Provisioning || inst.State == Ready) {
 		return s.view(ctx, inst)
 	}
+	cr, isCluster := r.(contextRunner)
+	switch {
+	case isCluster:
+		if err := cr.CheckContext(u.ID, opt.Context); err != nil {
+			return nil, err
+		}
+	case opt.Context != "":
+		return nil, apperr.Wrap(apperr.Invalid, "only cluster labs run on a cluster you pick")
+	}
 	q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab)
 	if err != nil {
 		return nil, err
@@ -671,7 +705,7 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	inst := &Instance{ID: newLabID(), UserID: u.ID, Team: team, Training: training, Module: module, SHA: sha,
 		Runtime: m.Lab.Runtime, State: Provisioning, CreatedAt: now, LastActivityAt: now,
 		TTL: q.Timing.TTL, IdleTimeout: q.Timing.IdleTimeout, IdleWarning: q.Timing.IdleWarning, MaxExtension: q.Timing.MaxExtension,
-		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap}
+		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap, ClusterContext: opt.Context}
 	if q.Tier == rbac.TierAuto {
 		if err := r.Available(inst); err != nil {
 			return nil, err
@@ -744,13 +778,20 @@ func provisionTimeout(runtime string) time.Duration {
 }
 
 // destroyTimeout bounds one destroy: terraform destroy for aws labs (the namespace delete and the tag sweep get
-// their own few minutes afterwards), a namespace or a compose project otherwise.
+// their own few minutes afterwards), helm uninstall and a namespace delete through the agent for cluster labs (5m on
+// the agent), a compose project otherwise.
 func destroyTimeout(runtime string) time.Duration {
-	if runtime == "aws" {
+	switch runtime {
+	case "aws":
 		return 55 * time.Minute // sweep: stuck after 70
+	case "cluster":
+		return 7 * time.Minute // sweep: stuck after 12
 	}
 	return 2 * time.Minute // sweep: stuck after 10
 }
+
+// slowDestroy: a destroy that takes minutes runs in the background, so End, the sweep and the kill switch don't wait.
+func slowDestroy(runtime string) bool { return runtime == "aws" || runtime == "cluster" }
 
 func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.Lab) {
 	ctx, cancel := context.WithTimeout(ctx, provisionTimeout(inst.Runtime))
@@ -775,6 +816,9 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 		s.Log.Warn("lab provisioning failed", "lab", inst.ID, "err", err)
 		s.failProvision(ctx, inst, cleanText(s.runnerErr(err).Error()), cleanText(err.Error()))
 		return
+	}
+	if inst.Runtime == "cluster" {
+		s.recordHealth(ctx, inst)
 	}
 	// Apply and setup may have used up ctx: the rest runs on a fresh one, or a lab with live resources would sit in
 	// 'provisioning' until the hung sweep destroys it.
@@ -838,7 +882,7 @@ func (s *Service) failProvision(ctx context.Context, inst *Instance, errText, de
 }
 
 func (s *Service) runScript(ctx context.Context, inst *Instance, lab *content.Lab, sc *content.Script, env map[string]string) (ScriptResult, error) {
-	body, err := os.ReadFile(filepath.Join(lab.Dir, sc.Script))
+	body, err := scriptBody(lab, sc)
 	if err != nil {
 		return ScriptResult{}, err
 	}
@@ -1053,8 +1097,11 @@ func (s *Service) Check(ctx context.Context, u *auth.User, labID, taskID, answer
 		return nil, s.runnerErr(err)
 	}
 	if _, err := s.DB.Exec(ctx, `INSERT INTO check_runs (lab_id, task, exit_code, output, answer, self_reported)
-		VALUES ($1, $2, $3, $4, $5, $6)`, inst.ID, taskID, res.ExitCode, res.Output, answer, inst.Runtime == "local"); err != nil {
+		VALUES ($1, $2, $3, $4, $5, $6)`, inst.ID, taskID, res.ExitCode, res.Output, answer, selfReported(inst.Runtime)); err != nil {
 		return nil, err
+	}
+	if inst.Runtime == "cluster" {
+		s.recordHealth(ctx, inst)
 	}
 	s.Touch(ctx, inst.ID)
 	out := &CheckResult{Passed: res.ExitCode == 0, Output: res.Output, TimedOut: res.TimedOut}
@@ -1364,7 +1411,7 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 				Text:    "Your lab ended before anyone decided on its extension, so the request lapsed.", Link: labLink(inst)})
 		}
 	}
-	if inst.Runtime == "aws" { // terraform destroy takes minutes: End, the sweep and the kill switch must not wait
+	if slowDestroy(inst.Runtime) {
 		if !s.once(inst.ID, func() { defer cancel(); s.finishDestroy(ctx, inst, reason) }) {
 			cancel()
 		}
@@ -1428,7 +1475,7 @@ func (s *Service) Sweep(ctx context.Context) {
 		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 -
 		       CASE WHEN runtime = 'aws' THEN interval '65 minutes' ELSE interval '15 minutes' END)
 		   OR (state = 'destroying' AND destroyed_at < $1 -
-		       CASE WHEN runtime = 'aws' THEN interval '70 minutes' ELSE interval '10 minutes' END)
+		       CASE runtime WHEN 'aws' THEN interval '70 minutes' WHEN 'cluster' THEN interval '12 minutes' ELSE interval '10 minutes' END)
 		   OR (state = 'pending_approval' AND escalate_at <= $1)`, now)
 	if err != nil {
 		s.Log.Error("lab sweep query failed", "err", err)
@@ -1452,7 +1499,7 @@ func (s *Service) Sweep(ctx context.Context) {
 			continue
 		case inst.State == "destroying": // a destroy that never finished: one more attempt, then give up
 			s.alertStuck(ctx, inst)
-			if inst.Runtime == "aws" {
+			if slowDestroy(inst.Runtime) {
 				s.once(inst.ID, func() { s.retryDestroy(context.WithoutCancel(ctx), inst) }) // never hold up the sweep
 			} else {
 				s.retryDestroy(ctx, inst)
@@ -1511,8 +1558,8 @@ func (s *Service) retryDestroy(ctx context.Context, inst *Instance) {
 // the API restarted mid-provision, or a leftover from a deleted database. Namespaces of labs that are provisioning,
 // ready or being destroyed are never touched.
 func (s *Service) reconcileCluster(ctx context.Context) {
-	cr, ok := s.Runners["cluster"].(*ClusterRunner)
-	if !ok {
+	cr := s.Kube
+	if cr == nil {
 		return
 	}
 	ids, err := cr.Live(ctx)
@@ -1555,7 +1602,7 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 		live[id] = true
 	}
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
-		WHERE user_id = $1 AND runtime = 'local' AND state IN ('provisioning', 'ready')`, userID)
+		WHERE user_id = $1 AND runtime IN ('local', 'cluster') AND state IN ('provisioning', 'ready')`, userID)
 	if err != nil {
 		s.Log.Error("agent reconcile query failed", "user", userID, "err", err)
 		return
@@ -1578,11 +1625,69 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 	}
 	for id := range live {
 		if !active[id] {
-			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: "local"}); err != nil {
+			runtime := "local"
+			_ = s.DB.QueryRow(ctx, `SELECT runtime FROM lab_instances WHERE id = $1`, id).Scan(&runtime)
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(runtime))
+			if err := s.destroyRuntime(dctx, &Instance{ID: id, UserID: userID, Runtime: runtime}); err != nil {
 				s.Log.Warn("removing a stale lab from the laptop failed", "lab", id, "err", err)
 			}
 			cancel()
 		}
 	}
+}
+
+// selfReported: results come from the trainee's machine (laptop labs, and cluster labs through the agent).
+func selfReported(runtime string) bool { return runtime == "local" || runtime == "cluster" }
+
+// scriptBody is what a script step runs: a ready: check runs crucible-ready in the toolbox, anything else its file.
+func scriptBody(lab *content.Lab, sc *content.Script) ([]byte, error) {
+	if len(sc.Ready) > 0 {
+		return []byte("exec crucible-ready " + strings.Join(sc.Ready, " ") + "\n"), nil
+	}
+	return os.ReadFile(filepath.Join(lab.Dir, sc.Script))
+}
+
+// parseHealth reads crucible-ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
+func parseHealth(out string) (ready.Report, bool) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		var rep ready.Report
+		if l := strings.TrimSpace(lines[i]); strings.HasPrefix(l, "{") && json.Unmarshal([]byte(l), &rep) == nil {
+			return rep.Lists(), true
+		}
+	}
+	var rep ready.Report
+	err := json.Unmarshal([]byte(out), &rep)
+	return rep.Lists(), err == nil
+}
+
+// recordHealth runs crucible-ready over every release and keeps the report as the lab's latest health event.
+func (s *Service) recordHealth(ctx context.Context, inst *Instance) {
+	r, err := s.runner(inst.Runtime)
+	if err != nil {
+		return
+	}
+	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible-ready --json all\n"), Timeout: 30 * time.Second})
+	if err != nil {
+		return
+	}
+	rep, ok := parseHealth(res.Output)
+	if !ok {
+		return
+	}
+	b, _ := json.Marshal(rep)
+	s.event(ctx, inst.ID, "health", string(b))
+}
+
+func (s *Service) health(ctx context.Context, labID string) *ready.Report {
+	var detail string
+	if err := s.DB.QueryRow(ctx, `SELECT detail FROM lab_events WHERE lab_id = $1 AND kind = 'health' ORDER BY id DESC LIMIT 1`, labID).Scan(&detail); err != nil {
+		return nil
+	}
+	var rep ready.Report
+	if json.Unmarshal([]byte(detail), &rep) != nil {
+		return nil
+	}
+	rep = rep.Lists()
+	return &rep
 }

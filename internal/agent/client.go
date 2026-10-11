@@ -31,6 +31,7 @@ type Client struct {
 	Token  string
 	Exec   Executor
 	Log    *slog.Logger
+	Kube   *Watcher // nil: this agent offers no cluster labs
 }
 
 // Run keeps the agent connected until ctx ends. It tears down local labs on start (crash leftovers) and on exit.
@@ -77,7 +78,25 @@ func (c *Client) runOnce(ctx context.Context) error {
 	s := &session{ws: ws, exec: c.Exec, ptys: map[string]*ptyEntry{}}
 	defer s.closeAll()
 	live, _ := json.Marshal(c.Exec.Labs()) // lets the server reconcile labs that drifted while we were away
-	s.send(ctx, ap.Msg{Type: ap.THello, Data: live})
+	hello := ap.Msg{Type: ap.THello, Data: live}
+	if c.Kube != nil {
+		hello.Contexts = c.Kube.Current()
+	}
+	s.send(ctx, hello) // before any contexts message: a later hello's older snapshot would overwrite a newer list
+	if c.Kube != nil {
+		wctx, stop := context.WithCancel(ctx)
+		defer stop() // the goroutine ends with this connection, not only with the agent
+		go func() {  // while connected, every change of the kubeconfig's contexts reaches Crucible
+			for {
+				select {
+				case <-wctx.Done():
+					return
+				case cs := <-c.Kube.Changes():
+					s.send(wctx, ap.Msg{Type: ap.TContexts, Contexts: cs})
+				}
+			}
+		}()
+	}
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
@@ -198,6 +217,10 @@ func (s *session) closeAll() {
 func (s *session) handle(ctx context.Context, m ap.Msg) {
 	switch m.Type {
 	case ap.TProvision:
+		if m.Cluster != nil {
+			s.reply(ctx, m.ID, ap.Msg{}, s.exec.ProvisionCluster(ctx, m.LabID, m.Data, *m.Cluster))
+			return
+		}
 		s.reply(ctx, m.ID, ap.Msg{}, s.exec.Provision(ctx, m.LabID, m.Data, m.Compose))
 	case ap.TDestroy:
 		s.reply(ctx, m.ID, ap.Msg{}, s.exec.Destroy(ctx, m.LabID))

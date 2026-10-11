@@ -1,5 +1,6 @@
 import type { Heat, JourneyFlag, JourneyRow } from '../types'
 import { useCalm } from '../me'
+import { releaseBadge, releaseWords } from './ReleaseHealth'
 
 export const glyph: Record<Heat, string> = { cold: '·', glowing: '◐', forged: '●' }
 export const heatText: Record<Heat, string> = { cold: 'not started', glowing: 'in progress', forged: 'complete' }
@@ -39,6 +40,22 @@ export function Flags({ flags }: { flags: JourneyFlag[] }) {
   )
 }
 
+// ClusterLabs: the person's running cluster labs, the context each runs on and its releases' health in words.
+export function ClusterLabs({ r }: { r: JourneyRow }) {
+  if (!r.cluster_labs?.length) return null
+  const title = (m: string) => r.cells.find((c) => c.module === m)?.title ?? m
+  return (
+    <ul className="cluster-labs">
+      {r.cluster_labs.map((l) => (
+        <li key={l.module + l.context}>
+          Lab running in {title(l.module)} on <code>{l.context}</code>
+          {l.health?.releases.map((h) => <span key={h.name}> · {h.name} <span className={`badge ${releaseBadge[h.status]}`}>{releaseWords[h.status]}</span></span>)}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 export function HeatMap({ rows, level = 2 }: { rows: JourneyRow[]; level?: 2 | 3 }) {
   const H = `h${level}` as 'h2' | 'h3'
   if (rows.length === 0) return <p className="muted">Nothing to show for you here yet.</p>
@@ -51,6 +68,7 @@ export function HeatMap({ rows, level = 2 }: { rows: JourneyRow[]; level?: 2 | 3
             <H>{r.name || r.email} <span className="muted">· {r.title} · {r.percent}% forged</span></H>
             <Cells r={r} />
             <p className="heat-summary muted">{n('forged')} complete, {n('glowing')} in progress, {n('cold')} not started</p>
+            <ClusterLabs r={r} />
             <Flags flags={r.flags} />
           </section>
         )

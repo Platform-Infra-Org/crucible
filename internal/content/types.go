@@ -77,6 +77,7 @@ type Lab struct {
 	Setup       *Script        `yaml:"setup"`
 	Tasks       []*Task        `yaml:"tasks"`
 	AWS         *AWSConfig     `yaml:"aws"`
+	Cluster     *ClusterLab    `yaml:"cluster"`
 	Dir         string         `yaml:"-"`
 }
 
@@ -94,6 +95,7 @@ type Script struct {
 	Script  string         `yaml:"script"`
 	RunIn   string         `yaml:"run_in"`
 	Timeout yamlx.Duration `yaml:"timeout"`
+	Ready   []string       `yaml:"ready"` // cluster labs, checks only: these releases (or "all") must be ready
 }
 
 type Task struct {
@@ -154,3 +156,19 @@ func IsHuman(questionType string) bool {
 
 // AssetTypes are the only files served from a training's assets/ (images and fonts).
 var AssetTypes = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true, ".ico": true, ".woff2": true}
+
+// ToolboxService is the one place a cluster lab's terminals and scripts run: the agent's toolbox container.
+const ToolboxService = "toolbox"
+
+// ClusterLab is a runtime: cluster lab's charts, installed in order into the lab's namespace.
+type ClusterLab struct {
+	Charts      []ClusterChart `yaml:"charts"`
+	ClusterWide bool           `yaml:"cluster_wide"`
+}
+
+type ClusterChart struct {
+	Name    string         `yaml:"name"`
+	Path    string         `yaml:"path"`
+	Values  string         `yaml:"values"`
+	Timeout yamlx.Duration `yaml:"timeout"`
+}

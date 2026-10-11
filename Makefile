@@ -1,4 +1,4 @@
-.PHONY: test build web local-check cluster-check
+.PHONY: test build web local-check cluster-check toolbox
 test:
 	go test ./...
 build:
@@ -10,3 +10,7 @@ local-check:
 	./scripts/local-check.sh
 cluster-check:
 	./scripts/cluster-check.sh
+
+TOOLBOX_TAG ?= dev
+toolbox:
+	docker build -f deploy/toolbox/Dockerfile -t crucible-toolbox:$(TOOLBOX_TAG) .

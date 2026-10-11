@@ -318,10 +318,10 @@ func (s *Service) SetItem(ctx context.Context, userID int64, team, training, mod
 	return nil
 }
 
-// afterWrite raises the forge rank; progress is already saved, so a failure only delays the rank.
+// afterWrite raises the sword and smith ranks; progress is already saved, so a failure only delays them.
 func (s *Service) afterWrite(ctx context.Context, userID int64) {
 	if _, err := s.UpdateForge(ctx, userID); err != nil {
-		slog.Warn("forge rank update failed", "user", userID, "err", err)
+		slog.Warn("sword and smith rank update failed", "user", userID, "err", err)
 	}
 }
 

@@ -25,13 +25,15 @@ func (s *Service) Routes(r chi.Router) {
 	})
 	r.Post("/api/me/forge/seen", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Level int `json:"level"`
+			Kind     string `json:"kind"`
+			Training string `json:"training"`
+			Level    int    `json:"level"`
 		}
 		if json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&in) != nil {
-			httpx.Error(w, apperr.Wrap(apperr.Invalid, "level required"))
+			httpx.Error(w, apperr.Wrap(apperr.Invalid, "kind and level required"))
 			return
 		}
-		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID, in.Level))
+		reply(w, nil, s.SeenRankUp(r.Context(), auth.UserFrom(r.Context()).ID, in.Kind, in.Training, in.Level))
 	})
 	r.Get("/api/catalog", func(w http.ResponseWriter, r *http.Request) {
 		c, err := s.Catalog(auth.UserFrom(r.Context()))

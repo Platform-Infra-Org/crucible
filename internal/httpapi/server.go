@@ -198,7 +198,8 @@ func NewRouter(d Deps) chi.Router {
 			w.WriteHeader(http.StatusNoContent)
 		})
 		r.Get("/api/agent/status", func(w http.ResponseWriter, r *http.Request) {
-			httpx.JSON(w, http.StatusOK, map[string]bool{"online": d.Hub.Online(auth.UserFrom(r.Context()).ID)})
+			id := auth.UserFrom(r.Context()).ID
+			httpx.JSON(w, http.StatusOK, map[string]any{"online": d.Hub.Online(id), "contexts": d.Hub.Contexts(id)})
 		})
 		d.Learn.Routes(r)
 		d.Labs.Routes(r)

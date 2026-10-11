@@ -44,14 +44,15 @@ type TrainingStatus struct {
 }
 
 type AttentionLab struct {
-	ID       string    `json:"id"`
-	Trainee  string    `json:"trainee"`
-	Team     string    `json:"team"`
-	Training string    `json:"training"`
-	Module   string    `json:"module"`
-	State    string    `json:"state"`
-	Error    string    `json:"error,omitempty"`
-	Since    time.Time `json:"since"`
+	ID             string    `json:"id"`
+	Trainee        string    `json:"trainee"`
+	Team           string    `json:"team"`
+	Training       string    `json:"training"`
+	Module         string    `json:"module"`
+	State          string    `json:"state"`
+	Error          string    `json:"error,omitempty"`
+	Since          time.Time `json:"since"`
+	ClusterContext string    `json:"cluster_context,omitempty"` // a cluster lab: the trainee's kubeconfig context it ran on
 }
 
 type ProgramPin struct {
@@ -161,7 +162,7 @@ func (s *Service) Status(ctx context.Context, u *auth.User) (*PlatformView, erro
 		return nil, err
 	}
 	rows, err := s.DB.Query(ctx, `SELECT li.id, u.email, li.team, li.training, li.module, li.state, li.error,
-		coalesce(li.destroyed_at, li.created_at) AS since
+		coalesce(li.destroyed_at, li.created_at) AS since, li.cluster_context
 		FROM lab_instances li JOIN users u ON u.id = li.user_id
 		WHERE (li.state = 'failed' AND coalesce(li.destroyed_at, li.created_at) > now() - interval '24 hours')
 		   OR (li.state = 'destroying' AND li.stuck_alerted_at IS NOT NULL)

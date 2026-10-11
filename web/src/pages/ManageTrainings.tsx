@@ -317,7 +317,7 @@ function RoleRow({ id, label, one, what, refs, resolved, people, busy, onChange 
             <datalist id={listId}>
               {groups.filter((g) => !refs.includes(g)).map((g) => <option key={g} value={g}>{describeGroup(g)}</option>)}
               {(people?.people ?? []).filter((x) => !refs.includes(x.email)).map((x) => (
-                <option key={x.email} value={x.email}>{[x.name, x.team && `${x.tag} on ${x.team}`].filter(Boolean).join(' · ') || 'on no team'}</option>
+                <option key={x.email} value={x.email}>{[x.name, x.smith?.title, x.team && `${x.tag} on ${x.team}`].filter(Boolean).join(' · ') || 'on no team'}</option>
               ))}
             </datalist>
             <button className="primary" disabled={busy || !text.trim()}>Add</button>

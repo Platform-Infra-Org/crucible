@@ -2,10 +2,11 @@ package labs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
+	ap "crucible/internal/agentproto"
 	"crucible/internal/apperr"
-	"crucible/internal/rbac"
 	"io"
 	"slices"
 	"strings"
@@ -44,40 +45,6 @@ func TestClusterLabUnavailableWithoutRunner(t *testing.T) {
 	}
 	if m.Runtime != "cluster" || m.RuntimeReady || !strings.Contains(m.RuntimeMessage, "cluster labs are not available yet") {
 		t.Fatalf("without a cluster runner the lobby must say so: %+v", m)
-	}
-}
-
-func TestClusterLabChecksAreNotSelfReported(t *testing.T) {
-	f := setup(t, true)
-	f.completeFirstLab(t)
-	f.s.Runners["cluster"], f.s.Estimators["cluster"] = f.run, f.rates
-	ctx := context.Background()
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 200 && v.State != Ready; i++ {
-		time.Sleep(10 * time.Millisecond)
-		if v, err = f.s.Get(ctx, f.u, v.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if v.State != Ready || v.Runtime != "cluster" || v.SelfReported {
-		t.Fatalf("cluster lab view: state %s runtime %s self_reported %v", v.State, v.Runtime, v.SelfReported)
-	}
-	res, err := f.s.Check(ctx, f.u, v.ID, "t1-cast", "")
-	if err != nil || !res.Passed {
-		t.Fatalf("check: %+v %v", res, err)
-	}
-	var self bool
-	if err := f.s.DB.QueryRow(ctx, `SELECT self_reported FROM check_runs WHERE lab_id = $1`, v.ID).Scan(&self); err != nil {
-		t.Fatal(err)
-	}
-	if self {
-		t.Fatal("cluster checks run server-side and must not be flagged self-reported")
-	}
-	if got := f.run.scripts[len(f.run.scripts)-1]; got.Service != "shell" || !strings.Contains(string(got.Script), "hello crucible") {
-		t.Fatalf("the check must run the t1 script in the shell service: %+v", got)
 	}
 }
 
@@ -285,7 +252,7 @@ func TestSweepRemovesOrphanLabNamespaces(t *testing.T) {
 	stranger := newLabID() // a namespace with no lab row at all
 	cs := fake.NewClientset(labNS(live.ID, false), labNS(over.ID, false), labNS(stranger, false))
 	cr := &ClusterRunner{Client: cs}
-	f.s.Runners["cluster"] = cr
+	f.s.Kube = cr
 	f.s.Sweep(ctx)
 	ids, err := cr.Live(ctx)
 	if err != nil || !slices.Equal(ids, []string{live.ID}) {
@@ -332,10 +299,7 @@ func TestSweepSkipsClusterRowsWithoutRunner(t *testing.T) {
 	c, l := mk("03-cluster-heat", "cluster"), mk("02-first-lab", "local")
 	f.s.Sweep(ctx)
 	for _, id := range []string{c.ID, l.ID} {
-		var st string
-		if err := f.s.DB.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1`, id).Scan(&st); err != nil || st != string(Destroyed) {
-			t.Fatalf("%s: %q %v", id, st, err)
-		}
+		f.waitState(t, f.u, id, Destroyed) // a cluster destroy runs in the background
 	}
 }
 
@@ -369,31 +333,189 @@ func TestLabPodStoppedByTheIMDSGuardSaysWhy(t *testing.T) {
 	}
 }
 
-func TestClusterLabAboveAutoApproveNeedsApproval(t *testing.T) {
-	ctx := context.Background()
+func TestClusterLabStartsOnAPickedContextForFree(t *testing.T) {
 	f := setup(t, true)
 	f.completeFirstLab(t)
-	st := f.s.Learn.State()
-	st.Platform.Settings.ClusterUSDPerHour = nil
-	f.s.Runners["cluster"] = f.run
-	f.s.Estimators["cluster"] = PlatformRate{State: f.s.Learn.State}
-	if m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || !strings.Contains(m.Blocked, "cluster_usd_per_hour") {
-		t.Fatalf("no cluster rate: the lab must be blocked with a message, not free: %+v %v", m, err)
+	ctx := context.Background()
+	contexts := []ap.KubeContext{{Name: "kind-dev"}}
+	f.s.Runners["cluster"] = AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return contexts },
+		online: func(int64) bool { return true }, call: func(context.Context, int64, ap.Msg) (ap.Msg, error) { return ap.Msg{}, nil }}
+	f.s.Estimators["cluster"] = FixedRates{}
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{}); err == nil || !strings.Contains(err.Error(), "pick a cluster") {
+		t.Fatalf("no context: %v", err)
 	}
-	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); !errors.Is(err, apperr.Unavailable) {
-		t.Fatalf("no cluster rate: a request must fail closed: %v", err)
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "kind-dev"})
+	if err != nil || v.ClusterContext != "kind-dev" || v.EstimateUSD != 0 || v.Tier != "auto" {
+		t.Fatalf("start: %+v %v", v, err)
 	}
-	rate := 0.0
-	st.Platform.Settings.ClusterUSDPerHour = &rate
-	if m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || m.NeedsApproval {
-		t.Fatalf("rate 0 auto-approves: %+v %v", m, err)
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{Context: "kind-dev"}); err == nil {
+		t.Fatal("a laptop lab must refuse a context")
 	}
-	rate = 1
-	m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat")
-	if err != nil || !m.NeedsApproval || m.EstimateUSD <= 0 {
-		t.Fatalf("a priced cluster lab routes to approval: %+v %v", m, err)
+	// starting again while it is active returns the same lab, even with no (or a stale) context
+	again, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{})
+	if err != nil || again.ID != v.ID {
+		t.Fatalf("restart of an active lab: %+v %v", again, err)
 	}
-	if v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || v.State != PendingApproval || v.Tier != rbac.TierApprover {
-		t.Fatalf("request %+v %v", v, err)
+}
+
+func TestClusterLabHealthAfterProvisionAndChecks(t *testing.T) {
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	ctx := context.Background()
+	var scripts []string
+	f.s.Runners["cluster"] = AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return []ap.KubeContext{{Name: "k"}} },
+		online: func(int64) bool { return true },
+		call: func(_ context.Context, _ int64, m ap.Msg) (ap.Msg, error) {
+			if m.Type == ap.TRunScript {
+				scripts = append(scripts, string(m.Data))
+				if strings.Contains(string(m.Data), "--json") {
+					return ap.Msg{Data: []byte(`{"releases":[{"name":"forge","status":"progressing","unready":["deployment/forge: 1 of 2 ready"]}]}`)}, nil
+				}
+			}
+			return ap.Msg{}, nil
+		}}
+	f.s.Estimators["cluster"] = FixedRates{}
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && v.State != Ready; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if v, err = f.s.Get(ctx, f.u, v.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v.Health == nil || v.Health.Releases[0].Status != "progressing" || !v.SelfReported {
+		t.Fatalf("health after provision: %+v self-reported %v", v.Health, v.SelfReported)
+	}
+	if !slices.ContainsFunc(scripts, func(s string) bool { return strings.Contains(s, "crucible-ready --json all") }) {
+		t.Fatalf("no health run: %q", scripts)
+	}
+}
+
+// slowCluster is a cluster runner whose destroy (helm uninstall --wait, a namespace delete) takes until hold closes.
+type slowCluster struct {
+	AgentClusterRunner
+	hold chan struct{}
+}
+
+func (s slowCluster) Destroy(context.Context, *Instance) error { <-s.hold; return nil }
+
+// A cluster destroy can take minutes on the agent: End, the sweep and the kill switch (which holds up AWS destroys)
+// must not wait for it.
+func TestClusterDestroyDoesNotHoldUpTheCaller(t *testing.T) {
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	ctx := context.Background()
+	run := slowCluster{AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return []ap.KubeContext{{Name: "k"}} },
+		online: func(int64) bool { return true }, call: func(context.Context, int64, ap.Msg) (ap.Msg, error) { return ap.Msg{}, nil }},
+		make(chan struct{})}
+	f.s.Runners["cluster"] = run
+	f.s.Estimators["cluster"] = FixedRates{}
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+	done := make(chan *View, 1)
+	go func() { ended, _ := f.s.End(ctx, f.u, v.ID); done <- ended }()
+	select {
+	case ended := <-done:
+		if ended == nil || ended.State != Destroying {
+			t.Fatalf("End: %+v", ended)
+		}
+	case <-time.After(5 * time.Second):
+		close(run.hold)
+		t.Fatal("End waited for the cluster destroy")
+	}
+	// a stuck destroy's retry in the sweep doesn't wait either
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET destroyed_at = $2 WHERE id = $1`, v.ID, f.clk.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	swept := make(chan struct{})
+	go func() { f.s.Sweep(ctx); close(swept) }()
+	select {
+	case <-swept:
+	case <-time.After(5 * time.Second):
+		close(run.hold)
+		t.Fatal("the sweep waited for the cluster destroy")
+	}
+	close(run.hold)
+	f.waitState(t, f.u, v.ID, Destroyed)
+	if destroyTimeout("cluster") < 7*time.Minute {
+		t.Fatal("the server gives up before the agent's helm uninstall and namespace delete (5m) can finish")
+	}
+}
+
+// The report is self-reported: a hand-made one with no releases or no unready list must still render (as [], not null).
+func TestHealthReportsNeverCarryNullLists(t *testing.T) {
+	for _, out := range []string{`{}`, `{"releases":null}`, `{"releases":[{"name":"x","status":"failing"}]}`, `{"releases":[{"name":"x","status":"healthy","unready":null}]}`} {
+		rep, ok := parseHealth(out)
+		b, _ := json.Marshal(rep)
+		if !ok || strings.Contains(string(b), "null") {
+			t.Errorf("%s: %s %v", out, b, ok)
+		}
+	}
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+		Runtime: "cluster", State: Ready, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+	if err := f.s.insert(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	f.s.event(ctx, in.ID, "health", `{"releases":[{"name":"x","status":"failing","unready":null}]}`) // stored before this fix
+	b, _ := json.Marshal(f.s.health(ctx, in.ID))
+	if strings.Contains(string(b), "null") {
+		t.Fatalf("stored: %s", b)
+	}
+}
+
+// deadlineRunner records which labs it destroyed and how long each destroy was given.
+type deadlineRunner struct {
+	*fakeRunner
+	mu   sync.Mutex
+	left map[string]time.Duration
+}
+
+func (d *deadlineRunner) Destroy(ctx context.Context, in *Instance) error {
+	dl, _ := ctx.Deadline()
+	d.mu.Lock()
+	d.left[in.ID] = time.Until(dl)
+	d.mu.Unlock()
+	return d.fakeRunner.Destroy(ctx, in)
+}
+
+// An agent reconnecting with a cluster lab that ended while it was offline removes it through the cluster runner, with
+// a cluster destroy's time; a running cluster lab it no longer has ends.
+func TestReconcileAgentWithClusterLabs(t *testing.T) {
+	f := setup(t, true)
+	ctx := context.Background()
+	now := f.clk.Now()
+	mk := func(st State) *Instance {
+		in := &Instance{ID: newLabID(), UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "03-cluster-heat", SHA: "abc",
+			Runtime: "cluster", State: st, CreatedAt: now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute, Tier: "auto"}
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+		return in
+	}
+	ended, lost := mk(Destroyed), mk(Ready)
+	run := &deadlineRunner{fakeRunner: &fakeRunner{}, left: map[string]time.Duration{}}
+	f.s.Runners["cluster"] = run
+	f.s.ReconcileAgent(ctx, f.u.ID, []string{ended.ID})
+	f.waitState(t, f.u, lost.ID, Destroyed)
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if d, ok := run.left[ended.ID]; !ok || d < 6*time.Minute {
+		t.Fatalf("the ended lab's removal: called %v with %v", ok, d)
+	}
+	if _, ok := run.left[lost.ID]; !ok {
+		t.Fatal("the lost lab was not destroyed through the cluster runner")
+	}
+	f.run.mu.Lock()
+	defer f.run.mu.Unlock()
+	if slices.Contains(f.run.destroyed, ended.ID) {
+		t.Fatal("a cluster lab went to the laptop runner")
 	}
 }

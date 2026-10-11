@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { Link } from 'react-router'
 import { useMe } from '../me'
 import { useFetch } from '../useFetch'
-import type { TeamSummary } from '../types'
+import type { Forge, TeamSummary } from '../types'
 import { reportSaveError } from './Conflict'
 import { Avatar, Icon } from './Avatar'
+import { ExperienceMeter } from './RankCard'
+import { SmithMark } from './SmithMark'
 import { AVATARS, initials } from '../lib/avatars'
 
 // Motes of light carried along the molten band, each on its own: where it rests under calm motion (x, y in %), its size,
@@ -27,6 +29,7 @@ export function UserMenu() {
   const box = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
   const teams = useFetch<TeamSummary[]>(open ? '/api/teams' : null)
+  const forge = useFetch<Forge>(open ? '/api/me/forge' : null)
   const u = me.user
 
   useEffect(() => {
@@ -72,8 +75,10 @@ export function UserMenu() {
               <strong>{u.name || u.email}</strong>
               <span className="muted">{u.email}</span>
               {me.is_admin && <span className="badge">admin</span>}
+              <SmithMark smith={forge.data?.smith} />
             </div>
           </div>
+          {forge.data && <ExperienceMeter smith={forge.data.smith} />}
 
           <h3>Teams</h3>
           {teams.error && <p className="error">Your teams could not be loaded.</p>}

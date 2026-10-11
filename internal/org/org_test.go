@@ -35,9 +35,6 @@ func TestPlatformOnAFreshDatabase(t *testing.T) {
 	if p.Settings.CostTiers != nil {
 		t.Error("a fresh instance must have no cost tiers: paid labs stay refused until an admin sets them")
 	}
-	if p.Settings.ClusterUSDPerHour != nil {
-		t.Error("a fresh instance must have no cluster rate: cluster labs unavailable, never free")
-	}
 	if p.Settings.EscalationHours != 4 {
 		t.Errorf("escalation hours = %v, want the 4-hour default", p.Settings.EscalationHours)
 	}
@@ -100,18 +97,15 @@ func platform(t *testing.T, pool *pgxpool.Pool) (*config.Platform, error) {
 	return (&Store{DB: pool}).Platform(context.Background())
 }
 
-func TestSettingsTiersAndFreeClusterRate(t *testing.T) {
+func TestSettingsTiers(t *testing.T) {
 	pool := dbtest.New(t)
-	mustExec(t, pool, `UPDATE settings SET auto_approve_usd=1, tier1_usd=5, tier2_usd=25, cluster_usd_per_hour=0`)
+	mustExec(t, pool, `UPDATE settings SET auto_approve_usd=1, tier1_usd=5, tier2_usd=25`)
 	p, err := platform(t, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c := p.Settings.CostTiers; c == nil || c.AutoApproveUSD != 1 || c.Tier1USD != 5 || c.Tier2USD != 25 {
 		t.Errorf("tiers = %+v", c)
-	}
-	if r := p.Settings.ClusterUSDPerHour; r == nil || *r != 0 {
-		t.Errorf("a rate of 0 must stay a non-nil 0 (free on the node), got %v", r)
 	}
 	if _, err := pool.Exec(context.Background(), `UPDATE settings SET tier1_usd=NULL`); err == nil {
 		t.Error("partly-set tiers must be rejected")
@@ -236,7 +230,6 @@ func writePlatformYAML(t *testing.T) string {
 	}
 	write("platform.yaml", `default_theme: anvil
 cost_tiers: { auto_approve_usd: 1, tier1_usd: 5, tier2_usd: 25 }
-cluster_usd_per_hour: 0
 escalation_hours: 6
 schedules:
   bh:
@@ -277,7 +270,7 @@ func TestPlatformMatchesConfigLoad(t *testing.T) {
 
 	pool := dbtest.New(t)
 	for _, q := range []string{
-		`UPDATE settings SET default_theme='anvil', auto_approve_usd=1, tier1_usd=5, tier2_usd=25, cluster_usd_per_hour=0, escalation_hours=6`,
+		`UPDATE settings SET default_theme='anvil', auto_approve_usd=1, tier1_usd=5, tier2_usd=25, escalation_hours=6`,
 		`INSERT INTO schedules VALUES ('bh','Europe/Bucharest','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`,
 		`INSERT INTO admins VALUES ('boss@x')`,
 		`INSERT INTO quotes (text) VALUES ('one'),('two')`,

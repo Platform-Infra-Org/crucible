@@ -2,6 +2,7 @@ package edits
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 	"crucible/internal/db/dbtest"
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
+	"crucible/internal/smith"
 )
 
 // TestMain allows the file transport: these tests use local bare repos as git remotes.
@@ -657,5 +659,54 @@ func TestNoEditsOffBranch(t *testing.T) {
 	}
 	if got := f.s.Trainings(f.leader); len(got) != 0 {
 		t.Fatalf("a training on a tag is offered for edits: %v", got)
+	}
+}
+
+func TestEditsCarryAuthorAndReviewerSmithRanks(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	mustUser := func(sub, email string, level int) {
+		if _, err := f.s.DB.Exec(ctx, `INSERT INTO users (sub, email, name) VALUES ($1, $2, '')`, sub, email); err != nil {
+			t.Fatal(err)
+		}
+		if level > 0 {
+			if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) SELECT id, 600, $2, true FROM users WHERE email = $1`, email, level); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mustUser("s-l", "leader@crucible.local", 0)
+	mustUser("s-s", "senior@crucible.local", 2)
+	e, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nA.\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.AuthorSmith != (smith.Ref{Level: 0, Title: "Bellows Hand"}) {
+		t.Errorf("create: %+v", e.AuthorSmith)
+	}
+	rej, err := f.s.Reject(ctx, f.senior, e.ID, "no")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := f.s.List(ctx, f.senior)
+	if err != nil || len(list) != 1 {
+		t.Fatal(list, err)
+	}
+	got, err := f.s.Get(ctx, f.senior, e.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]*Edit{"reject": rej, "list": &list[0], "detail": got} {
+		b, _ := json.Marshal(v)
+		if !strings.Contains(string(b), `"author_smith":{"level":0,"title":"Bellows Hand"}`) || !strings.Contains(string(b), `"reviewer_smith":{"level":2,"title":"Journeyman"}`) {
+			t.Errorf("%s: %s", name, b)
+		}
+	}
+	pending, err := f.propose(t, f.leader, map[string]string{"modules/m1/reading/intro.md": "# Intro\n\nB.\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := json.Marshal(pending); strings.Contains(string(b), "reviewer_smith") {
+		t.Errorf("no reviewer, no reviewer_smith: %s", b)
 	}
 }

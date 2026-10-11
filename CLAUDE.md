@@ -103,8 +103,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   limited to `training.yaml` and `modules/<id>/…`. All git calls go through `gitsync.git` (isolated config,
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.
-- Money: approvals use tiers by estimate; budgets fail closed; cluster labs priced by `cluster_usd_per_hour` (unset
-  → unavailable, never $0); aws labs need infracost (or `CRUCIBLE_INFRACOST=off` in dryrun only).
+- Money: approvals use tiers by estimate; budgets fail closed; cluster labs run on the trainee's own cluster through
+  their agent and are free; aws labs need infracost (or `CRUCIBLE_INFRACOST=off` in dryrun only).
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only

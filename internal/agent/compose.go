@@ -26,6 +26,7 @@ type Session interface {
 
 type Executor interface {
 	Provision(ctx context.Context, labID string, bundle []byte, compose string) error
+	ProvisionCluster(ctx context.Context, labID string, bundle []byte, spec ap.ClusterSpec) error
 	Destroy(ctx context.Context, labID string) error
 	RunScript(ctx context.Context, labID, service string, script []byte, env map[string]string, timeout time.Duration) (ap.Msg, error)
 	StartPTY(labID, service string, cols, rows int) (Session, error)
@@ -103,7 +104,7 @@ func (c Compose) Labs() []string {
 	entries, _ := os.ReadDir(c.Dir)
 	ids := []string{}
 	for _, e := range entries {
-		if e.IsDir() && validID(e.Name()) == nil {
+		if e.IsDir() && validID(e.Name()) == nil && !exists(markerPath(c.Dir, e.Name())) {
 			ids = append(ids, e.Name())
 		}
 	}
@@ -180,4 +181,13 @@ func docker(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = composeEnv(os.Environ())
 	return cmd
+}
+
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+var errNoKube = errors.New("this agent has no kubeconfig for cluster labs; start it with --kubeconfig or set KUBECONFIG")
+
+// ProvisionCluster: a bare Compose runs no cluster labs; use Labs.
+func (c Compose) ProvisionCluster(context.Context, string, []byte, ap.ClusterSpec) error {
+	return errNoKube
 }

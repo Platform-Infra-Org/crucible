@@ -37,4 +37,4 @@ have signed in to Crucible at least once.
 
 Scores are final, but an admin can unstick a trainee: on a quiz answer in the Anvil, or for a module on the team's
 Journey page, clear the module's quiz attempts, reopen scored answers, or both. A reset needs a reason, is audited,
-and the trainee is told. It never lowers anyone's forge rank.
+and the trainee is told. It never lowers anyone's sword or smith rank.

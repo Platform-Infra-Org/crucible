@@ -70,7 +70,7 @@ var Kinds = []KindInfo{
 	{SubmissionPending, "A submission is waiting for my score"},
 	{SubmissionScored, "My submission was scored or returned"},
 	{ReaperReport, "Leftover AWS lab resources need attention"},
-	{RankUp, "I or one of my mentees reached a new forge rank"},
+	{RankUp, "I reached a new smith rank"},
 	{ContentEdit, "A content edit waits for my review, or mine was decided"},
 	{LabStuck, "A lab is stuck while being destroyed (admins)"},
 }

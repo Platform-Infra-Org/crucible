@@ -56,9 +56,9 @@ spec:
             permanent: true
 YAML
 
-# Sysbox: cluster labs run dockerd in a sysbox pod, never a privileged pod (spec §8.2, §14).
+# Sysbox: AWS lab workspace pods run dockerd in a sysbox pod, never a privileged pod (spec §8.2, §14).
 # k3s reads config-v3.toml.tmpl (containerd 2.x) at start; the base template keeps every k3s default.
-# A sysbox failure must not take the platform down: k3s and Crucible still come up, only cluster labs stay unavailable.
+# A sysbox failure must not take the platform down: k3s and Crucible still come up, only AWS labs stay unavailable.
 install_sysbox() {
   retry curl -fsSL "https://github.com/nestybox/sysbox/releases/download/v${sysbox_version}/sysbox-ce_${sysbox_version}.linux_amd64.deb" -o /tmp/sysbox.deb &&
     echo "${sysbox_sha256_amd64}  /tmp/sysbox.deb" | sha256sum -c - &&
@@ -85,7 +85,7 @@ metadata:
 handler: sysbox-runc
 YAML
 else
-  echo "WARNING: sysbox install failed; cluster labs stay unavailable (see journalctl -u sysbox, /var/log/cloud-init-output.log)" >&2
+  echo "WARNING: sysbox install failed; AWS labs stay unavailable (see journalctl -u sysbox, /var/log/cloud-init-output.log)" >&2
 fi
 
 retry curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh

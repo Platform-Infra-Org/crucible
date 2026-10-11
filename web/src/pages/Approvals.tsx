@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { Approval, Spend, Tier } from '../types'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { toast } from '../lib/alerts'
@@ -54,7 +55,7 @@ function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
   return (
     <li className="card approval" aria-label={`${ext ? 'Extension' : 'Request'} from ${a.requester}`}>
       <h2>{ext && 'Extension: '}{a.lab_title} <small className="muted">{a.team} / {a.training}</small></h2>
-      <p>{a.requester_name || a.requester} <span className="muted">{a.requester}</span> · requested {new Date(a.requested_at).toLocaleString()}</p>
+      <p>{a.requester_name || a.requester} <span className="muted">{a.requester}</span> <SmithMark smith={a.requester_smith} /> · requested {new Date(a.requested_at).toLocaleString()}</p>
       <dl className="facts">
         {ext && a.extend_until && <><dt>Until</dt><dd>{new Date(a.extend_until).toLocaleString()}</dd></>}
         <dt>Estimate</dt>

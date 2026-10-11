@@ -62,7 +62,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Snapshots | Separate persistent S3 bucket (own terraform stack, never touched by teardown) |
 | Escalation default | 4 business hours (counted inside schedule window) |
 | Cost tiers | No defaults — set at install in `platform.yaml` |
-| Forge ranks | % of assigned (enrolled) training completed |
+| Ranks | A sword per training (% of that training) and a smith rank across Crucible (experience); see 2026-10-11-smith-and-sword-ranks-design.md |
 
 ---
 
@@ -271,7 +271,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - **Reading:** Markdown rendered with syntax highlighting, mermaid, callouts; "mark as read" + scroll tracking.
 - **Instant quizzes:** scored server-side; answers never sent to the client before submission. Attempts limit and cooldown configurable per quiz (default unlimited, no cooldown); best score counts.
 - **Human scoring:** submissions land in the program's **Scoring Queue** (Anvil view): filter by training/trainee/type, rubric shown, score + written feedback, return-for-rework. Lab submissions show the check results, a terminal transcript (recorded PTY output), and uploaded artifacts; scorers can override auto-check results with a reason (audited). Live **sign-offs** are created by a scorer ("Mark passed after live demo") with notes.
-- **Forge ranks:** rank = % of the trainee's enrolled programs completed (weighted by item points) — **Ore 0% → Ingot 20% → Tempered 45% → Blade 75% → Sword 90% → Masterwork 100%** (defaults; overridable in `platform.yaml`). Enrolling in a new program can lower the %, but a rank once earned is never lost. Per-training completion grants a badge. Rank-up triggers the hammer-strike animation. Ranks are personal; no leaderboards.
+- **Ranks:** a sword rank per training (Ore to Masterwork, by % of that training) and a smith rank across Crucible (Bellows Hand to Grandmaster, by experience); ranks only rise. Smith ranks show with people's names, sword ranks to the trainee and on Journey rows the viewer can see. No leaderboards. See `2026-10-11-smith-and-sword-ranks-design.md`.
 
 ---
 
@@ -286,7 +286,7 @@ requested ─► pending_approval ─► approved ─► provisioning ─► rea
 Every transition is a River job, idempotent, recorded in `lab_events`. `failed` always attempts destroy; stuck destroys alert admins.
 
 ### 8.2 Runtimes
-- **cluster:** namespace `lab-<id>` with ResourceQuota + default-deny NetworkPolicy (egress allowlist from lab.yaml). One pod using the **sysbox** runtime class runs dockerd and `docker compose up` on the lab's compose file. Terminals = `docker exec` into named services, proxied over WebSocket. Checks run via exec in `run_in` service — tamper-resistant.
+- **cluster** — Helm charts installed by the trainee's agent on a cluster of their kubeconfig (spec `2026-10-11-cluster-labs-on-your-cluster-design.md`); free, self-reported.
 - **local:** trainee installs `crucible-agent` (macOS, Linux, Windows/WSL2; requires Docker). Agent logs in (device code), holds an outbound WebSocket to the API, receives the compose bundle, runs it, streams PTYs, runs checks. Check results from local labs are flagged **self-reported**; a program can require human review for them. No cloud cost → always auto-approved.
 - **aws:** a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
 
@@ -339,9 +339,9 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 ## 9. FinOps
 
 ### 9.1 Request & approval
-1. Trainee requests a lab → Crucible computes **estimate**: `cluster` = pod resources × internal rate card from `platform.yaml`; `aws` = infracost on the module × requested TTL; `local` = $0.
+1. Trainee requests a lab → Crucible computes **estimate**: `aws` = infracost on the module × requested TTL; `local` and `cluster` = $0.
 2. **Cost tiers** (`platform.yaml`; no built-in defaults — install fails validation until set):
-   - `local`, `cluster` under `auto_approve_usd` → auto-approved.
+   - `local`, `cluster` → always auto-approved.
    - Estimate ≤ `tier1_usd` → program **approver**.
    - Estimate ≤ `tier2_usd` → team **leader**.
    - Above → global **admin**.
@@ -390,7 +390,7 @@ For comparison, an EKS-based setup (control plane ~73 + ALB ~20 + NAT ~35 + RDS 
 ---
 
 ## 10. Notifications
-Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; rank-up (to the trainee). Users can mute per event type (email) in settings.
+Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml`). Events: lab request pending / escalated / approved / rejected; submission awaiting scoring; scored/returned; budget 80%/100%; content sync failure; smith rank-up (to the trainee). Users can mute per event type (email) in settings.
 
 ## 11. Journey view
 - Mentors and the mentor dashboard were removed on 2026-10-11.
@@ -411,7 +411,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 - **Accessibility:** keyboard-navigable everything (including terminal tab switching), focus rings, ARIA live regions for check results, contrast checked per theme.
 
 ## 13. Data model (Postgres, core tables)
-`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `ranks`.
+`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `sword_ranks` · `smiths`.
 Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 
 ## 14. Errors, security, testing

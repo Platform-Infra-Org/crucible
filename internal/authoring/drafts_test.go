@@ -11,6 +11,7 @@ import (
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
+	"crucible/internal/smith"
 )
 
 var moveIntro = []gitsync.Op{
@@ -312,5 +313,26 @@ func TestRebaseConflictWhenRenamedAndEditedSourceChanged(t *testing.T) {
 	c := r.Conflicts[1]
 	if c.Path != to || c.Op.Op != "put" || c.Head != theirs || c.Mine != mine || c.Base != seed[from] || c.HeadMissing {
 		t.Fatalf("put conflict: %+v", c)
+	}
+}
+
+// The submit response names the author's smith rank, as every edit headed for a client does.
+func TestSubmitCarriesTheAuthorsSmith(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t)
+	if _, err := f.s.DB.Exec(ctx, `WITH u AS (INSERT INTO users (sub, email, name) VALUES ('s-l', $1, 'L') RETURNING id)
+		INSERT INTO smiths (user_id, xp, level, seen) SELECT id, 600, 2, true FROM u`, f.leader.Email); err != nil {
+		t.Fatal(err)
+	}
+	d, err := f.s.Create(ctx, f.leader, NewDraft{Training: "t1", Title: "Move the intro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err = f.s.Save(ctx, f.leader, d.ID, SaveDraft{Title: d.Title, BaseSHA: d.BaseSHA, Ops: moveIntro, UpdatedAt: d.UpdatedAt}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := f.s.Submit(ctx, f.leader, d.ID, d.UpdatedAt)
+	if err != nil || e.AuthorSmith != (smith.Ref{Level: 2, Title: "Journeyman"}) {
+		t.Fatalf("submit: %+v %v", e, err)
 	}
 }

@@ -5,6 +5,7 @@ import { useMe } from '../me'
 import { useFetch } from '../useFetch'
 import type { ContentEdit, DraftInfo } from '../types'
 import { DiffView } from '../components/DiffView'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
@@ -41,7 +42,8 @@ export function EditReviewPage() {
       <h1>{e.title}</h1>
       <p>
         <span className={`badge ${e.status}`} data-testid="edit-status">{e.status}</span>{' '}
-        <span className="muted">{e.training} · by {e.author}{e.reviewer ? ` · reviewed by ${e.reviewer}` : ''}</span>
+        <span className="muted">{e.training} · by {e.author}</span> <SmithMark smith={e.author_smith} />
+        {e.reviewer && <><span className="muted"> · reviewed by {e.reviewer}</span> <SmithMark smith={e.reviewer_smith} /></>}
       </p>
       {e.status === 'stale' && <p role="alert" className="error">This edit no longer applies to the current content.</p>}
       {e.note && <p className="hint"><span className="muted">Review note from {e.reviewer}:</span> {e.note}</p>}

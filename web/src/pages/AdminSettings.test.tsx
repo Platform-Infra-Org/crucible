@@ -10,7 +10,7 @@ let admins = ['a@x']
 vi.mock('../useFetch', () => ({
   useFetch: (path: string) => {
     const data: Record<string, unknown> = {
-      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, cluster_usd_per_hour: null, escalation_hours: 4, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 } },
+      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, escalation_hours: 4, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 }, smith: { apprentice: 150, journeyman: 500, smith: 1200, master_smith: 2500, grandmaster: 5000 } },
       '/api/admin/admins': { admins },
       '/api/admin/platform': { schedules: {}, programs: [{ team: 't', training: 'forge-101' }, { team: 'u', training: 'forge-101' }] },
       '/api/meta': { quotes: [] },
@@ -36,6 +36,16 @@ test('the page offers the export and the import', () => {
   const h = page()
   expect(h).toContain('href="/api/admin/export"')
   expect(h).toContain('Import into a fresh forge')
+})
+
+test('sword and smith ranks are both editable', () => {
+  const h = page()
+  expect(h).toContain('Sword ranks')
+  expect(h).not.toContain('Forge ranks')
+  expect(h).toContain('Smith ranks')
+  for (const [l, v] of [['Apprentice', 150], ['Journeyman', 500], ['Smith', 1200], ['Master Smith', 2500], ['Grandmaster', 5000]]) {
+    expect(h).toMatch(new RegExp(`${l} at \\(experience\\) <input[^>]*value="${v}"`))
+  }
 })
 
 describe('banners', () => {

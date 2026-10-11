@@ -35,19 +35,22 @@ type exportFile struct {
 
 // table is one section of the file, in insert order: parents before children.
 type table struct {
-	name   string
-	byUser bool   // user_id is written as the person's email
-	extra  string // jsonb merged into each row on import
+	name     string
+	byUser   bool   // user_id is written as the person's email
+	extra    string // jsonb merged into each row on import
+	defaults string // jsonb merged under each row on import: columns an older file lacks
+	optional bool   // a file from before this table existed may lack it; the table then stays empty
 }
 
 var exportTables = []table{
-	{name: "settings"}, {name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "trainings"},
+	{name: "settings", defaults: `'{"smith_apprentice":150,"smith_journeyman":500,"smith_smith":1200,"smith_master":2500,"smith_grandmaster":5000}'`}, // 00027
+	{name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "trainings"},
 	{name: "teams"}, {name: "team_members"}, {name: "team_webhooks"}, {name: "team_budgets"},
 	{name: "programs"}, {name: "training_roles"},
 	{name: "users"},
 	{name: "item_progress", byUser: true}, {name: "lab_task_progress", byUser: true}, {name: "quiz_attempts", byUser: true},
 	{name: "submissions", byUser: true, extra: `'{"lab_id": null}'`}, // labs stay behind
-	{name: "badges", byUser: true}, {name: "ranks", byUser: true}, {name: "hint_reveals", byUser: true},
+	{name: "badges", byUser: true}, {name: "sword_ranks", byUser: true, optional: true, defaults: `'{"points":0}'`}, {name: "smiths", byUser: true, optional: true}, {name: "hint_reveals", byUser: true},
 	{name: "notification_mutes", byUser: true},
 }
 
@@ -103,7 +106,7 @@ func (s *Store) Import(ctx context.Context, actor string, b []byte) error {
 		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("this file is export version %d; this Crucible reads version %d", f.Version, ExportVersion))
 	}
 	for _, t := range exportTables {
-		if f.Tables[t.name] == nil {
+		if f.Tables[t.name] == nil && !t.optional {
 			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("the file has no %s section", t.name))
 		}
 	}
@@ -125,7 +128,15 @@ func (s *Store) Import(ctx context.Context, actor string, b []byte) error {
 	}
 	counts := map[string]any{}
 	for _, t := range exportTables {
-		q := fmt.Sprintf(`INSERT INTO %s SELECT r.* FROM jsonb_array_elements($1::jsonb) e, jsonb_populate_record(NULL::%[1]s, e) r`, t.name)
+		// A file from before 00027 has one personal "ranks" table, which is never read: ranks are recomputed from progress.
+		if f.Tables[t.name] == nil {
+			continue
+		}
+		defaults := "'{}'"
+		if t.defaults != "" {
+			defaults = t.defaults
+		}
+		q := fmt.Sprintf(`INSERT INTO %s SELECT r.* FROM jsonb_array_elements($1::jsonb) e, jsonb_populate_record(NULL::%[1]s, %s::jsonb || e) r`, t.name, defaults)
 		switch {
 		case t.name == "admins":
 			q += ` ON CONFLICT DO NOTHING`
@@ -139,7 +150,7 @@ func (s *Store) Import(ctx context.Context, actor string, b []byte) error {
 				extra = " || " + t.extra
 			}
 			q = fmt.Sprintf(`INSERT INTO %s SELECT r.* FROM jsonb_array_elements($1::jsonb) e, jsonb_populate_record(NULL::%[1]s,
-				e || jsonb_build_object('user_id', (SELECT min(id) FROM users WHERE email = lower(e->>'email')))%s) r`, t.name, extra)
+				%s::jsonb || e || jsonb_build_object('user_id', (SELECT min(id) FROM users WHERE email = lower(e->>'email')))%s) r`, t.name, defaults, extra)
 		}
 		tag, err := tx.Exec(ctx, q, string(f.Tables[t.name]))
 		if err != nil {

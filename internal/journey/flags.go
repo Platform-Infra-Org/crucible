@@ -2,6 +2,7 @@ package journey
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"crucible/internal/content"
 	"crucible/internal/gitsync"
+	"crucible/internal/ready"
 )
 
 // key is one person in one program.
@@ -21,10 +23,11 @@ type key struct {
 func (k key) mod(m string) string { return fmt.Sprint(k.uid, "/", k.training, "/", m) }
 
 type signals struct {
-	active map[string]bool    // key.mod → a lab is live in that module
-	flags  map[key][]Flag     // failed_checks, final_hint, returned_twice (inactive is added per row)
-	last   map[key]*time.Time // last activity by the trainee (scorer-side writes do not count)
-	wait   map[key]bool       // a submission is waiting for a scorer
+	active  map[string]bool      // key.mod → a lab is live in that module
+	flags   map[key][]Flag       // failed_checks, final_hint, returned_twice (inactive is added per row)
+	last    map[key]*time.Time   // last activity by the trainee (scorer-side writes do not count)
+	wait    map[key]bool         // a submission is waiting for a scorer
+	cluster map[key][]ClusterLab // running cluster labs
 }
 
 func notStarted() Flag { return Flag{Kind: "not_started", Detail: "has not started"} }
@@ -35,7 +38,7 @@ func inactive(n int, at *time.Time) Flag {
 
 // signals computes spec §11's stuck signals for everyone in uids across the team's programs, one query per signal.
 func (s *Service) signals(ctx context.Context, st *gitsync.State, team string, uids []int64) (*signals, error) {
-	sg := &signals{active: map[string]bool{}, flags: map[key][]Flag{}, last: map[key]*time.Time{}, wait: map[key]bool{}}
+	sg := &signals{active: map[string]bool{}, flags: map[key][]Flag{}, last: map[key]*time.Time{}, wait: map[key]bool{}, cluster: map[key][]ClusterLab{}}
 	var k key
 	var m, item string
 	var n int
@@ -48,6 +51,26 @@ func (s *Service) signals(ctx context.Context, st *gitsync.State, team string, u
 		return nil, err
 	}
 	if _, err := pgx.ForEachRow(rows, []any{&k.uid, &k.training, &m}, func() error { sg.active[k.mod(m)] = true; return nil }); err != nil {
+		return nil, err
+	}
+	rows, err = s.DB.Query(ctx, `SELECT li.user_id, li.training, li.module, li.cluster_context, coalesce((SELECT e.detail FROM lab_events e
+		WHERE e.lab_id = li.id AND e.kind = 'health' ORDER BY e.id DESC LIMIT 1), '') FROM lab_instances li
+		WHERE li.user_id = ANY($1) AND li.team = $2 AND li.runtime = 'cluster' AND li.state IN ('provisioning', 'ready')
+		ORDER BY li.created_at`, uids, team)
+	if err != nil {
+		return nil, err
+	}
+	var kctx, health string
+	if _, err := pgx.ForEachRow(rows, []any{&k.uid, &k.training, &m, &kctx, &health}, func() error {
+		cl := ClusterLab{Module: m, Context: kctx}
+		var rep ready.Report
+		if health != "" && json.Unmarshal([]byte(health), &rep) == nil {
+			rep = rep.Lists()
+			cl.Health = &rep
+		}
+		sg.cluster[k] = append(sg.cluster[k], cl)
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	// ≥ 3 failed checks on a task that is still neither passed nor skipped.

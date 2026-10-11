@@ -189,4 +189,14 @@ func TestForgeStatusShowsAttention(t *testing.T) {
 	if _, err := f.s.Status(ctx, f.leader); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("admins only: %v", err)
 	}
+	// a cluster lab names the context it ran on (spec 2026-10-11 §3)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET runtime = 'cluster', cluster_context = 'kind-dev' WHERE id = 'aaaaaaaaaaaa'`); err != nil {
+		t.Fatal(err)
+	}
+	v, _ = f.s.Status(ctx, f.admin)
+	for _, a := range v.Attention {
+		if a.ID == "aaaaaaaaaaaa" && a.ClusterContext != "kind-dev" {
+			t.Fatalf("context: %+v", a)
+		}
+	}
 }

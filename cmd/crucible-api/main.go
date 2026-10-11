@@ -213,35 +213,36 @@ func run(ctx context.Context) error {
 	}
 	runners := map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}}
 	estimators := map[string]labs.Estimator{"local": rates}
-	if os.Getenv("CRUCIBLE_CLUSTER_LABS") == "1" {
+	if img := os.Getenv("CRUCIBLE_TOOLBOX_IMAGE"); img != "" {
+		runners["cluster"], estimators["cluster"] = labs.AgentClusterRunner{Hub: hub, Toolbox: img}, labs.FixedRates{} // free: the trainee's cluster
+		slog.Info("cluster labs enabled (on trainees' own clusters)", "toolbox", img)
+	}
+	var kube *labs.ClusterRunner
+	legacy := os.Getenv("CRUCIBLE_CLUSTER_LABS") == "1"
+	if legacy {
+		slog.Warn("CRUCIBLE_CLUSTER_LABS is retired: cluster labs run on trainees' own clusters (CRUCIBLE_TOOLBOX_IMAGE). Crucible's cluster is used for AWS labs (CRUCIBLE_LAB_CLUSTER=1) and to clean up old cluster labs")
+	}
+	if os.Getenv("CRUCIBLE_LAB_CLUSTER") == "1" || legacy || os.Getenv("CRUCIBLE_AWS_LABS") != "" {
 		// KUBECONFIG when set (dev), else the pod's service account (in-cluster).
 		cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(),
 			&clientcmd.ConfigOverrides{}).ClientConfig()
 		if err != nil {
-			return fmt.Errorf("cluster labs: %w", err)
+			return fmt.Errorf("lab cluster: %w", err)
 		}
-		// Dev clusters only: off unless explicitly set to exactly "1", and loud when on.
 		privileged := os.Getenv("CRUCIBLE_CLUSTER_PRIVILEGED") == "1"
 		if privileged {
-			slog.Warn("CRUCIBLE_CLUSTER_PRIVILEGED=1: cluster labs run as privileged pods without sysbox. Use this on development clusters only")
+			slog.Warn("CRUCIBLE_CLUSTER_PRIVILEGED=1: AWS lab workspaces run as privileged pods without sysbox. Use this on development clusters only")
 		}
-		cr, err := labs.NewClusterRunner(cfg, privileged)
-		if err != nil {
-			return fmt.Errorf("cluster labs: %w", err)
+		if kube, err = labs.NewClusterRunner(cfg, privileged); err != nil {
+			return fmt.Errorf("lab cluster: %w", err)
 		}
-		runners["cluster"], estimators["cluster"] = cr, labs.PlatformRate{State: syncer.Current, Override: rates}
-		slog.Info("cluster labs enabled", "api", cfg.Host, "privileged", privileged)
 	}
 	var cloud awscloud.Cloud
 	var awsRegions []string
 	switch mode := os.Getenv("CRUCIBLE_AWS_LABS"); mode {
 	case "":
 	case "1", "dryrun":
-		cr, ok := runners["cluster"].(*labs.ClusterRunner)
-		if !ok {
-			return errors.New("CRUCIBLE_AWS_LABS needs CRUCIBLE_CLUSTER_LABS=1: the workspace and terraform pods run in the cluster")
-		}
-		ar := &labs.AWSRunner{Cluster: cr, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
+		ar := &labs.AWSRunner{Cluster: kube, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
 			WorkspaceImage: env("CRUCIBLE_AWS_WORKSPACE_IMAGE", labs.DefaultWorkspaceImage),
 			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage)}
 		for r := range strings.SplitSeq(env("CRUCIBLE_AWS_LAB_REGIONS", "eu-west-1"), ",") {
@@ -264,7 +265,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
-		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions}
+		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
 		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))

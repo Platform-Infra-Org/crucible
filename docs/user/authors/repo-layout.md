@@ -22,7 +22,7 @@ modules/
     quiz.yaml              the module's quiz
     lab/
       lab.yaml             runtime, timings, terminals, tasks
-      compose.yaml         the containers (laptop and cluster labs)
+      compose.yaml         the containers (laptop labs); cluster labs have charts/ instead
       tasks/               one Markdown file of instructions per task
       checks/              the scripts that check each task
       setup/               scripts that prepare a task's starting state

@@ -18,6 +18,7 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 type Filter struct{ Training, Trainee, Type string }
@@ -40,7 +41,26 @@ func (s *Service) Queue(ctx context.Context, u *auth.User, f Filter) ([]*Submiss
 	if list == nil {
 		list = []*Submission{}
 	}
+	if err := s.addSmiths(ctx, list); err != nil {
+		return nil, err
+	}
 	return list, nil
+}
+
+// addSmiths sets each trainee's smith rank, in one query.
+func (s *Service) addSmiths(ctx context.Context, list []*Submission) error {
+	emails := make([]string, len(list))
+	for i, x := range list {
+		emails[i] = x.Email
+	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return err
+	}
+	for _, x := range list {
+		x.TraineeSmith = refs.Of(x.Email)
+	}
+	return nil
 }
 
 type Detail struct {
@@ -92,6 +112,9 @@ func (s *Service) Detail(ctx context.Context, u *auth.User, id int64) (*Detail, 
 	if hist == nil {
 		hist = []*Submission{}
 	}
+	if err := s.addSmiths(ctx, hist); err != nil {
+		return nil, err
+	}
 	d := &Detail{Submission: sub, History: hist}
 	if sub.LabID != "" && s.Labs != nil {
 		if d.Lab, err = s.Labs.Evidence(ctx, sub.LabID); err != nil { // e.g. its content version is gone: score without it
@@ -103,14 +126,15 @@ func (s *Service) Detail(ctx context.Context, u *auth.User, id int64) (*Detail, 
 }
 
 type SignOff struct {
-	Team        string  `json:"team"`
-	Training    string  `json:"training"`
-	Module      string  `json:"module"`
-	Question    string  `json:"question"`
-	Prompt      string  `json:"prompt"`
-	Points      float64 `json:"points"`
-	Trainee     string  `json:"trainee"`
-	TraineeName string  `json:"trainee_name"`
+	Team         string    `json:"team"`
+	Training     string    `json:"training"`
+	Module       string    `json:"module"`
+	Question     string    `json:"question"`
+	Prompt       string    `json:"prompt"`
+	Points       float64   `json:"points"`
+	Trainee      string    `json:"trainee"`
+	TraineeName  string    `json:"trainee_name"`
+	TraineeSmith smith.Ref `json:"trainee_smith"`
 }
 
 // SignOffs lists live demos the user can sign off: enrolled trainees (who have signed in) × signoff questions in the
@@ -182,12 +206,16 @@ func (s *Service) SignOffs(ctx context.Context, u *auth.User) ([]SignOff, error)
 	for _, k := range keys {
 		done[k] = true
 	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return nil, err
+	}
 	for _, x := range cands {
 		name, signedIn := names[x.Trainee]
 		if !signedIn || done[key{x.Trainee, x.Team, x.Training, x.Module, x.Question}] {
 			continue
 		}
-		x.TraineeName = name
+		x.TraineeName, x.TraineeSmith = name, refs.Of(x.Trainee)
 		out = append(out, x)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -297,7 +325,7 @@ func (s *Service) resetCheck(u *auth.User, in ResetInput) (string, error) {
 
 // Reset is the admin escape hatch for "scores are final" (spec §7): it clears the trainee's instant quiz attempts for
 // the submission's module and/or reopens the scored submission for scoring, audited in the same transaction, and
-// tells the trainee. Forge ranks are never lowered: UpdateForge only raises them.
+// tells the trainee. Sword and smith ranks are never lowered: UpdateForge only raises them.
 func (s *Service) Reset(ctx context.Context, u *auth.User, id int64, in ResetInput) (*Submission, error) {
 	reason, err := s.resetCheck(u, in)
 	if err != nil {

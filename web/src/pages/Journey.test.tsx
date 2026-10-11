@@ -5,7 +5,7 @@ import { JourneyPage } from './Journey'
 import type { JourneyRow } from '../types'
 
 const rows: JourneyRow[] = [
-  { email: 't@x', name: 'Tara', avatar: 'flame', team: 'forge', training: 'f101', title: 'Forge 101', percent: 50,
+  { email: 't@x', name: 'Tara', avatar: 'flame', team: 'forge', training: 'f101', title: 'Forge 101', percent: 50, smith: { level: 3, title: 'Smith' }, sword: { level: 3, rank: 'Blade' },
     cells: [{ module: 'm1', title: 'Sparks', heat: 'forged' }, { module: 'm2', title: 'Embers', heat: 'cold' }],
     flags: [{ kind: 'inactive', detail: 'no activity for 5 business days' }] },
   { email: 'u@x', name: 'Uma', team: 'forge', training: 'f101', title: 'Forge 101', percent: 100, cells: [], flags: [] },
@@ -23,9 +23,13 @@ test('by person: a panel each, with the molten bar, the cells, the flags and the
   expect(h).toContain('<strong>1</strong> needs a look')
   expect(h).toMatch(/aria-label="Tara".*aria-label="Uma"/)
   expect(h).toContain('aria-valuenow="50"')
+  expect(h).toContain('<span class="smith-mark l3">')
+  expect(h).toContain('<span class="badge">Blade</span>')
+  expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
   expect(h).toContain('Sparks<span class="sr-only">: forged</span>')
   expect(h).toContain('Gone quiet: no activity for 5 business days')
   expect(h).toContain('data-testid="journey-t@x-f101"')
+  expect(h).toMatch(/data-testid="journey-person-t@x".*<span class="smith-mark l3">/) // the mark sits in the person's header
   expect(h).toContain('aria-pressed="true">By person')
 })
 
@@ -34,6 +38,7 @@ test('by training: one panel for the training, everyone in it', () => {
   expect(h).toContain('aria-pressed="true">By training')
   expect(h.match(/class="panel journey-group"/g)).toHaveLength(1)
   expect(h).toContain('2 people')
+  expect(h).not.toContain('journey-person-')
 })
 
 test('filters come from the address: one person, the numbers follow, and a way back to everyone', () => {
@@ -47,4 +52,12 @@ test('filters come from the address: one person, the numbers follow, and a way b
   expect(h).toContain('Clear filters')
   expect(page('?look=1&training=f101')).not.toContain('aria-label="Uma"') // Uma has nothing to look at
   expect(page()).not.toContain('Clear filters')
+})
+
+test('a running cluster lab names its context and each release health in words', () => {
+  rows[0].cluster_labs = [{ module: 'm2', context: 'kind-dev', health: { releases: [{ name: 'forge', status: 'failing', unready: ['deployment/forge: 1 of 2 updated'] }] } }]
+  const h = page()
+  rows[0].cluster_labs = undefined
+  expect(h).toContain('Lab running in Embers on <code>kind-dev</code>')
+  expect(h).toMatch(/forge <span class="badge failing">Failing<\/span>/)
 })

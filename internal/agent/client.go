@@ -83,7 +83,7 @@ func (c *Client) runOnce(ctx context.Context) error {
 		hello.Contexts = c.Kube.Current()
 		wctx, stop := context.WithCancel(ctx)
 		defer stop() // the goroutine ends with this connection, not only with the agent
-		go func() { // while connected, every change of the kubeconfig's contexts reaches Crucible
+		go func() {  // while connected, every change of the kubeconfig's contexts reaches Crucible
 			for {
 				select {
 				case <-wctx.Done():

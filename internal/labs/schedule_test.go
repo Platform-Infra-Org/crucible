@@ -18,7 +18,7 @@ func TestScheduleGatesRequestsAndApprovals(t *testing.T) {
 	f := setup(t, true)
 	onSchedule(f)
 	f.clk.Set(time.Date(2026, 10, 10, 7, 0, 0, 0, time.UTC)) // Saturday 10:00 local
-	_, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab")
+	_, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "Next window opens Mon 08:00") {
 		t.Fatalf("request outside the window: %v", err)
 	}

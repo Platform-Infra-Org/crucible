@@ -150,7 +150,7 @@ func setup(t *testing.T, unlock bool) *fx {
 
 func (f *fx) start(t *testing.T) *View {
 	t.Helper()
-	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func statusOf(v *View, task string) string {
 func TestStartIsIdempotentAndBecomesReady(t *testing.T) {
 	f := setup(t, true)
 	v := f.start(t)
-	again, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab")
+	again, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil || again.ID != v.ID {
 		t.Fatalf("second start must return the same lab: %v %v", again, err)
 	}
@@ -191,12 +191,12 @@ func TestStartIsIdempotentAndBecomesReady(t *testing.T) {
 
 func TestStartGuards(t *testing.T) {
 	f := setup(t, false)
-	if _, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab"); !errors.Is(err, apperr.Locked) {
+	if _, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab", StartOptions{}); !errors.Is(err, apperr.Locked) {
 		t.Fatalf("locked module: %v", err)
 	}
 	f = setup(t, true)
 	f.run.unavailable = apperr.Wrap(apperr.Unavailable, "your laptop agent is not connected")
-	if _, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab"); !errors.Is(err, apperr.Unavailable) {
+	if _, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab", StartOptions{}); !errors.Is(err, apperr.Unavailable) {
 		t.Fatalf("offline agent: %v", err)
 	}
 	var n int
@@ -346,7 +346,7 @@ func TestEndDuringProvisioningDestroysLateContainers(t *testing.T) {
 	f := setup(t, true)
 	release := make(chan struct{})
 	f.run.provision = func() { <-release }
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

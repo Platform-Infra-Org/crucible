@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	ap "crucible/internal/agentproto"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -126,6 +127,7 @@ type View struct {
 	EscalateAt       *time.Time         `json:"escalate_at,omitempty"`
 	DecidedBy        string             `json:"decided_by,omitempty"`
 	DecisionNote     string             `json:"decision_note,omitempty"`
+	ClusterContext   string             `json:"cluster_context,omitempty"`
 	Log              []string           `json:"log,omitempty"` // provisioning only: the lab's latest events (spec §8.3)
 }
 
@@ -152,20 +154,22 @@ type HintResult struct {
 }
 
 type ModuleLab struct {
-	Title          string  `json:"title"`
-	Runtime        string  `json:"runtime"`
-	RuntimeReady   bool    `json:"runtime_ready"`
-	RuntimeMessage string  `json:"runtime_message,omitempty"`
-	EstimateUSD    float64 `json:"estimate_usd"`
-	NeedsApproval  bool    `json:"needs_approval"`
-	Blocked        string  `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
-	Lab            *View   `json:"lab"`
+	Title          string           `json:"title"`
+	Runtime        string           `json:"runtime"`
+	RuntimeReady   bool             `json:"runtime_ready"`
+	RuntimeMessage string           `json:"runtime_message,omitempty"`
+	EstimateUSD    float64          `json:"estimate_usd"`
+	NeedsApproval  bool             `json:"needs_approval"`
+	Blocked        string           `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
+	Lab            *View            `json:"lab"`
+	ClusterWide    bool             `json:"cluster_wide,omitempty"`
+	Contexts       []ap.KubeContext `json:"contexts,omitempty"`
 }
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
 	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
 	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note,
-	ext_until, ext_estimate_usd, ext_tier, ext_requested_at`
+	ext_until, ext_estimate_usd, ext_tier, ext_requested_at, cluster_context`
 
 func scanInst(row pgx.Row) (*Instance, error) {
 	var in Instance
@@ -173,7 +177,7 @@ func scanInst(row pgx.Row) (*Instance, error) {
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
 		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
 		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
-		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt)
+		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt, &in.ClusterContext)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
 	}
@@ -400,7 +404,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
-		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, SelfReported: inst.Runtime == "local", Complete: true,
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SelfReported: inst.Runtime == "local", Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -491,6 +495,10 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 		return nil, apperr.Wrap(apperr.NotFound, "this module has no lab")
 	}
 	out := &ModuleLab{Title: m.Title, Runtime: m.Lab.Runtime, RuntimeReady: true}
+	if cr, ok := s.Runners[m.Lab.Runtime].(contextRunner); ok {
+		out.Contexts = cr.Contexts(u.ID)
+		out.ClusterWide = m.Lab.Cluster != nil && m.Lab.Cluster.ClusterWide
+	}
 	if r := s.Runners[m.Lab.Runtime]; r == nil {
 		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
 	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
@@ -630,16 +638,26 @@ func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, trai
 func (s *Service) insert(ctx context.Context, in *Instance) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
 		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s,
-		hourly_usd, estimate_usd, tier, over_cap, escalate_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		hourly_usd, estimate_usd, tier, over_cap, escalate_at, cluster_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		in.ID, in.UserID, in.Team, in.Training, in.Module, in.SHA, in.Runtime, in.State, in.CreatedAt,
 		int(in.TTL.Seconds()), int(in.IdleTimeout.Seconds()), int(in.IdleWarning.Seconds()), int(in.MaxExtension.Seconds()),
-		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt)
+		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt, in.ClusterContext)
 	return err
 }
 
+// StartOptions are the trainee's choices at start: the kubeconfig context for a cluster lab.
+type StartOptions struct {
+	Context string `json:"context"`
+}
+
+type contextRunner interface {
+	CheckContext(userID int64, name string) error
+	Contexts(userID int64) []ap.KubeContext
+}
+
 // Start requests a lab: free labs within auto_approve_usd start at once; others wait for an approver (spec §9.1).
-func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string) (*View, error) {
+func (s *Service) Start(ctx context.Context, u *auth.User, team, training, module string, opt StartOptions) (*View, error) {
 	st, t, sha, err := s.Learn.Program(u, team, training)
 	if err != nil {
 		return nil, err
@@ -654,6 +672,15 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	r := s.Runners[m.Lab.Runtime]
 	if r == nil {
 		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime))
+	}
+	cr, isCluster := r.(contextRunner)
+	switch {
+	case isCluster:
+		if err := cr.CheckContext(u.ID, opt.Context); err != nil {
+			return nil, err
+		}
+	case opt.Context != "":
+		return nil, apperr.Wrap(apperr.Invalid, "only cluster labs run on a cluster you pick")
 	}
 	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
 		return nil, err
@@ -671,7 +698,7 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	inst := &Instance{ID: newLabID(), UserID: u.ID, Team: team, Training: training, Module: module, SHA: sha,
 		Runtime: m.Lab.Runtime, State: Provisioning, CreatedAt: now, LastActivityAt: now,
 		TTL: q.Timing.TTL, IdleTimeout: q.Timing.IdleTimeout, IdleWarning: q.Timing.IdleWarning, MaxExtension: q.Timing.MaxExtension,
-		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap}
+		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap, ClusterContext: opt.Context}
 	if q.Tier == rbac.TierAuto {
 		if err := r.Available(inst); err != nil {
 			return nil, err

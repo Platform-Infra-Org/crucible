@@ -29,6 +29,7 @@ const (
 )
 
 type Instance struct {
+	ClusterContext                              string // runtime cluster: the kubeconfig context it runs on (display only)
 	ID                                          string
 	UserID                                      int64
 	Team, Training, Module, SHA, Runtime        string

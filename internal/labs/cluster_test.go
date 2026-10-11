@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	ap "crucible/internal/agentproto"
 	"crucible/internal/apperr"
 	"crucible/internal/rbac"
 	"io"
@@ -346,7 +347,7 @@ func TestClusterLabAboveAutoApproveNeedsApproval(t *testing.T) {
 	if m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || !strings.Contains(m.Blocked, "cluster_usd_per_hour") {
 		t.Fatalf("no cluster rate: the lab must be blocked with a message, not free: %+v %v", m, err)
 	}
-	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); !errors.Is(err, apperr.Unavailable) {
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{}); !errors.Is(err, apperr.Unavailable) {
 		t.Fatalf("no cluster rate: a request must fail closed: %v", err)
 	}
 	rate := 0.0
@@ -359,7 +360,27 @@ func TestClusterLabAboveAutoApproveNeedsApproval(t *testing.T) {
 	if err != nil || !m.NeedsApproval || m.EstimateUSD <= 0 {
 		t.Fatalf("a priced cluster lab routes to approval: %+v %v", m, err)
 	}
-	if v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat"); err != nil || v.State != PendingApproval || v.Tier != rbac.TierApprover {
+	if v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{}); err != nil || v.State != PendingApproval || v.Tier != rbac.TierApprover {
 		t.Fatalf("request %+v %v", v, err)
+	}
+}
+
+func TestClusterLabStartsOnAPickedContextForFree(t *testing.T) {
+	f := setup(t, true)
+	f.completeFirstLab(t)
+	ctx := context.Background()
+	contexts := []ap.KubeContext{{Name: "kind-dev"}}
+	f.s.Runners["cluster"] = AgentClusterRunner{Toolbox: "t", contexts: func(int64) []ap.KubeContext { return contexts },
+		online: func(int64) bool { return true }, call: func(context.Context, int64, ap.Msg) (ap.Msg, error) { return ap.Msg{}, nil }}
+	f.s.Estimators["cluster"] = FixedRates{}
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{}); err == nil || !strings.Contains(err.Error(), "pick a cluster") {
+		t.Fatalf("no context: %v", err)
+	}
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "03-cluster-heat", StartOptions{Context: "kind-dev"})
+	if err != nil || v.ClusterContext != "kind-dev" || v.EstimateUSD != 0 || v.Tier != "auto" {
+		t.Fatalf("start: %+v %v", v, err)
+	}
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{Context: "kind-dev"}); err == nil {
+		t.Fatal("a laptop lab must refuse a context")
 	}
 }

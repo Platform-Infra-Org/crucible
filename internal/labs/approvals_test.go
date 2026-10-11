@@ -21,7 +21,7 @@ import (
 
 func (f *fx) request(t *testing.T, u *auth.User) *View {
 	t.Helper()
-	v, err := f.s.Start(context.Background(), u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(context.Background(), u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

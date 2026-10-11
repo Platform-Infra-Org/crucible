@@ -213,6 +213,10 @@ func run(ctx context.Context) error {
 	}
 	runners := map[string]labs.Runner{"local": labs.LocalRunner{Hub: hub}}
 	estimators := map[string]labs.Estimator{"local": rates}
+	if img := os.Getenv("CRUCIBLE_TOOLBOX_IMAGE"); img != "" {
+		runners["cluster"], estimators["cluster"] = labs.AgentClusterRunner{Hub: hub, Toolbox: img}, labs.FixedRates{} // free: the trainee's cluster
+		slog.Info("cluster labs enabled (on trainees' own clusters)", "toolbox", img)
+	}
 	if os.Getenv("CRUCIBLE_CLUSTER_LABS") == "1" {
 		// KUBECONFIG when set (dev), else the pod's service account (in-cluster).
 		cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(),

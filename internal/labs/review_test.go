@@ -51,7 +51,7 @@ func setupReview(t *testing.T) *fx {
 func (f *fx) startReviewLab(t *testing.T) *View {
 	t.Helper()
 	ctx := context.Background()
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-301", "02-review-lab")
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-301", "02-review-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

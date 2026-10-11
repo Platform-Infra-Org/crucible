@@ -20,7 +20,7 @@ func TestProvisioningViewCarriesTheEventLog(t *testing.T) {
 	f := setup(t, true)
 	release := make(chan struct{})
 	f.run.provision = func() { <-release }
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestLabLevelSetupFailureFailsTheLab(t *testing.T) {
 		}
 		return 0
 	}
-	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(context.Background(), f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

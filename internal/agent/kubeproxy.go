@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	utilnet "k8s.io/apimachinery/pkg/util/net"
@@ -27,9 +28,24 @@ type Proxy struct {
 	Addr  string
 	Token string
 	srv   *http.Server
+	base  *http.Transport
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
 }
 
-func (p *Proxy) Close() error { return p.srv.Close() }
+// Close stops listening and drops every open connection, hijacked exec/attach/port-forward streams included, so
+// nothing keeps an authenticated upstream connection after the lab ends.
+func (p *Proxy) Close() error {
+	err := p.srv.Close()
+	p.mu.Lock()
+	for c := range p.conns {
+		_ = c.Close()
+	}
+	p.conns = nil
+	p.mu.Unlock()
+	p.base.CloseIdleConnections()
+	return err
+}
 
 func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Proxy, error) {
 	raw, err := LoadingRules(kubeconfig).Load()
@@ -46,7 +62,7 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 	if err := probe(ctx, cfg); err != nil {
 		return nil, fmt.Errorf("can't reach %s at %s: %w", kubeContext, cfg.Host, err)
 	}
-	h, err := apiHandler(cfg)
+	h, base, err := apiHandler(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -57,9 +73,24 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 	if err != nil {
 		return nil, err
 	}
-	srv := &http.Server{Handler: requireToken(tok, h), ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = srv.Serve(ln) }()
-	return &Proxy{Addr: ln.Addr().String(), Token: tok, srv: srv}, nil
+	p := &Proxy{Addr: ln.Addr().String(), Token: tok, base: base, conns: map[net.Conn]struct{}{}}
+	p.srv = &http.Server{Handler: requireToken(tok, h), ReadHeaderTimeout: 10 * time.Second,
+		ConnState: func(c net.Conn, st http.ConnState) {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.conns == nil { // already closed
+				_ = c.Close()
+				return
+			}
+			switch st {
+			case http.StateActive, http.StateHijacked:
+				p.conns[c] = struct{}{}
+			case http.StateIdle, http.StateClosed:
+				delete(p.conns, c)
+			}
+		}}
+	go func() { _ = p.srv.Serve(ln) }()
+	return p, nil
 }
 
 // probe asks the API server for its version, so a cluster that is down or a credential plugin that fails is reported
@@ -101,35 +132,36 @@ func (responder) Error(w http.ResponseWriter, _ *http.Request, err error) {
 
 // apiHandler proxies every path to the API server, upgrades (exec, attach, port-forward) and watches included, as
 // kubectl proxy does.
-func apiHandler(cfg *rest.Config) (http.Handler, error) {
+func apiHandler(cfg *rest.Config) (http.Handler, *http.Transport, error) {
 	target, err := url.Parse(cfg.Host)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if target.Scheme == "" {
-		return nil, errors.New("the cluster's server address has no scheme")
+		return nil, nil, errors.New("the cluster's server address has no scheme")
 	}
 	rt, err := rest.TransportFor(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tc, err := cfg.TransportConfig()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tlsCfg, err := transport.TLSConfigFor(tc)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	base := utilnet.SetOldTransportDefaults(&http.Transport{TLSClientConfig: tlsCfg,
 		DialContext: (&net.Dialer{Timeout: 30 * time.Second}).DialContext})
 	wrap, err := transport.HTTPWrappersForConfig(tc, proxy.MirrorRequest)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	h := proxy.NewUpgradeAwareHandler(target, rt, false, false, responder{})
 	h.UpgradeTransport = proxy.NewUpgradeRequestRoundTripper(base, wrap)
 	h.UseRequestLocation = true
 	h.UseLocationHost = true
-	return h, nil
+	h.AppendLocationPath = true // a server URL with a path (Rancher) keeps it
+	return h, base, nil
 }

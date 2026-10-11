@@ -100,12 +100,21 @@ func TestProxyAddsTheRealCredentialsAndNeedsItsToken(t *testing.T) {
 }
 
 func TestProxyPassesUpgradedStreams(t *testing.T) {
-	srv, _ := upstream(t)
+	srv, seen := upstream(t)
 	p, err := StartProxy(context.Background(), kubeconfigFor(t, srv, "{token: t}"), "lab", "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
+	nc, err := net.Dial("tcp", p.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	fmt.Fprint(nc, "POST /exec HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n")
+	if st, _ := bufio.NewReader(nc).ReadString('\n'); !strings.Contains(st, "401") {
+		t.Fatalf("tokenless upgrade: %q", st)
+	}
 	c, err := net.Dial("tcp", p.Addr)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +132,79 @@ func TestProxyPassesUpgradedStreams(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if got, _ := r.ReadString('\n'); got != "echo:hello\n" {
 		t.Fatalf("stream: %q", got)
+	}
+	if *seen != "Bearer t" {
+		t.Fatalf("upstream saw %q on the upgrade", *seen)
+	}
+}
+
+func TestProxyHonoursAServerPathPrefix(t *testing.T) {
+	var paths []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if !strings.HasPrefix(r.URL.Path, "/prefix/") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/exec") {
+			conn, buf, _ := w.(http.Hijacker).Hijack()
+			defer conn.Close()
+			buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n")
+			buf.Flush()
+			return
+		}
+		fmt.Fprint(w, `{"kind":"PodList","major":"1"}`)
+	}))
+	defer srv.Close()
+	cfg := kubeconfigFor(t, srv, "{token: t}")
+	b, _ := os.ReadFile(cfg)
+	_ = os.WriteFile(cfg, []byte(strings.Replace(string(b), srv.URL, srv.URL+"/prefix", 1)), 0o600)
+	p, err := StartProxy(context.Background(), cfg, "lab", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	req, _ := http.NewRequest("GET", "http://"+p.Addr+"/api/v1/pods", nil)
+	req.Header.Set("Authorization", "Bearer "+p.Token)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != 200 {
+		t.Fatalf("plain: %d, upstream saw %v", res.StatusCode, paths)
+	}
+	c, err := net.Dial("tcp", p.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "POST /api/v1/exec HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n", p.Token)
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if st, _ := bufio.NewReader(c).ReadString('\n'); !strings.Contains(st, "101") {
+		t.Fatalf("upgrade: %q, upstream saw %v", st, paths)
+	}
+}
+
+func TestProxyCloseEndsOpenStreams(t *testing.T) {
+	srv, _ := upstream(t)
+	p, err := StartProxy(context.Background(), kubeconfigFor(t, srv, "{token: t}"), "lab", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", p.Addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "POST /exec HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer %s\r\nConnection: Upgrade\r\nUpgrade: SPDY/3.1\r\n\r\n", p.Token)
+	r := bufio.NewReader(c)
+	for line, _ := r.ReadString('\n'); line != "\r\n"; line, _ = r.ReadString('\n') {
+	}
+	_ = p.Close()
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := r.ReadByte(); err == nil || strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("stream survived Close: %v", err)
 	}
 }
 

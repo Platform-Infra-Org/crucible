@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// BindAddr is where per-lab proxies listen so that only containers on this machine reach them: loopback where Docker
+// BindAddr is where per-lab proxies listen for containers on this machine: loopback where Docker
 // runs in a VM that forwards host.docker.internal to it (macOS, Windows, Docker Desktop for Linux), else the Docker
-// bridge's gateway (what host.docker.internal:host-gateway points to). Never 0.0.0.0.
+// bridge's gateway (what host.docker.internal:host-gateway points to). Never 0.0.0.0. The bridge gateway can be reachable beyond local containers on Linux, so the per-lab token is the real gate.
 func BindAddr(ctx context.Context, goos string, docker func(ctx context.Context, args ...string) ([]byte, error)) (string, error) {
 	if goos != "linux" {
 		return "127.0.0.1", nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,13 +31,14 @@ type apiFixture struct {
 	pinErr    error
 }
 
-// newAPI seeds team "platform" (leader lead@x, senior senior@x, trainee new@x, other team "other" led by boss@x),
-// admin@x as admin, and serves the routes with a snapshot that only changes when Refresh runs.
+// newAPI seeds team "platform" (leader lead@x, senior senior@x, trainee new@x), "data" (leader dl@x, senior ds@x,
+// trainee dt@x), "other" led by boss@x, admin@x as admin, forge-101 owned by platform, and serves the routes with a
+// snapshot that only changes when Refresh runs.
 func newAPI(t *testing.T) *apiFixture { return newAPIWith(t, true) }
 
 func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 	s, ctx := orgFixture(t)
-	mustTeam(t, s, "other", TeamBody{Name: "Other", Leader: "boss@x"})
+	mustTeam(t, s, "other", body("Other", "boss@x:leader"))
 	if err := s.AddAdmin(ctx, "root", "admin@x"); err != nil {
 		t.Fatal(err)
 	}
@@ -89,16 +91,17 @@ func (f *apiFixture) do(user, method, path, body string) *httptest.ResponseRecor
 
 func (f *apiFixture) teamVersion(id string) int64 { return f.snap.Teams[id].Version }
 
-func (f *apiFixture) roster(version int64, leader, name string, seniors ...string) string {
-	return fmt.Sprintf(`{"version":%d,"name":%q,"leader":%q,"seniors":[%s],"trainees":["new@x"]}`, version, name, leader, quoteAll(seniors))
+// roster is a roster body from "email:tag" pairs.
+func (f *apiFixture) roster(version int64, name string, members ...string) string {
+	b := body(name, members...)
+	b.Version = version
+	j, _ := json.Marshal(b)
+	return string(j)
 }
 
-func quoteAll(in []string) string {
-	q := make([]string, len(in))
-	for i, s := range in {
-		q[i] = fmt.Sprintf("%q", s)
-	}
-	return strings.Join(q, ",")
+// platform is team platform's roster with its tags changed.
+func (f *apiFixture) platform(version int64, lead, senior, trainee string) string {
+	return f.roster(version, "Platform", "lead@x:"+lead, "senior@x:"+senior, "new@x:"+trainee)
 }
 
 func (f *apiFixture) settingsVersion() int64 {
@@ -121,11 +124,10 @@ func TestAdminRoutesAreAdminOnly(t *testing.T) {
 		{"GET", "/api/admin/admins", ""},
 		{"POST", "/api/admin/admins", `{"email":"second@x"}`},
 		{"GET", "/api/admin/trainings", ""},
-		{"POST", "/api/admin/trainings", `{"id":"new-101","repo":"https://git.example.com/n.git"}`},
-		{"POST", "/api/admin/teams/fresh", `{"name":"Fresh","leader":"f@x"}`},
+		{"PUT", "/api/admin/trainings/forge-101/owner", `{"team":"other"}`},
+		{"POST", "/api/admin/teams/fresh", `{"name":"Fresh","members":{"f@x":"leader"}}`},
 		{"PUT", "/api/admin/teams/platform/webhooks/slack", `{"url":"https://hooks.example.com/secret-token"}`},
 		{"DELETE", "/api/admin/teams/fresh", ""},
-		{"DELETE", "/api/admin/trainings/new-101", ""},
 		{"DELETE", "/api/admin/admins/second@x", ""},
 		{"DELETE", "/api/admin/schedules/nights", ""},
 		{"GET", "/api/admin/export", ""},
@@ -191,7 +193,7 @@ func TestConflictIsReportedAsConflict(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "reload") {
 		t.Fatalf("stale save = %d %s, want 409 telling the person to reload", w.Code, w.Body)
 	}
-	if w := f.do("admin@x", "POST", "/api/admin/teams/platform", `{"name":"Again","leader":"x@x"}`); w.Code != 409 {
+	if w := f.do("admin@x", "POST", "/api/admin/teams/platform", `{"name":"Again","members":{"x@x":"leader"}}`); w.Code != 409 {
 		t.Errorf("duplicate team = %d, want 409", w.Code)
 	}
 }
@@ -225,10 +227,13 @@ func TestUnknownFieldsAreRefusedOnEveryWriteRoute(t *testing.T) {
 		{"PUT", "/api/admin/schedules/n", `{"timezone":"UTC","windowz":[]}`},
 		{"PUT", "/api/admin/quotes", `{"quote":["x"]}`},
 		{"POST", "/api/admin/admins", `{"emial":"a@x"}`},
-		{"POST", "/api/admin/trainings", `{"id":"t-1","repo":"https://g/x.git","brnach":"m"}`},
-		{"POST", "/api/admin/teams/fresh", `{"name":"F","leader":"f@x","leaders":["g@x"]}`},
+		{"POST", "/api/org/trainings", `{"id":"t-1","team":"platform","repo":"https://g/x.git","brnach":"m"}`},
+		{"PUT", "/api/org/trainings/forge-101/source", `{"repo":"https://g/x.git","reff":"v1"}`},
+		{"PUT", "/api/admin/trainings/forge-101/owner", `{"teams":"other"}`},
+		{"POST", "/api/admin/teams/fresh", `{"name":"F","members":{"f@x":"leader"},"leader":"g@x"}`},
 		{"PUT", "/api/admin/teams/platform/webhooks/slack", `{"urll":"https://h/x"}`},
-		{"PUT", "/api/org/teams/platform/roster", fmt.Sprintf(`{"version":%d,"name":"Platform","leader":"lead@x","seniors":["senior@x"],"traniees":["x@x"]}`, v)},
+		{"PUT", "/api/org/teams/platform/roster", fmt.Sprintf(`{"version":%d,"name":"Platform","members":{"lead@x":"leader"},"memberz":{}}`, v)},
+		{"PUT", "/api/org/teams/platform/programs/forge-101", `{"version":1,"budget_usd_month":0,"roles":{"participantz":[]}}`},
 		{"PUT", "/api/org/teams/platform/programs/forge-101/pin", `{"shaa":"` + sha1 + `"}`},
 	} {
 		w := f.do("admin@x", c.method, c.path, c.body)
@@ -241,49 +246,47 @@ func TestUnknownFieldsAreRefusedOnEveryWriteRoute(t *testing.T) {
 	}
 }
 
-func TestLeaderCannotChangeLeaderNameOrSeniors(t *testing.T) {
+// A leader retags the people already on the team, any tag including leader, but never adds or removes anyone or
+// renames the team; only an admin does that. A team always keeps a leader.
+func TestLeaderRetagsButNeverAddsOrRemoves(t *testing.T) {
 	f := newAPI(t)
 	v := f.teamVersion("platform")
 	for name, body := range map[string]string{
-		"leader":  f.roster(v, "senior@x", "Platform", "senior@x"), // promote someone else, demote self
-		"self":    f.roster(v, "lead@x", "Platform", "senior@x", "new@x"),
-		"name":    f.roster(v, "lead@x", "Platform 2", "senior@x"),
-		"seniors": f.roster(v, "lead@x", "Platform"), // demote the senior
+		"add":    f.roster(v, "Platform", "lead@x:leader", "senior@x:senior", "new@x:trainee", "more@x:trainee"),
+		"remove": f.roster(v, "Platform", "lead@x:leader", "senior@x:senior"),
+		"swap":   f.roster(v, "Platform", "lead@x:leader", "senior@x:senior", "dt@x:trainee"), // someone from another team
+		"rename": f.roster(v, "Platform 2", "lead@x:leader", "senior@x:senior", "new@x:trainee"),
 	} {
-		w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", body)
-		if w.Code != 403 {
-			t.Errorf("leader changing %s = %d %s, want 403", name, w.Code, w.Body)
+		if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", body); w.Code != 403 {
+			t.Errorf("leader trying to %s = %d %s, want 403", name, w.Code, w.Body)
 		}
+	}
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.platform(v, "trainee", "senior", "trainee")); w.Code != 400 {
+		t.Errorf("no leader left = %d %s, want 400", w.Code, w.Body)
 	}
 	if f.refreshes != 0 || f.teamVersion("platform") != v || audits(t, f.s, "team.roster") != 0 {
 		t.Fatal("a refused change was applied")
 	}
-	// An admin may change them.
-	if w := f.do("admin@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "senior@x", "Platform", "lead@x")); w.Code != 200 {
-		t.Errorf("admin changing the leader = %d %s", w.Code, w.Body)
-	}
-}
-
-func TestLeaderEditsTheRestOfTheRoster(t *testing.T) {
-	f := newAPI(t)
-	v := f.teamVersion("platform")
-	body := fmt.Sprintf(`{"version":%d,"name":"Platform","leader":"LEAD@x","seniors":["senior@x"],"trainees":["new@x","more@x"]}`, v)
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", body); w.Code != 200 {
-		t.Fatalf("leader roster edit = %d %s", w.Code, w.Body)
-	}
-	if got := f.snap.Teams["platform"].Trainees; len(got) != 2 || f.snap.Teams["platform"].Version != v+1 {
-		t.Errorf("trainees = %v version = %d", got, f.snap.Teams["platform"].Version)
-	}
-	// others may not
 	for _, who := range []string{"senior@x", "new@x", "boss@x"} {
-		if w := f.do(who, "PUT", "/api/org/teams/platform/roster", f.roster(v+1, "lead@x", "Platform", "senior@x")); w.Code != 403 {
+		if w := f.do(who, "PUT", "/api/org/teams/platform/roster", f.platform(v, "leader", "leader", "junior")); w.Code != 403 {
 			t.Errorf("%s = %d, want 403", who, w.Code)
 		}
 	}
-	if w := f.do("admin@x", "PUT", "/api/org/teams/ghost/roster", f.roster(1, "a@x", "G")); w.Code != 404 {
+	// The leader promotes the senior to leader and the trainee to junior: two leaders now.
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.platform(v, "leader", "leader", "junior")); w.Code != 200 {
+		t.Fatalf("leader retagging = %d %s", w.Code, w.Body)
+	}
+	if tm := f.snap.Teams["platform"]; !slices.Equal(tm.Leaders, []string{"lead@x", "senior@x"}) || tm.RoleOf("new@x") != "junior" || tm.Version != v+1 {
+		t.Errorf("team = %+v", tm)
+	}
+	// An admin adds, removes and renames.
+	if w := f.do("admin@x", "PUT", "/api/org/teams/platform/roster", f.roster(v+1, "Platform 2", "lead@x:leader", "more@x:trainee")); w.Code != 200 {
+		t.Errorf("admin = %d %s", w.Code, w.Body)
+	}
+	if w := f.do("admin@x", "PUT", "/api/org/teams/ghost/roster", f.roster(1, "G", "a@x:leader")); w.Code != 404 {
 		t.Errorf("admin, unknown team = %d, want 404", w.Code)
 	}
-	if w := f.do("lead@x", "PUT", "/api/org/teams/ghost/roster", f.roster(1, "a@x", "G")); w.Code != 403 {
+	if w := f.do("lead@x", "PUT", "/api/org/teams/ghost/roster", f.roster(1, "G", "a@x:leader")); w.Code != 403 {
 		t.Errorf("leader, unknown team = %d, want 403 (no hint which teams exist)", w.Code)
 	}
 }
@@ -295,15 +298,15 @@ func TestRosterPermissionCheckMatchesTheVersionWritten(t *testing.T) {
 	v := f.teamVersion("platform")
 	old := f.snap
 	// An admin makes the senior the leader and the leader a senior.
-	if w := f.do("admin@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "senior@x", "Platform", "lead@x")); w.Code != 200 {
+	if w := f.do("admin@x", "PUT", "/api/org/teams/platform/roster", f.platform(v, "senior", "leader", "trainee")); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
 	// lead@x is no longer leader: the stale form is refused outright.
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "senior@x")); w.Code != 403 {
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.platform(v, "leader", "senior", "trainee")); w.Code != 403 {
 		t.Errorf("former leader = %d, want 403", w.Code)
 	}
 	// The new leader sends the old version (the page was open before the change): Conflict, not a write.
-	w := f.do("senior@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "senior@x", "Platform", "lead@x"))
+	w := f.do("senior@x", "PUT", "/api/org/teams/platform/roster", f.platform(v, "senior", "leader", "trainee"))
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "reload") {
 		t.Errorf("stale version = %d %s, want 409", w.Code, w.Body)
 	}
@@ -314,7 +317,7 @@ func TestRosterPermissionCheckMatchesTheVersionWritten(t *testing.T) {
 	f.mu.Unlock()
 	rows := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for name, ver := range map[string]int64{"client at the stale version": v, "client at the real version": v + 1} {
-		w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(ver, "lead@x", "Platform", "senior@x"))
+		w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.platform(ver, "leader", "senior", "trainee"))
 		if w.Code != 409 {
 			t.Errorf("%s: demoted leader on a stale snapshot = %d %s, want 409", name, w.Code, w.Body)
 		}
@@ -322,7 +325,7 @@ func TestRosterPermissionCheckMatchesTheVersionWritten(t *testing.T) {
 	if count(t, f.s, `SELECT count(*) FROM audit_log`) != rows {
 		t.Error("a refused write left an audit row")
 	}
-	if p, _ := f.s.Platform(context.Background()); p.Teams["platform"].Leader != "senior@x" {
+	if p, _ := f.s.Platform(context.Background()); !slices.Equal(p.Teams["platform"].Leaders, []string{"senior@x"}) {
 		t.Error("the stale write was applied")
 	}
 }
@@ -342,8 +345,8 @@ func TestWebhookURLNeverLeavesAdminContext(t *testing.T) {
 	}
 	for _, c := range []struct{ user, method, path, body string }{
 		{"admin@x", "GET", "/api/admin/settings", ""}, {"admin@x", "GET", "/api/admin/admins", ""}, {"admin@x", "GET", "/api/admin/trainings", ""},
-		{"lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(f.teamVersion("platform"), "lead@x", "Platform", "senior@x")},
-		{"lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(1, "x@x", "Platform")},
+		{"lead@x", "PUT", "/api/org/teams/platform/roster", f.platform(f.teamVersion("platform"), "leader", "senior", "trainee")},
+		{"lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(1, "Platform", "x@x:leader")},
 		{"lead@x", "PUT", "/api/org/teams/platform/programs/forge-101/pin", `{"sha":"zz"}`},
 	} {
 		if w := f.do(c.user, c.method, c.path, c.body); strings.Contains(w.Body.String(), "s3cr3t") {
@@ -381,7 +384,7 @@ func TestPinMustResolveBeforeItIsStored(t *testing.T) {
 		t.Errorf("mirror failure = %d, want 500", w.Code)
 	}
 	f.pinErr = nil
-	for _, who := range []string{"senior@x", "new@x", "boss@x"} {
+	for _, who := range []string{"new@x", "boss@x"} { // a trainee of the owning team; another team's leader
 		if w := f.do(who, "PUT", path, `{"sha":"`+sha2+`"}`); w.Code != 403 {
 			t.Errorf("%s pinning = %d, want 403", who, w.Code)
 		}
@@ -394,22 +397,12 @@ func TestPinMustResolveBeforeItIsStored(t *testing.T) {
 	}
 }
 
-func TestLeaderGuardSeesReorderedAndDuplicatedSeniors(t *testing.T) {
+func TestLeaderGuardComparesPeopleNotSpelling(t *testing.T) {
 	f := newAPI(t)
 	v := f.teamVersion("platform")
-	// same people in another order, other case, with a repeat: not a change
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "SENIOR@x")); w.Code != 200 {
-		t.Fatalf("same senior in another case = %d %s", w.Code, w.Body)
-	}
-	v++
-	// an accidental duplicate is the same set of people: not a change
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "senior@x", "senior@x")); w.Code != 200 {
-		t.Fatalf("duplicated senior = %d %s, want 200", w.Code, w.Body)
-	}
-	v++
-	// reordered with an extra person
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "lead@x", "Platform", "new@x", "senior@x")); w.Code != 403 {
-		t.Errorf("added senior = %d, want 403", w.Code)
+	// the same people in another case: not adding anyone
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/roster", f.roster(v, "Platform", "LEAD@x:leader", "Senior@x:senior", "new@x:trainee")); w.Code != 200 {
+		t.Fatalf("same people in another case = %d %s", w.Code, w.Body)
 	}
 }
 
@@ -427,32 +420,121 @@ func TestPinWithoutACheckerIsRefused(t *testing.T) {
 func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	f := newAPI(t)
 	const repo = "https://deploy:t0psecret@git.example.com/org/r.git"
-	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"`+repo+`"}`); w.Code != 200 {
-		t.Fatal(w.Body)
-	}
-	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"tok-101","repo":"https://ghp_t0kenonly@git.example.com/o/t.git"}`); w.Code != 200 {
-		t.Fatal(w.Body)
-	}
-	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"ssh-101","repo":"ssh://git@git.example.com/o/s.git"}`); w.Code != 200 {
-		t.Fatal(w.Body)
+	for _, b := range []string{`{"id":"cred-101","team":"platform","repo":"` + repo + `"}`,
+		`{"id":"tok-101","team":"platform","repo":"https://ghp_t0kenonly@git.example.com/o/t.git"}`,
+		`{"id":"ssh-101","team":"platform","repo":"ssh://git@git.example.com/o/s.git"}`} {
+		if w := f.do("admin@x", "POST", "/api/org/trainings", b); w.Code != 200 {
+			t.Fatal(w.Body)
+		}
 	}
 	if got := f.snap.Trainings["cred-101"].Repo; got != repo {
 		t.Errorf("stored repo = %q, cloning needs the credentials", got)
 	}
-	if w := f.do("admin@x", "GET", "/api/admin/trainings", ""); strings.Contains(w.Body.String(), "t0psecret") || strings.Contains(w.Body.String(), "t0kenonly") || !strings.Contains(w.Body.String(), "https://***@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
-		t.Errorf("list = %s", w.Body)
+	for _, path := range []string{"/api/admin/trainings", "/api/org/trainings"} {
+		if w := f.do("admin@x", "GET", path, ""); strings.Contains(w.Body.String(), "t0psecret") || strings.Contains(w.Body.String(), "t0kenonly") || !strings.Contains(w.Body.String(), "https://***@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
+			t.Errorf("%s = %s", path, w.Body)
+		}
 	}
-	if w := f.do("admin@x", "POST", "/api/admin/trainings", `{"id":"cred-101","repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
+	if w := f.do("senior@x", "PUT", "/api/org/trainings/cred-101/source", `{"repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
-	if w := f.do("admin@x", "DELETE", "/api/admin/trainings/cred-101", ""); w.Code != 200 {
+	if w := f.do("senior@x", "DELETE", "/api/org/trainings/cred-101", ""); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
 	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%' OR detail::text LIKE '%t0kenonly%'`); n != 0 {
 		t.Errorf("%d audit rows hold the repo credentials", n)
 	}
 	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 5 {
-		t.Errorf("audit rows with the redacted repo = %d, want 5 (three adds, repoint, remove)", n)
+		t.Errorf("audit rows with the redacted repo = %d, want 5 (three creates, repoint, remove)", n)
+	}
+}
+
+// Leaders, seniors and juniors register trainings for their own team; trainees don't; admins pick the team.
+func TestWhoRegistersATraining(t *testing.T) {
+	f := newAPI(t)
+	mustExec(t, f.s.DB, `UPDATE team_members SET role = 'junior' WHERE email = 'senior@x'`)
+	f.reload()
+	create := func(who, id, team string) int {
+		return f.do(who, "POST", "/api/org/trainings", fmt.Sprintf(`{"id":%q,"team":%q,"repo":"https://git/%s.git","path":"courses/%s"}`, id, team, id, id)).Code
+	}
+	if c := create("senior@x", "jr-101", ""); c != 200 || f.snap.Teams["platform"].Programs["jr-101"] == nil || f.snap.Trainings["jr-101"].Path != "courses/jr-101" {
+		t.Fatalf("a junior registers for their team = %d", c)
+	}
+	for who, want := range map[string]int{"new@x": 403, "nobody@x": 403} {
+		if c := create(who, "x-1", ""); c != want {
+			t.Errorf("%s = %d, want %d", who, c, want)
+		}
+	}
+	if c := create("lead@x", "x-2", "other"); c != 403 {
+		t.Errorf("a leader registering for another team = %d, want 403", c)
+	}
+	if c := create("admin@x", "x-3", ""); c != 400 {
+		t.Errorf("an admin on no team must pick one = %d, want 400", c)
+	}
+	if c := create("admin@x", "x-4", "other"); c != 200 || f.snap.Teams["other"].Programs["x-4"] == nil {
+		t.Errorf("an admin registers for any team = %d", c)
+	}
+	if c := create("lead@x", "jr-101", ""); c != 409 {
+		t.Errorf("a taken id = %d, want 409", c)
+	}
+}
+
+// A training's managers are its team's leaders, seniors and juniors and its admins (from any team); they give roles
+// to anyone and to groups, change its source and delete it. Others can't.
+func TestTrainingManagers(t *testing.T) {
+	f := newAPI(t)
+	put := func(who, roles string) *httptest.ResponseRecorder {
+		v := f.snap.Teams["platform"].Programs["forge-101"].Version
+		return f.do(who, "PUT", "/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"budget_usd_month":0,"roles":%s}`, v, roles))
+	}
+	for _, who := range []string{"new@x", "boss@x", "dl@x"} {
+		if w := put(who, `{"participants":["all"]}`); w.Code != 403 {
+			t.Errorf("%s giving roles = %d, want 403", who, w.Code)
+		}
+	}
+	if w := put("senior@x", `{"participants":["all_trainees","Guest@corp"],"editors":["data_seniors"],"admins":["dl@x"]}`); w.Code != 200 {
+		t.Fatalf("a senior of the owning team = %d %s", w.Code, w.Body)
+	}
+	pr := f.snap.Teams["platform"].Programs["forge-101"]
+	if !slices.Equal(pr.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(pr.Editors, []string{"dl@x", "ds@x"}) {
+		t.Fatalf("resolved: %v %v", pr.Enrolled, pr.Editors)
+	}
+	if w := put("senior@x", `{"editors":["ghost_seniors"]}`); w.Code != 400 {
+		t.Errorf("a group of no team = %d, want 400", w.Code)
+	}
+	// dl@x is now one of the training's admins: they manage it from another team.
+	if w := put("dl@x", `{"participants":["data"],"admins":["dl@x"]}`); w.Code != 200 {
+		t.Errorf("the training's admin = %d %s", w.Code, w.Body)
+	}
+	if w := f.do("dl@x", "PUT", "/api/org/trainings/forge-101/source", `{"ref":"v2"}`); w.Code != 200 || f.snap.Trainings["forge-101"].Ref != "v2" {
+		t.Errorf("the training's admin changes the source = %d %s", w.Code, w.Body)
+	}
+	if w := f.do("boss@x", "DELETE", "/api/org/trainings/forge-101", ""); w.Code != 403 {
+		t.Errorf("another team's leader deleting = %d, want 403", w.Code)
+	}
+	if w := f.do("lead@x", "PUT", "/api/admin/trainings/forge-101/owner", `{"team":"data"}`); w.Code != 403 {
+		t.Errorf("only an admin moves a training to another team: %d", w.Code)
+	}
+}
+
+// The people list feeds the role pickers: everyone known, with their team and tag, and every group.
+func TestPeopleList(t *testing.T) {
+	f := newAPI(t)
+	mustExec(t, f.s.DB, `INSERT INTO users (sub, email, name) VALUES ('s1', 'Loner@x', 'Lone Smith')`)
+	w := f.do("senior@x", "GET", "/api/org/people", "")
+	var got struct {
+		People []Person `json:"people"`
+		Groups []string `json:"groups"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+		t.Fatalf("people = %d %s", w.Code, w.Body)
+	}
+	if !slices.Contains(got.People, Person{Email: "new@x", Team: "platform", Tag: "trainee"}) ||
+		!slices.Contains(got.People, Person{Email: "loner@x", Name: "Lone Smith"}) || !slices.Contains(got.Groups, "data_seniors") {
+		t.Errorf("people %+v groups %v", got.People, got.Groups)
+	}
+	if w := f.do("new@x", "GET", "/api/org/people", ""); w.Code != 403 {
+		t.Errorf("a trainee = %d, want 403", w.Code)
 	}
 }
 

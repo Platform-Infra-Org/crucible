@@ -17,12 +17,11 @@ import (
 	"crucible/internal/config"
 )
 
-// ProgramBody is what an admin saves for a team's enrollment of a training. Version is the one the page read.
-// Exactly one of Schedule (a named schedule) and InlineSchedule may be set; neither means any time.
+// ProgramBody is a training's run as its managers save it: who holds which role, and the run settings. Version is the
+// one the page read. Exactly one of Schedule (a named schedule) and InlineSchedule may be set; neither means any time.
 type ProgramBody struct {
 	Version            int64            `json:"version"`
-	Roles              config.Roles     `json:"roles"`
-	Enrolled           []string         `json:"enrolled"`
+	Roles              config.Access    `json:"roles"`
 	Schedule           string           `json:"schedule"`
 	InlineSchedule     *config.Schedule `json:"inline_schedule"`
 	TTL                string           `json:"ttl"`
@@ -34,10 +33,9 @@ type ProgramBody struct {
 
 var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-// program is a validated body: addresses normalised and deduplicated, durations canonical, schedule resolved.
+// program is a validated body: refs normalised and deduplicated, durations canonical, schedule resolved.
 type program struct {
-	roles    map[string][]string // role -> sorted emails
-	enrolled []string
+	roles    map[string][]string // participant, editor, admin -> sorted refs
 	schedule *string
 	inline   []byte
 	durs     [3]*string // ttl, idle_timeout, max_extension
@@ -45,17 +43,26 @@ type program struct {
 	review   bool
 }
 
-func emails(field string, in []string) ([]string, error) {
+// refs normalises a role's holders: emails and group refs, deduplicated and sorted. Groups are checked against the
+// teams in checkGroups.
+func refs(role string, in []string) ([]string, error) {
 	seen := map[string]bool{}
-	var out []string
-	for _, e := range in {
-		e = em(e)
-		if err := config.CheckEmail(field, e); err != nil {
-			return nil, err
+	out := []string{}
+	for _, r := range in {
+		r = em(r)
+		if r == "" {
+			continue
 		}
-		if !seen[e] {
-			seen[e] = true
-			out = append(out, e)
+		if strings.Contains(r, "@") {
+			if err := config.CheckEmail(role, r); err != nil {
+				return nil, err
+			}
+		} else if strings.ContainsFunc(r, func(c rune) bool { return c == ' ' || c == '/' }) {
+			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s %q is neither an email nor a group", role, r))
+		}
+		if !seen[r] {
+			seen[r] = true
+			out = append(out, r)
 		}
 	}
 	slices.Sort(out)
@@ -71,13 +78,10 @@ func (b ProgramBody) validate() (*program, error) {
 	for _, g := range []struct {
 		role string
 		in   []string
-	}{{"manager", b.Roles.Manager}, {"scorer", b.Roles.Scorers}, {"approver", b.Roles.Approvers}} {
-		if p.roles[g.role], err = emails(g.role, g.in); err != nil {
+	}{{"participant", b.Roles.Participants}, {"editor", b.Roles.Editors}, {"admin", b.Roles.Admins}} {
+		if p.roles[g.role], err = refs(g.role, g.in); err != nil {
 			return nil, err
 		}
-	}
-	if p.enrolled, err = emails("enrolled", b.Enrolled); err != nil {
-		return nil, err
 	}
 	if name := strings.TrimSpace(b.Schedule); name != "" {
 		if b.InlineSchedule != nil {
@@ -111,69 +115,44 @@ func (b ProgramBody) validate() (*program, error) {
 }
 
 func (p *program) detail(version int64) map[string]any {
-	return map[string]any{"version": version, "manager": p.roles["manager"], "scorers": p.roles["scorer"],
-		"approvers": p.roles["approver"], "enrolled": p.enrolled, "schedule": p.schedule, "inline_schedule": p.inline != nil,
+	return map[string]any{"version": version, "participants": p.roles["participant"], "editors": p.roles["editor"],
+		"admins": p.roles["admin"], "schedule": p.schedule, "inline_schedule": p.inline != nil,
 		"ttl": p.durs[0], "idle_timeout": p.durs[1], "max_extension": p.durs[2], "budget_usd_month": p.budget,
 		"review_self_reported": p.review}
 }
 
-// teamRoster returns each member's role, or NotFound when the team does not exist.
-func teamRoster(ctx context.Context, tx pgx.Tx, team string) (map[string]string, error) {
-	rows, err := tx.Query(ctx, `SELECT email, role FROM team_members WHERE team = $1`, team)
-	if err != nil {
-		return nil, err
-	}
-	m := map[string]string{}
-	for rows.Next() {
-		var e, r string
-		if err := rows.Scan(&e, &r); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		m[em(e)] = r
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(m) == 0 {
-		return nil, apperr.Wrap(apperr.NotFound, fmt.Sprintf("no team %q", team))
-	}
-	return m, nil
-}
-
-// checkMembers refuses anyone outside the team, naming them.
-func (p *program) checkMembers(roster map[string]string) error {
-	for _, g := range []struct {
-		what string
-		in   []string
-	}{{"manager", p.roles["manager"]}, {"scorer", p.roles["scorer"]}, {"approver", p.roles["approver"]}, {"enrolled", p.enrolled}} {
-		for _, e := range g.in {
-			if _, ok := roster[e]; !ok {
-				return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s %s is not a member of this team", g.what, e))
+// checkGroups refuses a group of a team that does not exist, naming it. Emails may be anyone: a role can go to someone
+// who has not signed in yet.
+func (p *program) checkGroups(ctx context.Context, tx pgx.Tx) error {
+	for _, role := range []string{"participant", "editor", "admin"} {
+		for _, r := range p.roles[role] {
+			if strings.Contains(r, "@") {
+				continue
+			}
+			team, _ := config.SplitGroup(r)
+			if team == "" {
+				continue
+			}
+			var one int
+			if err := tx.QueryRow(ctx, `SELECT 1 FROM teams WHERE id = $1`, team).Scan(&one); errors.Is(err, pgx.ErrNoRows) {
+				return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s %q: there is no team %q (groups are all, all_seniors, <team> and <team>_seniors, …)", role, r, team))
+			} else if err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func (p *program) writeChildren(ctx context.Context, tx pgx.Tx, team, training string) error {
-	if _, err := tx.Exec(ctx, `DELETE FROM program_roles WHERE team = $1 AND training = $2`, team, training); err != nil {
+func (p *program) writeChildren(ctx context.Context, tx pgx.Tx, training string) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM training_roles WHERE training = $1`, training); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM enrollments WHERE team = $1 AND training = $2`, team, training); err != nil {
-		return err
-	}
-	for role, es := range p.roles {
-		for _, e := range es {
-			if _, err := tx.Exec(ctx, `INSERT INTO program_roles (team, training, email, role) VALUES ($1,$2,$3,$4)`, team, training, e, role); err != nil {
+	for role, rs := range p.roles {
+		for _, r := range rs {
+			if _, err := tx.Exec(ctx, `INSERT INTO training_roles (training, ref, role) VALUES ($1,$2,$3)`, training, r, role); err != nil {
 				return err
 			}
-		}
-	}
-	for _, e := range p.enrolled {
-		if _, err := tx.Exec(ctx, `INSERT INTO enrollments (team, training, email) VALUES ($1,$2,$3)`, team, training, e); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -199,9 +178,8 @@ func fkError(err error, team, training string, schedule *string) error {
 	}
 }
 
-// Enroll creates the program. Only roles named in the body are stored. An empty list means the spec default (the
-// leader manages and approves, the seniors score), resolved at read time against the team as it is then, as in
-// config.Load, so a new leader or a promoted senior is followed without touching the program.
+// Enroll gives training to team: its one run, with the roles and settings in the body. The seed uses it; a training
+// registered in the UI gets its run from CreateTraining, and an admin moves one with SetOwner.
 func (s *Store) Enroll(ctx context.Context, actor, team, training string, b ProgramBody) error {
 	p, err := b.validate()
 	if err != nil {
@@ -209,11 +187,7 @@ func (s *Store) Enroll(ctx context.Context, actor, team, training string, b Prog
 	}
 	detail := map[string]any{}
 	return s.inTx(ctx, actor, "program.enroll", team+"/"+training, detail, func(tx pgx.Tx) error {
-		roster, err := teamRoster(ctx, tx, team)
-		if err != nil {
-			return err
-		}
-		if err := p.checkMembers(roster); err != nil {
+		if err := p.checkGroups(ctx, tx); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO programs (team, training, schedule_name, inline_schedule, ttl, idle_timeout,
@@ -221,12 +195,12 @@ func (s *Store) Enroll(ctx context.Context, actor, team, training string, b Prog
 			team, training, p.schedule, p.inline, p.durs[0], p.durs[1], p.durs[2], p.budget, p.review)
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && pg.Code == "23505" {
-			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("team %s is already enrolled in %s", team, training))
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("%s already belongs to a team", training))
 		}
 		if err != nil {
 			return fkError(err, team, training, p.schedule)
 		}
-		if err := p.writeChildren(ctx, tx, team, training); err != nil {
+		if err := p.writeChildren(ctx, tx, training); err != nil {
 			return err
 		}
 		for k, v := range p.detail(1) { // audit.Log runs after fn
@@ -236,18 +210,14 @@ func (s *Store) Enroll(ctx context.Context, actor, team, training string, b Prog
 	})
 }
 
-// SetProgram replaces a program's roles, enrollments, schedule, lab defaults and budget. The pin is not touched.
+// SetProgram replaces a training's roles and its run's schedule, lab defaults and budget. The pin is not touched.
 func (s *Store) SetProgram(ctx context.Context, actor, team, training string, b ProgramBody) error {
 	p, err := b.validate()
 	if err != nil {
 		return err
 	}
 	return s.inTx(ctx, actor, "program.update", team+"/"+training, p.detail(b.Version+1), func(tx pgx.Tx) error {
-		roster, err := teamRoster(ctx, tx, team)
-		if err != nil {
-			return err
-		}
-		if err := p.checkMembers(roster); err != nil {
+		if err := p.checkGroups(ctx, tx); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE programs SET schedule_name = $3, inline_schedule = $4, ttl = $5, idle_timeout = $6,
@@ -262,13 +232,13 @@ func (s *Store) SetProgram(ctx context.Context, actor, team, training string, b 
 			if err := tx.QueryRow(ctx, `SELECT 1 FROM programs WHERE team = $1 AND training = $2`, team, training).Scan(&one); errors.Is(err, pgx.ErrNoRows) {
 				return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %s has no program %s", team, training))
 			}
-			return apperr.Wrap(apperr.Conflict, "someone changed this program, reload")
+			return apperr.Wrap(apperr.Conflict, "someone changed this training, reload")
 		}
-		return p.writeChildren(ctx, tx, team, training)
+		return p.writeChildren(ctx, tx, training)
 	})
 }
 
-// SetPin moves the commit trainees' attempts run at; an empty sha tracks the branch head again. The audit row holds
+// SetPin moves the commit participants' attempts run at; an empty sha follows the source head again. The audit row holds
 // the previous and new commit. The route checks that the commit exists in the mirror.
 func (s *Store) SetPin(ctx context.Context, actor, team, training, sha string) error {
 	sha = strings.ToLower(strings.TrimSpace(sha))
@@ -304,28 +274,28 @@ func (s *Store) SetPin(ctx context.Context, actor, team, training, sha string) e
 	return err
 }
 
-// DeleteProgram removes the enrollment, roles and trainees (cascade). Progress, submissions, badges and ranks carry
-// plain team/training text with no foreign key, so a trainee's history stays.
-func (s *Store) DeleteProgram(ctx context.Context, actor, team, training string) error {
-	detail := map[string]any{}
-	return s.inTx(ctx, actor, "program.delete", team+"/"+training, detail, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT email FROM enrollments WHERE team = $1 AND training = $2 ORDER BY email`, team, training)
-		if err != nil {
+// SetOwner gives training to team: its run (pin, schedule, budget, roles) moves with it, or starts empty when no team
+// owned it. Admins only.
+func (s *Store) SetOwner(ctx context.Context, actor, training, team string) error {
+	detail := map[string]any{"team": team, "previous_team": nil}
+	err := s.inTx(ctx, actor, "training.owner", training, detail, func(tx pgx.Tx) error {
+		var prev string
+		err := tx.QueryRow(ctx, `SELECT team FROM programs WHERE training = $1 FOR UPDATE`, training).Scan(&prev)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			_, err = tx.Exec(ctx, `INSERT INTO programs (team, training) VALUES ($1, $2)`, team, training)
+		case err != nil:
 			return err
+		case prev == team:
+			return errNoChange
+		default:
+			detail["previous_team"] = prev // audit.Log runs after fn
+			_, err = tx.Exec(ctx, `UPDATE programs SET team = $2, version = version + 1 WHERE training = $1`, training, team)
 		}
-		enrolled, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		var pin *string
-		err = tx.QueryRow(ctx, `DELETE FROM programs WHERE team = $1 AND training = $2 RETURNING pinned_ref`, team, training).Scan(&pin)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return apperr.Wrap(apperr.NotFound, fmt.Sprintf("team %s has no program %s", team, training))
-		}
-		if err != nil {
-			return err
-		}
-		detail["enrolled"], detail["pinned_sha"] = enrolled, pin
-		return nil
+		return fkError(err, team, training, nil)
 	})
+	if errors.Is(err, errNoChange) {
+		return nil
+	}
+	return err
 }

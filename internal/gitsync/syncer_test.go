@@ -58,8 +58,8 @@ func setup(t *testing.T) (*Syncer, string, string) {
 	platformRepo := newRepo(t, map[string]string{
 		"platform.yaml":            "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n",
 		"trainings.yaml":           "trainings:\n  t1: {repo: " + trainingRepo + "}\n",
-		"teams/a/team.yaml":        "name: A\nleader: l@x\ntrainees: [u@x]\n",
-		"teams/a/programs/t1.yaml": "enrolled: [u@x]\n",
+		"teams/a/team.yaml":        "name: A\nleaders: [l@x]\ntrainees: [u@x]\n",
+		"teams/a/programs/t1.yaml": "roles: {participants: [u@x]}\n",
 	})
 	s := New(t.TempDir(), fromDir(platformRepo), slog.Default())
 	if err := s.SyncOnce(context.Background()); err != nil {
@@ -115,7 +115,7 @@ func TestBadPlatformKeepsState(t *testing.T) {
 func TestBadPinKeepsLastGood(t *testing.T) {
 	s, platformRepo, _ := setup(t)
 	_, good := s.Current().ProgramTraining("a", "t1")
-	commit(t, platformRepo, map[string]string{"teams/a/programs/t1.yaml": "enrolled: [u@x]\npinned_ref: nope\n"})
+	commit(t, platformRepo, map[string]string{"teams/a/programs/t1.yaml": "roles: {participants: [u@x]}\npinned_ref: nope\n"})
 	if err := s.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { contentEdits, enroll, setEditorText } from './helpers'
+import { addParticipant, contentEdits, setEditorText } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
@@ -13,13 +13,13 @@ async function login(browser: Browser, user: string): Promise<Page> {
   return page
 }
 
-// Idempotent on a KEEP=1 stack: titles and the appended line carry a run id, and enroll tolerates an existing program.
+// Idempotent on a KEEP=1 stack: titles and the appended line carry a run id, and addParticipant tolerates an existing role.
 const run = Date.now().toString(36)
 
 test('a content edit is reviewed and merged; the trainee earns a badge; mentor and leader see the journey', async ({ browser }) => {
-  // The leader starts Forge 102 for the team and enrols the trainee (a no-op on a KEEP=1 rerun).
+  // The leader makes the trainee a participant of Forge 102 (a no-op on a KEEP=1 rerun).
   const leader = await login(browser, 'leader')
-  await enroll(leader, 'forge-102', 'trainee@crucible.local')
+  await addParticipant(leader, 'forge-102', 'trainee@crucible.local')
 
   // The leader proposes an edit; authors never approve their own.
   await (await contentEdits(leader, 'forge-102')).getByRole('link', { name: 'Edit content' }).click()
@@ -34,7 +34,7 @@ test('a content edit is reviewed and merged; the trainee earns a badge; mentor a
   await expect(leader.getByTestId('edit-status')).toHaveText('pending')
   await expect(leader.getByRole('button', { name: 'Approve and merge' })).toHaveCount(0)
 
-  // The senior (a maintainer of Forge 102) reviews the diff and merges.
+  // The senior (an editor of Forge 102, through forge_seniors) reviews the diff and merges.
   const senior = await login(browser, 'senior')
   await (await contentEdits(senior, 'forge-102')).getByRole('link', { name: `Add a line about the anvil ${run}` }).click()
   await expect(senior.getByTestId('diff')).toContainText(`+The anvil remembers ${run}.`)

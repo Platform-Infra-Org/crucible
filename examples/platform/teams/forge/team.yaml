@@ -1,7 +1,7 @@
 name: The Forge
-leader: leader@crucible.local
+leaders: [leader@crucible.local]
 seniors: [senior@crucible.local]
-members: []
+juniors: []
 trainees: [trainee@crucible.local]
 mentors:
   trainee@crucible.local: senior@crucible.local

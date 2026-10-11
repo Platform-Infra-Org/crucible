@@ -1,0 +1,5 @@
+training: forge-301
+roles:
+  participants: []   # the e2e gives the trainee this training through the UI
+  editors: [forge_leaders, forge_seniors]
+  admins: [leader@crucible.local]

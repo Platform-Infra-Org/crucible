@@ -54,21 +54,13 @@ func TestTeamReadCarriesVersionsAndNeverAWebhook(t *testing.T) {
 
 func TestProgramAndBudgetRoutesByRole(t *testing.T) {
 	f := newAPI(t)
-	mustTraining(t, f.s, "net-101")
-	f.reload()
 	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
-	prog := fmt.Sprintf(`{"version":%d,"enrolled":["new@x"],"budget_usd_month":0}`, pv)
-	routes := []struct{ method, path, body string }{
-		{"PUT", "/api/org/teams/platform/programs/forge-101", prog},
-		{"POST", "/api/org/teams/platform/programs/net-101", `{"enrolled":["new@x"],"budget_usd_month":0}`},
-		{"DELETE", "/api/org/teams/platform/programs/forge-101", ""},
-	}
+	prog := fmt.Sprintf(`{"version":%d,"roles":{"participants":["new@x"]},"budget_usd_month":0}`, pv)
+	path := "/api/org/teams/platform/programs/forge-101"
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
-	for _, who := range []string{"senior@x", "new@x", "boss@x", "nobody@x"} {
-		for _, rt := range routes {
-			if w := f.do(who, rt.method, rt.path, rt.body); w.Code != 403 {
-				t.Errorf("%s %s %s = %d, want 403", who, rt.method, rt.path, w.Code)
-			}
+	for _, who := range []string{"new@x", "boss@x", "nobody@x"} {
+		if w := f.do(who, "PUT", path, prog); w.Code != 403 {
+			t.Errorf("%s PUT = %d, want 403", who, w.Code)
 		}
 	}
 	for _, who := range []string{"senior@x", "lead@x", "boss@x"} {
@@ -79,17 +71,11 @@ func TestProgramAndBudgetRoutesByRole(t *testing.T) {
 	if count(t, f.s, `SELECT count(*) FROM audit_log`) != before || f.refreshes != 0 {
 		t.Fatal("refused requests changed something")
 	}
-	if w := f.do("lead@x", "PUT", routes[0].path, prog); w.Code != 200 || !strings.Contains(w.Body.String(), fmt.Sprintf(`"version":%d`, pv+1)) {
-		t.Fatalf("leader PUT = %d %s", w.Code, w.Body)
+	if w := f.do("senior@x", "PUT", path, prog); w.Code != 200 || !strings.Contains(w.Body.String(), fmt.Sprintf(`"version":%d`, pv+1)) {
+		t.Fatalf("a senior of the owning team PUT = %d %s", w.Code, w.Body)
 	}
-	if w := f.do("lead@x", "POST", routes[1].path, routes[1].body); w.Code != 200 || !strings.Contains(w.Body.String(), `"version":1`) {
-		t.Fatalf("leader POST = %d %s", w.Code, w.Body)
-	}
-	if w := f.do("lead@x", "DELETE", routes[1].path, ""); w.Code != 200 {
-		t.Fatalf("leader DELETE = %d %s", w.Code, w.Body)
-	}
-	if w := f.do("admin@x", "DELETE", routes[1].path, ""); w.Code != 404 {
-		t.Errorf("deleting a missing program = %d, want 404", w.Code)
+	if w := f.do("admin@x", "PUT", "/api/org/teams/other/programs/forge-101", prog); w.Code != 404 {
+		t.Errorf("a team that does not own it = %d, want 404", w.Code)
 	}
 	if w := f.do("admin@x", "PUT", "/api/org/teams/platform/budget", `{"version":0,"monthly_usd":5,"hard_cap_usd":9}`); w.Code != 200 || !strings.Contains(w.Body.String(), `"version":1`) {
 		t.Errorf("admin budget = %d %s", w.Code, w.Body)
@@ -107,7 +93,7 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	}
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for _, c := range []struct{ path, body string }{
-		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"enrolled":["new@x"],"budget_usd_month":0}`, pv+7)},
+		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"roles":{"participants":["x@x"]},"budget_usd_month":0}`, pv+7)},
 		{"/api/org/teams/platform/budget", `{"version":0,"monthly_usd":99}`},
 		{"/api/org/teams/platform/budget", `{"version":9,"monthly_usd":99}`},
 	} {
@@ -119,7 +105,7 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	if err := f.s.DB.QueryRow(t.Context(), `SELECT monthly_usd FROM team_budgets WHERE team = 'platform'`).Scan(&monthly); err != nil || monthly != 5 {
 		t.Errorf("budget = %v (%v), want it untouched at 5", monthly, err)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM enrollments WHERE team = 'platform'`); n != 0 {
+	if n := count(t, f.s, `SELECT count(*) FROM training_roles`); n != 0 {
 		t.Errorf("a stale program save enrolled %d people", n)
 	}
 	if count(t, f.s, `SELECT count(*) FROM audit_log`) != before {
@@ -127,27 +113,10 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	}
 }
 
-func TestEnrollingSomeoneOutsideTheTeamIsRefused(t *testing.T) {
-	f := newAPI(t)
-	mustTraining(t, f.s, "net-101")
-	f.reload()
-	if w := f.do("lead@x", "POST", "/api/org/teams/platform/programs/net-101", `{"enrolled":["stranger@x"]}`); w.Code != 400 {
-		t.Fatalf("enroll outsider = %d %s, want 400", w.Code, w.Body)
-	}
-	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"enrolled":["stranger@x"]}`, pv)); w.Code != 400 {
-		t.Fatalf("save outsider = %d %s, want 400", w.Code, w.Body)
-	}
-	if n := count(t, f.s, `SELECT count(*) FROM enrollments WHERE email = 'stranger@x'`) + count(t, f.s, `SELECT count(*) FROM programs WHERE training = 'net-101'`); n != 0 {
-		t.Errorf("%d rows were written", n)
-	}
-}
-
 func TestNewRoutesRefuseUnknownFields(t *testing.T) {
 	f := newAPI(t)
 	for _, c := range []struct{ method, path, body string }{
-		{"PUT", "/api/org/teams/platform/programs/forge-101", `{"version":1,"enrolledd":[]}`},
-		{"POST", "/api/org/teams/platform/programs/forge-101", `{"enrolledd":[]}`},
+		{"PUT", "/api/org/teams/platform/programs/forge-101", `{"version":1,"enrolled":[]}`},
 		{"PUT", "/api/org/teams/platform/budget", `{"version":0,"monthly_usd":1,"hard_cap":2}`},
 	} {
 		if w := f.do("admin@x", c.method, c.path, c.body); w.Code != 400 || !strings.Contains(w.Body.String(), "unknown field") {
@@ -156,26 +125,43 @@ func TestNewRoutesRefuseUnknownFields(t *testing.T) {
 	}
 }
 
-func TestGetThenPutBackStoresNoRoles(t *testing.T) {
+// What the page reads is what it saves back: roles as given (groups stay groups), with who they are now beside them.
+func TestGetThenPutBackKeepsGroups(t *testing.T) {
 	f := newAPI(t)
+	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"budget_usd_month":0,"roles":{"participants":["platform_trainees"],"editors":["senior@x"]}}`, pv)); w.Code != 200 {
+		t.Fatal(w.Body)
+	}
 	m, _, body := f.teamJSON("lead@x", "platform")
 	p := m["programs"].([]any)[0].(map[string]any)
-	roles := p["roles"].(map[string]any)
-	for k, v := range roles {
-		if len(v.([]any)) != 0 {
-			t.Fatalf("roles.%s = %v, want empty (defaulted) as stored: %s", k, v, body)
-		}
+	if got := fmt.Sprint(p["roles"].(map[string]any)["participants"]); got != "[platform_trainees]" {
+		t.Fatalf("roles as given = %s: %s", got, body)
 	}
-	if eff := p["effective_roles"].(map[string]any)["manager"].([]any); len(eff) != 1 || eff[0] != "lead@x" {
-		t.Errorf("effective manager = %v, want the leader", eff)
+	if got := fmt.Sprint(p["resolved"].(map[string]any)["participants"]); got != "[new@x]" {
+		t.Errorf("resolved = %s", got)
 	}
-	put := map[string]any{"version": p["version"], "enrolled": p["enrolled"], "roles": p["roles"], "schedule": p["schedule"],
+	put := map[string]any{"version": p["version"], "roles": p["roles"], "schedule": p["schedule"],
 		"ttl": p["lab_defaults"].(map[string]any)["ttl"], "budget_usd_month": p["budget_usd_month"], "review_self_reported": p["review_self_reported"]}
 	b, _ := json.Marshal(put)
 	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", string(b)); w.Code != 200 {
 		t.Fatalf("PUT = %d %s", w.Code, w.Body)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM program_roles`); n != 0 {
-		t.Errorf("%d program_roles rows after a round trip; defaults must stay dynamic", n)
+	if n := count(t, f.s, `SELECT count(*) FROM training_roles WHERE ref = 'platform_trainees'`); n != 1 {
+		t.Errorf("the group must survive a round trip: %d rows", n)
+	}
+}
+
+// The team page lists members with their tags, strongest first.
+func TestTeamPageListsMembersByTag(t *testing.T) {
+	f := newAPI(t)
+	m, _, _ := f.teamJSON("new@x", "platform")
+	if got := fmt.Sprint(m["members"]); got != "[map[email:lead@x tag:leader] map[email:senior@x tag:senior] map[email:new@x tag:trainee]]" {
+		t.Errorf("members = %s", got)
+	}
+	if m["can_edit_team"] != false || m["is_admin"] != false {
+		t.Errorf("a trainee edits nothing: %v %v", m["can_edit_team"], m["is_admin"])
+	}
+	if m, _, _ := f.teamJSON("lead@x", "platform"); m["can_edit_team"] != true {
+		t.Error("the leader retags")
 	}
 }

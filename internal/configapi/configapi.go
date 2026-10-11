@@ -7,7 +7,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -85,25 +84,8 @@ func (s *Service) state() (*gitsync.State, error) {
 	return st, nil
 }
 
-// Role is the user's team role, or else their strongest program role in the team (manager, approver, scorer), which
-// lets them read the team page; "" means no role.
-func Role(t *config.Team, email string) string {
-	if r := t.RoleOf(email); r != "" {
-		return r
-	}
-	email, role := strings.ToLower(email), ""
-	for _, p := range t.Programs {
-		switch {
-		case slices.Contains(p.Roles.Manager, email):
-			return "manager"
-		case slices.Contains(p.Roles.Approvers, email):
-			role = "approver"
-		case role == "" && slices.Contains(p.Roles.Scorers, email):
-			role = "scorer"
-		}
-	}
-	return role
-}
+// Role is the user's tag in the team (leader, senior, junior, trainee); "" means they are not on it.
+func Role(t *config.Team, email string) string { return t.RoleOf(email) }
 
 func (s *Service) Teams(u *auth.User) ([]TeamSummary, error) {
 	st, err := s.state()
@@ -232,7 +214,7 @@ func (s *Service) manageable(u *auth.User, team, training string) (*gitsync.Stat
 		return nil, err
 	}
 	if t.Programs[training] == nil {
-		return nil, apperr.Wrap(apperr.NotFound, "this team is not enrolled in that training")
+		return nil, apperr.Wrap(apperr.NotFound, "this team does not own that training")
 	}
 	if !(rbac.Checker{P: st.Platform}).Can(u.Email, rbac.ManageProgram, team, training, "") {
 		return nil, errCantBump

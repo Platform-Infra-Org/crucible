@@ -17,7 +17,7 @@ provider (Keycloak or AWS Cognito, depending on how Crucible was set up).
 3. Crucible knows you by your email address. Your identity provider must have verified it; if it hasn't, Crucible
    tells you so and does not let you in.
 
-Your teams, trainings and roles all hang off that email address, so use the account your team leader enrolled.
+Your teams, trainings and roles all hang off that email address, so use the account your team knows you by.
 
 ## How long you stay signed in
 

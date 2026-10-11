@@ -267,12 +267,14 @@ func TestSMTPEnvelopeSenderIsTheBareAddress(t *testing.T) {
 	}
 }
 
-func TestSyncProblemReachesMaintainersAndAdmins(t *testing.T) {
+// A training whose new commit fails to load: its editors and admins hear about it, and so do Crucible's admins.
+func TestSyncProblemReachesEditorsAndAdmins(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.New(t)
 	plat, _ := config.Load("../../examples/platform")
 	plat.Admins = []string{"admin@crucible.local"}
-	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"forge-101@abc": {ID: "forge-101", Maintainers: []string{"maint@crucible.local"}}}}
+	plat.Teams["forge"].Programs["forge-101"].Editors = []string{"maint@crucible.local"}
+	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"forge-101@abc": {ID: "forge-101", Maintainers: []string{"ignored@crucible.local"}}}}
 	s := &Service{DB: pool, State: func() *gitsync.State { return st }, PublicURL: "https://crucible.example",
 		SMTP: SMTPConfig{Addr: "127.0.0.1:1", From: "c@x"}, Log: slog.Default()}
 	workers := river.NewWorkers()

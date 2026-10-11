@@ -73,9 +73,9 @@ func TestAddTrainingValidatesIDAndRepo(t *testing.T) {
 	}
 }
 
-// Deleting a training removes Crucible's connection to its repository (the repository itself is untouched) and stops
-// it for every team that ran it, in one audited step. Everyone's progress stays.
-func TestRemoveTrainingStopsItForEveryTeam(t *testing.T) {
+// Deleting a training removes Crucible's connection to its repository (the repository itself is untouched), its run
+// and its roles, in one audited step. Everyone's progress stays.
+func TestRemoveTrainingStopsIt(t *testing.T) {
 	pool := dbtest.New(t)
 	s := &Store{DB: pool}
 	ctx := context.Background()
@@ -83,22 +83,22 @@ func TestRemoveTrainingStopsItForEveryTeam(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('forge', 'The Forge'), ('anvil', 'Anvil')`)
-	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('forge','forge-101'), ('anvil','forge-101')`)
-	mustExec(t, pool, `INSERT INTO enrollments (team, training, email) VALUES ('forge','forge-101','a@x')`)
+	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('forge','forge-101')`)
+	mustExec(t, pool, `INSERT INTO training_roles (training, ref, role) VALUES ('forge-101','a@x','participant'), ('forge-101','anvil','participant')`)
 	mustExec(t, pool, `INSERT INTO users (sub, email) VALUES ('s1', 'a@x')`)
 	mustExec(t, pool, `INSERT INTO item_progress (user_id, team, training, module, item, status) SELECT id, 'forge', 'forge-101', 'm', 'r', 'complete' FROM users`)
 	if err := s.RemoveTraining(ctx, "admin@x", "forge-101"); err != nil {
 		t.Fatal(err)
 	}
 	var left, progress int
-	mustScan(t, pool, `SELECT (SELECT count(*) FROM trainings) + (SELECT count(*) FROM programs) + (SELECT count(*) FROM enrollments)`, &left)
+	mustScan(t, pool, `SELECT (SELECT count(*) FROM trainings) + (SELECT count(*) FROM programs) + (SELECT count(*) FROM training_roles)`, &left)
 	mustScan(t, pool, `SELECT count(*) FROM item_progress`, &progress)
 	if left != 0 || progress != 1 {
-		t.Errorf("after delete: %d training/program/enrollment rows left, %d progress rows (want 0 and 1)", left, progress)
+		t.Errorf("after delete: %d training/program/role rows left, %d progress rows (want 0 and 1)", left, progress)
 	}
 	var stopped string
 	mustScan(t, pool, `SELECT detail->>'stopped_for' FROM audit_log WHERE action = 'training.remove'`, &stopped)
-	if stopped != `["anvil", "forge"]` {
+	if stopped != `["forge"]` {
 		t.Errorf("audit names the teams it was stopped for: %s", stopped)
 	}
 	if err := s.RemoveTraining(ctx, "admin@x", "forge-101"); !errors.Is(err, apperr.NotFound) {
@@ -198,8 +198,6 @@ func TestAddTrainingRefAndPath(t *testing.T) {
 		t.Fatalf("audit detail = %s", raw)
 	}
 }
-
-// The screen never sees a stored repo's credentials, so a source change that leaves the repo empty keeps it.
 
 // The screen never sees a stored repo's credentials, so a source change that leaves the repo empty keeps it.
 func TestAddTrainingKeepsRepo(t *testing.T) {

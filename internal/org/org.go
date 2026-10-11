@@ -1,5 +1,5 @@
 // Package org owns Crucible's configuration and org data: settings, schedules, quotes, admins, the
-// training registry, teams, membership, mentors, budgets, programs, roles and enrollments.
+// training registry, teams and their tags, mentors, budgets, trainings' runs and their roles.
 // It returns config.Platform so every consumer of the old git-loaded config is unchanged.
 package org
 
@@ -51,6 +51,7 @@ func (s *Store) Platform(ctx context.Context) (*config.Platform, error) {
 	if err := s.programs(ctx, p); err != nil {
 		return nil, err
 	}
+	p.Resolve()
 	return p, nil
 }
 
@@ -174,11 +175,11 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 		t := p.Teams[team]
 		switch role {
 		case "leader":
-			t.Leader = em(email)
+			t.Leaders = append(t.Leaders, em(email))
 		case "senior":
 			t.Seniors = append(t.Seniors, em(email))
-		case "member":
-			t.Members = append(t.Members, em(email))
+		case "junior":
+			t.Juniors = append(t.Juniors, em(email))
 		case "trainee":
 			t.Trainees = append(t.Trainees, em(email))
 		}
@@ -187,11 +188,8 @@ func (s *Store) teams(ctx context.Context, p *config.Platform) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, t := range p.Teams {
-		if t.Leader == "" {
-			return fmt.Errorf("teams/%s: team has no leader", t.ID)
-		}
-		t.Seniors, t.Members, t.Trainees = nonNil(t.Seniors), nonNil(t.Members), nonNil(t.Trainees)
+	for _, t := range p.Teams { // writes keep a leader; a team without one (an old row) is shown so an admin can fix it
+		t.Leaders, t.Seniors, t.Juniors, t.Trainees = nonNil(t.Leaders), nonNil(t.Seniors), nonNil(t.Juniors), nonNil(t.Trainees)
 	}
 
 	if rows, err = s.DB.Query(ctx, `SELECT team, trainee, mentor FROM mentors`); err != nil {
@@ -318,7 +316,7 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 				return fail(err)
 			}
 		}
-		pr.Enrolled, pr.Roles.Manager, pr.Roles.Scorers, pr.Roles.Approvers = []string{}, []string{}, []string{}, []string{}
+		pr.Access = config.Access{Participants: []string{}, Editors: []string{}, Admins: []string{}}
 		p.Teams[team].Programs[pr.Training] = pr
 	}
 	rows.Close()
@@ -326,67 +324,29 @@ func (s *Store) programs(ctx context.Context, p *config.Platform) error {
 		return err
 	}
 
-	if rows, err = s.DB.Query(ctx, `SELECT team, training, email, role FROM program_roles ORDER BY email`); err != nil {
+	// Roles of a training no team owns are kept for when an admin gives it to one.
+	if rows, err = s.DB.Query(ctx, `SELECT training, ref, role FROM training_roles ORDER BY ref`); err != nil {
 		return err
 	}
+	defer rows.Close()
 	for rows.Next() {
-		var team, training, email, role string
-		if err := rows.Scan(&team, &training, &email, &role); err != nil {
-			rows.Close()
+		var training, ref, role string
+		if err := rows.Scan(&training, &ref, &role); err != nil {
 			return err
 		}
-		pr := p.Teams[team].Programs[training]
+		_, pr := p.Owner(training)
 		if pr == nil {
 			continue
 		}
-		r := &pr.Roles
+		a := &pr.Access
 		switch role {
-		case "manager":
-			r.Manager = append(r.Manager, em(email))
-		case "scorer":
-			r.Scorers = append(r.Scorers, em(email))
-		case "approver":
-			r.Approvers = append(r.Approvers, em(email))
+		case "participant":
+			a.Participants = append(a.Participants, ref)
+		case "editor":
+			a.Editors = append(a.Editors, ref)
+		case "admin":
+			a.Admins = append(a.Admins, ref)
 		}
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	if rows, err = s.DB.Query(ctx, `SELECT team, training, email FROM enrollments ORDER BY email`); err != nil {
-		return err
-	}
-	for rows.Next() {
-		var team, training, email string
-		if err := rows.Scan(&team, &training, &email); err != nil {
-			rows.Close()
-			return err
-		}
-		pr := p.Teams[team].Programs[training]
-		if pr == nil {
-			continue
-		}
-		pr.Enrolled = append(pr.Enrolled, em(email))
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	// Defaults config.Load applies to a program with no explicit roles.
-	for _, t := range p.Teams {
-		for _, pr := range t.Programs {
-			if len(pr.Roles.Manager) == 0 {
-				pr.Roles.Manager = []string{t.Leader}
-			}
-			if len(pr.Roles.Approvers) == 0 {
-				pr.Roles.Approvers = []string{t.Leader}
-			}
-			if len(pr.Roles.Scorers) == 0 {
-				pr.Roles.Scorers = slices.Clone(t.Seniors)
-			}
-		}
-	}
-	return nil
+	return rows.Err()
 }

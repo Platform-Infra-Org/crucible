@@ -300,8 +300,8 @@ func TestSetupFailureAllowsSkipAndResetIsRateLimited(t *testing.T) {
 	if err != nil || statusOf(after, "t2-find-port") != "skipped" || statusOf(after, "t3-fix-nginx") != "open" {
 		t.Fatalf("skip: %v %+v", err, after)
 	}
-	if ev := f.notes.last(notify.SetupFailed); ev == nil || len(ev.To) != 1 || ev.To[0] != "senior@crucible.local" {
-		t.Fatalf("maintainers must hear about a failed scenario: %+v", ev)
+	if ev := f.notes.last(notify.SetupFailed); ev == nil || strings.Join(ev.To, ",") != "leader@crucible.local,senior@crucible.local" {
+		t.Fatalf("the training's editors must hear about a failed scenario: %+v", ev)
 	}
 }
 

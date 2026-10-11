@@ -1,2 +1,5 @@
 training: forge-103
-enrolled: [trainee@crucible.local]
+roles:
+  participants: [trainee@crucible.local]
+  editors: [forge_leaders, forge_seniors]
+  admins: [leader@crucible.local]

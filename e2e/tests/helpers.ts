@@ -24,27 +24,22 @@ export async function contentEdits(page: Page, training: string) {
   return panel
 }
 
-// enroll does what a leader does on Manage trainings: start the training for The Forge if the team doesn't run it yet,
-// then enroll email. Idempotent, so it runs again on a KEEP=1 stack.
-export async function enroll(page: Page, training: string, email: string) {
+// addParticipant does what a training's managers do on Manage trainings: give someone (an email or a group) the
+// participant role. Idempotent, so it runs again on a KEEP=1 stack.
+export async function addParticipant(page: Page, training: string, who: string) {
   await page.getByRole('link', { name: 'Trainings', exact: true }).click()
   await page.getByRole('link', { name: 'Manage trainings' }).click()
   await page.getByRole('navigation', { name: 'Trainings' }).getByRole('link', { name: new RegExp(`\\b${training}\\b`) }).click()
   // The page opens on the first training: wait for the one asked for, or the checks below read the wrong one.
   await expect(page).toHaveURL(new RegExp(`/trainings/manage/${training}$`))
   await expect(page.locator('.manage-detail > p code')).toHaveText(training)
-  const panel = page.locator('#team-forge')
-  if (!(await panel.count())) {
-    await page.getByLabel('Team to start it for').selectOption('forge')
-    await page.getByRole('button', { name: 'Start for this team' }).click()
-    await expect(panel).toBeVisible()
+  const panel = page.getByRole('region', { name: /^Roles in / })
+  const chip = panel.getByRole('button', { name: `Remove ${who} from participants` })
+  if (!(await chip.count())) {
+    await panel.getByLabel('Add to participants').fill(who)
+    await panel.getByLabel('Add to participants').press('Enter')
   }
-  const enrolled = panel.getByRole('button', { name: `Remove ${email} from enrolled` })
-  if (!(await enrolled.count())) {
-    await panel.getByLabel('Enroll someone in The Forge').fill(email)
-    await panel.getByRole('button', { name: 'Enroll', exact: true }).click()
-  }
-  await expect(enrolled).toBeVisible()
+  await expect(chip).toBeVisible()
 }
 
 // setEditorText replaces the open file's text in Monaco: select all, then one multi-character input (Monaco applies no

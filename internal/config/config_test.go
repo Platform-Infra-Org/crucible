@@ -26,12 +26,11 @@ func TestLoadExamplePlatform(t *testing.T) {
 	if prog == nil {
 		t.Fatal("program missing")
 	}
-	// Spec §5.2 defaults: leader → manager + approver, seniors → scorers.
-	if prog.Roles.Manager[0] != "leader@crucible.local" || prog.Roles.Approvers[0] != "leader@crucible.local" {
-		t.Fatalf("role defaults: %+v", prog.Roles)
-	}
-	if prog.Roles.Scorers[0] != "senior@crucible.local" {
-		t.Fatalf("scorer default: %+v", prog.Roles)
+	// The seed's roles: the leader is the training's admin, the forge's leaders and seniors edit (and score), the
+	// trainee takes it.
+	if !slices.Equal(prog.Roles.Manager, []string{"leader@crucible.local"}) || !slices.Equal(prog.Roles.Approvers, []string{"leader@crucible.local"}) ||
+		!slices.Equal(prog.Editors, []string{"leader@crucible.local", "senior@crucible.local"}) || !slices.Equal(prog.Enrolled, []string{"trainee@crucible.local"}) {
+		t.Fatalf("roles: %+v editors %v enrolled %v", prog.Roles, prog.Editors, prog.Enrolled)
 	}
 	if prog.LabDefaults.TTL.D() != 2*time.Hour {
 		t.Fatalf("ttl %v", prog.LabDefaults.TTL.D())
@@ -78,11 +77,14 @@ func copyTree(t *testing.T, src string) string {
 func TestLoadRejectsBadConfig(t *testing.T) {
 	cases := map[string]struct{ file, body, want string }{
 		"duplicate role": {"teams/forge/team.yaml",
-			"name: F\nleader: a@x\nseniors: [a@x]\ntrainees: []\n", "more than one team role"},
+			"name: F\nleaders: [a@x]\nseniors: [a@x]\ntrainees: []\n", "more than one tag"},
+		"no leader": {"teams/forge/team.yaml", "name: F\nseniors: [a@x]\n", "no leader"},
 		"unknown training": {"teams/forge/programs/forge-101.yaml",
 			"training: forge-999\n", "must match the file name"},
-		"enrolled outsider": {"teams/forge/programs/forge-101.yaml",
-			"training: forge-101\nenrolled: [stranger@x]\n", "not a member of team"},
+		"unknown group": {"teams/forge/programs/forge-101.yaml",
+			"training: forge-101\nroles: {participants: [nope_seniors]}\n", "neither an email nor a group"},
+		"two teams":         {"teams/other/team.yaml", "name: O\nleaders: [senior@crucible.local]\n", "already on team"},
+		"reserved team":     {"teams/all_seniors/team.yaml", "name: O\nleaders: [x@x]\n", "reads as a group"},
 		"training id dots":  {"trainings.yaml", "trainings:\n  \"..\": {repo: file:///x}\n", "invalid training id"},
 		"training id slash": {"trainings.yaml", "trainings:\n  a/b: {repo: file:///x}\n", "invalid training id"},
 		"bad theme":         {"platform.yaml", "default_theme: neon\n", "default_theme"},
@@ -92,12 +94,15 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 		"bad schedule":      {"platform.yaml", "cost_tiers: {tier1_usd: 5, tier2_usd: 25}\nschedules:\n  night: {timezone: UTC, windows: [{days: [mon], start: \"22:00\", end: \"02:00\"}]}\n", "schedules.night"},
 		"unknown sched":     {"teams/forge/programs/forge-101.yaml", "training: forge-101\nschedule: night\n", `unknown schedule "night"`},
 		"negative budget":   {"teams/forge/programs/forge-101.yaml", "training: forge-101\nbudget_usd_month: -1\n", "budget_usd_month"},
-		"http webhook":      {"teams/forge/team.yaml", "name: F\nleader: a@x\nnotifications: {slack_webhook: \"http://hooks.example\"}\n", "https://"},
+		"http webhook":      {"teams/forge/team.yaml", "name: F\nleaders: [a@x]\nnotifications: {slack_webhook: \"http://hooks.example\"}\n", "https://"},
 		"cap below budget":  {"teams/forge/budget.yaml", "monthly_usd: 100\nhard_cap_usd: 50\n", "hard_cap_usd"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := copyTree(t, "../../examples/platform")
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, c.file)), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			if err := os.WriteFile(filepath.Join(dir, c.file), []byte(c.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -116,8 +121,8 @@ func platformDir(t *testing.T, files map[string]string) string {
 	all := map[string]string{
 		"platform.yaml":            "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\n",
 		"trainings.yaml":           "trainings:\n  t1: {repo: file:///nowhere}\n",
-		"teams/a/team.yaml":        "name: A\nleader: l@x\ntrainees: [u@x]\n",
-		"teams/a/programs/t1.yaml": "enrolled: [u@x]\n",
+		"teams/a/team.yaml":        "name: A\nleaders: [l@x]\ntrainees: [u@x]\n",
+		"teams/a/programs/t1.yaml": "roles: {participants: [u@x]}\n",
 	}
 	for k, v := range files {
 		all[k] = v
@@ -158,7 +163,7 @@ func TestRankLadderFromConfig(t *testing.T) {
 }
 
 func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
-	prog := "enrolled: [u@x]\nreview_self_reported: true\nschedule:\n  timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]\n"
+	prog := "roles: {participants: [u@x]}\nreview_self_reported: true\nschedule:\n  timezone: Europe/Bucharest\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]\n"
 	p, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": prog}))
 	if err != nil {
 		t.Fatal(err)
@@ -176,14 +181,14 @@ func TestInlineProgramScheduleAndReviewFlag(t *testing.T) {
 		"timezone: Europe/Bucharest\n  windows: []",
 		"timezone: UTC\n  tz: x\n  windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]",
 	} {
-		bad := "enrolled: [u@x]\nschedule:\n  " + sched + "\n"
+		bad := "roles: {participants: [u@x]}\nschedule:\n  " + sched + "\n"
 		if _, err := Load(platformDir(t, map[string]string{"teams/a/programs/t1.yaml": bad})); err == nil || !strings.Contains(err.Error(), "programs/t1.yaml") {
 			t.Fatalf("a bad inline schedule names programs/t1.yaml: %v", err)
 		}
 	}
 	named, err := Load(platformDir(t, map[string]string{
 		"platform.yaml":            "cost_tiers: {auto_approve_usd: 0, tier1_usd: 5, tier2_usd: 25}\nschedules:\n  bh: {timezone: UTC, windows: [{days: [mon], start: \"08:00\", end: \"10:00\"}]}\n",
-		"teams/a/programs/t1.yaml": "enrolled: [u@x]\nschedule: bh\n"}))
+		"teams/a/programs/t1.yaml": "roles: {participants: [u@x]}\nschedule: bh\n"}))
 	if err != nil || named.Teams["a"].Programs["t1"].Schedule != "bh" || named.ProgramSchedule("a", "t1") == nil {
 		t.Fatalf("named schedule still works: %v", err)
 	}
@@ -250,3 +255,55 @@ func TestCleanRefAndPath(t *testing.T) {
 
 // Roles go to people and to groups: a team, a tag in a team, a tag in every team, everyone. They resolve against the
 // teams as they are, so a promotion changes who holds a role without touching the training.
+func TestGroupsResolve(t *testing.T) {
+	p := &Platform{Teams: map[string]*Team{
+		"platform": {ID: "platform", Leaders: []string{"lead@x"}, Seniors: []string{"sen@x"}, Juniors: []string{"jun@x"}, Trainees: []string{"tr@x"}},
+		"data":     {ID: "data", Leaders: []string{"dl@x"}, Seniors: []string{"ds@x"}, Juniors: []string{"dj@x"}, Programs: map[string]*Program{}},
+	}}
+	p.Teams["platform"].Programs = map[string]*Program{"t": {Training: "t", Access: Access{
+		Participants: []string{"all_trainees", "data_seniors", "guest@x"}, Editors: []string{"platform_seniors"}, Admins: []string{"PLATFORM_LEADERS"}}}}
+	for ref, want := range map[string][]string{
+		"platform":         {"jun@x", "lead@x", "sen@x", "tr@x"},
+		"platform_seniors": {"sen@x"},
+		"all_seniors":      {"ds@x", "sen@x"},
+		"all_leaders":      {"dl@x", "lead@x"},
+		"all_juniors":      {"dj@x", "jun@x"},
+		"data_juniors":     {"dj@x"},
+		"platform_juniors": {"jun@x"},
+		"all_trainees":     {"tr@x"},
+		"all":              {"dj@x", "dl@x", "ds@x", "jun@x", "lead@x", "sen@x", "tr@x"},
+		"x@y":              {"x@y"},
+		"nope":             nil,
+		"nope_seniors":     nil,
+		"":                 nil,
+	} {
+		got := p.Members(ref)
+		slices.Sort(got)
+		if !slices.Equal(got, want) {
+			t.Errorf("Members(%q) = %v, want %v", ref, got, want)
+		}
+	}
+	p.Resolve()
+	pr := p.Teams["platform"].Programs["t"]
+	if !slices.Equal(pr.Enrolled, []string{"ds@x", "guest@x", "tr@x"}) || !slices.Equal(pr.Editors, []string{"lead@x", "sen@x"}) ||
+		!slices.Equal(pr.Roles.Approvers, []string{"lead@x"}) || !slices.Equal(pr.Roles.Scorers, pr.Editors) {
+		t.Fatalf("resolved %+v", pr)
+	}
+	p.Teams["platform"].Seniors, p.Teams["platform"].Juniors = []string{"sen@x", "jun@x"}, nil // a promotion
+	p.Resolve()
+	if !slices.Equal(pr.Editors, []string{"jun@x", "lead@x", "sen@x"}) {
+		t.Fatalf("a promoted junior edits through platform_seniors: %v", pr.Editors)
+	}
+	for ref, ok := range map[string]bool{"all": true, "all_trainees": true, "data": true, "data_juniors": true, "a@b": true,
+		"nope": false, "nope_seniors": false, "": false, "not an email": false} {
+		if err := p.CheckRef("participant", ref); (err == nil) != ok {
+			t.Errorf("CheckRef(%q) = %v, want ok %v", ref, err, ok)
+		}
+	}
+	if g := p.Groups(); !slices.Contains(g, "data_seniors") || !slices.Contains(g, "all_juniors") || g[0] != "all" {
+		t.Errorf("groups %v", g)
+	}
+	if !ReservedTeamID("all") || !ReservedTeamID("x_trainees") || ReservedTeamID("platform") {
+		t.Error("reserved team ids")
+	}
+}

@@ -360,15 +360,15 @@ func TestTeamScopedToCaller(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t)
 	team := f.st.Platform.Teams["forge"]
-	// a member who mentors only one of two trainees sees that one, never the other
-	team.Members = append(team.Members, "member@crucible.local")
+	// a junior manages the team's trainings, so they follow every participant; their mentees are only their own
+	team.Juniors = append(team.Juniors, "member@crucible.local")
 	team.Trainees = append(team.Trainees, "other@crucible.local")
 	team.Programs["forge-101"].Enrolled = append(team.Programs["forge-101"].Enrolled, "other@crucible.local")
 	team.Mentors["other@crucible.local"] = "member@crucible.local"
 	member := &auth.User{Email: "member@crucible.local"}
 	rows, err := f.s.Team(ctx, member, "forge")
-	if err != nil || len(rows) != 1 || rows[0].Email != "other@crucible.local" {
-		t.Fatalf("member sees only their mentee: %+v %v", rows, err)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("a junior follows the team training's participants: %+v %v", rows, err)
 	}
 	ms, err := f.s.Mentees(ctx, member)
 	if err != nil || len(ms) != 1 || ms[0].Email != "other@crucible.local" || len(ms[0].Pending) != 0 {

@@ -16,13 +16,13 @@ export function tiersRequest(auto: string, t1: string, t2: string): { tiers: Tie
   return { tiers: { auto_approve_usd: a, tier1_usd: b, tier2_usd: c } }
 }
 
-// repoWarning is shown before a repoint is sent: a new repo or folder holds other content than programs were pinned to.
-// A ref-only change, an empty repo (the stored one is kept) or a training no team runs needs none.
-export function repoWarning(old: { repo?: string; path?: string } | undefined, repo: string, path: string, programs: number): string {
+// repoWarning is shown before a repoint is sent: a new repo or folder holds other content than the pinned version.
+// A ref-only change, an empty repo (the stored one is kept) or a training that follows its source needs none.
+export function repoWarning(old: { repo?: string; path?: string } | undefined, repo: string, path: string, pinned: boolean): string {
   const folder = (p?: string) => (p ?? '').trim().replace(/^\/+|\/+$/g, '')
-  if (!old || programs === 0) return ''
+  if (!old || !pinned) return ''
   if ((repo.trim() === '' || repo.trim() === old.repo) && folder(path) === folder(old.path)) return ''
-  return `${programs} program${programs === 1 ? ' is' : 's are'} pinned to content from the old repository or folder. Those pins may stop resolving once this training points somewhere else.`
+  return 'This training is pinned to a version from the old repository or folder. The pin may stop resolving once it points somewhere else.'
 }
 
 // windowsRequest reads lines like "mon,tue,wed 08:00-19:00" into schedule windows.

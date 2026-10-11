@@ -1,21 +1,22 @@
 import { describe, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import type { TeamProgram, TrainingsAdmin } from '../types'
+import type { ProgramConfig, TrainingsAdmin } from '../types'
 import { ManageTrainingsPage } from './ManageTrainings'
 
-const prog = (over: Partial<TeamProgram> = {}): TeamProgram => ({
-  team: 'forge', training: 'forge-101', title: 'Forge 101', version: 2, enrolled: ['a@x'],
-  roles: { manager: [], scorers: ['s@x'], approvers: [] }, effective_roles: { manager: ['l@x'], scorers: ['s@x'], approvers: ['l@x'] },
+const prog = (over: Partial<ProgramConfig> = {}): ProgramConfig => ({
+  team: 'forge', training: 'forge-101', title: 'Forge 101', version: 2,
+  roles: { participants: ['all_trainees', 'guest@x'], editors: ['forge_seniors'], admins: [] },
+  resolved: { participants: ['a@x', 'b@x', 'guest@x'], editors: ['s@x'], admins: [] },
   schedule: '', lab_defaults: { ttl: '', idle_timeout: '', max_extension: '' }, budget_usd_month: 0, review_self_reported: false,
   can_manage: true, running_sha: 'a'.repeat(40), head_sha: 'a'.repeat(40), pinned_ref: '', ...over,
 })
-const roster = (id: string, edit: boolean) => ({ id, name: id === 'forge' ? 'The Forge' : 'Anvil', version: 1, leader: 'l@x', seniors: ['s@x'],
-  members: [], trainees: ['a@x', 'b@x'], mentors: {}, can_edit_team: edit })
 
 let page: TrainingsAdmin
 const me = { can_edit_content: false }
 const other: Record<string, unknown> = {
+  '/api/org/people': { people: [{ email: 'guest@x', name: '', team: '', tag: '' }, { email: 'a@x', name: 'Ann', team: 'forge', tag: 'trainee' }],
+    groups: ['all', 'all_trainees', 'forge', 'forge_seniors'] },
   '/api/content': [{ id: 'forge-101', title: 'Forge 101' }],
   '/api/edits': [{ id: 7, training: 'forge-101', title: 'Sharper intro', author: 'l@x', status: 'pending' },
     { id: 8, training: 'forge-201', title: 'Elsewhere', author: 'l@x', status: 'pending' }],
@@ -25,44 +26,52 @@ vi.mock('../useFetch', () => ({ useFetch: (path: string) => ({ data: path === '/
 vi.mock('../me', () => ({ useMe: () => ({ me }) }))
 vi.mock('react-router', async (orig) => ({ ...(await orig<typeof import('react-router')>()), useParams: () => ({ training: 'forge-101' }) }))
 const render = () => renderToStaticMarkup(<MemoryRouter><ManageTrainingsPage /></MemoryRouter>)
+const base = { schedules: ['nights'], teams: [], my_team: 'forge' }
 
 describe('manage trainings', () => {
-  test('an admin sees the source, every team, who is enrolled and who holds each role', () => {
-    page = { is_admin: true, schedules: ['nights'], teams: [roster('forge', true), roster('anvil', true)], trainings: [
-      { id: 'forge-101', title: 'Forge 101', available: true, repo: 'https://***@git.example/f.git', ref: 'main', programs: [prog()] },
-      { id: 'forge-201', title: 'Forge 201', available: false, repo: 'https://git.example/g.git', ref: 'v1.0', path: 'courses/g', programs: [] },
+  test('a manager sees the source and gives roles to people and groups', () => {
+    page = { ...base, is_admin: false, can_create: true, trainings: [
+      { id: 'forge-101', title: 'Forge 101', available: true, team: 'forge', can_manage: true, repo: 'https://***@git.example/f.git', ref: 'main', program: prog() },
     ] }
     const h = render()
     expect(h).toContain('https://***@git.example/f.git')
     expect(h).toContain('<dt>Branch, tag or commit</dt><dd><code>main</code></dd><dt>Folder</dt><dd>the repository root</dd>')
-    expect(h).toContain('forge-101 · 1 team · 1 enrolled')
-    expect(h).toContain('aria-label="Remove a@x from enrolled"')
-    expect(h).toContain('Default: l@x') // managers and approvers are unset: the leader by default
-    expect(h).toContain('aria-label="Remove s@x from scorers"') // scorers are named explicitly
-    expect(h).toContain('Start for this team') // anvil does not run it yet
+    expect(h).toContain('forge-101 · forge · 3 taking it')
+    expect(h).toContain('aria-label="Remove guest@x from participants"')
+    expect(h).toContain('aria-label="Remove all_trainees from participants"')
+    expect(h).toContain('title="the trainees of every team"') // a group says who it is
+    expect(h).toContain('Now 3 people.')
+    expect(h).toContain('<option value="forge_seniors">the seniors of forge</option>')
+    expect(h).toContain('<option value="a@x">Ann · trainee on forge</option>')
     expect(h).toContain('+ New training')
-    expect(h).toMatch(/<button type="button" class="ghost danger-text">Delete training<\/button>/) // enabled while teams run it
-    expect(h).toContain('id="team-forge"') // the team page links here
-    expect(h).not.toContain('pinned to content') // no repoint warning until a new repo is typed
+    expect(h).toMatch(/<button type="button" class="ghost danger-text">Delete training<\/button>/)
+    expect(h).not.toContain('Give to this team') // only admins move a training
   })
-  test('someone who cannot manage the program reads it without controls', () => {
-    page = { is_admin: false, schedules: [], teams: [roster('forge', false)], trainings: [
-      { id: 'forge-101', title: 'Forge 101', available: true, programs: [prog({ can_manage: false })] },
+  test('an admin gives a training to another team', () => {
+    page = { ...base, is_admin: true, can_create: true, teams: [{ id: 'forge', name: 'The Forge' }, { id: 'anvil', name: 'Anvil' }], trainings: [
+      { id: 'forge-101', title: 'Forge 101', available: true, team: 'forge', can_manage: true, repo: 'r', ref: 'main', program: prog() },
+    ] }
+    const h = render()
+    expect(h).toContain('Give to this team')
+    expect(h).toMatch(/<option value="anvil"[^>]*>Anvil<\/option>/)
+  })
+  test('an editor reads the roles without controls', () => {
+    page = { ...base, is_admin: false, can_create: false, trainings: [
+      { id: 'forge-101', title: 'Forge 101', available: true, team: 'forge', can_manage: false, program: prog({ can_manage: false }) },
     ] }
     const h = render()
     expect(h).toContain('Read-only')
-    expect(h).toContain('a@x')
-    expect(h).not.toContain('Remove a@x')
+    expect(h).toContain('guest@x')
+    expect(h).not.toContain('Remove guest@x')
     expect(h).not.toContain('Repository')
     expect(h).not.toContain('Delete training')
     expect(h).not.toContain('New training')
-    expect(h).not.toContain('Start for this team')
     expect(h).not.toContain('Lab settings')
     expect(h).not.toContain('Content edits') // not an author
   })
   test("an author edits the training's content from here and sees its drafts and edits, not other trainings'", () => {
-    page = { is_admin: false, schedules: [], teams: [roster('forge', false)], trainings: [
-      { id: 'forge-101', title: 'Forge 101', available: true, programs: [prog({ can_manage: false })] },
+    page = { ...base, is_admin: false, can_create: false, trainings: [
+      { id: 'forge-101', title: 'Forge 101', available: true, team: 'forge', can_manage: false, program: prog({ can_manage: false }) },
     ] }
     me.can_edit_content = true
     const h = render()

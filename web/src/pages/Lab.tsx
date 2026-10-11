@@ -23,7 +23,7 @@ const endMessages: Record<string, string> = {
   ttl: 'Time ran out on this lab.',
   user: 'You ended the lab.',
   provision_timeout: 'The lab took too long to start.',
-  schedule: "The program's schedule window closed.",
+  schedule: "The training's schedule window closed.",
   kill_switch: 'An admin paused all labs.',
   agent_restarted: 'Your laptop agent restarted — start the lab again.',
   budget: 'The budget cap was reached.',

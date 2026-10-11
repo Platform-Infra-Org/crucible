@@ -8,8 +8,9 @@ order: 40
 
 ## The Journey
 
-Open your team and choose **Journey**. You see the people and programs you may follow: the leader and seniors see
-everyone, managers and scorers their programs, mentors their mentees.
+Open your team and choose **Journey**. You see the people you may follow: the participants of the trainings the team owns (its leaders,
+seniors and juniors run those), the team's own people in trainings other teams own (for its leaders and seniors),
+the trainings you edit or are an admin of, and your mentees.
 
 At the top are four numbers: how many people, how many trainings, how much is forged on average, and how many need a
 look. Then choose how to read it:

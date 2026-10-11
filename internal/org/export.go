@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"crucible/internal/apperr"
@@ -25,7 +25,7 @@ import (
 // The file is personal data: names, emails, answers, scores, webhook URLs and rubrics.
 
 // ExportVersion is the file format this build writes and reads.
-const ExportVersion = 1
+const ExportVersion = 2 // 2: team tags and training roles (training_roles replaces enrollments and program_roles)
 
 type exportFile struct {
 	Version     int                        `json:"crucible_export"`
@@ -43,7 +43,7 @@ type table struct {
 var exportTables = []table{
 	{name: "settings"}, {name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "trainings"},
 	{name: "teams"}, {name: "team_members"}, {name: "mentors"}, {name: "team_webhooks"}, {name: "team_budgets"},
-	{name: "programs"}, {name: "program_roles"}, {name: "enrollments"},
+	{name: "programs"}, {name: "training_roles"},
 	{name: "users"},
 	{name: "item_progress", byUser: true}, {name: "lab_task_progress", byUser: true}, {name: "quiz_attempts", byUser: true},
 	{name: "submissions", byUser: true, extra: `'{"lab_id": null}'`}, // labs stay behind
@@ -184,17 +184,12 @@ func checkImported(p *config.Platform) error {
 		if err := checkTeamID(id); err != nil {
 			return err
 		}
-		if _, err := (TeamBody{Name: t.Name, Leader: t.Leader, Seniors: t.Seniors, Members: t.Members, Trainees: t.Trainees,
-			Mentors: t.Mentors}).roster(); err != nil {
+		if _, err := BodyOf(t).roster(); err != nil {
 			return fmt.Errorf("team %s: %w", id, err)
 		}
-		for tr, pr := range t.Programs {
-			for _, e := range slices.Concat(pr.Enrolled, pr.Roles.Manager, pr.Roles.Scorers, pr.Roles.Approvers) {
-				if err := config.CheckEmail("program "+tr, e); err != nil {
-					return err
-				}
-			}
-		}
+	}
+	if errs := p.Check(); len(errs) > 0 {
+		return apperr.Wrap(apperr.Invalid, errors.Join(errs...).Error())
 	}
 	return nil
 }

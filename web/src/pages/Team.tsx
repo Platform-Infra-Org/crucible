@@ -2,14 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
-import type { TeamSummary, TeamView } from '../types'
+import type { People, Tag, TeamSummary, TeamView } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { useMe } from '../me'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { toast } from '../lib/alerts'
-import { formatMentors } from '../lib/lists'
-import { budgetRequest, rosterRequest, teamPath } from '../lib/teamRequests'
+import { formatMentors, parseMentors } from '../lib/lists'
+import { budgetRequest, membersOf, retag, rosterRequest, TAGS, tagPlural, teamPath } from '../lib/teamRequests'
 
 const usd = (n: number) => `$${n.toFixed(2)}`
 const STALE = 'Someone changed this team, reload to see the latest.'
@@ -24,7 +24,7 @@ export function TeamsIndex() {
   return (
     <section className="page">
       <h1>Teams</h1>
-      <p className="lede">Each team has a leader, its people and the trainings it runs.</p>
+      <p className="lede">Each team has its leaders, seniors, juniors and trainees, and the trainings it owns.</p>
       {data.length === 0 && <p className="muted">You&apos;re not on a team yet.</p>}
       <div className="cards">
         {[...data].sort((a, b) => a.name.localeCompare(b.name)).map((t) => (
@@ -56,7 +56,7 @@ export function CreateTeam({ onCancel }: { onCancel?: () => void }) {
     setBusy(true)
     setStatus('')
     try {
-      await api(`/api/admin/teams/${encodeURIComponent(id.trim())}`, { method: 'POST', json: { name: name.trim(), leader: leader.trim() } })
+      await api(`/api/admin/teams/${encodeURIComponent(id.trim())}`, { method: 'POST', json: { name: name.trim(), members: { [leader.trim().toLowerCase()]: 'leader' } } })
       navigate(`/teams/${encodeURIComponent(id.trim())}`)
     } catch (err) {
       setStatus(err instanceof ApiError && err.status === 409 ? `A team called ${id.trim()} already exists.` : (err as Error).message)
@@ -67,7 +67,7 @@ export function CreateTeam({ onCancel }: { onCancel?: () => void }) {
   return (
     <form className="stack panel" onSubmit={create}>
       <h2>Start a team</h2>
-      <p className="muted">Name its leader now; add the rest of the people on the team&apos;s own page.</p>
+      <p className="muted">Name its first leader now; add the rest of the people on the team&apos;s own page. The id names its groups too, such as <code>{id.trim() || 'platform'}_seniors</code>.</p>
       <label>Team id (short, no spaces) <input required value={id} onChange={(e) => setId(e.target.value)} /></label>
       <label>Name <input required value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label>Leader email <input required type="email" value={leader} onChange={(e) => setLeader(e.target.value)} /></label>
@@ -85,66 +85,86 @@ export function TeamPage() {
   const { data, error, reload } = useFetch<TeamView>(teamPath(team ?? ''))
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Gathering the smiths…" />
-  const people = 1 + data.seniors.length + data.members.length + data.trainees.length
-  const enrolled = data.programs.reduce((n, p) => n + p.enrolled.length, 0)
+  const leaders = data.members.filter((m) => m.tag === 'leader').map((m) => m.email)
+  const trainees = data.members.filter((m) => m.tag === 'trainee').length
+  const participants = data.programs.reduce((n, p) => n + p.resolved.participants.length, 0)
   return (
     <section className="page">
       <div className="row team-head">
         <div>
           <h1>{data.name}</h1>
-          <p className="lede">Led by {data.leader}</p>
+          <p className="lede">{leaders.length > 0 ? `Led by ${leaders.join(', ')}` : 'This team has no leader; an admin names one below.'}</p>
         </div>
         <span className="spacer" />
         <Link className="button-link" to={`/teams/${data.id}/journey`}>Journey</Link>
       </div>
       <ul className="stats" aria-label="At a glance">
-        <li><strong>{people}</strong> {people === 1 ? 'person' : 'people'}</li>
-        <li><strong>{data.trainees.length}</strong> {data.trainees.length === 1 ? 'trainee' : 'trainees'}</li>
+        <li><strong>{data.members.length}</strong> {data.members.length === 1 ? 'person' : 'people'}</li>
+        <li><strong>{trainees}</strong> {trainees === 1 ? 'trainee' : 'trainees'}</li>
         <li><strong>{data.programs.length}</strong> {data.programs.length === 1 ? 'training' : 'trainings'}</li>
-        <li><strong>{enrolled}</strong> enrolled</li>
+        <li><strong>{participants}</strong> taking them</li>
       </ul>
       <Roster key={`r-${data.version}`} team={data} onSaved={reload} />
       <Programs team={data} />
       <Budget key={`b-${data.budget?.version}`} team={data} onSaved={reload} />
-      {data.is_admin && <RevokeAgents people={[data.leader, ...data.seniors, ...data.members, ...data.trainees]} />}
+      {data.is_admin && <RevokeAgents people={data.members.map((m) => m.email)} />}
       {data.is_admin && <DeleteTeam team={data} />}
     </section>
   )
 }
 
-const GROUPS = [['Leader', 'leader'], ['Seniors', 'seniors'], ['Members', 'members'], ['Trainees', 'trainees']] as const
-
+// Roster shows who holds which tag. A leader changes tags (any member, any tag, leader included) and mentor pairs; an
+// admin also adds people (moving them from another team) and takes them off.
 function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
-  const [seniors, setSeniors] = useState(team.seniors.join('\n'))
-  const [members, setMembers] = useState(team.members.join('\n'))
-  const [trainees, setTrainees] = useState(team.trainees.join('\n'))
-  const [mentors, setMentors] = useState(formatMentors(team.mentors))
+  const people = useFetch<People>(team.is_admin ? '/api/org/people' : null)
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState(false)
   const pairs = Object.entries(team.mentors).sort(([a], [b]) => a.localeCompare(b))
-  const save = async (e: FormEvent) => {
-    e.preventDefault()
+  const save = async (change: Parameters<typeof rosterRequest>[1], ok: string) => {
+    if (busy) return false
     setBusy(true)
     try {
-      const r = rosterRequest(team, { seniors, members, trainees, mentors })
+      const r = rosterRequest(team, change)
       await api(r.path, { method: 'PUT', json: r.json })
-      toast('Roster saved')
+      toast(ok)
       onSaved()
+      return true
     } catch (err) {
       setConflict(reportSaveError(err))
+      return false
     } finally {
       setBusy(false)
     }
   }
+  const remove = (email: string) => {
+    const members = membersOf(team)
+    delete members[email]
+    if (!Object.values(members).includes('leader')) return toast(`${team.name} needs a leader. Make someone else leader first.`)
+    if (!window.confirm(`Take ${email} off ${team.name}? Their progress is kept.`)) return
+    const mentors = Object.fromEntries(Object.entries(team.mentors).filter(([t, m]) => t !== email && m !== email))
+    void save({ members, mentors }, `${email} is off ${team.name}.`)
+  }
   return (
     <section className="panel" aria-labelledby="people">
       <h2 id="people">People</h2>
-      {GROUPS.map(([label, key]) => {
-        const list = key === 'leader' ? [team.leader] : team[key]
+      {conflict && <Conflict onReload={onSaved} message={STALE} />}
+      {TAGS.map((tag) => {
+        const list = team.members.filter((m) => m.tag === tag).map((m) => m.email)
         return (
-          <div key={key} className="role-row">
-            <span className="role-name">{label}</span>
-            {list.length > 0 ? <ul className="chips">{list.map((e) => <li key={e} className="chip">{e}</li>)}</ul> : <p className="muted role-default">Nobody yet</p>}
+          <div key={tag} className="role-row">
+            <span className="role-name">{tagPlural[tag]}</span>
+            {list.length > 0
+              ? (
+                  <ul className="chips" aria-label={tagPlural[tag]}>
+                    {list.map((e) => (
+                      <li key={e} className="chip">
+                        {e}
+                        {team.is_admin && <button type="button" aria-label={`Take ${e} off the team`} disabled={busy} onClick={() => remove(e)}>×</button>}
+                      </li>
+                    ))}
+                  </ul>
+                )
+              : <p className="muted role-default">Nobody yet</p>}
           </div>
         )
       })}
@@ -154,21 +174,97 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
           ? <ul className="chips">{pairs.map(([t, m]) => <li key={t} className="chip">{t} → {m}</li>)}</ul>
           : <p className="muted role-default">No mentor pairs</p>}
       </div>
+      {team.can_edit_team && <Retag team={team} busy={busy} save={save} />}
+      {team.is_admin && <AddPerson team={team} people={people.data} busy={busy} save={save} />}
       {team.can_edit_team && (
-        <details className="lab-settings" open={conflict}>
-          <summary>Edit the roster</summary>
-          <form className="stack roster-form" onSubmit={save}>
-            <p className="muted">One email per line. Saving replaces the roster.</p>
-            {conflict && <Conflict onReload={onSaved} message={STALE} />}
-            <label>Seniors <textarea rows={3} value={seniors} onChange={(e) => setSeniors(e.target.value)} /></label>
-            <label>Members <textarea rows={3} value={members} onChange={(e) => setMembers(e.target.value)} /></label>
-            <label>Trainees <textarea rows={4} value={trainees} onChange={(e) => setTrainees(e.target.value)} /></label>
-            <label>Mentors (one “trainee = mentor” per line) <textarea rows={4} value={mentors} onChange={(e) => setMentors(e.target.value)} /></label>
-            <button className="primary" disabled={busy}>Save roster</button>
-          </form>
+        <details className="lab-settings">
+          <summary>Mentor pairs</summary>
+          <Mentors team={team} busy={busy} save={save} />
         </details>
       )}
     </section>
+  )
+}
+
+type Save = (change: Parameters<typeof rosterRequest>[1], ok: string) => Promise<boolean>
+
+const TagSelect = ({ value, onChange, label }: { value: Tag; onChange: (t: Tag) => void; label: string }) => (
+  <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value as Tag)}>
+    {TAGS.map((t) => <option key={t} value={t}>{t}</option>)}
+  </select>
+)
+
+// Retag: pick a member (autocompleted from the team as it is now) and the tag they hold from now on.
+function Retag({ team, busy, save }: { team: TeamView; busy: boolean; save: Save }) {
+  const [email, setEmail] = useState('')
+  const [tag, setTag] = useState<Tag>('senior')
+  const [problem, setProblem] = useState('')
+  const listId = `members-${team.id}`
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    const r = retag(team, email, tag)
+    if ('problem' in r) return setProblem(r.problem)
+    setProblem('')
+    if (await save({ members: r.members }, `${email.trim().toLowerCase()} is now a ${tag}.`)) setEmail('')
+  }
+  return (
+    <form className="row retag" onSubmit={submit}>
+      <span className="role-name">Change a tag</span>
+      <input aria-label="Team member" list={listId} value={email} placeholder="a member of the team" onChange={(e) => setEmail(e.target.value)} />
+      <datalist id={listId}>{team.members.map((m) => <option key={m.email} value={m.email}>{m.tag}</option>)}</datalist>
+      <TagSelect label="New tag" value={tag} onChange={setTag} />
+      <button className="primary" disabled={busy || !email.trim()}>Set tag</button>
+      {problem && <p role="alert" className="error">{problem}</p>}
+    </form>
+  )
+}
+
+// AddPerson (admins): anyone Crucible knows, or a new email. Someone on another team moves here.
+function AddPerson({ team, people, busy, save }: { team: TeamView; people?: People; busy: boolean; save: Save }) {
+  const [email, setEmail] = useState('')
+  const [tag, setTag] = useState<Tag>('trainee')
+  const [problem, setProblem] = useState('')
+  const listId = `people-${team.id}`
+  const members = membersOf(team)
+  const candidates = (people?.people ?? []).filter((p) => !members[p.email])
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    const who = email.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+$/.test(who)) return setProblem('Enter an email address, such as someone@example.com.')
+    if (members[who]) return setProblem(`${who} is already on ${team.name}; change their tag above.`)
+    const from = people?.people.find((p) => p.email === who)?.team
+    if (from && !window.confirm(`${who} is on ${from}. Move them to ${team.name} as a ${tag}? They leave ${from} and its mentor pairs.`)) return
+    setProblem('')
+    if (await save({ members: { ...members, [who]: tag } }, from ? `${who} moved to ${team.name}.` : `${who} joined ${team.name}.`)) setEmail('')
+  }
+  return (
+    <form className="row retag" onSubmit={submit}>
+      <span className="role-name">Add someone</span>
+      <input aria-label="Person to add" list={listId} value={email} placeholder="an email" onChange={(e) => setEmail(e.target.value)} />
+      <datalist id={listId}>{candidates.map((p) => <option key={p.email} value={p.email}>{p.team ? `${p.name || p.email} · ${p.tag} on ${p.team}` : p.name || 'on no team'}</option>)}</datalist>
+      <TagSelect label="Their tag" value={tag} onChange={setTag} />
+      <button className="primary" disabled={busy || !email.trim()}>Add to team</button>
+      {problem && <p role="alert" className="error">{problem}</p>}
+    </form>
+  )
+}
+
+function Mentors({ team, busy, save }: { team: TeamView; busy: boolean; save: Save }) {
+  const [text, setText] = useState(formatMentors(team.mentors))
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    try {
+      void save({ mentors: parseMentors(text) }, 'Mentor pairs saved.')
+    } catch (err) {
+      toast((err as Error).message)
+    }
+  }
+  return (
+    <form className="stack" onSubmit={submit}>
+      <p className="muted">One “trainee = mentor” per line. The mentor is a leader, senior or junior of this team.</p>
+      <label>Mentor pairs <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} /></label>
+      <button className="primary" disabled={busy}>Save mentor pairs</button>
+    </form>
   )
 }
 
@@ -179,7 +275,7 @@ function RevokeAgents({ people }: { people: string[] }) {
     <section className="panel" aria-labelledby="agents">
       <h2 id="agents">Laptop agents</h2>
       <p className="muted">Revoke a person&apos;s pairing token when they leave. Their agent is disconnected at once; labs already running end by idle or TTL.</p>
-      <table className="grid">
+      <div className="table-wrap"><table className="grid">
         <tbody>
           {emails.map((email) => (
             <tr key={email}>
@@ -198,17 +294,17 @@ function RevokeAgents({ people }: { people: string[] }) {
             </tr>
           ))}
         </tbody>
-      </table>
+      </table></div>
     </section>
   )
 }
 
-// DeleteTeam removes the team, its roster and the trainings it runs. Progress, scores and badges are kept.
+// DeleteTeam removes the team and its people's tags. A team that still owns trainings is refused by the server.
 function DeleteTeam({ team }: { team: TeamView }) {
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
   const remove = async () => {
-    if (busy || !window.confirm(`Delete ${team.name}? Its people lose their roles in it and its trainings stop. Everyone's progress is kept.`)) return
+    if (busy || !window.confirm(`Delete ${team.name}? Its people leave it and lose their tags. Everyone's progress is kept.`)) return
     setBusy(true)
     try {
       await api(`/api/admin/teams/${encodeURIComponent(team.id)}`, { method: 'DELETE' })
@@ -222,38 +318,38 @@ function DeleteTeam({ team }: { team: TeamView }) {
   return (
     <section className="panel danger-zone" aria-labelledby="delete-team">
       <h2 id="delete-team">Delete this team</h2>
-      <p className="muted">Removes the team, its roster, mentors and budget, and stops every training it runs. Progress, scores and badges are kept.</p>
+      <p className="muted">Removes the team, its tags, mentors and budget. Give its trainings to another team or delete them first. Progress, scores and badges are kept.</p>
       <button type="button" className="ghost danger-text" disabled={busy} onClick={remove}>Delete team</button>
     </section>
   )
 }
 
-// Programs lists what the team runs. Starting a training, enrolling people and roles live on the trainings page.
+// Programs lists the trainings the team owns. Registering one, its roles and its settings live on the trainings page.
 function Programs({ team }: { team: TeamView }) {
   const { me } = useMe()
   return (
     <section className="panel" aria-labelledby="programs">
       <div className="row panel-head">
-        <h2 id="programs">Trainings</h2>
+        <h2 id="programs">Trainings it owns</h2>
         <span className="spacer" />
-        {team.can_edit_team && me.can_manage_trainings && <Link to="/trainings/manage">Start a training for this team</Link>}
+        {me.can_manage_trainings && <Link to="/trainings/manage?new">Register a training</Link>}
       </div>
-      {team.programs.length === 0 && <p className="muted">This team doesn't run any training yet.</p>}
+      {team.programs.length === 0 && <p className="muted">This team owns no training yet. Its leaders, seniors and juniors can register one.</p>}
       {team.programs.length > 0 && (
-        <table className="grid">
-          <thead><tr><th>Training</th><th>Enrolled</th><th>Schedule</th><th>Budget</th><th /></tr></thead>
+        <div className="table-wrap"><table className="grid">
+          <thead><tr><th>Training</th><th>Taking it</th><th>Schedule</th><th>Budget</th><th /></tr></thead>
           <tbody>
             {team.programs.map((p) => (
               <tr key={p.training}>
                 <td>{p.title}</td>
-                <td>{p.enrolled.length}</td>
+                <td>{p.resolved.participants.length}</td>
                 <td>{p.schedule || 'any time'}</td>
                 <td>{p.budget_usd_month ? `${usd(p.budget_usd_month)}/month` : '—'}</td>
-                <td className="actions">{me.can_manage_trainings && <Link to={`/trainings/manage/${p.training}#team-${team.id}`}>{p.can_manage ? 'Manage' : 'Details'}</Link>}</td>
+                <td className="actions">{me.can_manage_trainings && <Link to={`/trainings/manage/${p.training}`}>{p.can_manage ? 'Manage' : 'Details'}</Link>}</td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </table></div>
       )}
     </section>
   )

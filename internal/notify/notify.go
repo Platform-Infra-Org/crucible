@@ -368,7 +368,7 @@ func (s *Service) SetMutes(ctx context.Context, userID int64, kinds []Kind) erro
 	return tx.Commit(ctx)
 }
 
-// ReportSyncProblem tells admins, and the maintainers of the affected training, that a new commit was rejected
+// ReportSyncProblem tells admins, and the editors and admins of the affected training, that a new commit was rejected
 // (spec §6, §10). key is "platform", "<training>", "<training>@<sha>" or "<team>/<training>" (a bad pin).
 func (s *Service) ReportSyncProblem(ctx context.Context, key string, probs []content.Problem) {
 	st := s.State()
@@ -383,10 +383,8 @@ func (s *Service) ReportSyncProblem(ctx context.Context, key string, probs []con
 			training = tr
 		}
 		what = "Training " + training
-		for _, t := range st.Trainings {
-			if t.ID == training {
-				to = append(to, t.Maintainers...)
-			}
+		if _, pr := st.Platform.Owner(training); pr != nil {
+			to = append(to, pr.Editors...)
 		}
 	}
 	var lines []string

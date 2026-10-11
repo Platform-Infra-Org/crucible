@@ -1,5 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
-import { enroll } from './helpers'
+import { addParticipant } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage()
@@ -21,9 +21,9 @@ async function typeIn(page: Page, tab: string, command: string) {
 }
 
 test('an aws lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger', async ({ browser }) => {
-  // The leader starts Forge 401 for the team and enrols the trainee, as approvals.spec.ts does for 201.
+  // The leader makes the trainee a participant of Forge 401 (The Forge owns it), as approvals.spec.ts does for 201.
   const leader = await login(browser, 'leader')
-  await enroll(leader, 'forge-401', 'trainee@crucible.local')
+  await addParticipant(leader, 'forge-401', 'trainee@crucible.local')
 
   // Estimated ($0.04/h × 1 h in dry-run pricing). AWS labs always need an approver.
   const trainee = await login(browser, 'trainee')

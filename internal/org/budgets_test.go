@@ -16,7 +16,7 @@ func f(v float64) *float64 { return &v }
 func budgetStore(t *testing.T) (*Store, context.Context) {
 	s := &Store{DB: dbtest.New(t)}
 	ctx := context.Background()
-	if err := s.CreateTeam(ctx, "admin@x", "platform", TeamBody{Name: "Platform", Leader: "lead@x"}); err != nil {
+	if err := s.CreateTeam(ctx, "admin@x", "platform", body("Platform", "lead@x:leader")); err != nil {
 		t.Fatal(err)
 	}
 	return s, ctx

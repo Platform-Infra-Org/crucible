@@ -34,7 +34,8 @@ func TestMatrix(t *testing.T) {
 		{trainee, ViewProgress, senior, false},
 		{senior, ViewProgress, trainee, true}, // senior + mentor
 		{leader, ManageProgram, "", true},
-		{senior, ManageProgram, "", false},
+		{senior, ManageProgram, "", true}, // the owning team's seniors and juniors manage its trainings too
+		{trainee, ManageProgram, "", false},
 		{senior, Score, trainee, true},
 		{senior, Score, senior, false}, // never score yourself
 		{admin, Score, admin, false},   // admins can't score themselves either
@@ -153,5 +154,65 @@ func TestSpendTeams(t *testing.T) {
 	p.Teams["forge"].Programs["forge-101"].Roles.Approvers = []string{"senior@crucible.local"}
 	if got := c.SpendTeams("senior@crucible.local"); !slices.Equal(got, []string{"forge"}) {
 		t.Fatalf("a program approver sees the team's spend (spec §5.3): %v", got)
+	}
+}
+
+// The model of 2026-10-11: a training belongs to one team, whose leaders, seniors and juniors manage it; its roles go
+// to people and groups from any team.
+func TestTeamsAndTrainingRoles(t *testing.T) {
+	p := &config.Platform{Teams: map[string]*config.Team{
+		"platform": {ID: "platform", Leaders: []string{"pl@x", "pl2@x"}, Seniors: []string{"ps@x"}, Juniors: []string{"pj@x"}, Trainees: []string{"pt@x"},
+			Mentors: map[string]string{"pt@x": "pj@x"}},
+		"data": {ID: "data", Leaders: []string{"dl@x"}, Seniors: []string{"ds@x"}, Trainees: []string{"dt@x"}, Programs: map[string]*config.Program{}},
+	}}
+	p.Teams["platform"].Programs = map[string]*config.Program{"k8s": {Training: "k8s", Access: config.Access{
+		Participants: []string{"all_trainees"}, Editors: []string{"data_seniors"}, Admins: []string{"dl@x"}}}}
+	p.Settings.CostTiers = &config.CostTiers{Tier1USD: 5, Tier2USD: 25}
+	p.Resolve()
+	c := Checker{P: p}
+	can := func(actor string, a Action, subject string) bool { return c.Can(actor, a, "platform", "k8s", subject) }
+	for _, tc := range []struct {
+		actor   string
+		action  Action
+		subject string
+		want    bool
+	}{
+		{"pj@x", ManageProgram, "", true},  // a junior of the owning team
+		{"pt@x", ManageProgram, "", false}, // never a trainee
+		{"dl@x", ManageProgram, "", true},  // the training's admin, from another team
+		{"ds@x", ManageProgram, "", false}, // an editor does not manage
+		{"dt@x", TakeTraining, "", true},   // all_trainees reaches every team
+		{"pt@x", TakeTraining, "", true},
+		{"ps@x", TakeTraining, "", false},
+		{"ds@x", Score, "dt@x", true},  // editors score
+		{"dl@x", Score, "pt@x", true},  // admins score
+		{"pj@x", Score, "pt@x", false}, // managing is not scoring
+		{"dl@x", ViewProgress, "dt@x", true},
+		{"pj@x", ViewProgress, "dt@x", true}, // the owning team follows its training's participants
+		{"pl2@x", ApproveLabs, "dt@x", true}, // any of several leaders
+		{"dl@x", ApproveLabs, "pt@x", true},  // training admins approve (tier 1)
+	} {
+		if got := can(tc.actor, tc.action, tc.subject); got != tc.want {
+			t.Errorf("%s %v subject=%s: got %v want %v", tc.actor, tc.action, tc.subject, got, tc.want)
+		}
+	}
+	// A team's leaders and seniors, and a mentor, follow their own people in trainings other teams own.
+	p.Teams["data"].Programs["etl"] = &config.Program{Training: "etl", Access: config.Access{Participants: []string{"pt@x"}}}
+	p.Resolve()
+	for actor, want := range map[string]bool{"pl@x": true, "ps@x": true, "pj@x": true /* mentor */, "dt@x": false} {
+		if got := c.Can(actor, ViewProgress, "data", "etl", "pt@x"); got != want {
+			t.Errorf("%s follows pt@x in data's etl: got %v want %v", actor, got, want)
+		}
+	}
+	if !c.MayApprove("pl2@x", "pt@x", "platform", "k8s", 20, false) || c.MayApprove("dl@x", "pt@x", "platform", "k8s", 20, false) {
+		t.Error("leaders approve up to tier 2, training admins up to tier 1")
+	}
+	for who, want := range map[string]bool{"pl@x": true, "ps@x": true, "pj@x": true, "pt@x": false, "nobody@x": false} {
+		if got := c.CanCreateTraining(who); got != want {
+			t.Errorf("CanCreateTraining(%s) = %v", who, got)
+		}
+	}
+	if got := c.TierApprovers(TierLeader, "platform", "k8s", "pl@x"); !slices.Equal(got, []string{"pl2@x"}) {
+		t.Errorf("the leader tier is every leader but the requester: %v", got)
 	}
 }

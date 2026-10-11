@@ -77,7 +77,7 @@ func setup(t *testing.T) *fx {
 		t.Fatal(err)
 	}
 	plat.Trainings["t1"] = config.TrainingRef{Repo: remote, Ref: "main"}
-	plat.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local"}}
+	plat.Teams["forge"].Programs["t1"] = &config.Program{Training: "t1", Enrolled: []string{"trainee@crucible.local"}, Editors: []string{"leader@crucible.local", "senior@crucible.local"}}
 	st := &gitsync.State{Platform: plat, Trainings: map[string]*content.Training{"t1@" + head: tr}, Heads: map[string]string{"t1": head}, OnBranch: map[string]bool{"t1": true}}
 	repo := &gitsync.ContentRepo{URL: remote, Branch: "main", Dir: filepath.Join(t.TempDir(), "edits"), Name: "Crucible", Email: "bot@x"}
 	db := dbtest.New(t)

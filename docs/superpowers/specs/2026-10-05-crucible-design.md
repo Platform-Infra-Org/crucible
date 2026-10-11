@@ -226,26 +226,28 @@ aws:
 OIDC authorization-code + PKCE against the configured IdP: an Amazon Cognito user pool on AWS (setup guide: `docs/runbooks/cognito.md`), Keycloak for local development. Users are auto-provisioned on first login; identity key = OIDC `sub`, matched to git config by email. `crucible-agent` authenticates with a **pairing token** the trainee generates on the *Connect your laptop* page (shown once, stored hashed, revocable). This works with any OIDC provider, including those without device-code support. A bootstrap admin email in Helm values exists only to seed `admins.yaml` on first start.
 
 ### 5.2 Roles
-- **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views.
-- **Team:** `leader`, `senior`, `member`, `trainee` (one role per team; a user may be in multiple teams).
-- **Per program (team × training):** `manager`, `scorer`, `approver`. Defaults on enrollment: leader → manager + approver; seniors → scorers. Overridable in UI → committed to the program file.
-- **Mentor:** a pairing (senior/member → trainee) in `team.yaml`, not a role.
+Superseded on 2026-10-11 by `2026-10-11-teams-and-training-roles-design.md`, which is the authority; in short:
+- **Global:** `admin` — everything, including kill switch, hibernate, budgets, cross-team views, adding and moving people.
+- **Team tags:** `leader`, `senior`, `junior`, `trainee`; one team per person, one tag each, one or more leaders.
+- **Per training (owned by one team):** `participant`, `editor`, `admin`, each given to people or groups
+  (`all`, `all_<tag>s`, `<team>`, `<team>_<tag>s`). The owning team's leaders, seniors and juniors manage it.
+- **Mentor:** a pairing (leader/senior/junior → trainee) within a team, not a role.
 
-### 5.3 Permission matrix (team scope)
+### 5.3 Permission matrix
 
-| Action | admin | leader | senior | member | trainee | program manager | scorer | approver |
-|---|---|---|---|---|---|---|---|---|
-| Edit team membership / mentors | ✓ | ✓ | | | | | | |
-| Enroll team in training, set program roles | ✓ | ✓ | | | | ✓ | | |
-| Bump pinned content ref, set schedule/TTL | ✓ | ✓ | | | | ✓ | | |
-| Take training / request lab | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
-| Score human items | ✓ | | | | | | ✓ | |
-| Approve lab request (within tier) | ✓ | tier 2 | | | | | | tier 1 |
-| View trainee progress | ✓ | ✓ | ✓ | | own | ✓ | ✓ | |
-| View team spend | ✓ | ✓ | | | | ✓ | | ✓ |
-| Review/merge content edits | ✓ | | | | | | | |
+| Action | admin | team leader | senior / junior (owning team) | trainee | training admin | editor | participant |
+|---|---|---|---|---|---|---|---|
+| Add, remove, move people; create/delete teams | ✓ | | | | | | |
+| Change tags and mentor pairs in own team | ✓ | ✓ | | | | | |
+| Register a training (for own team) | ✓ | ✓ | ✓ | | | | |
+| Give a training's roles, source, pin, schedule/TTL, delete it | ✓ | ✓ (owning team) | ✓ | | ✓ | | |
+| Give a training to another team | ✓ | | | | | | |
+| Take training / request lab | | | | | | | ✓ |
+| Score human items, propose and review content edits | ✓ | | | | ✓ | ✓ | |
+| Approve lab request (within tier) | ✓ | tier 2 (owning team) | | | tier 1 | | |
+| View progress | ✓ | own team's people, owned trainings | owned trainings (seniors: own team's people) | own | ✓ | ✓ | own |
 
-Content edits are also reviewable by the training's `maintainers` (from `training.yaml`), regardless of team role.
+`maintainers` in `training.yaml` grant nothing.
 
 Rules: nobody approves their own lab request or scores their own submission. A trainee sees only their own scores; mentors see their mentees.
 

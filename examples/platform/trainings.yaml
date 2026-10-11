@@ -3,16 +3,16 @@ trainings:
     repo: file:///git/forge-101.git   # local check mounts seeded bare repos at /git
     ref: main
   forge-201:
-    repo: file:///git/forge-201.git   # fixture for the approvals e2e; no team is enrolled until the UI does it
+    repo: file:///git/forge-201.git   # fixture for the approvals e2e; the forge owns it, the UI makes the trainee a participant
     ref: main
   forge-301:
-    repo: file:///git/forge-301.git   # human-scoring e2e fixture; the e2e enrolls the trainee through the UI
+    repo: file:///git/forge-301.git   # human-scoring e2e fixture; the e2e makes the trainee a participant through the UI
     ref: main
   forge-401:
-    repo: file:///git/forge-401.git   # aws lab e2e fixture (dry run on kind); the e2e enrols the team through the UI
+    repo: file:///git/forge-401.git   # aws lab e2e fixture (dry run on kind); the e2e makes the trainee a participant through the UI
     ref: main
   forge-102:
-    repo: file:///git/forge-102.git   # fixture for the M7 e2e (ranks, badges, journey, content edits); enrolled through the UI
+    repo: file:///git/forge-102.git   # fixture for the M7 e2e (ranks, badges, journey, content edits); participants added through the UI
     ref: main
   forge-103:
     repo: file:///git/forge-103.git   # authoring e2e fixture; the test reshapes it on every run (idempotent on KEEP=1)

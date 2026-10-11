@@ -1,26 +1,30 @@
 export type User = { id: number; email: string; name: string; theme: string; calm_motion: boolean; avatar: string }
 export type Me = { user: User; is_admin: boolean; default_theme: string; teams: string[]; can_approve: boolean; can_score: boolean; can_view_spend: boolean; is_mentor: boolean; can_edit_content: boolean; can_manage_trainings: boolean }
 export type TeamSummary = { id: string; name: string; role: string }
-export type Roles = { manager: string[]; scorers: string[]; approvers: string[] }
+export type Tag = 'leader' | 'senior' | 'junior' | 'trainee'
+// A training's roles: emails and group refs (all, all_seniors, <team>, <team>_seniors, …).
+export type Access = { participants: string[]; editors: string[]; admins: string[] }
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
+// A training's one run, under the team that owns it.
 export type ProgramConfig = {
-  training: string; title: string; version: number; inline_schedule?: object; enrolled: string[]; roles: Roles; effective_roles?: Roles; schedule: string
+  training: string; title: string; team: string; version: number; inline_schedule?: object; roles: Access; resolved: Access; schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string
 }
-// The trainings page (/api/org/trainings): every training, with the caller's teams that run it.
-export type TeamRoster = {
-  id: string; name: string; version: number; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; can_edit_team: boolean
+// The trainings page (/api/org/trainings): the trainings the caller manages or edits.
+export type ManagedTraining = {
+  id: string; title: string; available: boolean; team: string; repo?: string; ref?: string; path?: string; can_manage: boolean; program?: ProgramConfig
 }
-export type TeamProgram = ProgramConfig & { team: string }
-export type ManagedTraining = { id: string; title: string; available: boolean; repo?: string; ref?: string; path?: string; programs: TeamProgram[] }
-export type TrainingsAdmin = { is_admin: boolean; schedules: string[]; teams: TeamRoster[]; trainings: ManagedTraining[] }
+export type TrainingsAdmin = {
+  is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
+}
+export type Person = { email: string; name: string; team: string; tag: Tag | '' }
+export type People = { people: Person[]; groups: string[] }
 export type Changes = { commits: string[]; stat: string; more?: boolean }
+export type Member = { email: string; tag: Tag }
 export type TeamView = {
-  id: string; name: string; leader: string; seniors: string[]; members: string[]; trainees: string[]
-  mentors: Record<string, string>; budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]
-  available_trainings: { id: string; title: string }[]; schedules: string[]; version: number
+  id: string; name: string; members: Member[]; mentors: Record<string, string>
+  budget?: { version: number; monthly_usd: number; hard_cap_usd: number }; programs: ProgramConfig[]; schedules: string[]; version: number
   can_edit_team: boolean; is_admin: boolean
 }
 export type ProgramCard = { team: string; team_name: string; training: string; title: string; description: string; percent: number; available: boolean }

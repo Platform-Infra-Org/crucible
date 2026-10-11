@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { enroll } from './helpers'
+import { addParticipant } from './helpers'
 
 let agent: ChildProcess | undefined
 test.afterAll(() => {
@@ -27,9 +27,9 @@ async function typeIn(page: Page, tab: string, command: string) {
 }
 
 test('a scorer grades a free-text answer and a lab submission; the trainee sees the feedback', async ({ browser }) => {
-  // The leader enrolls the trainee in Forge 301; seniors become its scorers by default.
+  // The leader makes the trainee a participant of Forge 301; its editors (forge_leaders, forge_seniors) score.
   const leader = await login(browser, 'leader')
-  await enroll(leader, 'forge-301', 'trainee@crucible.local')
+  await addParticipant(leader, 'forge-301', 'trainee@crucible.local')
 
   // The trainee answers the choice question, writes an answer and attaches a screenshot. Module 2 stays locked.
   const trainee = await login(browser, 'trainee')

@@ -18,12 +18,12 @@ paused labs and when. Both actions are audited.
 ## Needs attention
 
 - Content edits waiting for review, with a link to **Edits**.
-- Labs that failed to start or are stuck being destroyed, with the trainee, program, state and error.
+- Labs that failed to start or are stuck being destroyed, with the trainee, training, state and error.
 
-## Program versions
+## Training versions
 
-Every program, the content version it runs (and whether it is pinned), and the head of the training's source. A
-program that follows the source but hasn't caught up is marked *behind*.
+Every training with the team that owns it, the content version it runs (and whether it is pinned), and the head of
+its source. A training that follows its source but hasn't caught up is marked *behind*.
 
 ## Sync
 

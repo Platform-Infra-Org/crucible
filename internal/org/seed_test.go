@@ -35,9 +35,9 @@ func TestSeedImportsAPlatformOnce(t *testing.T) {
 		t.Errorf("seeded platform differs from config.Load\n got: %s\nwant: %s", dump(got), dump(want))
 	}
 	var roles, audited int
-	mustScan(t, pool, `SELECT count(*) FROM program_roles WHERE training = 'b'`, &roles)
+	mustScan(t, pool, `SELECT count(*) FROM training_roles WHERE training = 'b'`, &roles)
 	if roles != 0 {
-		t.Errorf("program b sets no roles: its defaults must stay unset, got %d role rows", roles)
+		t.Errorf("program b sets no roles, got %d role rows", roles)
 	}
 	mustScan(t, pool, `SELECT count(*) FROM audit_log WHERE actor = 'seed' AND action = 'program.enroll'`, &audited)
 	if audited != 2 {

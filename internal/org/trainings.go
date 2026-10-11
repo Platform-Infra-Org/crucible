@@ -98,6 +98,31 @@ func (s *Store) AddTraining(ctx context.Context, actor, id string, ref config.Tr
 	return err
 }
 
+// CreateTraining registers a new training owned by team, with an empty run: no roles, any time, no budget. The
+// route decides who may create one for which team.
+func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config.TrainingRef, team string) error {
+	if !config.ValidTrainingID(id) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
+	}
+	ref, err := cleanTrainingRef(ref)
+	if err != nil {
+		return err
+	}
+	detail := map[string]any{"repo": redactRepo(ref.Repo), "ref": ref.Ref, "path": ref.Path, "team": team}
+	return s.inTx(ctx, actor, "training.create", id, detail, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO trainings (id, repo, ref, path) VALUES ($1, $2, $3, $4)`, id, ref.Repo, ref.Ref, ref.Path)
+		var pg *pgconn.PgError
+		if errors.As(err, &pg) && pg.Code == "23505" {
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("a training %q already exists; pick another id", id))
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO programs (team, training) VALUES ($1, $2)`, team, id)
+		return fkError(err, team, id, nil)
+	})
+}
+
 // cleanTrainingRef trims and checks a training's repo, ref and path, filling in the defaults.
 func cleanTrainingRef(ref config.TrainingRef) (config.TrainingRef, error) {
 	ref.Repo = strings.TrimSpace(ref.Repo)

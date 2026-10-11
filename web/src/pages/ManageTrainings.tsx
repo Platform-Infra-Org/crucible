@@ -2,15 +2,16 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, NavLink, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
-import type { Changes, ManagedTraining, Roles, TeamProgram, TeamRoster, TrainingsAdmin } from '../types'
+import type { Access, Changes, ManagedTraining, People, ProgramConfig, TrainingsAdmin } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { Conflict, reportSaveError } from '../components/Conflict'
 import { toast } from '../lib/alerts'
 import { repoWarning } from '../lib/adminConfig'
+import { checkRef, describeGroup, isGroup } from '../lib/refs'
 import { useMe } from '../me'
 import { EditList } from './Edits'
-import { addTraineeRequest, enrollPlan, enrollRequest, people, pinRequest, programChange, programFields } from '../lib/teamRequests'
+import { pinRequest, programChange, programFields } from '../lib/teamRequests'
 
 const STALE = 'Someone changed this while you were looking. Reload to see the latest.'
 
@@ -40,39 +41,39 @@ function useAct(onChange: () => void) {
 
 const put = (r: { path: string; json: unknown }) => api(r.path, { method: 'PUT', json: r.json })
 
-// ManageTrainingsPage is the one place for trainings: register and repoint them (admins), start one for a team, see
-// and change who is enrolled, and give out the program roles.
+// ManageTrainingsPage is the one place for trainings: register one for your team, point it at its content, give its
+// roles to people and groups, and set how its labs run.
 export function ManageTrainingsPage() {
   const { training } = useParams()
   const [search] = useSearchParams()
   const { data, error, reload } = useFetch<TrainingsAdmin>('/api/org/trainings')
+  const people = useFetch<People>(data?.can_create ? '/api/org/people' : null)
   if (error) return <ErrorBox error={error} />
   if (!data) return <Loader label="Laying out the moulds…" />
-  const creating = data.is_admin && search.has('new')
+  const creating = data.can_create && search.has('new')
   const selected = creating ? undefined : data.trainings.find((t) => t.id === training) ?? (training ? undefined : data.trainings[0])
-  const enrolled = (t: ManagedTraining) => t.programs.reduce((n, p) => n + p.enrolled.length, 0)
   return (
     <section className="page manage">
       <h1>Manage trainings</h1>
-      <p className="lede">Start a training for a team, enroll people, hand out roles and edit the content. The content lives in each training&apos;s git repository; edits reach it after review.</p>
+      <p className="lede">Register a training for your team, choose who takes it, edits it and runs it, and edit the content. The content lives in each training&apos;s git repository; edits reach it after review.</p>
       <div className="manage-grid">
         <nav aria-label="Trainings" className="manage-list">
-          {data.trainings.length === 0 && <p className="muted">No trainings are registered yet.</p>}
+          {data.trainings.length === 0 && <p className="muted">You don&apos;t run or edit any training yet.</p>}
           <ul>
             {data.trainings.map((t) => (
               <li key={t.id}>
                 <NavLink to={`/trainings/manage/${t.id}`} className={t.id === selected?.id ? 'active' : undefined}>
                   {t.title}
-                  <small>{t.id} · {t.programs.length} {t.programs.length === 1 ? 'team' : 'teams'} · {enrolled(t)} enrolled</small>
+                  <small>{t.id} · {t.team || 'no team'}{t.program && ` · ${t.program.resolved.participants.length} taking it`}</small>
                 </NavLink>
               </li>
             ))}
           </ul>
-          {data.is_admin && <Link to="/trainings/manage?new" className={creating ? 'new-training active' : 'new-training'}>+ New training</Link>}
+          {data.can_create && <Link to="/trainings/manage?new" className={creating ? 'new-training active' : 'new-training'}>+ New training</Link>}
         </nav>
         <div className="manage-detail">
-          {creating && <NewTraining onDone={reload} />}
-          {!creating && selected && <TrainingDetail key={selected.id} t={selected} data={data} onChange={reload} />}
+          {creating && <NewTraining data={data} onDone={reload} />}
+          {!creating && selected && <TrainingDetail key={selected.id} t={selected} data={data} people={people.data} onChange={reload} />}
           {!creating && !selected && training && <p className="warn">There is no training called {training}, or it is not one you can see.</p>}
         </div>
       </div>
@@ -80,54 +81,84 @@ export function ManageTrainingsPage() {
   )
 }
 
-function NewTraining({ onDone }: { onDone: () => void }) {
+function NewTraining({ data, onDone }: { data: TrainingsAdmin; onDone: () => void }) {
   const navigate = useNavigate()
   const [id, setId] = useState('')
+  const [team, setTeam] = useState(data.my_team || data.teams[0]?.id || '')
   const [repo, setRepo] = useState('')
   const [ref, setRef] = useState('main')
   const [path, setPath] = useState('')
   const act = useAct(onDone)
+  const owner = data.is_admin ? team : data.my_team
   const save = async (e: FormEvent) => {
     e.preventDefault()
-    const ok = await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: id.trim(), repo: repo.trim(), ref: ref.trim(), path: path.trim() } }),
-      `${id.trim()} is registered.`)
+    const ok = await act.run(() => api('/api/org/trainings', { method: 'POST', json: { id: id.trim(), team: owner, repo: repo.trim(), ref: ref.trim(), path: path.trim() } }),
+      `${id.trim()} is registered for ${owner}.`)
     if (ok) navigate(`/trainings/manage/${encodeURIComponent(id.trim())}`)
   }
   return (
     <form className="stack panel" onSubmit={save}>
       <h2>New training</h2>
       <p className="muted">A training&apos;s readings, quizzes and labs live in a git repository (<code>training.yaml</code> and <code>modules/…</code>).
-        Register the repository here; who takes the training and who runs it are kept in Crucible.</p>
+        Register it here; your team owns it, and you choose who takes it, edits it and runs it.</p>
       <label>Training id <input required value={id} placeholder="e.g. forge-501" onChange={(e) => setId(e.target.value)} /></label>
+      {data.is_admin
+        ? (
+            <label>Team that owns it
+              <select required value={team} onChange={(e) => setTeam(e.target.value)}>
+                {data.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </label>
+          )
+        : <p>Owned by <strong>{data.my_team}</strong>, your team.</p>}
       <label>Repository URL <input required value={repo} placeholder="https://git.example.com/trainings/forge-501.git" onChange={(e) => setRepo(e.target.value)} /></label>
       <RefFields gitRef={ref} setRef={setRef} path={path} setPath={setPath} />
       {act.banner}
-      <button className="primary" disabled={act.busy}>Register training</button>
+      <button className="primary" disabled={act.busy || !owner}>Register training</button>
     </form>
   )
 }
 
-function TrainingDetail({ t, data, onChange }: { t: ManagedTraining; data: TrainingsAdmin; onChange: () => void }) {
-  const team = (id: string) => data.teams.find((x) => x.id === id)
-  const free = data.teams.filter((x) => x.can_edit_team && !t.programs.some((p) => p.team === x.id))
+function TrainingDetail({ t, data, people, onChange }: { t: ManagedTraining; data: TrainingsAdmin; people?: People; onChange: () => void }) {
   return (
     <>
       <h2>{t.title}</h2>
-      <p className="muted"><code>{t.id}</code>{!t.available && <> · <span className="badge warn">content not loaded yet</span></>}</p>
-      {data.is_admin && <Source t={t} onChange={onChange} />}
+      <p className="muted"><code>{t.id}</code> · {t.team ? <>owned by <Link to={`/teams/${t.team}`}>{t.team}</Link></> : 'no team owns it yet'}
+        {!t.available && <> · <span className="badge warn">content not loaded yet</span></>}</p>
+      {data.is_admin && <Owner t={t} data={data} onChange={onChange} />}
+      {t.can_manage && <Source t={t} onChange={onChange} />}
       <ContentEdits t={t} />
-      <h3>Teams running it</h3>
-      {t.programs.length === 0 && <p className="muted">No team runs this training yet{free.length > 0 ? '; start it for one below.' : '.'}</p>}
-      {t.programs.map((p) => {
-        const tm = team(p.team)
-        return tm && <ProgramPanel key={`${p.team}-${p.version}-${tm.version}`} team={tm} p={p} schedules={data.schedules} onChange={onChange} />
-      })}
-      {free.length > 0 && <StartForTeam training={t} teams={free} onChange={onChange} />}
+      {t.program && <Run key={t.program.version} p={t.program} people={people} schedules={data.schedules} onChange={onChange} />}
     </>
   )
 }
 
-// Source is where the content comes from, for admins: repoint it, or delete the training (its repository stays).
+// Owner (admins): give the training to another team. Its run (roles, version, schedule, budget) moves with it.
+function Owner({ t, data, onChange }: { t: ManagedTraining; data: TrainingsAdmin; onChange: () => void }) {
+  const others = data.teams.filter((x) => x.id !== t.team)
+  const [picked, setPicked] = useState('')
+  const act = useAct(onChange)
+  if (others.length === 0) return null
+  const pick = others.some((x) => x.id === picked) ? picked : others[0].id
+  const give = () => {
+    if (t.team && !window.confirm(`Give ${t.title} to ${pick}? Its roles, version, schedule and budget move with it; ${t.team}'s leaders, seniors and juniors stop managing it.`)) return
+    void act.run(() => api(`/api/admin/trainings/${encodeURIComponent(t.id)}/owner`, { method: 'PUT', json: { team: pick } }), `${t.title} now belongs to ${pick}.`)
+  }
+  return (
+    <div className="panel">
+      <h3>Team</h3>
+      {act.banner}
+      <div className="row">
+        <select aria-label="Team to give it to" value={pick} onChange={(e) => setPicked(e.target.value)}>
+          {others.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+        </select>
+        <button className={t.team ? 'ghost' : 'primary'} disabled={act.busy} onClick={give}>{t.team ? 'Give to this team' : 'Give it to this team'}</button>
+      </div>
+    </div>
+  )
+}
+
+// Source is where the content comes from: repoint it, or delete the training (its repository stays).
 function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
   const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
@@ -135,18 +166,17 @@ function Source({ t, onChange }: { t: ManagedTraining; onChange: () => void }) {
   const [ref, setRef] = useState(t.ref ?? 'main')
   const [path, setPath] = useState(t.path ?? '')
   const act = useAct(onChange)
-  const warn = repoWarning(t, repo, path, t.programs.length)
+  const warn = repoWarning(t, repo, path, !!t.program?.pinned_ref)
   const save = async (e: FormEvent) => {
     e.preventDefault()
     if (warn && !window.confirm(warn)) return
-    if (await act.run(() => api('/api/admin/trainings', { method: 'POST', json: { id: t.id, repo: repo.trim(), ref: ref.trim(), path: path.trim() } }), `${t.id} now reads from the new source.`)) {
+    if (await act.run(() => api(`/api/org/trainings/${encodeURIComponent(t.id)}/source`, { method: 'PUT', json: { repo: repo.trim(), ref: ref.trim(), path: path.trim() } }), `${t.id} now reads from the new source.`)) {
       setEditing(false)
     }
   }
   const remove = async () => {
-    const teams = t.programs.map((p) => p.team).join(', ')
-    if (!window.confirm(`Delete ${t.title} from Crucible?${teams ? ` It stops for ${teams}.` : ''} The repository itself is not touched, and everyone's progress is kept: register it again to bring it back.`)) return
-    if (await act.run(() => api(`/api/admin/trainings/${encodeURIComponent(t.id)}`, { method: 'DELETE' }), `${t.title} is deleted.`)) {
+    if (!window.confirm(`Delete ${t.title} from Crucible? Nobody can take it any more. The repository itself is not touched, and everyone's progress is kept: register it again to bring it back.`)) return
+    if (await act.run(() => api(`/api/org/trainings/${encodeURIComponent(t.id)}`, { method: 'DELETE' }), `${t.title} is deleted.`)) {
       navigate('/trainings/manage')
     }
   }
@@ -211,136 +241,88 @@ function ContentEdits({ t }: { t: ManagedTraining }) {
   )
 }
 
-function StartForTeam({ training, teams, onChange }: { training: ManagedTraining; teams: TeamRoster[]; onChange: () => void }) {
-  const [picked, setPicked] = useState('')
-  const pick = teams.some((x) => x.id === picked) ? picked : teams[0].id
-  const act = useAct(onChange)
-  const start = () => {
-    const r = enrollRequest(pick, training.id)
-    void act.run(() => api(r.path, { method: r.method, json: r.json }), `${training.title} started for ${teams.find((x) => x.id === pick)?.name}.`)
-  }
-  return (
-    <div className="panel">
-      <h3>Start it for a team</h3>
-      {act.banner}
-      <div className="row">
-        <select aria-label="Team to start it for" value={pick} onChange={(e) => setPicked(e.target.value)}>
-          {teams.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-        </select>
-        <button className="primary" disabled={act.busy} onClick={start}>Start for this team</button>
-      </div>
-      <p className="muted">Nobody is enrolled at first. The team leader manages and approves, seniors score, until you name others.</p>
-    </div>
-  )
-}
-
-function Chips({ emails, label, onRemove, busy }: { emails: string[]; label: string; onRemove?: (e: string) => void; busy: boolean }) {
-  return (
-    <ul className="chips" aria-label={label}>
-      {emails.map((e) => (
-        <li key={e} className="chip">
-          {e}
-          {onRemove && <button type="button" aria-label={`Remove ${e} from ${label.toLowerCase()}`} disabled={busy} onClick={() => onRemove(e)}>×</button>}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-const ROLES: { key: keyof Roles; label: string; one: string; add: string }[] = [
-  { key: 'manager', label: 'Managers', one: 'manager', add: 'Add a manager' },
-  { key: 'scorers', label: 'Scorers', one: 'scorer', add: 'Add a scorer' },
-  { key: 'approvers', label: 'Approvers', one: 'approver', add: 'Add an approver' },
+const ROLES: { key: keyof Access; label: string; one: string; what: string }[] = [
+  { key: 'participants', label: 'Participants', one: 'a participant', what: 'take the training' },
+  { key: 'editors', label: 'Editors', one: 'an editor', what: 'propose and review content edits, and score answers' },
+  { key: 'admins', label: 'Admins', one: 'an admin', what: 'do what editors do, manage the training and approve its paid labs' },
 ]
 
-function ProgramPanel({ team, p, schedules, onChange }: { team: TeamRoster; p: TeamProgram; schedules: string[]; onChange: () => void }) {
+// Run is the training's one run: who holds each role, how its labs run, and the content version it uses.
+function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: People; schedules: string[]; onChange: () => void }) {
   const act = useAct(onChange)
   const manage = p.can_manage
-  const save = (change: Parameters<typeof programChange>[2], ok: string) => act.run(() => put(programChange(team.id, p, change)), ok)
-  const stop = () => {
-    if (!window.confirm(`Stop ${p.title} for ${team.name}? Everyone's progress is kept, but nobody can continue until it is started again.`)) return
-    void act.run(() => api(`/api/org/teams/${team.id}/programs/${p.training}`, { method: 'DELETE' }), `${p.title} stopped for ${team.name}.`)
-  }
+  const save = (change: Parameters<typeof programChange>[1], ok: string) => act.run(() => put(programChange(p, change)), ok)
   return (
-    <section className="panel" id={`team-${team.id}`} aria-label={`${team.name} in ${p.title}`}>
+    <section className="panel" aria-label={`Roles in ${p.title}`}>
       <div className="row panel-head">
-        <h4>{team.name}</h4>
-        <span className="muted">{p.enrolled.length} enrolled</span>
+        <h3>Roles</h3>
         <span className="spacer" />
-        {manage && <button type="button" className="ghost" disabled={act.busy} onClick={stop}>Stop for this team</button>}
+        <span className="muted">{p.resolved.participants.length} taking it</span>
       </div>
       {act.banner}
-      {!manage && <p className="muted">Read-only: the team leader, a program manager or an admin makes changes here.</p>}
-
-      <h5>Enrolled</h5>
-      {p.enrolled.length === 0 && <p className="muted">Nobody is enrolled yet.</p>}
-      <Chips emails={p.enrolled} label="Enrolled" busy={act.busy}
-        onRemove={manage ? (e) => void save({ enrolled: p.enrolled.filter((x) => x !== e) }, `${e} is no longer enrolled.`) : undefined} />
-      {manage && <EnrollBox team={team} p={p} act={act} />}
-
-      <h5>Roles</h5>
-      <p className="muted">Leave a role empty for the default: the leader manages and approves, seniors score.</p>
+      {manage
+        ? <p className="muted">Give a role to anyone, or to a group: <code>all</code>, <code>all_seniors</code>, <code>{p.team}</code>, <code>{p.team}_trainees</code>… Groups follow the teams as they change.</p>
+        : <p className="muted">Read-only: {p.team}&apos;s leaders, seniors and juniors and the training&apos;s admins make changes here.</p>}
       {ROLES.map((r) => (
-        <RoleRow key={r.key} label={r.label} one={r.one} add={r.add} stored={p.roles[r.key]} effective={p.effective_roles?.[r.key] ?? []}
-          candidates={people(team).filter((e) => !p.roles[r.key].includes(e))} busy={act.busy}
+        <RoleRow key={r.key} id={`${p.training}-${r.key}`} label={r.label} one={r.one} what={r.what} refs={p.roles[r.key]} resolved={p.resolved[r.key]}
+          people={people} busy={act.busy}
           onChange={manage ? (list, ok) => void save({ roles: { ...p.roles, [r.key]: list } }, ok) : undefined} />
       ))}
-
       {manage && (
         <details className="lab-settings">
           <summary>Lab settings</summary>
           <LabSettings p={p} schedules={schedules} busy={act.busy} save={save} />
         </details>
       )}
-      {manage && <ContentVersion team={team.id} p={p} onDone={onChange} />}
+      {manage && <ContentVersion p={p} onDone={onChange} />}
     </section>
   )
 }
 
-function EnrollBox({ team, p, act }: { team: TeamRoster; p: TeamProgram; act: ReturnType<typeof useAct> }) {
-  const [email, setEmail] = useState('')
-  const [problem, setProblem] = useState('')
-  const listId = `enroll-${team.id}-${p.training}`
-  const candidates = people(team).filter((e) => !p.enrolled.includes(e))
-  const submit = async (e: FormEvent) => {
-    e.preventDefault()
-    const plan = enrollPlan(team, p, email)
-    if (plan.kind === 'refuse') return setProblem(plan.reason)
-    setProblem('')
-    if (plan.kind === 'add-and-enroll' && !window.confirm(`${plan.email} is not on ${team.name} yet. Add them to the team as a trainee and enroll them?`)) return
-    const ok = await act.run(async () => {
-      if (plan.kind === 'add-and-enroll') await put(addTraineeRequest(team, plan.email))
-      await put(programChange(team.id, p, { enrolled: [...p.enrolled, plan.email] }))
-    }, plan.kind === 'add-and-enroll' ? `${plan.email} joined ${team.name} and is enrolled.` : `${plan.email} is enrolled.`)
-    if (ok) setEmail('')
-  }
-  return (
-    <form className="row enroll" onSubmit={submit}>
-      <input aria-label={`Enroll someone in ${team.name}`} list={listId} value={email} placeholder={team.can_edit_team ? 'a team member, or a new email' : 'a team member'}
-        onChange={(e) => setEmail(e.target.value)} />
-      <datalist id={listId}>{candidates.map((c) => <option key={c} value={c} />)}</datalist>
-      <button className="primary" disabled={act.busy || !email.trim()}>Enroll</button>
-      {problem && <p role="alert" className="error">{problem}</p>}
-    </form>
-  )
-}
-
-function RoleRow({ label, one, add, stored, effective, candidates, busy, onChange }: {
-  label: string; one: string; add: string; stored: string[]; effective: string[]; candidates: string[]; busy: boolean
+function RoleRow({ id, label, one, what, refs, resolved, people, busy, onChange }: {
+  id: string; label: string; one: string; what: string; refs: string[]; resolved: string[]; people?: People; busy: boolean
   onChange?: (list: string[], ok: string) => void
 }) {
+  const [text, setText] = useState('')
+  const [problem, setProblem] = useState('')
+  const listId = `refs-${id}`
+  const groups = people?.groups ?? []
+  const add = (e: FormEvent) => {
+    e.preventDefault()
+    const r = checkRef(text, groups)
+    if ('problem' in r) return setProblem(r.problem)
+    if (refs.includes(r.ref)) return setProblem(`${r.ref} is already ${one}.`)
+    setProblem('')
+    setText('')
+    onChange?.([...refs, r.ref], `${r.ref} ${isGroup(r.ref) ? 'are' : 'is'} now ${one}${isGroup(r.ref) ? 's' : ''}.`)
+  }
   return (
     <div className="role-row">
       <span className="role-name">{label}</span>
       <div>
-        {stored.length > 0
-          ? <Chips emails={stored} label={label} busy={busy} onRemove={onChange && ((e) => onChange(stored.filter((x) => x !== e), `${e} is no longer a ${one}.`))} />
-          : <p className="muted role-default">Default: {effective.join(', ') || 'nobody'}</p>}
-        {onChange && candidates.length > 0 && (
-          <select aria-label={add} value="" disabled={busy} onChange={(e) => e.target.value && onChange([...stored, e.target.value], `${e.target.value} is now a ${one}.`)}>
-            <option value="">{add}…</option>
-            {candidates.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+        <p className="muted role-default">They {what}.{refs.some(isGroup) && ` Now ${resolved.length} ${resolved.length === 1 ? 'person' : 'people'}.`}</p>
+        {refs.length === 0 && <p className="muted role-default">Nobody yet.</p>}
+        <ul className="chips" aria-label={label}>
+          {refs.map((ref) => (
+            <li key={ref} className={isGroup(ref) ? 'chip group' : 'chip'} title={isGroup(ref) ? describeGroup(ref) : undefined}>
+              {isGroup(ref) && <span aria-hidden="true">⚑ </span>}{ref}
+              {onChange && <button type="button" aria-label={`Remove ${ref} from ${label.toLowerCase()}`} disabled={busy}
+                onClick={() => onChange(refs.filter((x) => x !== ref), `${ref} ${isGroup(ref) ? 'are' : 'is'} no longer ${one}${isGroup(ref) ? 's' : ''}.`)}>×</button>}
+            </li>
+          ))}
+        </ul>
+        {onChange && (
+          <form className="row enroll" onSubmit={add}>
+            <input aria-label={`Add to ${label.toLowerCase()}`} list={listId} value={text} placeholder="an email or a group" onChange={(e) => setText(e.target.value)} />
+            <datalist id={listId}>
+              {groups.filter((g) => !refs.includes(g)).map((g) => <option key={g} value={g}>{describeGroup(g)}</option>)}
+              {(people?.people ?? []).filter((x) => !refs.includes(x.email)).map((x) => (
+                <option key={x.email} value={x.email}>{[x.name, x.team && `${x.tag} on ${x.team}`].filter(Boolean).join(' · ') || 'on no team'}</option>
+              ))}
+            </datalist>
+            <button className="primary" disabled={busy || !text.trim()}>Add</button>
+            {problem && <p role="alert" className="error">{problem}</p>}
+          </form>
         )}
       </div>
     </div>
@@ -348,7 +330,7 @@ function RoleRow({ label, one, add, stored, effective, candidates, busy, onChang
 }
 
 function LabSettings({ p, schedules, busy, save }: {
-  p: TeamProgram; schedules: string[]; busy: boolean; save: (change: Parameters<typeof programChange>[2], ok: string) => Promise<boolean>
+  p: ProgramConfig; schedules: string[]; busy: boolean; save: (change: Parameters<typeof programChange>[1], ok: string) => Promise<boolean>
 }) {
   const f = programFields(p)
   const [schedule, setSchedule] = useState(f.schedule)
@@ -363,7 +345,7 @@ function LabSettings({ p, schedules, busy, save }: {
   }
   return (
     <form className="stack" onSubmit={submit}>
-      {p.inline_schedule && !schedule && <p className="muted">This program keeps its own schedule windows until you pick a named schedule.</p>}
+      {p.inline_schedule && !schedule && <p className="muted">This training keeps its own schedule windows until you pick a named schedule.</p>}
       <label>Schedule
         <select value={schedule} onChange={(e) => setSchedule(e.target.value)}>
           <option value="">Any time</option>
@@ -374,13 +356,14 @@ function LabSettings({ p, schedules, busy, save }: {
       <label>Idle timeout <input value={idle} placeholder="the lab's own, e.g. 30m" onChange={(e) => setIdle(e.target.value)} /></label>
       <label>Longest extension <input value={ext} placeholder="none, e.g. 30m" onChange={(e) => setExt(e.target.value)} /></label>
       <label>Monthly budget (USD, 0 = none) <input type="number" min={0} step="0.01" value={budget} onChange={(e) => setBudget(e.target.value)} /></label>
-      <label><input type="checkbox" checked={reviewSelf} onChange={(e) => setReviewSelf(e.target.checked)} /> Scorers review self-reported (laptop) lab results</label>
+      <label><input type="checkbox" checked={reviewSelf} onChange={(e) => setReviewSelf(e.target.checked)} /> Editors and admins review self-reported (laptop) lab results</label>
       <button className="primary" disabled={busy}>Save lab settings</button>
     </form>
   )
 }
 
-function ContentVersion({ team, p, onDone }: { team: string; p: TeamProgram; onDone: () => void }) {
+function ContentVersion({ p, onDone }: { p: ProgramConfig; onDone: () => void }) {
+  const team = p.team
   const [changes, setChanges] = useState<Changes>()
   const act = useAct(onDone)
   const pin = (sha: string, ok: string) => act.run(() => put(pinRequest(team, p.training, sha)), ok)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -15,28 +16,40 @@ import (
 	"crucible/internal/config"
 )
 
-// TeamBody is what an admin saves. Version is the one the page read; a mismatch means someone else saved first.
+// TeamBody is a team as its page saves it: every member and their tag. Version is the one the page read; a mismatch
+// means someone else saved first.
 type TeamBody struct {
-	Version  int64             `json:"version"`
-	Name     string            `json:"name"`
-	Leader   string            `json:"leader"`
-	Seniors  []string          `json:"seniors"`
-	Members  []string          `json:"members"`
-	Trainees []string          `json:"trainees"`
-	Mentors  map[string]string `json:"mentors"`
+	Version int64             `json:"version"`
+	Name    string            `json:"name"`
+	Members map[string]string `json:"members"` // email → leader, senior, junior or trainee
+	Mentors map[string]string `json:"mentors"` // trainee → mentor
+}
+
+// BodyOf is t as a TeamBody: every member with their tag.
+func BodyOf(t *config.Team) TeamBody {
+	b := TeamBody{Version: t.Version, Name: t.Name, Members: map[string]string{}, Mentors: t.Mentors}
+	for _, tag := range config.Tags {
+		for _, e := range t.Tagged(tag) {
+			b.Members[e] = tag
+		}
+	}
+	return b
 }
 
 func checkTeamID(id string) error {
-	if id == "" || !filepath.IsLocal(id) || strings.ContainsAny(id, "/\\ ") || len(id) > 64 {
-		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("team id %q must be 1-64 characters with no slash or space", id))
+	if id == "" || !filepath.IsLocal(id) || strings.ContainsAny(id, "/\\ @") || len(id) > 64 {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("team id %q must be 1-64 characters with no slash, space or @", id))
+	}
+	if config.ReservedTeamID(id) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("team id %q reads as a group; avoid all and names ending in _leaders, _seniors, _juniors or _trainees", id))
 	}
 	return nil
 }
 
-// roster is a validated body: addresses normalised, one role per person, mentors checked.
+// roster is a validated body: addresses normalised, a known tag each, at least one leader, mentors checked.
 type roster struct {
 	name    string
-	roles   map[string]string // email -> role
+	roles   map[string]string // email -> tag
 	mentors map[string]string
 }
 
@@ -44,71 +57,105 @@ func (b TeamBody) roster() (*roster, error) {
 	if strings.TrimSpace(b.Name) == "" {
 		return nil, apperr.Wrap(apperr.Invalid, "a team needs a name")
 	}
-	r := &roster{name: b.Name, roles: map[string]string{}, mentors: map[string]string{}}
-	add := func(role string, emails ...string) error {
-		for _, e := range emails {
-			e = em(e)
-			if err := config.CheckEmail(role, e); err != nil {
-				return err
-			}
-			if prev, ok := r.roles[e]; ok && prev != role {
-				return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s is listed as both %s and %s; a person has one role per team", e, prev, role))
-			}
-			r.roles[e] = role
-		}
-		return nil
-	}
-	if em(b.Leader) == "" {
-		return nil, apperr.Wrap(apperr.Invalid, "a team needs a leader")
-	}
-	for _, g := range []struct {
-		role   string
-		emails []string
-	}{{"leader", []string{b.Leader}}, {"senior", b.Seniors}, {"member", b.Members}, {"trainee", b.Trainees}} {
-		if err := add(g.role, g.emails...); err != nil {
+	r := &roster{name: strings.TrimSpace(b.Name), roles: map[string]string{}, mentors: map[string]string{}}
+	for e, tag := range b.Members {
+		e = em(e)
+		if err := config.CheckEmail("member", e); err != nil {
 			return nil, err
 		}
+		if !slices.Contains(config.Tags, tag) {
+			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s: %q is not a tag; use leader, senior, junior or trainee", e, tag))
+		}
+		if prev, ok := r.roles[e]; ok && prev != tag {
+			return nil, apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s is listed as both %s and %s; a person has one tag", e, prev, tag))
+		}
+		r.roles[e] = tag
+	}
+	if !slices.Contains(slices.Collect(maps.Values(r.roles)), "leader") {
+		return nil, apperr.Wrap(apperr.Invalid, "a team needs at least one leader")
 	}
 	for t, m := range b.Mentors {
 		t, m = em(t), em(m)
 		if t == m {
 			return nil, apperr.Wrap(apperr.Invalid, t+" cannot mentor themselves")
 		}
-		for _, e := range []string{t, m} {
-			if _, ok := r.roles[e]; !ok {
-				return nil, apperr.Wrap(apperr.Invalid, e+" is in a mentor pair but is not on this team")
-			}
+		if r.roles[t] != "trainee" {
+			return nil, apperr.Wrap(apperr.Invalid, t+" is mentored but is not a trainee on this team")
 		}
-		if prev, ok := r.mentors[t]; ok && prev != m {
-			return nil, apperr.Wrap(apperr.Invalid, t+" is given two different mentors")
+		if tag := r.roles[m]; tag == "" || tag == "trainee" {
+			return nil, apperr.Wrap(apperr.Invalid, m+" mentors "+t+" but is not a leader, senior or junior on this team")
 		}
 		r.mentors[t] = m
 	}
 	return r, nil
 }
 
-// detail is the audit record: with no git history, this is the only account of who joined or left.
+// detail is the audit record: with no git history, this is the only account of who joined, left or moved.
 func (r *roster) detail(version int64) map[string]any {
 	by := map[string][]string{}
-	for e, role := range r.roles {
-		by[role] = append(by[role], e)
+	for e, tag := range r.roles {
+		by[tag] = append(by[tag], e)
 	}
-	for _, v := range by {
-		slices.Sort(v)
+	d := map[string]any{"version": version, "name": r.name, "mentors": r.mentors}
+	for _, tag := range config.Tags {
+		slices.Sort(by[tag])
+		d[tag+"s"] = nonNil(by[tag])
 	}
-	return map[string]any{"version": version, "name": r.name, "leader": by["leader"][0], "seniors": by["senior"],
-		"members": by["member"], "trainees": by["trainee"], "mentors": r.mentors}
+	return d
 }
 
-func (r *roster) write(ctx context.Context, tx pgx.Tx, id string) error {
+// write replaces the team's members and mentors. Someone on another team moves here: they leave that team and its
+// mentor pairs, and that team's version moves on. A move that would leave a team with no leader is refused.
+func (r *roster) write(ctx context.Context, tx pgx.Tx, id string, detail map[string]any) error {
+	rows, err := tx.Query(ctx, `SELECT email, team FROM team_members WHERE email = ANY($1) AND team <> $2 ORDER BY email`,
+		slices.Collect(maps.Keys(r.roles)), id)
+	if err != nil {
+		return err
+	}
+	moved := map[string]string{}
+	for rows.Next() {
+		var e, from string
+		if err := rows.Scan(&e, &from); err != nil {
+			rows.Close()
+			return err
+		}
+		moved[e] = from
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for e, from := range moved {
+		if _, err := tx.Exec(ctx, `DELETE FROM team_members WHERE team = $1 AND email = $2`, from, e); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM mentors WHERE team = $1 AND (trainee = $2 OR mentor = $2)`, from, e); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE teams SET version = version + 1 WHERE id = $1`, from); err != nil {
+			return err
+		}
+	}
+	for _, from := range slices.Sorted(maps.Values(moved)) {
+		var leaders int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM team_members WHERE team = $1 AND role = 'leader'`, from).Scan(&leaders); err != nil {
+			return err
+		}
+		if leaders == 0 {
+			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("this would take the last leader out of team %s; make someone else its leader first", from))
+		}
+	}
+	if len(moved) > 0 {
+		detail["moved_from"] = moved // audit.Log runs after fn
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM team_members WHERE team = $1`, id); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM mentors WHERE team = $1`, id); err != nil {
 		return err
 	}
-	for e, role := range r.roles {
-		if _, err := tx.Exec(ctx, `INSERT INTO team_members (team, email, role) VALUES ($1, $2, $3)`, id, e, role); err != nil {
+	for e, tag := range r.roles {
+		if _, err := tx.Exec(ctx, `INSERT INTO team_members (team, email, role) VALUES ($1, $2, $3)`, id, e, tag); err != nil {
 			return err
 		}
 	}
@@ -128,7 +175,8 @@ func (s *Store) CreateTeam(ctx context.Context, actor, id string, b TeamBody) er
 	if err != nil {
 		return err
 	}
-	return s.inTx(ctx, actor, "team.create", id, r.detail(1), func(tx pgx.Tx) error {
+	detail := r.detail(1)
+	return s.inTx(ctx, actor, "team.create", id, detail, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO teams (id, name) VALUES ($1, $2)`, id, r.name); err != nil {
 			var pg *pgconn.PgError
 			if errors.As(err, &pg) && pg.Code == "23505" {
@@ -136,7 +184,7 @@ func (s *Store) CreateTeam(ctx context.Context, actor, id string, b TeamBody) er
 			}
 			return err
 		}
-		return r.write(ctx, tx, id)
+		return r.write(ctx, tx, id, detail)
 	})
 }
 
@@ -148,7 +196,8 @@ func (s *Store) SetTeam(ctx context.Context, actor, id string, b TeamBody) error
 	if err != nil {
 		return err
 	}
-	return s.inTx(ctx, actor, "team.roster", id, r.detail(b.Version+1), func(tx pgx.Tx) error {
+	detail := r.detail(b.Version + 1)
+	return s.inTx(ctx, actor, "team.roster", id, detail, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE teams SET name = $2, version = version + 1 WHERE id = $1 AND version = $3`, id, r.name, b.Version)
 		if err != nil {
 			return err
@@ -160,16 +209,28 @@ func (s *Store) SetTeam(ctx context.Context, actor, id string, b TeamBody) error
 			}
 			return apperr.Wrap(apperr.Conflict, "someone changed this team, reload")
 		}
-		return r.write(ctx, tx, id)
+		return r.write(ctx, tx, id, detail)
 	})
 }
 
-// DeleteTeam removes the team and its roster, mentors, webhooks, budget and programs (cascade). Learning history
+// DeleteTeam removes the team and its members, mentors, webhooks and budget (cascade). A team that still owns
+// trainings is refused, so no training loses its run settings by accident. Learning history
 // (item_progress, submissions, badges, ranks) has no foreign key to teams and is kept.
 func (s *Store) DeleteTeam(ctx context.Context, actor, id string) error {
 	detail := map[string]any{"team": id}
 	return s.inTx(ctx, actor, "team.delete", id, detail, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT email FROM team_members WHERE team = $1 ORDER BY email`, id)
+		rows, err := tx.Query(ctx, `SELECT training FROM programs WHERE team = $1 ORDER BY training`, id)
+		if err != nil {
+			return err
+		}
+		owned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		if len(owned) > 0 {
+			return apperr.Wrap(apperr.Conflict, fmt.Sprintf("team %s owns %s; give those trainings to another team or delete them first", id, strings.Join(owned, ", ")))
+		}
+		rows, err = tx.Query(ctx, `SELECT email FROM team_members WHERE team = $1 ORDER BY email`, id)
 		if err != nil {
 			return err
 		}

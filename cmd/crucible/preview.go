@@ -307,8 +307,8 @@ func writePlatform(dir, training string) error {
 		"platform.yaml":           "default_theme: forge\ncost_tiers: {auto_approve_usd: 0, tier1_usd: 1, tier2_usd: 2}\n",
 		"admins.yaml":             "admins: [preview@crucible.local]\n",
 		"trainings.yaml":          fmt.Sprintf("trainings:\n  %s: {repo: file:///git/content.git, ref: main}\n", training),
-		"teams/preview/team.yaml": "name: Preview\nleader: preview@crucible.local\n",
-		"teams/preview/programs/" + training + ".yaml": fmt.Sprintf("training: %s\nenrolled: [preview@crucible.local]\n", training),
+		"teams/preview/team.yaml": "name: Preview\nleaders: [preview@crucible.local]\n",
+		"teams/preview/programs/" + training + ".yaml": fmt.Sprintf("training: %s\nroles: {participants: [preview@crucible.local], editors: [preview_leaders]}\n", training),
 	}
 	for rel, body := range files {
 		p := filepath.Join(dir, rel)

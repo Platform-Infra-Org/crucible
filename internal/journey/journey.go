@@ -81,8 +81,8 @@ type Mentee struct {
 	Failures []Failure `json:"failures"`
 }
 
-// want is one (program, person) pair a page shows.
-type want struct{ training, email string }
+// want is one (training, person) pair a page shows; team owns the training.
+type want struct{ team, training, email string }
 
 type person struct {
 	id     int64
@@ -98,8 +98,8 @@ func (s *Service) state() (*gitsync.State, error) {
 	return st, nil
 }
 
-// Team lists every enrolled person the actor may follow (spec §5.3 "View trainee progress"), program by program,
-// excluding the actor themselves.
+// Team lists, excluding the actor themselves, the participants of the trainings the team owns that the actor may
+// follow, and the team's own people in trainings other teams own (its leaders and seniors follow them there).
 func (s *Service) Team(ctx context.Context, u *auth.User, team string) ([]Row, error) {
 	st, err := s.state()
 	if err != nil {
@@ -111,10 +111,13 @@ func (s *Service) Team(ctx context.Context, u *auth.User, team string) ([]Row, e
 	}
 	c, me := rbac.Checker{P: st.Platform}, strings.ToLower(u.Email)
 	var ws []want
-	for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
-		for _, email := range slices.Sorted(slices.Values(t.Programs[tr].Enrolled)) {
-			if email != me && c.Can(me, rbac.ViewProgress, team, tr, email) {
-				ws = append(ws, want{tr, email})
+	for _, owner := range slices.Sorted(maps.Keys(st.Platform.Teams)) {
+		ot := st.Platform.Teams[owner]
+		for _, tr := range slices.Sorted(maps.Keys(ot.Programs)) {
+			for _, email := range ot.Programs[tr].Enrolled {
+				if email != me && (owner == team || t.RoleOf(email) != "") && c.Can(me, rbac.ViewProgress, owner, tr, email) {
+					ws = append(ws, want{owner, tr, email})
+				}
 			}
 		}
 	}
@@ -122,7 +125,7 @@ func (s *Service) Team(ctx context.Context, u *auth.User, team string) ([]Row, e
 	if err != nil {
 		return nil, err
 	}
-	return s.rows(ctx, st, team, ws, people)
+	return s.rows(ctx, st, ws, people)
 }
 
 // people looks up everyone in ws in one query; someone who never signed in is absent.
@@ -143,7 +146,8 @@ func (s *Service) people(ctx context.Context, ws []want) (map[string]person, err
 	return out, err
 }
 
-func (s *Service) rows(ctx context.Context, st *gitsync.State, team string, ws []want, people map[string]person) ([]Row, error) {
+// rows builds one row per want, in order. Signals are read once per owning team.
+func (s *Service) rows(ctx context.Context, st *gitsync.State, ws []want, people map[string]person) ([]Row, error) {
 	out := []Row{}
 	if len(ws) == 0 {
 		return out, nil
@@ -152,11 +156,17 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, team string, ws [
 	for _, p := range people {
 		uids = append(uids, p.id)
 	}
-	sig, err := s.signals(ctx, st, team, uids)
-	if err != nil {
-		return nil, err
-	}
+	sigs := map[string]*signals{}
 	for _, w := range ws {
+		team := w.team
+		sig := sigs[team]
+		if sig == nil {
+			var err error
+			if sig, err = s.signals(ctx, st, team, uids); err != nil {
+				return nil, err
+			}
+			sigs[team] = sig
+		}
 		r := Row{Email: w.email, Team: team, Training: w.training, Title: w.training, Cells: []Cell{}, Flags: []Flag{}}
 		t, _ := st.ProgramTraining(team, w.training)
 		if t == nil {
@@ -209,8 +219,8 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, team string, ws [
 	return out, nil
 }
 
-// Mentees is the mentor dashboard (spec §11): each mentee's programs, rank, submissions waiting for a scorer, and
-// recent lab failures. Only people whose mentor (team.yaml) is the caller, and only within that team.
+// Mentees is the mentor dashboard (spec §11): each mentee's trainings (whichever team owns them), rank, submissions
+// waiting for a scorer, and recent lab failures. Only people whose mentor on their team is the caller.
 func (s *Service) Mentees(ctx context.Context, u *auth.User) ([]Mentee, error) {
 	st, err := s.state()
 	if err != nil {
@@ -227,10 +237,8 @@ func (s *Service) Mentees(ctx context.Context, u *auth.User) ([]Mentee, error) {
 				continue
 			}
 			mentees = append(mentees, trainee)
-			for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
-				if slices.Contains(t.Programs[tr].Enrolled, trainee) {
-					ws = append(ws, want{tr, trainee})
-				}
+			for _, e := range (rbac.Checker{P: st.Platform}).Enrollments(trainee) {
+				ws = append(ws, want{e.Team.ID, e.Program.Training, trainee})
 			}
 		}
 		if len(mentees) == 0 {
@@ -238,17 +246,17 @@ func (s *Service) Mentees(ctx context.Context, u *auth.User) ([]Mentee, error) {
 		}
 		all := ws
 		for _, e := range mentees {
-			all = append(all, want{"", e}) // mentees enrolled in nothing still get a name and rank
+			all = append(all, want{"", "", e}) // mentees enrolled in nothing still get a name and rank
 		}
 		people, err := s.people(ctx, all)
 		if err != nil {
 			return nil, err
 		}
-		rows, err := s.rows(ctx, st, teamID, ws, people)
+		rows, err := s.rows(ctx, st, ws, people)
 		if err != nil {
 			return nil, err
 		}
-		d, err := s.details(ctx, teamID, people)
+		d, err := s.details(ctx, people)
 		if err != nil {
 			return nil, err
 		}
@@ -279,9 +287,9 @@ type details struct {
 	failures map[int64][]Failure
 }
 
-// details loads ranks, pending submissions and recent failures for a team's mentees, one query each. Only ids, item
+// details loads ranks, pending submissions and recent failures for mentees, in any training, one query each. Only ids, item
 // names and types leave here: never prompts, rubrics, answers or check output.
-func (s *Service) details(ctx context.Context, team string, people map[string]person) (*details, error) {
+func (s *Service) details(ctx context.Context, people map[string]person) (*details, error) {
 	d := &details{level: map[int64]int{}, pending: map[int64][]Pending{}, failures: map[int64][]Failure{}}
 	uids := []int64{}
 	for _, p := range people {
@@ -298,7 +306,7 @@ func (s *Service) details(ctx context.Context, team string, people map[string]pe
 	}
 	var p Pending
 	rows, err = s.DB.Query(ctx, `SELECT user_id, id, training, module, item, qtype, created_at FROM submissions
-		WHERE user_id = ANY($1) AND team = $2 AND status = 'pending' ORDER BY created_at, id`, uids, team)
+		WHERE user_id = ANY($1) AND status = 'pending' ORDER BY created_at, id`, uids)
 	if err != nil {
 		return nil, err
 	}
@@ -313,14 +321,14 @@ func (s *Service) details(ctx context.Context, team string, people map[string]pe
 		SELECT user_id, training, module, task, kind, detail, at FROM (
 		  SELECT *, row_number() OVER (PARTITION BY user_id ORDER BY at DESC) AS n FROM (
 		    SELECT user_id, training, module, '' AS task, 'lab_failed' AS kind, left(error, 200) AS detail, created_at AS at
-		      FROM lab_instances WHERE user_id = ANY($1) AND team = $2 AND state = 'failed'
-		       AND created_at > $3::timestamptz - interval '14 days'
+		      FROM lab_instances WHERE user_id = ANY($1) AND state = 'failed'
+		       AND created_at > $2::timestamptz - interval '14 days'
 		    UNION ALL
 		    SELECT li.user_id, li.training, li.module, cr.task, 'check_failed', count(*)::text || ' failed checks', max(cr.at)
 		      FROM check_runs cr JOIN lab_instances li ON li.id = cr.lab_id
-		     WHERE li.user_id = ANY($1) AND li.team = $2 AND cr.exit_code <> 0 AND cr.at > $3::timestamptz - interval '7 days'
+		     WHERE li.user_id = ANY($1) AND cr.exit_code <> 0 AND cr.at > $2::timestamptz - interval '7 days'
 		     GROUP BY li.user_id, li.training, li.module, cr.task) f) x
-		WHERE n <= 20 ORDER BY user_id, at DESC`, uids, team, s.Now())
+		WHERE n <= 20 ORDER BY user_id, at DESC`, uids, s.Now())
 	if err != nil {
 		return nil, err
 	}

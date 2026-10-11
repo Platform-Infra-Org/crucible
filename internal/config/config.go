@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path"
@@ -17,6 +18,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"crucible/internal/apperr"
 	"crucible/internal/yamlx"
 )
 
@@ -174,28 +176,35 @@ func CleanPath(p string) (string, error) {
 	return c, nil
 }
 
+// Team is a team and its members, each holding one tag (leader, senior, junior, trainee). A person is on one team.
 type Team struct {
 	ID       string              `yaml:"-"`
 	Version  int64               `yaml:"-"`
 	Name     string              `yaml:"name"`
-	Leader   string              `yaml:"leader"`
+	Leaders  []string            `yaml:"leaders"`
 	Seniors  []string            `yaml:"seniors"`
-	Members  []string            `yaml:"members"`
+	Juniors  []string            `yaml:"juniors"`
 	Trainees []string            `yaml:"trainees"`
 	Mentors  map[string]string   `yaml:"mentors"` // trainee email → mentor email
-	Programs map[string]*Program `yaml:"-"`       // by training id
+	Programs map[string]*Program `yaml:"-"`       // the trainings this team owns, by training id: one run each
 
 	Notifications TeamNotifications `yaml:"notifications" json:"-"` // webhook URLs are secrets: never marshalled
 	Budget        Budget            `yaml:"-"`                      // from budget.yaml
 }
 
+// Program is a training's one run, under the team that owns it: who holds its roles, the version it runs, its
+// schedule, lab defaults and budget.
 type Program struct {
 	Training    string      `yaml:"training"`
 	Version     int64       `yaml:"-"`
 	PinnedRef   string      `yaml:"pinned_ref"`
-	Roles       Roles       `yaml:"roles"`
-	Enrolled    []string    `yaml:"enrolled"`
+	Access      Access      `yaml:"roles"` // as given: people and groups
 	LabDefaults LabDefaults `yaml:"lab_defaults"`
+
+	// Resolved from Access and the teams by Platform.Resolve, never stored.
+	Enrolled []string `yaml:"-"` // participants
+	Editors  []string `yaml:"-"` // may propose and review content edits: editors and the training's admins
+	Roles    Roles    `yaml:"-"`
 
 	ScheduleSpec       ScheduleRef `yaml:"schedule"`             // a schedule name from platform.yaml, or inline windows (spec §4.3)
 	Schedule           string      `yaml:"-"`                    // the named schedule; "" = inline or any time
@@ -236,10 +245,19 @@ func (p *Platform) ProgramSchedule(team, training string) *Schedule {
 	return p.Settings.Schedules[t.Programs[training].Schedule]
 }
 
+// Access is who holds a training's roles: emails and group refs (see Platform.Members).
+type Access struct {
+	Participants []string `yaml:"participants" json:"participants"`
+	Editors      []string `yaml:"editors" json:"editors"`
+	Admins       []string `yaml:"admins" json:"admins"`
+}
+
+// Roles are the people a program's permissions go to, resolved from its Access. Manager is the training's admins;
+// the owning team's leaders, seniors and juniors manage it too (rbac).
 type Roles struct {
-	Manager   []string `yaml:"manager" json:"manager"`
-	Scorers   []string `yaml:"scorers" json:"scorers"`
-	Approvers []string `yaml:"approvers" json:"approvers"`
+	Manager   []string `json:"manager"`   // training admins
+	Scorers   []string `json:"scorers"`   // editors and training admins
+	Approvers []string `json:"approvers"` // training admins: paid labs up to tier 1
 }
 
 type LabDefaults struct {
@@ -248,20 +266,186 @@ type LabDefaults struct {
 	MaxExtension yamlx.Duration `yaml:"max_extension"`
 }
 
-// RoleOf returns leader, senior, member, trainee or "" for an email.
+// Tags are the team tags, strongest first.
+var Tags = []string{"leader", "senior", "junior", "trainee"}
+
+// groupTags maps a group suffix to its tag: platform_seniors, all_trainees.
+var groupTags = map[string]string{"leaders": "leader", "seniors": "senior", "juniors": "junior", "trainees": "trainee"}
+
+// Tagged returns the members holding tag.
+func (t *Team) Tagged(tag string) []string {
+	switch tag {
+	case "leader":
+		return t.Leaders
+	case "senior":
+		return t.Seniors
+	case "junior":
+		return t.Juniors
+	case "trainee":
+		return t.Trainees
+	}
+	return nil
+}
+
+// RoleOf returns the tag email holds in the team (leader, senior, junior, trainee), or "".
 func (t *Team) RoleOf(email string) string {
 	email = strings.ToLower(email)
-	switch {
-	case email == t.Leader:
-		return "leader"
-	case slices.Contains(t.Seniors, email):
-		return "senior"
-	case slices.Contains(t.Members, email):
-		return "member"
-	case slices.Contains(t.Trainees, email):
-		return "trainee"
+	for _, tag := range Tags {
+		if slices.Contains(t.Tagged(tag), email) {
+			return tag
+		}
 	}
 	return ""
+}
+
+// People lists every member, sorted.
+func (t *Team) People() []string {
+	return slices.Sorted(slices.Values(slices.Concat(t.Leaders, t.Seniors, t.Juniors, t.Trainees)))
+}
+
+// Manages reports whether email runs the team's trainings: its leaders, seniors and juniors.
+func (t *Team) Manages(email string) bool {
+	r := t.RoleOf(email)
+	return r != "" && r != "trainee"
+}
+
+// ReservedTeamID reports a team id that would read as a group: "all", or one ending in _leaders, _seniors, _juniors
+// or _trainees.
+func ReservedTeamID(id string) bool {
+	if id == "all" {
+		return true
+	}
+	for suffix := range groupTags {
+		if strings.HasSuffix(id, "_"+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// SplitGroup reads a group ref (not an email): "all", "all_seniors", "platform", "platform_seniors". team is "" for
+// all teams and tag "" for every tag. It does not check that the team exists.
+func SplitGroup(ref string) (team, tag string) {
+	for suffix, t := range groupTags {
+		if base, ok := strings.CutSuffix(ref, "_"+suffix); ok && base != "" {
+			if base == "all" {
+				return "", t
+			}
+			return base, t
+		}
+	}
+	if ref == "all" {
+		return "", ""
+	}
+	return ref, ""
+}
+
+// Members resolves a ref to people: an email is itself; a group is its members now. An unknown team is nobody.
+func (p *Platform) Members(ref string) []string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if strings.Contains(ref, "@") {
+		return []string{ref}
+	}
+	if ref == "" {
+		return nil // never "everyone"
+	}
+	team, tag := SplitGroup(ref)
+	var teams []*Team
+	if team == "" {
+		for _, id := range slices.Sorted(maps.Keys(p.Teams)) {
+			teams = append(teams, p.Teams[id])
+		}
+	} else if t := p.Teams[team]; t != nil {
+		teams = []*Team{t}
+	}
+	var out []string
+	for _, t := range teams {
+		if tag == "" {
+			out = append(out, t.People()...)
+		} else {
+			out = append(out, t.Tagged(tag)...)
+		}
+	}
+	return out
+}
+
+// CheckRef checks a role holder: a valid email, or a group of an existing team (or of all teams).
+func (p *Platform) CheckRef(role, ref string) error {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if strings.Contains(ref, "@") {
+		return CheckEmail(role, ref)
+	}
+	if team, _ := SplitGroup(ref); ref == "" || (team != "" && p.Teams[team] == nil) {
+		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("%s %q is neither an email nor a group (all, all_seniors, <team>, <team>_seniors, … of an existing team)", role, ref))
+	}
+	return nil
+}
+
+// Groups lists every group ref there is now: all, all_<tags>, and each team and its tags.
+func (p *Platform) Groups() []string {
+	out := []string{"all"}
+	for _, tag := range Tags {
+		out = append(out, "all_"+tag+"s")
+	}
+	for _, id := range slices.Sorted(maps.Keys(p.Teams)) {
+		out = append(out, id)
+		for _, tag := range Tags {
+			out = append(out, id+"_"+tag+"s")
+		}
+	}
+	return out
+}
+
+// resolve turns refs into a sorted set of people.
+func (p *Platform) resolve(refs ...[]string) []string {
+	var out []string
+	for _, list := range refs {
+		for _, r := range list {
+			out = append(out, p.Members(r)...)
+		}
+	}
+	slices.Sort(out)
+	return nonNilStrings(slices.Compact(out))
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// Resolve fills every program's Enrolled, Editors and Roles from its Access and the teams as they are now.
+func (p *Platform) Resolve() {
+	for _, t := range p.Teams {
+		for _, pr := range t.Programs {
+			admins := p.resolve(pr.Access.Admins)
+			pr.Enrolled = p.resolve(pr.Access.Participants)
+			pr.Editors = p.resolve(pr.Access.Editors, pr.Access.Admins)
+			pr.Roles = Roles{Manager: admins, Scorers: slices.Clone(pr.Editors), Approvers: slices.Clone(admins)}
+		}
+	}
+}
+
+// Owner returns the team that owns training and its run, or nil, nil when no team owns it.
+func (p *Platform) Owner(training string) (*Team, *Program) {
+	for _, t := range p.Teams {
+		if pr := t.Programs[training]; pr != nil {
+			return t, pr
+		}
+	}
+	return nil, nil
+}
+
+// TeamOf returns the team email is on, or nil.
+func (p *Platform) TeamOf(email string) *Team {
+	email = strings.ToLower(email)
+	for _, t := range p.Teams {
+		if t.RoleOf(email) != "" {
+			return t
+		}
+	}
+	return nil
 }
 
 // ValidTrainingID reports whether id can name a training: it becomes a directory name in the content mirror.
@@ -377,7 +561,42 @@ func Load(dir string) (*Platform, error) {
 			p.Teams[t.ID] = t
 		}
 	}
+	errs = append(errs, p.Check()...)
+	p.Resolve()
 	return p, errors.Join(errs...)
+}
+
+// Check applies the rules that span teams: one team per person, one owner per training, role holders that resolve.
+func (p *Platform) Check() []error {
+	var errs []error
+	teamOf, owner := map[string]string{}, map[string]string{}
+	for _, id := range slices.Sorted(maps.Keys(p.Teams)) {
+		t := p.Teams[id]
+		for _, e := range t.People() {
+			if prev, ok := teamOf[e]; ok {
+				errs = append(errs, fmt.Errorf("teams/%s: %s is already on team %s; a person is on one team", id, e, prev))
+			}
+			teamOf[e] = id
+		}
+		for _, tr := range slices.Sorted(maps.Keys(t.Programs)) {
+			if prev, ok := owner[tr]; ok {
+				errs = append(errs, fmt.Errorf("teams/%s/programs/%s.yaml: team %s already owns %s; a training has one team", id, tr, prev, tr))
+			}
+			owner[tr] = id
+			a := t.Programs[tr].Access
+			for _, g := range []struct {
+				role string
+				refs []string
+			}{{"participant", a.Participants}, {"editor", a.Editors}, {"admin", a.Admins}} {
+				for _, r := range g.refs {
+					if err := p.CheckRef(g.role, r); err != nil {
+						errs = append(errs, fmt.Errorf("teams/%s/programs/%s.yaml: %w", id, tr, err))
+					}
+				}
+			}
+		}
+	}
+	return errs
 }
 
 func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[string]*Schedule) (*Team, []error) {
@@ -389,15 +608,15 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 	bad := func(format string, a ...any) {
 		errs = append(errs, fmt.Errorf("teams/%s: "+format, append([]any{id}, a...)...))
 	}
-
-	t.Leader = strings.ToLower(t.Leader)
-	t.Seniors, t.Members, t.Trainees = lower(t.Seniors), lower(t.Members), lower(t.Trainees)
+	if ReservedTeamID(id) {
+		bad("the id reads as a group (all, or a name ending in _leaders, _seniors, _juniors or _trainees)")
+	}
+	t.Leaders, t.Seniors, t.Juniors, t.Trainees = lower(t.Leaders), lower(t.Seniors), lower(t.Juniors), lower(t.Trainees)
 	mentors := map[string]string{}
 	for trainee, mentor := range t.Mentors {
 		mentors[strings.ToLower(trainee)] = strings.ToLower(mentor)
 	}
 	t.Mentors = mentors
-
 	for _, u := range []string{t.Notifications.SlackWebhook, t.Notifications.TeamsWebhook} {
 		if u != "" && !strings.HasPrefix(u, "https://") {
 			bad("notifications: webhook URLs must start with https://")
@@ -409,14 +628,13 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 	if err := t.Budget.Validate(); err != nil {
 		bad("budget.yaml: %v", err)
 	}
-
-	if t.Leader == "" {
+	if len(t.Leaders) == 0 {
 		bad("team has no leader")
 	}
 	seen := map[string]bool{}
-	for _, e := range slices.Concat([]string{t.Leader}, t.Seniors, t.Members, t.Trainees) {
+	for _, e := range slices.Concat(t.Leaders, t.Seniors, t.Juniors, t.Trainees) {
 		if seen[e] {
-			bad("%s has more than one team role", e)
+			bad("%s has more than one tag", e)
 		}
 		seen[e] = true
 	}
@@ -424,11 +642,10 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 		if t.RoleOf(trainee) != "trainee" {
 			bad("mentor pairing: %s is not a trainee", trainee)
 		}
-		if r := t.RoleOf(mentor); r == "" || r == "trainee" {
+		if !t.Manages(mentor) {
 			bad("mentor pairing: %s must be a non-trainee team member", mentor)
 		}
 	}
-
 	files, _ := filepath.Glob(filepath.Join(dir, "programs", "*.yaml"))
 	for _, f := range files {
 		name := strings.TrimSuffix(filepath.Base(f), ".yaml")
@@ -455,22 +672,8 @@ func loadTeam(dir, id string, trainings map[string]TrainingRef, schedules map[st
 			bad("programs/%s.yaml: training %q is not in trainings.yaml", name, pr.Training)
 			continue
 		}
-		pr.Enrolled = lower(pr.Enrolled)
-		pr.Roles.Manager, pr.Roles.Scorers, pr.Roles.Approvers = lower(pr.Roles.Manager), lower(pr.Roles.Scorers), lower(pr.Roles.Approvers)
-		if len(pr.Roles.Manager) == 0 {
-			pr.Roles.Manager = []string{t.Leader}
-		}
-		if len(pr.Roles.Approvers) == 0 {
-			pr.Roles.Approvers = []string{t.Leader}
-		}
-		if len(pr.Roles.Scorers) == 0 {
-			pr.Roles.Scorers = slices.Clone(t.Seniors)
-		}
-		for _, e := range pr.Enrolled {
-			if t.RoleOf(e) == "" {
-				bad("programs/%s.yaml: %s is not a member of team %s", name, e, id)
-			}
-		}
+		sorted := func(in []string) []string { return nonNilStrings(slices.Sorted(slices.Values(lower(in)))) } // as the database reads them back
+		pr.Access = Access{Participants: sorted(pr.Access.Participants), Editors: sorted(pr.Access.Editors), Admins: sorted(pr.Access.Admins)}
 		if pr.Schedule != "" && schedules[pr.Schedule] == nil {
 			bad("programs/%s.yaml: unknown schedule %q (define it under schedules in platform.yaml)", name, pr.Schedule)
 		}

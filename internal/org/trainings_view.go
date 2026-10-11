@@ -6,98 +6,78 @@ import (
 	"slices"
 
 	"crucible/internal/apperr"
-	"crucible/internal/config"
 	"crucible/internal/httpx"
 	"crucible/internal/rbac"
 )
 
-// TeamRoster is a team as the trainings page needs it: who can be enrolled or given a role, and the version a roster
-// save must echo (enrolling someone new adds them to the team as a trainee first).
-type TeamRoster struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Version     int64             `json:"version"`
-	Leader      string            `json:"leader"`
-	Seniors     []string          `json:"seniors"`
-	Members     []string          `json:"members"`
-	Trainees    []string          `json:"trainees"`
-	Mentors     map[string]string `json:"mentors"`
-	CanEditTeam bool              `json:"can_edit_team"` // admin or leader: may add people and start programs
-}
-
-// TeamProgram is one team's run of a training.
-type TeamProgram struct {
-	Team string `json:"team"`
-	ProgramView
+// TeamOption is a team an admin can give a training to.
+type TeamOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type TrainingView struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Available bool          `json:"available"`      // its content has loaded at least once
-	Repo      string        `json:"repo,omitempty"` // admins only, credentials masked
-	Ref       string        `json:"ref,omitempty"`  // admins only
-	Path      string        `json:"path,omitempty"` // admins only
-	Programs  []TeamProgram `json:"programs"`
+	ID        string       `json:"id"`
+	Title     string       `json:"title"`
+	Available bool         `json:"available"`      // its content has loaded at least once
+	Team      string       `json:"team"`           // the owning team; "" when none owns it yet
+	Repo      string       `json:"repo,omitempty"` // managers only, credentials masked
+	Ref       string       `json:"ref,omitempty"`
+	Path      string       `json:"path,omitempty"`
+	CanManage bool         `json:"can_manage"`
+	Program   *ProgramView `json:"program,omitempty"` // its run; nil when no team owns it
 }
 
 type TrainingsView struct {
 	IsAdmin   bool           `json:"is_admin"`
+	CanCreate bool           `json:"can_create"` // may register a training
+	MyTeam    string         `json:"my_team"`    // the team a training registered here belongs to ("" for an admin on no team)
 	Schedules []string       `json:"schedules"`
-	Teams     []TeamRoster   `json:"teams"`
+	Teams     []TeamOption   `json:"teams"` // admins only: who a training can be given to
 	Trainings []TrainingView `json:"trainings"`
 }
 
-// trainingsPage is the trainings page: every registered training, and for each the teams running it with who is
-// enrolled and who holds which role. The visibility rule is getTeam's: a caller sees the teams in which they hold a
-// team or program role, an admin sees all. Only admins see where the content comes from.
+// trainingsPage lists the trainings the caller works on: the ones they manage (their team owns it, or they are one of
+// its admins) or edit; admins see every one. Participants find theirs on the Hearth, not here.
 func (a *api) trainingsPage(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	admin := c.IsAdmin(actor)
-	v := TrainingsView{IsAdmin: admin, Schedules: nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))), Teams: []TeamRoster{},
-		Trainings: []TrainingView{}}
-	stored := map[string]map[string]config.Roles{}
-	for _, id := range slices.Sorted(maps.Keys(c.P.Teams)) {
-		t := c.P.Teams[id]
-		if !admin && teamRole(t, actor) == "" {
-			continue
-		}
-		roles, err := a.storedRoles(r, id)
-		if err != nil {
-			return err
-		}
-		stored[id] = roles
-		mentors := t.Mentors
-		if mentors == nil {
-			mentors = map[string]string{}
-		}
-		v.Teams = append(v.Teams, TeamRoster{ID: id, Name: t.Name, Version: t.Version, Leader: t.Leader, Seniors: nonNil(t.Seniors),
-			Members: nonNil(t.Members), Trainees: nonNil(t.Trainees), Mentors: mentors, CanEditTeam: c.Can(actor, rbac.EditTeam, id, "", "")})
+	v := TrainingsView{IsAdmin: admin, CanCreate: c.CanCreateTraining(actor), Schedules: nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))),
+		Teams: []TeamOption{}, Trainings: []TrainingView{}}
+	if t := c.P.TeamOf(actor); t != nil {
+		v.MyTeam = t.ID
 	}
-	if !admin && len(v.Teams) == 0 {
-		return apperr.Wrap(apperr.Forbidden, "you are not on any team; ask an admin or your team leader")
+	if admin {
+		for _, id := range slices.Sorted(maps.Keys(c.P.Teams)) {
+			v.Teams = append(v.Teams, TeamOption{ID: id, Name: c.P.Teams[id].Name})
+		}
 	}
 	for _, tr := range slices.Sorted(maps.Keys(c.P.Trainings)) {
-		tv := TrainingView{ID: tr, Title: tr, Programs: []TeamProgram{}}
-		if admin {
+		owner, p := c.P.Owner(tr)
+		team := ""
+		if owner != nil {
+			team = owner.ID
+		}
+		manages := admin || (owner != nil && c.Can(actor, rbac.ManageProgram, team, tr, ""))
+		if !manages && (p == nil || !slices.Contains(p.Editors, actor)) {
+			continue
+		}
+		title, running, head := tr, "", ""
+		if a.d.Content != nil {
+			title, running, head = a.d.Content(team, tr)
+		}
+		tv := TrainingView{ID: tr, Title: title, Available: head != "", Team: team, CanManage: manages}
+		if manages {
 			ref := c.P.Trainings[tr]
 			tv.Repo, tv.Ref, tv.Path = redactRepo(ref.Repo), ref.Ref, ref.Path
 		}
-		for _, team := range v.Teams {
-			title, running, head := tr, "", ""
-			if a.d.Content != nil {
-				title, running, head = a.d.Content(team.ID, tr)
-			}
-			tv.Title, tv.Available = title, tv.Available || head != ""
-			if p := c.P.Teams[team.ID].Programs[tr]; p != nil {
-				tv.Programs = append(tv.Programs, TeamProgram{Team: team.ID, ProgramView: programView(c, actor, team.ID, tr, p,
-					stored[team.ID][tr], title, running, head)})
-			}
-		}
-		if len(v.Teams) == 0 && a.d.Content != nil { // an admin with no teams yet still sees titles
-			title, _, head := a.d.Content("", tr)
-			tv.Title, tv.Available = title, head != ""
+		if p != nil {
+			pv := programView(c, actor, team, tr, p, title, running, head)
+			tv.Program = &pv
 		}
 		v.Trainings = append(v.Trainings, tv)
+	}
+	if !v.CanCreate && len(v.Trainings) == 0 {
+		return apperr.Wrap(apperr.Forbidden, "you don't manage or edit any training")
 	}
 	httpx.JSON(w, http.StatusOK, v)
 	return nil

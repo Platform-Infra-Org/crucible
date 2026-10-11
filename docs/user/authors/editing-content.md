@@ -7,20 +7,22 @@ order: 20
 # The editor
 
 You can change a training without leaving Crucible. You work in a *draft*; when it is ready, you submit it and it
-becomes an *edit*: Crucible pushes it to its own branch, a maintainer reviews it, and the bot merges it.
+becomes an *edit*: Crucible pushes it to its own branch, another editor reviews it, and the bot merges it.
 
 ## Who can edit
 
 Editing is part of managing a training: each training's page on **Trainings → Manage trainings** has a **Content
 edits** panel, with an **Edit content** button when you may edit it. You may propose edits to a training if you are:
 
-- an admin,
-- one of the training's maintainers (listed in its `training.yaml`), or
-- a leader or senior of a team that runs the training.
+- a Crucible admin, or
+- one of the training's **editors** or **admins** (its roles, given on
+  [Manage trainings](/docs/leaders/manage-trainings), often to a group such as `platform_seniors`).
 
-Being enrolled in the training doesn't change this: if you run it, you may edit it while you take it. Editing shows
-you the answer keys, rubrics and check scripts, so keep that in mind about your own scores. Being enrolled never lets
-anyone else edit, and nobody scores a training they are enrolled in.
+The `maintainers` listed in `training.yaml` are a note for readers of the repository; they grant nothing.
+
+Taking the training doesn't change this: an editor who is also a participant keeps editing. Editing shows you the
+answer keys, rubrics and check scripts, so keep that in mind about your own scores. Being a participant never lets
+anyone else edit, and nobody scores a training they take.
 
 ## Starting an edit
 

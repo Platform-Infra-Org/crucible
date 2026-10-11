@@ -28,6 +28,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+echo "== stop a stack an earlier KEEP=1 run left up"
+# Its api watches this kind cluster and reaps lab namespaces it has no row for: the integration tests' labs below.
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/cluster.yml down -v >/dev/null 2>&1 || true
+
 echo "== kind cluster"
 kind get clusters 2>/dev/null | grep -qx "$name" || kind create cluster --name "$name" --image "${KIND_NODE_IMAGE:-kindest/node:v1.34.11}" --wait 180s
 

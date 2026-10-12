@@ -225,3 +225,16 @@ func TestRound2(t *testing.T) {
 		t.Fatalf("root message: %v", err)
 	}
 }
+
+func TestDedicatedVPC(t *testing.T) {
+	vpc := Resource{Address: "aws_vpc.v", Type: "aws_vpc", Values: map[string]any{"instance_tenancy": "dedicated"}}
+	if _, err := priceOne(vpc, map[string]float64{"aws_instance": 0.5}); err != nil {
+		t.Fatalf("declared aws_instance covers a dedicated VPC: %v", err)
+	}
+	if _, err := priceOne(vpc, map[string]float64{"aws_vpc": 0.1}); err == nil {
+		t.Fatal("declaring aws_vpc must not bypass the dedicated check")
+	}
+	if _, err := priceOne(vpc, nil); err == nil || !strings.Contains(err.Error(), "aws_vpc.v") {
+		t.Fatalf("dedicated VPC alone: %v", err)
+	}
+}

@@ -39,6 +39,10 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 	for _, r := range res {
 		line := Line{Address: r.Address, Type: r.Type}
 		u := usageFor(usage, r.Address)
+		// instances in a dedicated VPC are dedicated; only a declared aws_instance price covers that (aws_vpc's own never does)
+		if _, ok := declared["aws_instance"]; r.Type == "aws_vpc" && !ok && str(r.Values, "instance_tenancy") != "" && str(r.Values, "instance_tenancy") != "default" {
+			return b, fmt.Errorf("%s: only shared tenancy is priced (dedicated VPC); declare aws_instance under aws.prices", r.Address)
+		}
 		if p, ok := declared[r.Type]; ok {
 			line.HourlyUSD, line.Note = p, "declared"
 			b.Lines = append(b.Lines, line)
@@ -46,8 +50,6 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 			continue
 		}
 		switch {
-		case r.Type == "aws_vpc" && str(r.Values, "instance_tenancy") != "" && str(r.Values, "instance_tenancy") != "default":
-			return b, fmt.Errorf("%s: only shared tenancy is priced (dedicated VPC); declare aws_instance under aws.prices", r.Address)
 		case freeAWS[r.Type]:
 			line.Note = "free"
 		case r.Type == "aws_instance":

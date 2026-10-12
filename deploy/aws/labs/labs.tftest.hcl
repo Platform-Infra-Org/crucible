@@ -10,6 +10,11 @@ mock_provider "aws" {
   }
 }
 
+# The billing-region provider alias (Data Exports live in us-east-1) is mocked too.
+mock_provider "aws" {
+  alias = "billing"
+}
+
 variables {
   region = "eu-west-1"
 }
@@ -54,8 +59,8 @@ run "lab_role_is_bounded_tagged_and_short_lived" {
     error_message = "no IAM for lab roles"
   }
   assert {
-    condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "ce:GetCostAndUsage", "cloudtrail:LookupEvents"])
-    error_message = "the ops role only reads the inventory, bucket names, costs and CloudTrail"
+    condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"])
+    error_message = "the ops role only reads the inventory, bucket names and CloudTrail"
   }
   assert {
     condition     = aws_s3_account_public_access_block.labs.block_public_policy && aws_s3_account_public_access_block.labs.restrict_public_buckets
@@ -196,5 +201,62 @@ run "the_trust_names_the_node_role_main_created" {
   assert {
     condition     = jsondecode(aws_iam_role.lab.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node" && jsondecode(aws_iam_role.ops.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node"
     error_message = "labs-init passes main's node role name to both trusts"
+  }
+}
+
+run "plan_role_reads_only" {
+  command = apply
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement :
+    alltrue([for a in flatten([s.Action]) : can(regex("^[a-z0-9]+:(Describe|Get|List)", a))])])
+    error_message = "the plan role may only describe, get and list"
+  }
+  assert {
+    condition     = aws_iam_role.plan.max_session_duration == 3600 && aws_iam_role.plan.permissions_boundary == aws_iam_policy.boundary.arn
+    error_message = "the plan role sits inside the boundary"
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.plan.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/crucible-node"
+    error_message = "only Crucible's node role may assume the plan role"
+  }
+}
+
+run "ops_reads_the_export_not_cost_explorer" {
+  command = apply
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.ops.policy, "ce:")
+    error_message = "no Cost Explorer: it is paid per call"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.ops.policy, aws_s3_bucket.exports.arn)
+    error_message = "the ops role reads the export bucket"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.ops.policy, "labs/*")
+    error_message = "the ops role reads lab state for metering"
+  }
+}
+
+run "export_and_budget" {
+  command = apply
+  variables {
+    budget_monthly_usd = 100
+    budget_emails      = ["admin@example.com"]
+  }
+  assert {
+    condition     = aws_bcmdataexports_export.labs.export[0].destination_configurations[0].s3_destination[0].s3_bucket == aws_s3_bucket.exports.bucket
+    error_message = "the CUR export lands in the export bucket"
+  }
+  assert {
+    condition     = aws_budgets_budget.labs[0].limit_amount == "100" && length(aws_budgets_budget.labs[0].notification) == 2
+    error_message = "a monthly budget alerting at 80% and 100%"
+  }
+}
+
+run "no_budget_without_emails" {
+  command = apply
+  assert {
+    condition     = length(aws_budgets_budget.labs) == 0
+    error_message = "no budget without someone to tell"
   }
 }

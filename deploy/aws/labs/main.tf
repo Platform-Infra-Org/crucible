@@ -44,10 +44,27 @@ variable "allowed_instance_types" {
   type    = list(string)
   default = ["t3.nano", "t3.micro", "t3a.nano", "t3a.micro", "t4g.nano", "t4g.micro"]
 }
+variable "budget_monthly_usd" {
+  type        = number
+  default     = 100
+  description = "Monthly AWS Budget (free) for the account; alerts at 80% and 100% of actual spend. A backstop to Crucible's own budgets."
+}
+variable "budget_emails" {
+  type        = list(string)
+  default     = []
+  description = "Who the budget alerts. Empty = no budget."
+}
 variable "max_volume_gib" {
   type        = number
   default     = 50
   description = "Largest EBS volume a lab may create (gp2/gp3 only, baseline IOPS and throughput)"
+}
+
+# AWS Data Exports (CUR 2.0) exist only in us-east-1; the export's S3 bucket may be anywhere.
+provider "aws" {
+  alias  = "billing"
+  region = "us-east-1"
+  default_tags { tags = { app = "crucible" } }
 }
 
 data "aws_caller_identity" "me" {}
@@ -59,6 +76,8 @@ locals {
   regions   = length(var.allowed_regions) == 0 ? [var.region] : var.allowed_regions
   lab       = "$${aws:PrincipalTag/crucible:lab-id}" # an IAM policy variable, not a Terraform one
   state     = "arn:aws:s3:::${aws_s3_bucket.state.bucket}"
+  exports   = "arn:aws:s3:::${aws_s3_bucket.exports.bucket}"
+  export    = "${var.name}-labs"
   # ponytail: no standalone CreateNetworkInterface: a lab could then launch on a detached ENI of its own, or try one
   # another lab left behind (detached ENIs do exist: a terminated instance's extra ENI, or one made by an admin).
   # Instances still get their own ENIs. Add it back with a guard.
@@ -242,13 +261,142 @@ resource "aws_iam_role" "ops" {
 resource "aws_iam_role_policy" "ops" {
   role = aws_iam_role.ops.id
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "ce:GetCostAndUsage", "cloudtrail:LookupEvents"], Resource = "*" }]
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"], Resource = "*" },
+      # Billed spend comes from the free CUR 2.0 export, metering from lab state: no Cost Explorer (paid per call).
+      { Sid = "ReadExport", Effect = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.exports.arn },
+      { Sid = "ReadExportFiles", Effect = "Allow", Action = "s3:GetObject", Resource = "${aws_s3_bucket.exports.arn}/*" },
+      { Sid = "ReadLabState", Effect = "Allow", Action = "s3:GetObject", Resource = "${local.state}/labs/*" },
+    ]
   })
+}
+
+# Runs `terraform plan` for a cost estimate: reads only, inside the same boundary.
+resource "aws_iam_role" "plan" {
+  name                 = "${var.name}-lab-plan"
+  max_session_duration = 3600
+  permissions_boundary = aws_iam_policy.boundary.arn
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [merge(local.trust, { Action = "sts:AssumeRole", Condition = { ArnEquals = { "aws:PrincipalArn" = local.node_role } } })]
+  })
+}
+
+resource "aws_iam_role_policy" "plan" {
+  role = aws_iam_role.plan.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{ Effect = "Allow", Resource = "*",
+    Action = ["ec2:Describe*", "elasticloadbalancing:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets", "iam:GetRole"] }]
+  })
+}
+
+# Billing export (free): CUR 2.0 as daily gzip CSV, resource ids and tags included.
+resource "aws_s3_bucket" "exports" {
+  bucket = "${var.name}-${local.account}-labexports"
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "exports" {
+  bucket = aws_s3_bucket.exports.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "exports" {
+  bucket                  = aws_s3_bucket.exports.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "exports" {
+  bucket = aws_s3_bucket.exports.id
+  rule {
+    id     = "expire-old-exports"
+    status = "Enabled"
+    filter {}
+    expiration { days = 400 }
+    abort_incomplete_multipart_upload { days_after_initiation = 7 }
+  }
+}
+
+resource "aws_s3_bucket_policy" "exports" {
+  bucket = aws_s3_bucket.exports.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "TLSOnly", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [local.exports, "${local.exports}/*"],
+      Condition = { Bool = { "aws:SecureTransport" = "false" } } },
+      { Sid       = "DataExportsWrite", Effect = "Allow",
+        Principal = { Service = ["bcm-data-exports.amazonaws.com", "billingreports.amazonaws.com"] },
+        Action    = ["s3:PutObject", "s3:GetBucketPolicy"], Resource = [local.exports, "${local.exports}/*"],
+      Condition = { StringEquals = { "aws:SourceAccount" = local.account } } },
+    ]
+  })
+}
+
+resource "aws_bcmdataexports_export" "labs" {
+  provider = aws.billing
+  export {
+    name = local.export
+    data_query {
+      query_statement = "SELECT * FROM COST_AND_USAGE_REPORT"
+      table_configurations = {
+        COST_AND_USAGE_REPORT = {
+          INCLUDE_RESOURCES                     = "TRUE"
+          TIME_GRANULARITY                      = "DAILY"
+          INCLUDE_MANUAL_DISCOUNT_COMPATIBILITY = "FALSE"
+          INCLUDE_SPLIT_COST_ALLOCATION_DATA    = "FALSE"
+        }
+      }
+    }
+    destination_configurations {
+      s3_destination {
+        s3_bucket = aws_s3_bucket.exports.bucket
+        s3_prefix = "cur"
+        s3_region = var.region
+        s3_output_configurations {
+          overwrite   = "OVERWRITE_REPORT"
+          format      = "TEXT_OR_CSV"
+          compression = "GZIP"
+          output_type = "CUSTOM"
+        }
+      }
+    }
+    refresh_cadence { frequency = "SYNCHRONOUS" }
+  }
+  depends_on = [aws_s3_bucket_policy.exports]
+}
+
+# Free backstop under Crucible's own budgets.
+resource "aws_budgets_budget" "labs" {
+  count        = length(var.budget_emails) > 0 ? 1 : 0
+  name         = "${var.name}-labs-monthly"
+  budget_type  = "COST"
+  time_unit    = "MONTHLY"
+  limit_amount = tostring(var.budget_monthly_usd)
+  limit_unit   = "USD"
+  dynamic "notification" {
+    for_each = [80, 100]
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value
+      threshold_type             = "PERCENTAGE"
+      notification_type          = "ACTUAL"
+      subscriber_email_addresses = var.budget_emails
+    }
+  }
 }
 
 output "lab_role_arn" { value = aws_iam_role.lab.arn }
 output "ops_role_arn" { value = aws_iam_role.ops.arn }
+output "plan_role_arn" { value = aws_iam_role.plan.arn }
+output "export_bucket" { value = aws_s3_bucket.exports.bucket }
+output "export_prefix" { value = "cur" }
+output "export_name" { value = local.export }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "state_region" { value = var.region }
 output "regions" { value = join(",", local.regions) }

@@ -374,13 +374,16 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
 **Troubleshooting.**
 - A lab sits in "provisioning" and then fails with `terraform apply failed: …`. The trainee sees the log tail. On the node, `k3s kubectl -n lab-<id> get pod tf-apply -o jsonpath='{.status.containerStatuses[0].state.terminated.message}'` shows the same.
 - **A lab can't be requested.** The lab page says why when it is the lab's own limit ("This lab is priced at $X/h,
-  above its $Y/h limit; its maintainers need to make it cheaper.") or a region this server doesn't allow. Anything
-  else (a failed plan, a resource type with no price, missing or stale prices) shows as "the lab can't be requested
-  right now", and the reason is in the api log: `k3s kubectl -n crucible logs deploy/crucible -c api | grep 'lab quote failed'`.
+  above its $Y/h limit; its maintainers need to make it cheaper."), a region this server doesn't allow, "AWS price
+  data is out of date; an admin needs to refresh it" (missing or over 30 days old: see the Ledger's price line and
+  **Refresh now**) or "Crucible can't price: <types>; the lab must declare a price for them". When the lab itself
+  fails to estimate (a failed plan, or a resource Crucible's pricer refuses, such as io2 or an unknown size), the
+  training's editors and admins see the error on the lab page ("The estimate failed …"); participants see only "the
+  lab can't be requested right now". Every failure is also in the api log:
+  `k3s kubectl -n crucible logs deploy/crucible -c api | grep 'lab quote failed'`.
   `terraform plan failed: …` carries the plan's own error (often a data source the plan role can't read: it has
-  only `ec2:Describe*`, `s3:GetBucket*` and `s3:ListAllMyBuckets`); `no aws price for <key> in <region>` means the
-  price data is missing or stale (see the Ledger's price line); `no price for <type>: declare it under aws.prices`
-  names a type the lab must declare.
+  only `ec2:Describe*`, `s3:GetBucket*` and `s3:ListAllMyBuckets`); `no aws price for <key> in <region>` names a
+  price key the list doesn't have (an instance type not offered in that region, say).
   Plan pods: `k3s kubectl -n crucible-estimates get pods` (`tf-plan-*`; leftovers are removed after 15 minutes).
 - If the Ledger says the billed figures are out of date, look at the export (setup step 4), the ops role's read of
   the export bucket, and the tag activation (step 2). Budgets keep using metered spend and estimates meanwhile.

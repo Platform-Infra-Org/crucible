@@ -19,6 +19,12 @@ const (
 	pricesTTL       = time.Minute     // how long a fetched price list is reused
 )
 
+// labFault is an estimate failure the lab's own content caused (its plan failed, or a resource can't be priced):
+// its text may quote the module, so only those who may edit the training see it.
+type labFault struct{ msg string }
+
+func (f *labFault) Error() string { return f.msg }
+
 // Planner runs a read-only `terraform plan` of an aws lab's module and returns `terraform show -json` of it.
 type Planner interface {
 	Plan(ctx context.Context, lab *content.Lab) ([]byte, error)
@@ -89,12 +95,14 @@ func (e *TerraformEstimator) Breakdown(ctx context.Context, lab *content.Lab) (p
 		return pricing.Breakdown{}, err
 	}
 	b, err := pricing.PriceAWS(res, lab.AWS.Region, lab.AWS.Prices, lab.AWS.Usage, prices)
-	if err != nil {
+	if u := (*pricing.Unpriced)(nil); errors.As(err, &u) {
 		return pricing.Breakdown{}, err
+	} else if err != nil { // a resource Crucible's pricer fails closed on: the module's to fix, or to declare
+		return pricing.Breakdown{}, &labFault{err.Error()}
 	}
 	switch h, limit := b.HourlyUSD, lab.AWS.MaxHourlyUSD; {
 	case !(h > 0): // NaN too
-		return pricing.Breakdown{}, fmt.Errorf("the plan priced to $%.4f an hour; an aws lab is never quoted as free", h)
+		return pricing.Breakdown{}, &labFault{fmt.Sprintf("the plan priced to $%.4f an hour; an aws lab is never quoted as free", h)}
 	case h > limit:
 		return pricing.Breakdown{}, apperr.Wrap(apperr.Invalid, overCeiling(h, limit))
 	}

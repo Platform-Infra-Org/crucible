@@ -261,3 +261,42 @@ func TestDestroyWithoutTerraformKeepsTheMeter(t *testing.T) {
 		t.Fatal("terraform destroy never ran: the meter runs until the reaper has cleaned up")
 	}
 }
+
+// Trainees run terraform from the workspace terminal: the sweep meters each ready aws lab again every 15 minutes.
+func TestReadyLabsAreMeteredAgain(t *testing.T) {
+	ctx := context.Background()
+	f, fake, inst, lab := meterFixture(t, corev1.PodSucceeded)
+	fake.SetState(inst.ID, stateWith("aws_instance.web"))
+	if err := f.s.Meter(ctx, inst, lab); err != nil { // the apply's meter
+		t.Fatal(err)
+	}
+	fake.SetState(inst.ID, stateWith("aws_instance.web", "aws_nat_gateway.gw")) // the trainee applies more by hand
+	f.clk.Add(14 * time.Minute)
+	f.s.Sweep(ctx)
+	if r := openRows(t, f, inst.ID); len(r) != 1 {
+		t.Fatalf("at most once every 15 minutes per lab: %v", r)
+	}
+	f.clk.Add(time.Minute)
+	f.s.Sweep(ctx)
+	if r := openRows(t, f, inst.ID); len(r) != 2 {
+		t.Fatalf("what the trainee added is metered on the next sweep after 15 minutes: %v", r)
+	}
+}
+
+// A ready lab's committed figure is what it has spent (metered) plus its hourly estimate for the time it has left.
+func TestCommittedNeverSitsBelowSpent(t *testing.T) {
+	ctx := context.Background()
+	f, _, inst, _ := meterFixture(t, corev1.PodSucceeded) // $1/h estimate, ready at t0, ends at t0+24h
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_resources VALUES ($1, 'aws_nat_gateway.big', 'aws_nat_gateway', 20, 0, $2, NULL)`,
+		inst.ID, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Add(2 * time.Hour)
+	sp, err := f.s.spend(ctx, f.plat, inst.Team, inst.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(sp.SpentUSD-40) > 1e-9 || math.Abs(sp.CommittedUSD-(40+22)) > 1e-9 {
+		t.Fatalf("spent %v (want 40), committed %v (want 40 spent + 22 h × $1)", sp.SpentUSD, sp.CommittedUSD)
+	}
+}

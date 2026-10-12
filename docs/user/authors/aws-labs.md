@@ -35,6 +35,12 @@ The Terraform goes in `terraform/` inside the lab folder. Crucible adds the prov
 - **Local modules only** (`source = "./modules/net"`). Registry and git modules are refused; copy one into
   `terraform/` if you need it. Providers must be HashiCorp's, and `hashicorp/local` and `hashicorp/external` are
   refused.
+- **No `import` blocks.** A lab creates its own resources; it never adopts existing ones.
+- **File reads name a literal path inside the module.** `file`, `templatefile`, `fileset`, `filebase64`, `fileexists`
+  and the `file*sha*`/`filemd5` functions take a literal relative path: `"user_data.sh"`, `"./user_data.sh"` or
+  `"${path.module}/user_data.sh"` (`fileset` also takes `path.module` itself, with a literal pattern). No absolute
+  paths, `~`, `..` or computed paths. A `templatefile` target must be a regular file in `terraform/` (128 KiB at most)
+  and must not read files itself.
 - **Nothing generated**: no `.terraform/`, `.tfvars` or `.tfstate` files.
 - **No secrets in state or outputs.** The trainee's credentials can read the lab's own Terraform state.
 - The account's permission boundary decides what a lab may create: EC2 and S3 in the allowed regions, small
@@ -82,8 +88,11 @@ unstated (a lone bucket, say) can't be requested until you state its usage or de
 
 **The ceiling.** A lab priced above its `max_hourly_usd` can't be requested; its page says "This lab is priced at
 $X/h, above its $Y/h limit; its maintainers need to make it cheaper." A failed plan, a type with no price, or AWS
-price data that is missing or more than 30 days old also stops requests, never prices the lab at $0. Your admins can
-see why in Crucible's log.
+price data that is missing or more than 30 days old also stops requests, never prices the lab at $0. The lab page
+says why: "AWS price data is out of date; an admin needs to refresh it", or "Crucible can't price: <types>; the lab
+must declare a price for them". When the lab itself fails to estimate (its plan fails, or a resource Crucible
+refuses to guess), the training's editors and admins see the error under "The estimate failed"; participants only
+see that the lab can't be requested right now.
 
 **The breakdown.** The lab page shows **How this estimate was worked out** under the request button: each resource
 with its price per hour, its usage per hour, and a note (*free*, *declared* or *usage not stated*). Open it to check

@@ -362,3 +362,54 @@ type pendingEstimator struct{}
 func (pendingEstimator) HourlyUSD(context.Context, *content.Lab) (float64, error) {
 	return 0, apperr.Wrap(apperr.Unavailable, "estimate pending, try again shortly")
 }
+
+// Why an aws lab can't be requested: price data and unpriced types are told to everyone; a failed plan's output only
+// to those who may edit the training (participants never see it).
+func TestModuleLabSaysWhyAnAWSLabCantBeRequested(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withForge401(t)
+	pr := f.plat.Teams["forge"].Programs["forge-401"]
+	pr.Enrolled, pr.Editors = append(pr.Enrolled, "senior@crucible.local"), []string{"senior@crucible.local"}
+	f.s.Runners["aws"] = &fakeRunner{}
+	lab := f.s.Learn.State().Trainings["forge-401@abc"].Module("01-cloud-heat").Lab
+	blocked := func(e Estimator, version string) (string, string) {
+		f.s.Estimators["aws"] = e
+		lab.Dir += version // a new content version: no cached plan or failure
+		trainee, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-401", "01-cloud-heat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		editor, err := f.s.ModuleLab(ctx, f.other, "forge", "forge-401", "01-cloud-heat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return trainee.Blocked, editor.Blocked
+	}
+	plan := mustRead(t, "../pricing/testdata/plan.json")
+	stale := &TerraformEstimator{Plan: &fakePlanner{plan: plan}, Prices: func(context.Context) (pricing.Lookup, error) { return nil, pricing.ErrStale }}
+	for _, b := range func() []string { a, e := blocked(stale, "-stale"); return []string{a, e} }() {
+		if b != "AWS price data is out of date; an admin needs to refresh it." {
+			t.Fatalf("stale prices: %q", b)
+		}
+	}
+	unknown := []byte(`{"resource_changes":[{"address":"aws_kinesis_stream.s","mode":"managed","type":"aws_kinesis_stream","change":{"actions":["create"],"after":{}}}]}`)
+	for _, b := range func() []string {
+		a, e := blocked(&TerraformEstimator{Plan: &fakePlanner{plan: unknown}, Prices: fixedPrices}, "-unpriced")
+		return []string{a, e}
+	}() {
+		if b != "Crucible can't price: aws_kinesis_stream; the lab must declare a price for them." {
+			t.Fatalf("unpriced: %q", b)
+		}
+	}
+	failing := &TerraformEstimator{Plan: planFunc(func(context.Context, *content.Lab) ([]byte, error) {
+		return nil, &labFault{"terraform plan failed: Error: Unsupported argument on main.tf line 3"}
+	}), Prices: fixedPrices}
+	trainee, editor := blocked(failing, "-broken")
+	if trainee != "the lab can't be requested right now" {
+		t.Fatalf("a participant never sees the plan's output: %q", trainee)
+	}
+	if !strings.Contains(editor, "Unsupported argument on main.tf line 3") {
+		t.Fatalf("an editor sees why the plan failed: %q", editor)
+	}
+}

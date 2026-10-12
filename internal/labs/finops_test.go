@@ -447,3 +447,13 @@ func TestTTLBeatsALaterBudget(t *testing.T) {
 		t.Fatalf("ttl first: %+v", got)
 	}
 }
+
+func TestAPaidLabNeverRoundsToFree(t *testing.T) {
+	f := setup(t, true)
+	f.spent(t, "bbbbbbbbbbb1", "forge-101", 250) // the team is at its $250 cap
+	f.rates["first-heat"] = 0.001                // ttl 1h: $0.001
+	v := f.request(t, f.u)
+	if v.EstimateUSD != 0.01 || !v.OverCap || v.Tier != rbac.TierAdmin {
+		t.Fatalf("$0.001 rounds up to a cent and still meets the cap: %+v", v)
+	}
+}

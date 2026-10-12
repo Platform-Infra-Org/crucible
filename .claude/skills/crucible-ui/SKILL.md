@@ -65,7 +65,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - A grid column that holds a terminal, an editor or anything that sizes itself is `minmax(0, 1fr)`, never a bare `1fr`
   (which can't shrink below its content and spills off the page). Something with `hidden` leaves the grid, so change
   the column template with it (the lab's Hide tasks).
-- Breakpoints in use: 900px, 760px, 640px. Nothing may scroll horizontally at phone width; wide tables go in `.table-wrap`.
+- Breakpoints in use: 900px, 760px, 640px. Nothing may scroll horizontally at phone width; wide tables go in `.table-wrap`;
+  a `p.warn` (a lab's blocked reason, which may quote a terraform error to editors) wraps anywhere.
 
 ## Components and patterns
 

@@ -39,7 +39,7 @@ would pass a hard cap needs an admin, and approving it is an audited override. A
 would reach the cap. Budgets fail closed: if Crucible can't read the spend, it starts nothing.
 
 What counts against a budget is each lab's cost so far. A running lab counts at its hourly estimate until it is
-metered. An AWS lab is metered from what it actually built (read from its Terraform state after each apply) and then
+metered. An AWS lab is metered from what it actually built (read from its Terraform state after the lab's apply and every 15 minutes while it runs) and then
 counts at that. Once its AWS bill settles, about two days after it ends, the billed figure replaces the metered one.
 The [Ledger](/docs/leaders/ledger-and-content-versions) shows all of these figures.
 

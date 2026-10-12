@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -561,6 +562,9 @@ func TestAWSPlanFailureIsMaskedAndCleanedUp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "terraform plan failed: Error: AccessDenied") ||
 		strings.Contains(err.Error(), plan.SecretAccessKey) || strings.Contains(err.Error(), plan.SessionToken) {
 		t.Fatalf("the tail without the credentials: %v", err)
+	}
+	if lf := (*labFault)(nil); !errors.As(err, &lf) {
+		t.Fatalf("a failed plan is the lab's fault, shown to its editors: %T", err)
 	}
 	if !slices.Contains(steps(cs, "delete"), "delete secrets") {
 		t.Fatal("the credentials are deleted after a failure too")

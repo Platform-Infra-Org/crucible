@@ -439,7 +439,7 @@ func (a *AWSRunner) Plan(ctx context.Context, lab *content.Lab) ([]byte, error) 
 				msg = strings.ReplaceAll(msg, v, "***")
 			}
 		}
-		return nil, fmt.Errorf("terraform plan failed: %s", tailOf([]byte(msg)))
+		return nil, &labFault{"terraform plan failed: " + tailOf([]byte(msg))}
 	}
 	out, err := core.Pods(estimatesNS).GetLogs(name, &corev1.PodLogOptions{Container: "terraform",
 		LimitBytes: ptr.To(int64(maxPlanJSON + 1))}).DoRaw(ctx)

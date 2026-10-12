@@ -17,9 +17,9 @@ spend for the teams you may see:
   - **Estimate**: what the lab was expected to cost for its full time when it was requested.
   - **Cost so far**: metered spend, or hourly estimate × time run; it counts against the budget until the bill settles.
   - **Metered** (AWS labs): what the lab actually built, priced at AWS list prices for as long as it existed. Crucible
-    reads it from the lab's Terraform state. Once an AWS lab has a metered figure, it becomes the cost so far.
-  - **Billed** (AWS labs): what AWS charged, from the billing export. It arrives about a day late, and shows "(so far)"
-    until it settles.
+    reads it from the lab's Terraform state after the lab's apply and every 15 minutes while it runs. Once an AWS lab has a metered figure, it becomes the cost so far.
+  - **Billed** (AWS labs): what AWS charged, from the billing export, before credits, refunds and discounts. It arrives
+    about a day late, and shows "(so far)" until it settles.
 - **Top spenders**.
 
 Cluster labs run on the trainee's own cluster and cost nothing in Crucible, so they are not in the Ledger.

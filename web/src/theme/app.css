@@ -8,6 +8,7 @@ code, pre { font-family: 'JetBrains Mono', monospace; }
 .muted { color: var(--muted); }
 .error { color: var(--danger); }
 .warn { color: var(--accent-2); }
+p.warn { overflow-wrap: anywhere; } /* a lab's blocked reason may quote a terraform error: never widen a phone */
 .pass { color: var(--ok); }
 .spacer { flex: 1; }
 .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; position: relative; }

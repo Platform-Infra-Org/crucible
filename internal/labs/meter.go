@@ -17,6 +17,12 @@ func (s *Service) Meter(ctx context.Context, inst *Instance, lab *content.Lab) e
 	if !ok || lab.AWS == nil || s.Prices == nil {
 		return errors.New("metering needs the aws runner, an aws lab and list prices")
 	}
+	s.meterMu.Lock()
+	if s.meteredAt == nil {
+		s.meteredAt = map[string]time.Time{}
+	}
+	s.meteredAt[inst.ID] = s.Now() // a failure waits for the next turn too
+	s.meterMu.Unlock()
 	raw, err := ar.cloud().ReadState(ctx, ar.StateRegion, ar.StateBucket, "labs/"+inst.ID+".tfstate")
 	if err != nil {
 		return err
@@ -72,8 +78,22 @@ func (s *Service) Meter(ctx context.Context, inst *Instance, lab *content.Lab) e
 
 // EndMeter ends every resource still metered for the lab: its destroy succeeded, or the reaper cleaned up after it.
 func (s *Service) EndMeter(ctx context.Context, labID string, at time.Time) error {
+	s.meterMu.Lock()
+	delete(s.meteredAt, labID)
+	s.meterMu.Unlock()
 	_, err := s.DB.Exec(ctx, `UPDATE lab_resources SET ended_at = $2 WHERE lab_id = $1 AND ended_at IS NULL`, labID, at)
 	return err
+}
+
+// meterEvery is how often the sweep meters a ready aws lab again: trainees apply more from the workspace terminal.
+const meterEvery = 15 * time.Minute
+
+// meterDue reports whether the lab's last Meter in this process is meterEvery or more ago (or there was none).
+func (s *Service) meterDue(labID string) bool {
+	s.meterMu.Lock()
+	defer s.meterMu.Unlock()
+	last, ok := s.meteredAt[labID]
+	return !ok || s.Now().Sub(last) >= meterEvery
 }
 
 // provisionLab runs a lab provisioner. An aws lab's state is metered afterwards whether the apply worked or not: a

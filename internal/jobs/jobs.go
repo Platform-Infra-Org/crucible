@@ -18,6 +18,10 @@ type Periodic struct {
 	Args  river.JobArgs
 }
 
+// RescueStuckAfter is how long a job may run before River retries it as stuck: above the longest worker timeout
+// (the weekly price download's 2 h), so no job is run twice at once.
+const RescueStuckAfter = 3 * time.Hour
+
 // New builds a client working the default queue. Start it to work jobs; an unstarted client can still insert.
 func New(pool *pgxpool.Pool, workers *river.Workers, periodic []Periodic, log *slog.Logger) (*river.Client[pgx.Tx], error) {
 	var pj []*river.PeriodicJob
@@ -30,9 +34,10 @@ func New(pool *pgxpool.Pool, workers *river.Workers, periodic []Periodic, log *s
 			&river.PeriodicJobOpts{RunOnStart: true}))
 	}
 	return river.NewClient(riverpgxv5.New(pool), &river.Config{
-		Queues:       map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 10}},
-		Workers:      workers,
-		PeriodicJobs: pj,
-		Logger:       log,
+		Queues:               map[string]river.QueueConfig{river.QueueDefault: {MaxWorkers: 10}},
+		Workers:              workers,
+		PeriodicJobs:         pj,
+		Logger:               log,
+		RescueStuckJobsAfter: RescueStuckAfter,
 	})
 }

@@ -24,7 +24,7 @@ import (
 // labs whose actual cost has settled (spec §9.3).
 type Spend struct {
 	SpentUSD     float64 `json:"spent_usd"`     // per lab: settled actual, else metered (aws), else hourly estimate × time run
-	CommittedUSD float64 `json:"committed_usd"` // spent + the rest of every lab still starting or running, to its end
+	CommittedUSD float64 `json:"committed_usd"` // spent + the rest of every lab still starting or running, to its end (a ready lab: its spend so far + hourly estimate × time left)
 	ActualUSD    float64 `json:"actual_usd"`    // the part of spent that comes from settled actuals
 	BudgetUSD    float64 `json:"budget_usd"`    // 0 = no budget
 	CapUSD       float64 `json:"cap_usd"`       // 0 = no hard cap
@@ -64,7 +64,7 @@ func (s *Service) spend(ctx context.Context, p *config.Platform, team, training 
 			coalesce(sum(CASE
 				WHEN settled THEN actual
 				WHEN state = 'provisioning' THEN estimate_usd
-				WHEN state = 'ready' THEN hourly_usd * extract(epoch FROM greatest(ends_at, $1) - ready_at)::float8 / 3600
+				WHEN state = 'ready' THEN est_spent + hourly_usd * extract(epoch FROM greatest(ends_at - $1, interval '0'))::float8 / 3600
 				ELSE est_spent END), 0),
 			coalesce(sum(CASE WHEN settled THEN actual ELSE 0 END), 0)
 		FROM labs`, now, team, training, monthStart(now)).Scan(&sp.SpentUSD, &sp.CommittedUSD, &sp.ActualUSD)

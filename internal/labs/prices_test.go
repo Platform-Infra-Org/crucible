@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"crucible/internal/jobs"
 	"crucible/internal/pricing"
 )
 
@@ -121,5 +122,11 @@ func TestRefreshPricesReplacesDryRunFixture(t *testing.T) {
 	f.s.PriceFetch = &pricing.Fetcher{HTTP: srv.Client(), Base: srv.URL}
 	if err := f.s.RefreshPrices(context.Background()); err == nil || hits.Load() == 0 {
 		t.Fatalf("fixture prices must not pass for a fresh real refresh: %v hits=%d", err, hits.Load())
+	}
+}
+
+func TestThePriceJobIsNotRescuedMidRun(t *testing.T) {
+	if jobs.RescueStuckAfter <= (&PriceWorker{}).Timeout(nil) {
+		t.Fatalf("River rescues a job running %v while the price download may run %v", jobs.RescueStuckAfter, (&PriceWorker{}).Timeout(nil))
 	}
 }

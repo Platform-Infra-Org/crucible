@@ -71,6 +71,9 @@ type Service struct {
 
 	setupMu    sync.Mutex
 	setupLocks map[string]*sync.Mutex // per lab: one setup decision at a time; dropped on destroy
+
+	meterMu   sync.Mutex
+	meteredAt map[string]time.Time // per aws lab: its last Meter in this process (one API replica); dropped by EndMeter
 }
 
 // setupLock serialises setup runs for one lab so concurrent opens/resets cannot run a scenario twice.
@@ -526,7 +529,7 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Invalid.Error())
 		default:
 			s.Log.Error("lab quote failed", "team", team, "training", training, "module", module, "err", err)
-			out.Blocked = "the lab can't be requested right now"
+			out.Blocked = s.whyNoQuote(st.Platform, u, training, err)
 		}
 	} else {
 		out.EstimateUSD, out.NeedsApproval, out.Blocked = q.EstimateUSD, q.Tier != rbac.TierAuto, q.Blocked
@@ -546,6 +549,22 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 		}
 	}
 	return out, nil
+}
+
+// whyNoQuote says in plain words why an estimate failed. Price data and unpriced types are told to everyone; what the
+// lab's own content caused (a failed plan's output) only to those who may edit the training; anything else is generic.
+func (s *Service) whyNoQuote(p *config.Platform, u *auth.User, training string, err error) string {
+	var unpriced *pricing.Unpriced
+	var fault *labFault
+	switch {
+	case errors.Is(err, pricing.ErrStale):
+		return "AWS price data is out of date; an admin needs to refresh it."
+	case errors.As(err, &unpriced):
+		return "Crucible can't price: " + strings.Join(unpriced.Types, ", ") + "; the lab must declare a price for them."
+	case errors.As(err, &fault) && (rbac.Checker{P: p}).MayEdit(u.Email, training):
+		return "The estimate failed (shown to the training's editors only): " + cleanText(fault.msg)
+	}
+	return "the lab can't be requested right now"
 }
 
 // quote is what a request for this lab would cost and who would decide it. The lobby preview and the real request
@@ -574,7 +593,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}
 	q := &quote{Timing: ResolveTiming(lab, p.Teams[team].Programs[training].LabDefaults), HourlyUSD: hourly}
-	q.EstimateUSD = math.Round(hourly*q.Timing.TTL.Hours()*100) / 100
+	q.EstimateUSD = math.Ceil(hourly*q.Timing.TTL.Hours()*100-1e-9) / 100 // up to the cent: a paid lab never rounds to free
 	q.Tier = rbac.Tier(lab.Runtime, q.EstimateUSD, *p.Settings.CostTiers)
 	if q.Tier != rbac.TierAuto {
 		again, err := s.recentlyApproved(ctx, u.ID, team, training, module)
@@ -587,7 +606,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Tier = rbac.Checker{P: p}.Route(q.Tier, team, training, u.Email)
 		}
 	}
-	if q.EstimateUSD > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
+	if hourly > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
 		over, err := s.overCap(ctx, p, team, training, q.EstimateUSD)
 		if err != nil {
 			return nil, err

@@ -116,7 +116,12 @@ button.danger-text { color: var(--danger); border-color: var(--danger); }
 .enroll [role='alert'] { flex-basis: 100%; margin: 0; }
 /* A team's people: the tag next to each person is a pill; for a leader or an admin it opens a menu of the four tags. The
    pill's text stays --text; the tag's colour is only its edge and tint, and the word says the tag. */
-.people td { vertical-align: middle; }
+/* Grouped by tag, each group is its own table, so fix the columns: left to itself every table sizes to its own rows
+   and the Tag column lands somewhere else in each one (a group with display names is wider than one without). */
+.people { table-layout: fixed; min-width: 30rem; } /* below that the wrap scrolls rather than break emails mid-word */
+.people :is(th, td):nth-child(2) { width: 11rem; }
+.people :is(th, td):nth-child(3) { width: 7.5rem; }
+.people td { vertical-align: middle; overflow-wrap: anywhere; }
 .people td .muted { margin-left: 0.35rem; }
 .tag-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.12rem 0.7rem; border-radius: 999px; font-size: 0.85rem;
   border: 1px solid var(--border); background: var(--surface-2); color: var(--text); line-height: 1.5; }
@@ -198,6 +203,11 @@ a.button-link:hover { border-color: var(--accent); }
   box-shadow: var(--glow), 0 18px 40px rgba(0, 0, 0, 0.35); animation: card-cast 0.22s ease-out; }
 @keyframes card-cast { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
 /* the pour: the primary button's molten churn, cooling into the card where the avatar sits */
+.user-card.from-left { left: 0; right: auto; } /* its button has wrapped to the left of the nav: open rightwards instead */
+/* Too narrow for the card to sit beside its button either way: pin it to the screen, under where the button is. */
+@media (max-width: 640px) {
+  .user-card, .user-card.from-left { position: fixed; left: 0.75rem; right: 0.75rem; top: var(--card-top, 4.5rem); width: auto; }
+}
 .user-card-band { height: 4.25rem; margin: 0 -1.1rem; position: relative;
   background:
     radial-gradient(ellipse 45% 90% at 50% 50%, var(--accent-2), transparent 70%) 0 50% / 220% 200%,
@@ -240,7 +250,7 @@ a.button-link:hover { border-color: var(--accent); }
 .icon-picker button:hover:not(:disabled), .icon-picker button:focus-visible { border-color: var(--accent); transform: translateY(-2px); }
 .icon-picker button:hover:not(:disabled) > *, .icon-picker button:focus-visible > *, .icon-picker button[aria-pressed="true"] > * { filter: none; opacity: 1; }
 .icon-picker button[aria-pressed="true"] { border-color: var(--accent-2); box-shadow: var(--glow), inset 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
-.user-card-foot { margin-top: 1.1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+.user-card-foot { margin-top: 1.1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); gap: 0.5rem; }
 .admin-menu-button { background: none; border: 1px solid transparent; border-radius: 8px; padding: 0.2rem 0.6rem; font: inherit; color: var(--muted); cursor: pointer; }
 .admin-menu-button:hover, .admin-menu-button[aria-expanded="true"], .admin-menu-button.active { color: var(--text); border-color: var(--border); }
 .admin-menu-list { position: absolute; right: 0; top: calc(100% + 0.4rem); z-index: 20; display: flex; flex-direction: column; min-width: 12rem; padding: 0.4rem; gap: 0.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--glow); }
@@ -772,6 +782,46 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .docs-nav li a[aria-current='page'] { color: var(--text); border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .docs-nav h2:not(.docs-search-title) { font-family: inherit; font-size: 0.72rem; letter-spacing: 0.1em; margin: 1.2rem 0 0.4rem; }
 
+/* Repositories: a connection is a long URL and a few actions, so one per row — in a 280px tile the URL breaks
+   mid-word and the buttons wrap onto three lines. The URL leads, its state sits opposite it, and the one
+   destructive action is pushed to the far right, away from the two that are safe to press. */
+/* A title with its one action beside it: the action keeps its place whatever the lede below says. */
+.page-head { margin: 0 0 0.5rem; align-items: center; }
+.page-head h1 { margin: 0; }
+.page-head + .lede { margin-top: 0; }
+
+/* A list, so it must shed the list indent the rest of the page does not have; minmax(0,…) keeps a long deploy key
+   inside the column instead of widening the page. */
+.repos { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; list-style: none; padding: 0; margin: 0; }
+.repo-head { margin: 0; gap: 0.5rem; }
+.repo-head h2 { font-size: 0.95rem; margin: 0; overflow-wrap: anywhere; letter-spacing: 0; }
+.repo-head h2 code { background: none; padding: 0; color: var(--text); }
+.repo-trainings { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.75rem 0 0; }
+.repo-trainings .eyebrow { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.repo-trainings .chips { margin: 0; }
+.repo .hint { margin: 0.4rem 0 0; }
+.repo-actions { margin: 0.9rem 0 0; }
+/* A credential, or the deploy key to copy, is a section of the row rather than a continuation of its buttons:
+   a rule separates it, and its fields line up with everything else in the row. */
+.repo form.stack, .deploy-key { margin: 0.9rem 0 0; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+.repo form.stack > *, .deploy-key > * { max-width: 46rem; }
+.repo form.stack label { width: 100%; }
+.deploy-key { margin: 0.75rem 0 0; }
+.deploy-key .key { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.8rem;
+  overflow-x: auto; margin: 0.5rem 0; }
+.deploy-key .key { max-width: 100%; }
+.deploy-key .key code { background: none; padding: 0; font-size: 0.8rem; white-space: pre; }
+
+/* Sheet: a modal for one short task. The native dialog gives Escape and focus containment; this gives it the forge
+   look — a panel on a dimmed forge, rising as cards do. */
+.sheet { border: 0; padding: 0; background: none; max-width: min(40rem, calc(100vw - 2rem)); width: 100%; color: var(--text); }
+.sheet::backdrop { background: color-mix(in srgb, var(--bg) 78%, transparent); }
+.sheet .sheet-body { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem 1.4rem 1.4rem;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 45%); }
+.sheet[open] .sheet-body { animation: card-cast 0.22s ease-out backwards; }
+.sheet-head { margin: 0 0 0.25rem; }
+.sheet-head h2 { margin: 0; }
+.sheet form.stack { margin-top: 0.5rem; }
 /* A person's smith rank beside their name: the hammer's metal deepens with the rank, the title says it in words. */
 .smith-mark { display: inline-flex; gap: 0.25em; align-items: center; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 .smith-mark > span[aria-hidden] { color: color-mix(in srgb, var(--accent) 35%, var(--muted)); }

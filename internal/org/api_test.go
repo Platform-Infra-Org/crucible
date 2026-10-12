@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +22,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/auth"
 	"crucible/internal/config"
+	"crucible/internal/gitsync"
 	"crucible/internal/smith"
 )
 
@@ -43,7 +48,9 @@ func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 	if err := s.AddAdmin(ctx, "root", "admin@x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
+	// forge-101 is managed by the team's leader and edited by its seniors, which is what registering as a leader gives.
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101",
+		ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}, Editors: []string{"platform_seniors"}}, BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	f := &apiFixture{t: t, s: s}
@@ -61,6 +68,8 @@ func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 		Platform: func() *config.Platform { f.mu.Lock(); defer f.mu.Unlock(); return f.snap },
 		Refresh:  func(context.Context) error { f.mu.Lock(); f.refreshes++; f.mu.Unlock(); f.reload(); return nil },
 		CheckPin: func(_ context.Context, _, sha string) error { f.pinCalls = append(f.pinCalls, sha); return f.pinErr },
+		BotName:  "Crucible",
+		BotEmail: "crucible@localhost",
 	}
 	if !withPinCheck {
 		deps.CheckPin = nil
@@ -418,70 +427,93 @@ func TestPinWithoutACheckerIsRefused(t *testing.T) {
 	}
 }
 
+// A repository's credential is kept sealed and never leaves: not in a listing, not in an audit row. A URL that
+// carries userinfo of its own is shown masked.
 func TestRepoCredentialsAreStoredButNeverShownOrAudited(t *testing.T) {
 	f := newAPI(t)
-	const repo = "https://deploy:t0psecret@git.example.com/org/r.git"
-	for _, b := range []string{`{"id":"cred-101","team":"platform","repo":"` + repo + `"}`,
-		`{"id":"tok-101","team":"platform","repo":"https://ghp_t0kenonly@git.example.com/o/t.git"}`,
-		`{"id":"ssh-101","team":"platform","repo":"ssh://git@git.example.com/o/s.git"}`} {
-		if w := f.do("admin@x", "POST", "/api/org/trainings", b); w.Code != 200 {
-			t.Fatal(w.Body)
+	for _, b := range []string{
+		`{"url":"https://git.example.com/org/r.git","auth":"token","secret":"t0psecret"}`,
+		`{"url":"https://ghp_t0kenonly@git.example.com/o/t.git","auth":"none"}`,
+		`{"url":"ssh://git@git.example.com/o/s.git","auth":"none"}`,
+	} {
+		if w := f.do("admin@x", "POST", "/api/admin/repos", b); w.Code != 200 {
+			t.Fatalf("connect %s: %d %s", b, w.Code, w.Body)
 		}
 	}
-	if got := f.snap.Trainings["cred-101"].Repo; got != repo {
-		t.Errorf("stored repo = %q, cloning needs the credentials", got)
+	w := f.do("admin@x", "GET", "/api/admin/repos", "")
+	body := w.Body.String()
+	if strings.Contains(body, "t0psecret") || strings.Contains(body, "t0kenonly") {
+		t.Errorf("a credential reached the listing: %s", body)
 	}
-	for _, path := range []string{"/api/admin/trainings", "/api/org/trainings"} {
-		if w := f.do("admin@x", "GET", path, ""); strings.Contains(w.Body.String(), "t0psecret") || strings.Contains(w.Body.String(), "t0kenonly") || !strings.Contains(w.Body.String(), "https://***@git.example.com/org/r.git") || !strings.Contains(w.Body.String(), "ssh://git@git.example.com/o/s.git") {
-			t.Errorf("%s = %s", path, w.Body)
+	for _, want := range []string{`"has_secret":true`, "https://***@git.example.com/o/t.git", "ssh://git@git.example.com/o/s.git"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the listing lacks %q: %s", want, body)
 		}
-	}
-	if w := f.do("senior@x", "PUT", "/api/org/trainings/cred-101/source", `{"repo":"https://other:t0psecret2@git.example.com/o/r2.git"}`); w.Code != 200 {
-		t.Fatal(w.Body)
-	}
-	if w := f.do("senior@x", "DELETE", "/api/org/trainings/cred-101", ""); w.Code != 200 {
-		t.Fatal(w.Body)
 	}
 	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE detail::text LIKE '%t0psecret%' OR detail::text LIKE '%t0kenonly%'`); n != 0 {
-		t.Errorf("%d audit rows hold the repo credentials", n)
+		t.Errorf("%d audit rows hold a credential", n)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action LIKE 'training.%' AND detail::text LIKE '%git.example.com%'`); n != 5 {
-		t.Errorf("audit rows with the redacted repo = %d, want 5 (three creates, repoint, remove)", n)
+	if n := count(t, f.s, `SELECT count(*) FROM audit_log WHERE action = 'repo.connect' AND detail::text LIKE '%git.example.com%'`); n != 3 {
+		t.Errorf("audit rows naming the repository = %d, want 3", n)
+	}
+	// What is stored is ciphertext, and only the key opens it.
+	var sealed string
+	mustScan(t, f.s.DB, `SELECT secret FROM repositories WHERE auth = 'token'`, &sealed)
+	if sealed == "" || strings.Contains(sealed, "t0psecret") {
+		t.Errorf("the stored secret is not sealed: %q", sealed)
 	}
 }
 
 // Leaders, seniors and juniors register trainings for their own team; trainees don't; admins pick the team.
+// Leaders, seniors and juniors register trainings for their own team; trainees don't; admins pick the team. The id
+// and title come from the repository's training.yaml, never from the request.
 func TestWhoRegistersATraining(t *testing.T) {
 	f := newAPI(t)
 	mustExec(t, f.s.DB, `UPDATE team_members SET role = 'junior' WHERE email = 'senior@x'`)
 	f.reload()
-	create := func(who, id, team string) int {
-		return f.do(who, "POST", "/api/org/trainings", fmt.Sprintf(`{"id":%q,"team":%q,"repo":"https://git/%s.git","path":"courses/%s"}`, id, team, id, id)).Code
+	create := func(who, id, team string) (int, string) {
+		rid := repoWithTraining(t, f.s, id, strings.ToUpper(id), "courses/"+id)
+		w := f.do(who, "POST", "/api/org/trainings", fmt.Sprintf(`{"repository":%d,"team":%q,"path":"courses/%s"}`, rid, team, id))
+		return w.Code, w.Body.String()
 	}
-	if c := create("senior@x", "jr-101", ""); c != 200 || f.snap.Teams["platform"].Programs["jr-101"] == nil || f.snap.Trainings["jr-101"].Path != "courses/jr-101" {
-		t.Fatalf("a junior registers for their team = %d", c)
+	if c, b := create("senior@x", "jr-101", ""); c != 200 || f.snap.Teams["platform"].Programs["jr-101"] == nil ||
+		f.snap.Trainings["jr-101"].Path != "courses/jr-101" || !strings.Contains(b, `"title":"JR-101"`) {
+		t.Fatalf("a junior registers for their team = %d %s", c, b)
 	}
 	for who, want := range map[string]int{"new@x": 403, "nobody@x": 403} {
-		if c := create(who, "x-1", ""); c != want {
+		if c, _ := create(who, "x-1", ""); c != want {
 			t.Errorf("%s = %d, want %d", who, c, want)
 		}
 	}
-	if c := create("lead@x", "x-2", "other"); c != 403 {
+	if c, _ := create("lead@x", "x-2", "other"); c != 403 {
 		t.Errorf("a leader registering for another team = %d, want 403", c)
-	}
-	if c := create("admin@x", "x-3", ""); c != 400 {
-		t.Errorf("an admin on no team must pick one = %d, want 400", c)
-	}
-	if c := create("admin@x", "x-4", "other"); c != 200 || f.snap.Teams["other"].Programs["x-4"] == nil {
-		t.Errorf("an admin registers for any team = %d", c)
-	}
-	if c := create("lead@x", "jr-101", ""); c != 409 {
-		t.Errorf("a taken id = %d, want 409", c)
 	}
 }
 
-// A training's managers are its team's leaders, seniors and juniors and its admins (from any team); they give roles
-// to anyone and to groups, change its source and delete it. Others can't.
+// A repository with no commits gets a training to start from, named after the folder it was registered in, so
+// somebody can connect a new repository and go straight to editing.
+func TestRegisteringAnEmptyRepositoryWritesAStarter(t *testing.T) {
+	f := newAPI(t)
+	rid, dir := emptyRepo(t, f.s)
+	w := f.do("admin@x", "POST", "/api/org/trainings", fmt.Sprintf(`{"repository":%d,"team":"platform"}`, rid))
+	if w.Code != 200 {
+		t.Fatalf("register = %d %s", w.Code, w.Body)
+	}
+	for _, want := range []string{`"id":"kubernetes-course"`, `"started":true`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("the answer lacks %q: %s", want, w.Body)
+		}
+	}
+	// The starter is really in the repository, and it is a training Crucible will load.
+	out, err := exec.Command("git", "-C", dir, "show", "main:training.yaml").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "kubernetes-course") || !strings.Contains(string(out), "modules:") {
+		t.Fatalf("training.yaml in the repository: %v\n%s", err, out)
+	}
+	if f.snap.Trainings["kubernetes-course"].Repo != dir {
+		t.Errorf("the training does not read from the repository: %+v", f.snap.Trainings)
+	}
+}
+
 func TestTrainingManagers(t *testing.T) {
 	f := newAPI(t)
 	put := func(who, roles string) *httptest.ResponseRecorder {
@@ -493,14 +525,18 @@ func TestTrainingManagers(t *testing.T) {
 			t.Errorf("%s giving roles = %d, want 403", who, w.Code)
 		}
 	}
-	if w := put("senior@x", `{"participants":["all_trainees","Guest@corp"],"editors":["data_seniors"],"admins":["dl@x"]}`); w.Code != 200 {
-		t.Fatalf("a senior of the owning team = %d %s", w.Code, w.Body)
+	// forge-101 names only its leader as admin, so a senior of the owning team is not one of its managers.
+	if w := put("senior@x", `{"participants":["all"],"admins":["dl@x"]}`); w.Code != 403 {
+		t.Fatalf("a senior who is not an admin of it = %d %s", w.Code, w.Body)
+	}
+	if w := put("lead@x", `{"participants":["all_trainees","Guest@corp"],"editors":["data_seniors"],"admins":["dl@x","platform_leaders"]}`); w.Code != 200 {
+		t.Fatalf("the training's admin = %d %s", w.Code, w.Body)
 	}
 	pr := f.snap.Teams["platform"].Programs["forge-101"]
-	if !slices.Equal(pr.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(pr.Editors, []string{"dl@x", "ds@x"}) {
+	if !slices.Equal(pr.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(pr.Editors, []string{"dl@x", "ds@x", "lead@x"}) {
 		t.Fatalf("resolved: %v %v", pr.Enrolled, pr.Editors)
 	}
-	if w := put("senior@x", `{"editors":["ghost_seniors"]}`); w.Code != 400 {
+	if w := put("lead@x", `{"editors":["ghost_seniors"],"admins":["platform_leaders"]}`); w.Code != 400 {
 		t.Errorf("a group of no team = %d, want 400", w.Code)
 	}
 	// dl@x is now one of the training's admins: they manage it from another team.
@@ -574,4 +610,55 @@ func TestRedactRepo(t *testing.T) {
 			t.Errorf("redactRepo(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// repoWithTraining makes a local repository holding one training at root ("" is the repository root) and connects it,
+// returning the repositories row id. Registration reads training.yaml from it, so it has to be a real repository.
+func repoWithTraining(t *testing.T, s *Store, id, title, root string) int64 {
+	t.Helper()
+	gitsync.AllowFileTransport = true
+	t.Cleanup(func() { gitsync.AllowFileTransport = false })
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"training.yaml":          "id: " + id + "\ntitle: " + title + "\nmodules: [m1]\n",
+		"modules/m1/module.yaml": "title: M1\nitems:\n  - reading: r.md\n",
+		"modules/m1/r.md":        "# Hello\n",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(path.Join(root, name)))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"commit", "-qm", "c"}} {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@x"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	var rid int64
+	if err := s.DB.QueryRow(context.Background(), `INSERT INTO repositories (url) VALUES ($1) RETURNING id`, dir).Scan(&rid); err != nil {
+		t.Fatal(err)
+	}
+	return rid
+}
+
+// emptyRepo connects a repository with no commits, which registration fills with a training to start from.
+func emptyRepo(t *testing.T, s *Store) (int64, string) {
+	t.Helper()
+	gitsync.AllowFileTransport = true
+	t.Cleanup(func() { gitsync.AllowFileTransport = false })
+	dir := filepath.Join(t.TempDir(), "kubernetes-course.git")
+	cmd := exec.Command("git", "init", "-q", "--bare", "-b", "main", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	var rid int64
+	if err := s.DB.QueryRow(context.Background(), `INSERT INTO repositories (url) VALUES ($1) RETURNING id`, dir).Scan(&rid); err != nil {
+		t.Fatal(err)
+	}
+	return rid, dir
 }

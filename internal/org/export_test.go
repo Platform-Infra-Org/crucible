@@ -104,8 +104,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	var roles int
 	mustScan(t, dst.DB, `SELECT count(*) FROM training_roles WHERE training = 'b'`, &roles)
-	if roles != 0 {
-		t.Errorf("a training with no roles has none after an import: %d rows", roles)
+	// A program the file named no admin for was seeded with its team's leaders, since a training with no admin could
+	// be managed only by a Crucible admin; the import carries that across.
+	if roles != 1 {
+		t.Errorf("roles for a training the file left bare = %d rows, want the one defaulted admin", roles)
 	}
 	var sub string
 	mustScan(t, dst.DB, `SELECT sub FROM users WHERE email = 'new-boss@x'`, &sub)
@@ -172,8 +174,8 @@ func TestImportIsAllOrNothing(t *testing.T) {
 	for name, f := range map[string][]byte{
 		"truncated":       file[:len(file)/2],
 		"unknown person":  broken("badges", `"tr@x"`, `"ghost@x"`),
-		"local repo":      broken("trainings", `https://git/a.git`, `/etc`),
-		"option as repo":  broken("trainings", `https://git/a.git`, `--upload-pack=touch`),
+		"local repo":      broken("repositories", `https://git/a.git`, `/etc`),
+		"option as repo":  broken("repositories", `https://git/a.git`, `--upload-pack=touch`),
 		"bad email":       broken("team_members", `"m@x"`, `"not an email"`),
 		"no leader":       broken("team_members", `"leader"`, `"member"`),
 		"plain http hook": broken("team_webhooks", `https://hooks/s`, `http://hooks/s`),

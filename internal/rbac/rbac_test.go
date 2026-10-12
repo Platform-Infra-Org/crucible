@@ -34,7 +34,7 @@ func TestMatrix(t *testing.T) {
 		{trainee, ViewProgress, senior, false},
 		{senior, ViewProgress, trainee, true}, // a senior of the trainee's team
 		{leader, ManageProgram, "", true},
-		{senior, ManageProgram, "", true}, // the owning team's seniors and juniors manage its trainings too
+		{senior, ManageProgram, "", false}, // forge-101 names only its leader as admin: being a senior of the team grants nothing
 		{trainee, ManageProgram, "", false},
 		{senior, Score, trainee, true},
 		{senior, Score, senior, false}, // never score yourself
@@ -176,7 +176,7 @@ func TestTeamsAndTrainingRoles(t *testing.T) {
 		subject string
 		want    bool
 	}{
-		{"pj@x", ManageProgram, "", true},  // a junior of the owning team
+		{"pj@x", ManageProgram, "", false}, // a junior of the owning team, but not named as an admin
 		{"pt@x", ManageProgram, "", false}, // never a trainee
 		{"dl@x", ManageProgram, "", true},  // the training's admin, from another team
 		{"ds@x", ManageProgram, "", false}, // an editor does not manage
@@ -213,5 +213,41 @@ func TestTeamsAndTrainingRoles(t *testing.T) {
 	}
 	if got := c.TierApprovers(TierLeader, "platform", "k8s", "pl@x"); !slices.Equal(got, []string{"pl2@x"}) {
 		t.Errorf("the leader tier is every leader but the requester: %v", got)
+	}
+}
+
+// Managing a training comes from being named as its admin, person or group — not from being on the team that owns
+// it. Otherwise removing an admin would change nothing, and a training could be managed by people nobody chose.
+func TestManagingComesFromBeingNamed(t *testing.T) {
+	p := &config.Platform{Teams: map[string]*config.Team{
+		"forge": {ID: "forge", Leaders: []string{"l@x"}, Seniors: []string{"s@x"}, Juniors: []string{"j@x"},
+			Trainees: []string{"t@x"}, Programs: map[string]*config.Program{
+				"k8s": {Training: "k8s", Access: config.Access{Admins: []string{"forge_seniors"}}},
+			}},
+	}}
+	p.Resolve()
+	c := Checker{P: p}
+	for who, want := range map[string]bool{
+		"s@x": true,  // named through forge_seniors
+		"l@x": false, // a leader of the owning team, but the group does not include them
+		"j@x": false,
+		"t@x": false,
+	} {
+		if got := c.Can(who, ManageProgram, "forge", "k8s", ""); got != want {
+			t.Errorf("%s manages = %v, want %v", who, got, want)
+		}
+	}
+	// A program that names no admin is given its team's leaders when it is read (config.Resolve), so a training is
+	// never left manageable by Crucible admins alone. The write path refuses emptying the list as well
+	// (org.ProgramBody.validate).
+	p.Teams["forge"].Programs["k8s"].Access.Admins = nil
+	p.Resolve()
+	if !c.Can("l@x", ManageProgram, "forge", "k8s", "") {
+		t.Error("a program naming no admin should fall back to its team's leaders")
+	}
+	for _, who := range []string{"s@x", "j@x", "t@x"} {
+		if c.Can(who, ManageProgram, "forge", "k8s", "") {
+			t.Errorf("%s manages it, but only the leaders were defaulted in", who)
+		}
 	}
 }

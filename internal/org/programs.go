@@ -83,6 +83,11 @@ func (b ProgramBody) validate() (*program, error) {
 			return nil, err
 		}
 	}
+	// Someone has to be able to manage it: a training with no admins could be changed only by a Crucible admin, and
+	// the people who run it would be locked out of their own training. One person or one group is enough.
+	if len(p.roles["admin"]) == 0 {
+		return nil, apperr.Wrap(apperr.Invalid, "a training needs at least one admin: keep one person or one group before removing the rest")
+	}
 	if name := strings.TrimSpace(b.Schedule); name != "" {
 		if b.InlineSchedule != nil {
 			return nil, apperr.Wrap(apperr.Invalid, "a program uses a named schedule or an inline one, not both")

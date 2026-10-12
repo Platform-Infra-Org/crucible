@@ -13,10 +13,19 @@ test('an admin registers a training for a team and gives its roles to groups and
   await expect(admin.getByRole('heading', { name: 'Manage trainings' })).toBeVisible()
   const list = admin.getByRole('navigation', { name: 'Trainings' })
   if (!(await list.getByRole('link', { name: /forge-001/ }).count())) {
+    // A training is registered from a connected repository, and its id and title come from the training.yaml there.
+    await admin.goto('/admin/repos')
+    const repo = 'file:///git/forge-001.git' // seeded by scripts/seed-git.sh
+    if (!(await admin.getByText(repo, { exact: true }).count())) {
+      await admin.getByRole('button', { name: 'Connect a repository' }).click()
+      await admin.getByLabel('Repository URL').fill(repo)
+      await admin.getByRole('button', { name: 'Connect repository' }).click()
+      await expect(admin.getByText(repo, { exact: true })).toBeVisible()
+    }
+    await admin.goto('/trainings/manage')
     await admin.getByRole('link', { name: '+ New training' }).click()
-    await admin.getByLabel('Training id').fill('forge-001')
     await admin.getByLabel('Team that owns it').selectOption('forge')
-    await admin.getByLabel('Repository URL').fill('file:///git/forge-001.git') // seeded by scripts/seed-git.sh
+    await admin.getByRole('combobox', { name: /Repository/ }).selectOption({ label: repo })
     await admin.getByRole('button', { name: 'Register training' }).click()
   } else {
     await list.getByRole('link', { name: /forge-001/ }).click()

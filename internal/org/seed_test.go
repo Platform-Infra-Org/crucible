@@ -34,10 +34,13 @@ func TestSeedImportsAPlatformOnce(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("seeded platform differs from config.Load\n got: %s\nwant: %s", dump(got), dump(want))
 	}
-	var roles, audited int
-	mustScan(t, pool, `SELECT count(*) FROM training_roles WHERE training = 'b'`, &roles)
-	if roles != 0 {
-		t.Errorf("program b sets no roles, got %d role rows", roles)
+	// Program b names nobody, so it is seeded with the one admin config.Resolve fills in: its team's leaders. The
+	// equivalence check above is what proves the seed stores exactly what reading the files gives.
+	var audited int
+	var bRoles string
+	mustScan(t, pool, `SELECT coalesce(string_agg(ref || '/' || role, ','), '') FROM training_roles WHERE training = 'b'`, &bRoles)
+	if bRoles != "t_leaders/admin" {
+		t.Errorf("program b names nobody, so it gets its team's leaders as admin; got %q", bRoles)
 	}
 	mustScan(t, pool, `SELECT count(*) FROM audit_log WHERE actor = 'seed' AND action = 'program.enroll'`, &audited)
 	if audited != 2 {
@@ -60,7 +63,8 @@ func TestSeedLeavesAConfiguredInstanceAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool := dbtest.New(t)
-	mustExec(t, pool, `INSERT INTO trainings VALUES ('mine','https://git/mine.git','main')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('https://git/mine.git') RETURNING id)
+		INSERT INTO trainings (id, repository, ref) SELECT 'mine', id, 'main' FROM r`)
 	if ok, err := (&Store{DB: pool}).Seed(ctx, p); err != nil || ok {
 		t.Fatalf("an instance with a training must not be seeded: %v %v", ok, err)
 	}

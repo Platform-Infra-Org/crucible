@@ -35,10 +35,10 @@ func ids(v TrainingsView) []string {
 func TestTrainingsPageShowsWhatEachCallerWorksOn(t *testing.T) {
 	f := newAPI(t)
 	ctx := context.Background()
-	if err := f.s.CreateTraining(ctx, "admin@x", "forge-201", config.TrainingRef{Repo: "https://bot:s3cret@git.example.com/f.git"}, "other"); err != nil {
+	if err := f.s.CreateTraining(ctx, "admin@x", "forge-201", config.TrainingRef{Repo: "https://bot:s3cret@git.example.com/f.git"}, "other", "leader"); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.SetProgram(ctx, "boss@x", "other", "forge-201", ProgramBody{Version: 1, BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ds@x"}}}); err != nil {
+	if err := f.s.SetProgram(ctx, "boss@x", "other", "forge-201", ProgramBody{Version: 1, BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ds@x"}, Admins: []string{"other_leaders"}}}); err != nil {
 		t.Fatal(err)
 	}
 	f.reload()

@@ -61,6 +61,10 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_GIT_HOOK_SECRET } }
             - name: CRUCIBLE_QUIZ_SECRET
               valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_QUIZ_SECRET } }
+            # Seals the credentials of connected repositories. Optional: without it public repositories still work
+            # and connecting one with a token is refused rather than stored in the clear.
+            - name: CRUCIBLE_SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: CRUCIBLE_SECRET_KEY, optional: true } }
             - { name: CRUCIBLE_BLOB_BUCKET, value: {{ .Values.backup.bucket | quote }} }   # uploads/ and transcripts (M5)
             - { name: CRUCIBLE_BLOB_REGION, value: {{ .Values.backup.region | quote }} }
             - { name: OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }} }

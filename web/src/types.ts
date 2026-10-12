@@ -7,7 +7,8 @@ export type Access = { participants: string[]; editors: string[]; admins: string
 export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: string }
 // A training's one run, under the team that owns it.
 export type ProgramConfig = {
-  training: string; title: string; team: string; version: number; inline_schedule?: object; roles: Access; resolved: Access; schedule: string
+  training: string; title: string; team: string; version: number; inline_schedule?: object; roles: Access; resolved: Access
+  schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string
 }
@@ -17,6 +18,7 @@ export type ManagedTraining = {
 }
 export type TrainingsAdmin = {
   is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
+  repos?: { id: number; url: string }[] // the connected repositories a training can be registered from
 }
 export type Person = { email: string; name: string; team: string; tag: Tag | ''; smith?: SmithRef }
 export type People = { people: Person[]; groups: string[] }
@@ -162,3 +164,12 @@ export type Conflict = { path: string; base: string; head: string; head_missing:
 export type Problem = { file: string; line: number; msg: string }
 export type BlockField = { name: string; type: string; required?: boolean; enum?: string[]; default?: string; description: string; min?: number; max?: number }
 export type BlockInfo = { id: string; group: string; title: string; summary: string; doc?: string; file_kind: string; fields: BlockField[]; example: string; git_only?: boolean }
+
+// A connected repository: where training content comes from. The credential is never sent to the browser; has_secret
+// says only that one is set.
+export type Repo = {
+  id: number; url: string; auth: 'none' | 'token' | 'ssh'; username: string; has_secret: boolean; public_key: string
+  status: 'unknown' | 'ok' | 'failed'; can_write: boolean | null; last_error: string
+  checked_at: string | null; version: number; trainings: string[]
+}
+export type ReposView = { repos: Repo[]; can_keep_secrets: boolean }

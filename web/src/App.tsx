@@ -23,6 +23,7 @@ import { LedgerPage } from './pages/Ledger'
 import { AnvilDetailPage, AnvilPage } from './pages/Anvil'
 import { ForgeStatusPage } from './pages/ForgeStatus'
 import { AdminSettingsPage } from './pages/AdminSettings'
+import { AdminReposPage } from './pages/AdminRepos'
 import { JourneyPage } from './pages/Journey'
 import { TrainingsPage } from './pages/Trainings'
 import { ManageTrainingsPage } from './pages/ManageTrainings'
@@ -110,6 +111,7 @@ export default function App() {
           <Route path="/edits/:id" element={<EditReviewPage />} />
           <Route path="/admin" element={<ForgeStatusPage />} />
           <Route path="/admin/settings" element={<AdminSettingsPage />} />
+          <Route path="/admin/repos" element={<AdminReposPage />} />
           <Route path="/docs/*" element={<DocsPage />} />
           <Route path="*" element={<div className="center"><div><h1>Lost in the smoke</h1><Link to="/">Back to the Hearth</Link></div></div>} />
         </Routes>

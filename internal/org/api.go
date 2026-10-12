@@ -30,6 +30,11 @@ type APIDeps struct {
 	CheckPin func(ctx context.Context, training, sha string) error
 	// Content names a training and the commits it runs and tracks, for the team page. Nil: the id, no commits.
 	Content func(team, training string) (title, running, head string)
+	// CheckRepo tries a connected repository and records what it found (Store.RecordCheck). Nil: no test is run and
+	// a repository stays "unknown" until something reads from it.
+	CheckRepo func(ctx context.Context, id int64)
+	// BotName and BotEmail are the committer Crucible writes a starter training as.
+	BotName, BotEmail string
 }
 
 type api struct {
@@ -51,6 +56,11 @@ func (s *Store) Routes(r chi.Router, d APIDeps) {
 	r.Get("/api/admin/admins", a.admin(a.getAdmins))
 	r.Post("/api/admin/admins", a.admin(a.postAdmin))
 	r.Delete("/api/admin/admins/{email}", a.admin(a.deleteAdmin))
+	r.Get("/api/admin/repos", a.admin(a.getRepos))
+	r.Post("/api/admin/repos", a.admin(a.postRepo))
+	r.Put("/api/admin/repos/{id}", a.admin(a.putRepo))
+	r.Post("/api/admin/repos/{id}/check", a.admin(a.checkRepoNow))
+	r.Delete("/api/admin/repos/{id}", a.admin(a.deleteRepo))
 	r.Get("/api/admin/trainings", a.admin(a.getTrainings))
 	r.Put("/api/admin/trainings/{id}/owner", a.admin(a.putOwner))
 	r.Post("/api/admin/teams/{id}", a.admin(a.createTeam))
@@ -253,9 +263,10 @@ func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string,
 		return apperr.Wrap(apperr.Forbidden, "only a team's leaders, seniors and juniors, or an admin, can register a training")
 	}
 	var b struct {
-		ID   string `json:"id"`
-		Team string `json:"team"`
-		config.TrainingRef
+		Repository int64  `json:"repository"`
+		Team       string `json:"team"`
+		Ref        string `json:"ref"`
+		Path       string `json:"path"`
 	}
 	if err := httpx.Read(r, &b); err != nil {
 		return err
@@ -270,10 +281,21 @@ func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string,
 		}
 		team = own.ID
 	}
-	if err := a.s.CreateTraining(r.Context(), actor, strings.TrimSpace(b.ID), b.TrainingRef, team); err != nil {
+	// The id and title come from the repository's training.yaml, not from this request: the content says who it is.
+	// The registrant's tag on the owning team decides the training's first admins (config.RankAndAbove).
+	tag := ""
+	if t := c.P.Teams[team]; t != nil {
+		tag = t.RoleOf(actor)
+	}
+	out, err := a.s.Register(r.Context(), actor, b.Repository, b.Ref, b.Path, team, tag, a.d.BotName, a.d.BotEmail)
+	if err != nil {
 		return err
 	}
-	return a.done(w, r, 1)
+	if a.d.Refresh != nil {
+		_ = a.d.Refresh(r.Context())
+	}
+	httpx.JSON(w, http.StatusOK, out)
+	return nil
 }
 
 // manage checks that actor may manage training (its owning team's leaders, seniors and juniors, its admins, Crucible
@@ -288,7 +310,7 @@ func manage(c rbac.Checker, actor, training string) error {
 	if t, _ := c.P.Owner(training); t != nil && c.Can(actor, rbac.ManageProgram, t.ID, training, "") {
 		return nil
 	}
-	return apperr.Wrap(apperr.Forbidden, "only the training's managers (its team's leaders, seniors and juniors, and its admins) can change it")
+	return apperr.Wrap(apperr.Forbidden, "only this training's admins can change it; ask one of them, or a Crucible admin")
 }
 
 // putSource points a training at another repo, ref or folder. An empty repo keeps the stored one.

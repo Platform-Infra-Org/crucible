@@ -20,6 +20,8 @@ import (
 // reconcileCluster removed without terraform destroy). Resources with an unknown or malformed lab id are reported,
 // never deleted: they may belong to another deployment or to a restored database. Successful create calls by lab
 // sessions without the lab tag (CloudTrail) are reported. If the database cannot be read, nothing is deleted.
+// After a run that listed every region, the meters of labs that ended over an hour ago end (a failed terraform
+// destroy left them running; the tag sweep and this run cleaned up after it).
 // Deletes AWS refuses for now (awscloud.ErrNotYet) are retried by the next run. Admins get one summary when
 // something new turns up.
 func (s *Service) Reap(ctx context.Context) error {
@@ -29,10 +31,12 @@ func (s *Service) Reap(ctx context.Context) error {
 	now := s.Now()
 	var errs []error
 	report := func(source, labID, arn, detail string) { s.finding(ctx, source, labID, arn, "reported", detail) }
+	complete := true // every region listed and every ended lab's leftovers handled: meters of ended labs can end
 	for _, region := range s.AWSRegions {
 		res, err := s.Cloud.Tagged(ctx, region, "")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: listing tagged resources: %w", region, err))
+			complete = false
 			continue
 		}
 		byLab := map[string][]awscloud.Resource{}
@@ -50,6 +54,7 @@ func (s *Service) Reap(ctx context.Context) error {
 		ended, known, err := s.labsEnded(ctx, ids, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: reading labs: %w", region, err))
+			complete = false
 			continue // never guess: without the database nothing is deleted
 		}
 		for _, id := range ids {
@@ -62,6 +67,7 @@ func (s *Service) Reap(ctx context.Context) error {
 				creds, err := s.Cloud.AssumeLab(ctx, awscloud.Session{LabID: id})
 				if err != nil {
 					errs = append(errs, fmt.Errorf("lab %s: credentials: %w", id, err))
+					complete = false
 					continue
 				}
 				stuck := ended[id].Before(now.Add(-notYetGrace))
@@ -81,6 +87,13 @@ func (s *Service) Reap(ctx context.Context) error {
 	// The run's ctx may be spent (timeout, shutdown): outcomes and the email go out on a fresh one.
 	wctx, wcancel := finalCtx(ctx)
 	defer wcancel()
+	if complete {
+		if _, err := s.DB.Exec(wctx, `UPDATE lab_resources SET ended_at = $1 WHERE ended_at IS NULL AND lab_id IN (
+			SELECT id FROM lab_instances WHERE state NOT IN ('pending_approval', 'provisioning', 'ready', 'destroying')
+				AND coalesce(destroyed_at, created_at) < $2)`, now, now.Add(-time.Hour)); err != nil {
+			errs = append(errs, fmt.Errorf("ending the meters of ended labs: %w", err))
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		s.Log.Warn("reaper run incomplete", "err", err)
 		_, _ = s.DB.Exec(wctx, `UPDATE aws_ops SET reap_error = $1, reap_error_at = $2`, cleanText(err.Error()), now)

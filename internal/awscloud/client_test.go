@@ -22,8 +22,8 @@ import (
 )
 
 type call struct {
-	target, method, path, query, body string
-	form                              url.Values
+	target, method, path, query, body, auth string
+	form                                    url.Values
 }
 
 const assumeXML = `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials>
@@ -42,7 +42,8 @@ func fakeAWS(t *testing.T, reply func(c call) (code int, contentType, body strin
 	var calls []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		c := call{target: r.Header.Get("X-Amz-Target"), method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, body: string(b)}
+		c := call{target: r.Header.Get("X-Amz-Target"), method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, body: string(b),
+			auth: r.Header.Get("Authorization")}
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 			c.form, _ = url.ParseQuery(string(b))
 		}
@@ -478,5 +479,35 @@ func TestDeleteBucketAbortsUploadsAndSurfacesObjectErrors(t *testing.T) {
 	}
 	if !aborted || bucketDeleted {
 		t.Fatalf("uploads aborted (%v), bucket not deleted after a failed object (%v)", aborted, bucketDeleted)
+	}
+}
+
+func TestReadStateUsesTheOpsRoleInTheStateRegion(t *testing.T) {
+	big := strings.Repeat("x", 32<<20+1)
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		switch c.path {
+		case "/state/labs/aaaaaaaaaaaa.tfstate":
+			return 200, "application/json", `{"version":4,"resources":[]}`
+		case "/state/labs/bbbbbbbbbbbb.tfstate":
+			return 200, "application/json", big
+		}
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
+	})
+	got, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/aaaaaaaaaaaa.tfstate")
+	if err != nil || string(got) != `{"version":4,"resources":[]}` {
+		t.Fatalf("state: %q %v", got, err)
+	}
+	all := calls()
+	if all[0].form.Get("RoleSessionName") != "crucible-ops" {
+		t.Fatalf("state is read as the ops role: %+v", all[0])
+	}
+	if last := all[len(all)-1]; !strings.Contains(last.auth, "/eu-central-1/s3/") || !strings.Contains(last.auth, "ASIAcrucible-ops") {
+		t.Fatalf("signed by the ops session for the state bucket's region: %q", last.auth)
+	}
+	if _, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/bbbbbbbbbbbb.tfstate"); err == nil {
+		t.Fatal("a state over 32 MiB is refused")
+	}
+	if _, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/cccccccccccc.tfstate"); err == nil {
+		t.Fatal("no state is an error, not an empty lab")
 	}
 }

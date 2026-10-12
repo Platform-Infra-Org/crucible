@@ -149,7 +149,7 @@ func (c *Client) Tagged(ctx context.Context, region, labID string) ([]Resource, 
 // labBuckets adds the region's lab buckets found by name to res: an untagged (or retagged) bucket is swept too.
 func (c *Client) labBuckets(ctx context.Context, region, labID string, res []Resource) ([]Resource, error) {
 	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
-		o.Region, o.BaseEndpoint, o.UsePathStyle = region, c.endpoint(), c.cfg.Endpoint != ""
+		o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != ""
 	})
 	seen := map[string]bool{}
 	for _, r := range res {
@@ -290,6 +290,28 @@ func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {
 	}
 	_, err := cl.DeleteBucket(ctx, &s3.DeleteBucketInput{Bucket: aws.String(bucket)})
 	return err
+}
+
+// maxState bounds one lab's Terraform state.
+const maxState = 32 << 20
+
+func (c *Client) ReadState(ctx context.Context, region, bucket, key string) ([]byte, error) {
+	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
+		o.Region, o.BaseEndpoint, o.UsePathStyle = region, c.endpoint(), c.cfg.Endpoint != ""
+	})
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(obj.Body, maxState+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxState {
+		return nil, fmt.Errorf("state %s is over 32 MiB", key)
+	}
+	return b, nil
 }
 
 // maxExportObject bounds one export file after decompression.

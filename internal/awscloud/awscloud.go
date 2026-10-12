@@ -75,6 +75,8 @@ type Cloud interface {
 	// LabWrites lists successful create calls by lab sessions since `since` whose request had no lab tag.
 	// ErrTruncated (with the events read so far) when it stopped before the end.
 	LabWrites(ctx context.Context, region string, since time.Time) ([]TrailEvent, error)
+	// ReadState returns a lab's Terraform state object from the state bucket (in region), read as the ops role.
+	ReadState(ctx context.Context, region, bucket, key string) ([]byte, error)
 }
 
 var labIDRe = regexp.MustCompile(`^[0-9a-f]{12}$`)

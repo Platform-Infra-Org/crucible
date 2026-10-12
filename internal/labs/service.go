@@ -815,7 +815,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	s.event(ctx, inst.ID, "progress", "preparing workspace") // the loader shows these (spec §8.3)
 	if lp, ok := r.(labProvisioner); ok {
 		s.event(ctx, inst.ID, "progress", "starting services")
-		err = lp.ProvisionLab(ctx, inst, lab) // aws: builds its own workspace bundle and terraform module
+		err = s.provisionLab(ctx, lp, inst, lab) // aws: builds its own workspace bundle and terraform module, then meters it
 	} else if err == nil {
 		var bundle []byte
 		if bundle, err = Bundle(lab.Dir, lab.Runtime); err == nil {
@@ -1437,7 +1437,9 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 }
 
 // destroyRuntime tears a lab's environment down. For aws labs, terraform destroy is followed by a tag sweep (spec
-// §8.2) with its own few minutes: terraform may have used up ctx.
+// §8.2) with its own few minutes: terraform may have used up ctx. Every path that ends a lab (End, expiry, idle, the
+// kill switch, a failed or hung provisioning, the stuck-destroy retry) comes through here; a successful destroy ends
+// the lab's meter. A failed one leaves it running until the reaper has cleaned up.
 func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
@@ -1448,6 +1450,11 @@ func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		s.sweepLab(sctx, inst.ID)
+		if err == nil {
+			if merr := s.EndMeter(sctx, inst.ID, s.Now()); merr != nil {
+				s.Log.Error("ending the lab's meter failed; the reaper ends it", "lab", inst.ID, "err", merr)
+			}
+		}
 	}
 	return err
 }

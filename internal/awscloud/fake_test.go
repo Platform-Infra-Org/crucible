@@ -2,7 +2,9 @@ package awscloud
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +86,39 @@ func TestFakeFindsLabBucketsByName(t *testing.T) {
 	a, _ := f.AssumeLab(ctx, Session{LabID: "aaaaaaaaaaaa"})
 	if ok, err := f.Delete(ctx, "eu-west-1", a, got[0].ARN); !ok || err != nil {
 		t.Fatalf("the owning lab deletes its untagged bucket: %v %v", ok, err)
+	}
+}
+
+func TestFakeStateFollowsApplyAndDestroy(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	if _, err := f.ReadState(ctx, "eu-west-1", "state", "labs/aaaaaaaaaaaa.tfstate"); err == nil {
+		t.Fatal("no apply, no state")
+	}
+	f.SimulateApply("eu-west-1", Session{LabID: "aaaaaaaaaaaa"})
+	types := func() (out []string) {
+		b, err := f.ReadState(ctx, "eu-west-1", "state", "labs/aaaaaaaaaaaa.tfstate")
+		var s struct {
+			Version   int
+			Resources []struct{ Type string }
+		}
+		if err != nil || json.Unmarshal(b, &s) != nil || s.Version != 4 {
+			t.Fatalf("a v4 state: %s %v", b, err)
+		}
+		for _, r := range s.Resources {
+			out = append(out, r.Type)
+		}
+		return out
+	}
+	if got := types(); !slices.Equal(got, []string{"aws_s3_bucket", "aws_instance"}) {
+		t.Fatalf("apply leaves the bucket and an instance in the state: %v", got)
+	}
+	f.SimulateDestroy("aaaaaaaaaaaa")
+	if got := types(); len(got) != 0 {
+		t.Fatalf("destroy empties the state: %v", got)
+	}
+	f.SetState("bbbbbbbbbbbb", []byte(`{"version":4,"resources":[]}`))
+	if _, err := f.ReadState(ctx, "eu-west-1", "state", "labs/bbbbbbbbbbbb.tfstate"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,0 +1,2 @@
+line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_resource_id,line_item_product_code,line_item_line_item_type
+2026-10-11T00:00:00Z,abc,"{""user_crucible:lab-id"":""0123456789ab""}",i-1,AmazonEC2,Usage

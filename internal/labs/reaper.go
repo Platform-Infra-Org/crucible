@@ -167,7 +167,7 @@ func (s *Service) labsEnded(ctx context.Context, ids []string, now time.Time) (e
 	return ended, known, rows.Err()
 }
 
-// IngestCosts stores Cost Explorer's daily cost per lab (spec §9.3): month to date plus the three days before,
+// IngestCosts stores the billed daily cost per lab, read from the CUR 2.0 export in S3 (spec §9.3): month to date plus the three days before,
 // because a day's figure keeps changing for a while. Days are UTC, the end is exclusive. Every row in the window is
 // upserted and ingest_ok_at moves only when the whole run committed (the spend settle rule relies on it). A failure
 // is recorded for the Ledger ("actuals stale") and retried by the next periodic run; caps keep using estimates
@@ -177,12 +177,12 @@ func (s *Service) IngestCosts(ctx context.Context) error {
 		return nil
 	}
 	now := s.Now().UTC()
-	// End is exclusive: tomorrow (UTC) includes today, and is never past the 1st of next month, the latest end
-	// Cost Explorer accepts.
+	// End is exclusive: tomorrow (UTC) includes today. The export is overwritten daily and a month's late
+	// corrections land in its own prefix, so the window's months are re-read in full.
 	from, to := monthStart(now.AddDate(0, 0, -3)), now.Truncate(24*time.Hour).AddDate(0, 0, 1)
 	err := s.ingestCosts(ctx, from, to, now)
 	if err != nil {
-		s.Log.Warn("cost explorer ingestion failed; the Ledger marks actuals stale", "err", err)
+		s.Log.Warn("billing export ingestion failed; the Ledger marks actuals stale", "err", err)
 		wctx, wcancel := finalCtx(ctx) // ctx may be the reason it failed
 		defer wcancel()
 		_, _ = s.DB.Exec(wctx, `UPDATE aws_ops SET ingest_error = $1, ingest_error_at = $2`, cleanText(err.Error()), now)

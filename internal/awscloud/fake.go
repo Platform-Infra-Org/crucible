@@ -14,8 +14,9 @@ import (
 // resources. It backs unit tests and CRUCIBLE_AWS_LABS=dryrun (see SimulateApply).
 type Fake struct {
 	Now            func() time.Time
-	Err            error // when set, every call fails with it (throttling, Cost Explorer down…)
+	Err            error // when set, every call fails with it (throttling, an API down…)
 	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
+	costsErr       error // when set, only Costs fails (a broken billing export)
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
@@ -139,9 +140,15 @@ func (f *Fake) Delete(_ context.Context, region string, c Credentials, arn strin
 	return true, nil
 }
 
+// FailCosts makes Costs fail with err (nil restores it): an unreadable or malformed billing export.
+func (f *Fake) FailCosts(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.costsErr = err }
+
 func (f *Fake) Costs(_ context.Context, from, to time.Time) ([]DailyCost, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.costsErr != nil {
+		return nil, f.costsErr
+	}
 	if f.Err != nil {
 		return nil, f.Err
 	}

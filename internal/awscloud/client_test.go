@@ -1,13 +1,18 @@
 package awscloud
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -168,22 +173,117 @@ func TestDeleteKnowsItsTypes(t *testing.T) {
 	}
 }
 
-func TestCostsGroupsByLabAndSkipsUntaggedSpend(t *testing.T) {
-	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
-		return 200, "application/x-amz-json-1.1", `{"ResultsByTime":[{"TimePeriod":{"Start":"2026-10-04","End":"2026-10-05"},"Groups":[
-			{"Keys":["crucible:lab-id$aaaaaaaaaaaa"],"Metrics":{"UnblendedCost":{"Amount":"0.4213","Unit":"USD"}}},
-			{"Keys":["crucible:lab-id$"],"Metrics":{"UnblendedCost":{"Amount":"12.5","Unit":"USD"}}}],"Estimated":true}]}`
+// exportClient is a Client whose export bucket is an httptest S3 holding files (key -> body): ListObjectsV2 + GetObject.
+func exportClient(t *testing.T, files map[string][]byte) *Client {
+	t.Helper()
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		key := strings.TrimPrefix(c.path, "/bills/")
+		if c.path == "/bills" || c.path == "/bills/" {
+			prefix := url.Values(mustQuery(c.query)).Get("prefix")
+			var b strings.Builder
+			b.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bills</Name><IsTruncated>false</IsTruncated>`)
+			for k, v := range files {
+				if strings.HasPrefix(k, prefix) {
+					fmt.Fprintf(&b, "<Contents><Key>%s</Key><Size>%d</Size></Contents>", k, len(v))
+				}
+			}
+			b.WriteString("</ListBucketResult>")
+			return 200, "application/xml", b.String()
+		}
+		if v, ok := files[key]; ok {
+			return 200, "application/gzip", string(v)
+		}
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
 	})
-	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	got, err := cl.Costs(context.Background(), from, from.AddDate(0, 0, 5))
-	if err != nil || len(got) != 1 || got[0].LabID != "aaaaaaaaaaaa" || got[0].USD != 0.4213 || !got[0].Day.Equal(from.AddDate(0, 0, 3)) {
+	cl.cfg.ExportBucket, cl.cfg.ExportPrefix, cl.cfg.ExportName = "bills", "exports", "crucible-labs"
+	return cl
+}
+
+func mustQuery(q string) url.Values { v, _ := url.ParseQuery(q); return v }
+
+func gzBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	_, _ = w.Write([]byte(s))
+	_ = w.Close()
+	return buf.Bytes()
+}
+
+func gzFile(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile("testdata/cur/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gzBytes(t, string(b))
+}
+
+func day(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+
+const exportBase = "exports/crucible-labs/data/BILLING_PERIOD="
+
+func TestCostsReadTheExport(t *testing.T) {
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz": gzFile(t, "part-0.csv"),
+		exportBase + "2026-10/part-1.csv.gz": gzFile(t, "part-1.csv"),
+	})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 2 {
 		t.Fatalf("costs: %+v %v", got, err)
 	}
-	last := calls()[len(calls())-1]
-	for _, want := range []string{`"Granularity":"DAILY"`, `"Key":"crucible:lab-id"`, `"Type":"TAG"`, `"Start":"2026-10-01"`, `"End":"2026-10-06"`, `"UnblendedCost"`} {
-		if last.target != "AWSInsightsIndexService.GetCostAndUsage" || !strings.Contains(last.body, want) {
-			t.Fatalf("missing %s in %s %s", want, last.target, last.body)
+	want := []DailyCost{{Day: day("2026-10-11"), LabID: "0123456789ab", USD: 0.14}, {Day: day("2026-10-12"), LabID: "0123456789ab", USD: 0.02}}
+	for i, w := range want {
+		if !got[i].Day.Equal(w.Day) || got[i].LabID != w.LabID || math.Abs(got[i].USD-w.USD) > 1e-9 {
+			t.Fatalf("row %d: got %+v want %+v (both tag spellings counted, untagged skipped)", i, got[i], w)
 		}
+	}
+	// a day outside the window is not returned
+	got, err = c.Costs(context.Background(), day("2026-10-12"), day("2026-10-13"))
+	if err != nil || len(got) != 1 || !got[0].Day.Equal(day("2026-10-12")) {
+		t.Fatalf("window: %+v %v", got, err)
+	}
+}
+
+func TestCostsMalformedCostFailsTheWholeRead(t *testing.T) {
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz": gzFile(t, "part-0.csv"),
+		exportBase + "2026-10/bad.csv.gz":    gzFile(t, "bad.csv"),
+	})
+	if got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatalf("a half-read bill must never settle a lab: %+v", got)
+	}
+}
+
+func TestExportIngestEdges(t *testing.T) {
+	ctx := context.Background()
+	csvHead := "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n"
+	row := func(day, cost, lab string) string {
+		return day + "T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""` + lab + `""}"` + "\n"
+	}
+	// (a) no files yet: no error, no costs
+	if got, err := exportClient(t, nil).Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 0 {
+		t.Fatalf("an export that hasn't run yet is not an error: %v %v", got, err)
+	}
+	// (b) not gzip / missing columns: an error
+	for _, body := range [][]byte{[]byte("not gzip"), gzBytes(t, "a,b\n1,2\n")} {
+		c := exportClient(t, map[string][]byte{exportBase + "2026-10/part-0.csv.gz": body})
+		if _, err := c.Costs(ctx, day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Fatal("a broken export file is an error")
+		}
+	}
+	// (c) a window across a month boundary reads both months
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-09/part-0.csv.gz": gzBytes(t, csvHead+row("2026-09-30", "0.30", "0123456789ab")),
+		exportBase + "2026-10/part-0.csv.gz": gzBytes(t, csvHead+row("2026-10-01", "0.10", "0123456789ab")),
+	})
+	if got, err := c.Costs(ctx, day("2026-09-28"), day("2026-10-02")); err != nil || len(got) != 2 {
+		t.Fatalf("both months: %+v %v", got, err)
+	}
+	// (d) a net-negative day passes through; IngestCosts clamps it to 0
+	c = exportClient(t, map[string][]byte{exportBase + "2026-10/part-0.csv.gz": gzBytes(t, csvHead+row("2026-10-05", "-0.40", "0123456789ab"))})
+	if got, err := c.Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 1 || got[0].USD != -0.40 {
+		t.Fatalf("credits pass through to the clamp: %+v %v", got, err)
 	}
 }
 

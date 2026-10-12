@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crucible Deploy Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (max 1080px) of sections; each section is prose, then a full-width diagram, then a key.
+   Palette: Crucible's own themes — steel (Anvil) in light, molten forge in dark. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e; --line: #cbd3dc;
+  --accent: #2f5d8a; --heat: #96500f; --ok: #276b2b; --danger: #c62828;
+  --display: "Cinzel", "Trajan Pro", Georgia, serif;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+    --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+  --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); }
+.page { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 56px; }
+@media (max-width: 640px) { .page { padding-inline: 16px; padding-block: 24px 48px; gap: 44px; } }
+
+h1, h2 { font-family: var(--display); font-weight: 700; text-wrap: balance; letter-spacing: 0.02em; margin: 0; }
+h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.15; }
+h2 { font-size: clamp(1.35rem, 2.6vw, 1.7rem); line-height: 1.25; }
+h3 { font: 600 1rem/1.4 var(--sans); margin: 0; }
+p { margin: 0; max-width: 68ch; }
+code { font: 500 0.86em var(--mono); background: var(--surface-2); padding: 0.08em 0.36em; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 3px solid var(--heat); outline-offset: 2px; border-radius: 3px; }
+
+.eyebrow { font: 600 0.74rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--heat); }
+header { display: grid; gap: 14px; }
+header h1::after { content: ""; display: block; width: 56px; height: 3px; margin-top: 14px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--heat)); }
+.lede { font-size: 1.05rem; color: var(--muted); }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a { font: 500 0.85rem/1 var(--sans); color: var(--text); text-decoration: none; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.toc a:hover { border-color: var(--accent); }
+
+section { display: grid; gap: 18px; scroll-margin-top: 16px; }
+section > .head { display: grid; gap: 8px; }
+
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.figure.small svg { min-width: 640px; }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; }
+.cols > div { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.cols p { color: var(--muted); font-size: 0.94rem; }
+
+.key { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.84rem; color: var(--muted); }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 22px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line); background: var(--surface); display: inline-block; }
+.sw.hot { border: 2px solid var(--accent); }
+.sw.dash { border-style: dashed; }
+.sw.zone { background: var(--surface-2); }
+.sw.arrow { border: 0; height: 2px; border-radius: 0; background: var(--accent); }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); }
+tbody th { font: 600 0.9rem/1.4 var(--sans); letter-spacing: 0; text-transform: none; color: var(--text); background: transparent; }
+tr:last-child > * { border-bottom: 0; }
+td.money { color: var(--heat); font-weight: 600; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: step; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 4px 14px; padding-block: 14px;
+  border-top: 1px solid var(--line); }
+ol.steps li::before { content: counter(step); grid-row: span 3; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font: 600 0.9rem/1 var(--mono); color: var(--accent); border: 2px solid var(--accent); }
+ol.steps h3 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+ol.steps p { color: var(--muted); font-size: 0.94rem; }
+.lane { font: 500 0.7rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--surface-2); }
+.lane.aws { color: var(--heat); border-color: color-mix(in srgb, var(--heat) 45%, var(--line)); }
+.lane.k8s { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+footer { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 6px; }
+
+/* SVG diagrams: every colour from the tokens above. */
+svg .zone { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+svg .group { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+svg .box.hot { stroke: var(--accent); stroke-width: 2.2; }
+svg .box.dash { stroke-dasharray: 6 4; }
+svg .box.aws { stroke: var(--heat); stroke-width: 1.8; }
+svg .zl { font: 600 11.5px var(--mono); fill: var(--muted); letter-spacing: 0.08em; }
+svg .zl.aws { fill: var(--heat); }
+svg .bt { font: 600 15px var(--sans); fill: var(--text); }
+svg .bs { font: 400 12.5px var(--sans); fill: var(--muted); }
+svg .cd { font: 500 11.5px var(--mono); fill: var(--muted); }
+svg .ar { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+svg .ar.soft { stroke: var(--muted); stroke-dasharray: 5 4; }
+svg .al { font: 600 11.5px var(--sans); fill: var(--accent); paint-order: stroke; stroke: var(--surface-2); stroke-width: 5px; stroke-linejoin: round; }
+svg .al.on1 { stroke: var(--surface); }
+svg .ahp { fill: var(--accent); }
+svg .ahm { fill: var(--muted); }
+body { margin: 0; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahp" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahm" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">Crucible · how it is deployed</span>
+    <h1>Crucible Deploy Architecture</h1>
+    <p class="lede">Crucible is one Go process that serves the API and the React app, backed by Postgres and an OIDC sign-in.
+      The same process runs in three settings: on your laptop under Docker Compose, in the kind-based end-to-end check, and in
+      production on a single k3s node in AWS, with AWS labs in a separate lab account. This page draws each one from the files
+      in <code>deploy/</code>.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#glance">At a glance</a>
+      <a href="#local">Local stack</a>
+      <a href="#check">cluster-check</a>
+      <a href="#prod">Production on AWS</a>
+      <a href="#node">Inside the node</a>
+      <a href="#runtimes">Where labs run</a>
+      <a href="#awslab">An AWS lab, start to finish</a>
+      <a href="#ship">Shipping a release</a>
+    </nav>
+  </header>
+
+  <section id="glance" aria-labelledby="glance-h">
+    <div class="head"><span class="eyebrow">Compare</span><h2 id="glance-h">At a glance</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col"></th><th scope="col">Local stack</th><th scope="col">cluster-check</th><th scope="col">Production</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Where the app runs</th><td>A Compose container on your laptop</td><td>The same container, joined to kind's network</td><td>A pod in k3s on one EC2 node</td></tr>
+          <tr><th scope="row">Sign-in</th><td>Keycloak (users <code>trainee</code>, <code>senior</code>, <code>leader</code>, <code>admin</code>)</td><td>Keycloak</td><td>Amazon Cognito user pool</td></tr>
+          <tr><th scope="row">Database</th><td>Postgres 18 container</td><td>Postgres 18, wiped each run</td><td>Postgres StatefulSet, 10 GiB, nightly dump to S3</td></tr>
+          <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code></td><td>Seeded git repos</td><td>Your git host; push webhook and bot merges</td></tr>
+          <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
+          <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
+          <tr><th scope="row">Started by</th><td><code>docker compose up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="local" aria-labelledby="local-h">
+    <div class="head"><span class="eyebrow">deploy/compose/docker-compose.yml</span><h2 id="local-h">Local stack</h2>
+      <p>Three containers and no Kubernetes. Open <code>http://localhost:8080</code>; you sign in on Keycloak, and the app talks to Postgres. Labs run outside Compose, through the laptop agent.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1000 470" role="img" aria-labelledby="d1t d1d">
+        <title id="d1t">Local stack</title>
+        <desc id="d1d">A laptop running Docker Compose with crucible-api, Keycloak, Postgres and mounted git repos, plus the crucible-agent that runs labs in Docker or on your own cluster.</desc>
+        <rect class="zone" x="10" y="10" width="980" height="450" rx="14"/>
+        <text class="zl" x="30" y="38">YOUR LAPTOP · DOCKER DESKTOP</text>
+
+        <rect class="box" x="30" y="70" width="190" height="84" rx="10"/>
+        <text class="bt" x="46" y="100">Browser</text>
+        <text class="cd" x="46" y="122">localhost:8080</text>
+        <text class="bs" x="46" y="142">signs in on Keycloak</text>
+
+        <rect class="group" x="262" y="56" width="466" height="386" rx="12"/>
+        <text class="zl" x="280" y="82">DOCKER COMPOSE</text>
+
+        <rect class="box hot" x="280" y="96" width="430" height="108" rx="10"/>
+        <text class="bt" x="298" y="124">crucible-api</text>
+        <text class="bs" x="298" y="148">One Go process: the API and the React app on port 8080</text>
+        <text class="bs" x="298" y="168">Imports examples/platform into an empty database</text>
+        <text class="bs" x="298" y="188">Fetches training content from git every 10 s</text>
+
+        <rect class="box" x="280" y="230" width="205" height="96" rx="10"/>
+        <text class="bt" x="298" y="258">Keycloak 26</text>
+        <text class="bs" x="298" y="280">OIDC sign-in</text>
+        <text class="cd" x="298" y="302">:8081 (KEYCLOAK_PORT)</text>
+
+        <rect class="box" x="505" y="230" width="205" height="96" rx="10"/>
+        <text class="bt" x="523" y="258">Postgres 18</text>
+        <text class="bs" x="523" y="280">config, people, progress</text>
+        <text class="bs" x="523" y="300">spend, prices, jobs</text>
+
+        <rect class="box" x="280" y="352" width="430" height="70" rx="10"/>
+        <text class="bt" x="298" y="380">Training repos at /git</text>
+        <text class="cd" x="298" y="403">.local/git, seeded by scripts/seed-git.sh</text>
+
+        <rect class="box hot" x="760" y="96" width="210" height="108" rx="10"/>
+        <text class="bt" x="778" y="124">crucible-agent</text>
+        <text class="bs" x="778" y="148">paired with a token</text>
+        <text class="bs" x="778" y="168">dials out to the app;</text>
+        <text class="bs" x="778" y="188">nothing listens on it</text>
+
+        <rect class="box dash" x="760" y="250" width="210" height="96" rx="10"/>
+        <text class="bt" x="778" y="278">Lab containers</text>
+        <text class="bs" x="778" y="300">laptop labs in Docker</text>
+        <text class="bs" x="778" y="320">one per running lab</text>
+
+        <rect class="box dash" x="760" y="366" width="210" height="76" rx="10"/>
+        <text class="bt" x="778" y="394">Your own cluster</text>
+        <text class="bs" x="778" y="416">cluster labs, via kubeconfig</text>
+
+        <path class="ar" d="M220,112 H276" marker-end="url(#ah)"/>
+        <text class="al" x="226" y="104">app</text>
+        <path class="ar" d="M125,154 V286 H276" marker-end="url(#ah)"/>
+        <text class="al" x="133" y="226">sign in</text>
+        <path class="ar" d="M600,204 V226" marker-end="url(#ah)"/>
+        <text class="al" x="608" y="220">SQL</text>
+        <path class="ar" d="M390,204 V226" marker-end="url(#ah)"/>
+        <text class="al" x="398" y="220">token keys</text>
+        <path class="ar" d="M495,204 V348" marker-end="url(#ah)"/>
+        <text class="al" x="490" y="344" text-anchor="end">git fetch</text>
+        <path class="ar" d="M760,150 H714" marker-end="url(#ah)"/>
+        <path class="ar" d="M865,204 V246" marker-end="url(#ah)"/>
+        <text class="al" x="873" y="230">docker</text>
+        <path class="ar" d="M970,140 H980 V404 H974" marker-end="url(#ah)"/>
+      </svg>
+    </div>
+    <div class="key">
+      <span><i class="sw hot"></i>Crucible's own programs</span>
+      <span><i class="sw dash"></i>Created on demand</span>
+      <span><i class="sw zone"></i>Machine or account</span>
+      <span><i class="sw arrow"></i>Who calls whom</span>
+    </div>
+    <div class="cols">
+      <div><h3>Start it</h3><p><code>make build && make toolbox && ./scripts/seed-git.sh</code>, then <code>docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code>. On this machine port 8081 is taken, so prefix <code>KEYCLOAK_PORT=8082</code>.</p></div>
+      <div><h3>Configuration</h3><p>Settings, teams and budgets live in Postgres. <code>CRUCIBLE_SEED_DIR</code> imports <code>examples/platform</code> once, into an empty database only.</p></div>
+      <div><h3>Labs</h3><p>The agent on your laptop runs laptop labs in Docker, and cluster labs on whatever cluster your kubeconfig points at. AWS labs are off here.</p></div>
+    </div>
+  </section>
+
+  <section id="check" aria-labelledby="check-h">
+    <div class="head"><span class="eyebrow">scripts/cluster-check.sh · deploy/compose/cluster.yml</span><h2 id="check-h">cluster-check: the end-to-end proof</h2>
+      <p>The same Compose stack, plus a kind cluster named <code>crucible-m4</code> after milestone 4 (the cluster runtime). The API joins kind's Docker network and acts as the <code>crucible</code> service account, so the production RBAC and admission policy apply to it. It never touches <code>~/.kube/config</code> or your <code>platform</code> cluster.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1000 560" role="img" aria-labelledby="d2t d2d">
+        <title id="d2t">cluster-check</title>
+        <desc id="d2d">Playwright drives the Compose stack; crucible-api, running in dry-run AWS mode, creates lab pods in the kind cluster crucible-m4 as the crucible service account; the agent runs the Forge 101 cluster lab on the same kind cluster.</desc>
+        <rect class="zone" x="10" y="10" width="980" height="540" rx="14"/>
+        <text class="zl" x="30" y="38">YOUR LAPTOP · make cluster-check</text>
+
+        <rect class="box" x="30" y="60" width="200" height="100" rx="10"/>
+        <text class="bt" x="46" y="90">Playwright</text>
+        <text class="bs" x="46" y="114">12 browser journeys</text>
+        <text class="bs" x="46" y="134">as trainee, leader, admin</text>
+
+        <rect class="group" x="252" y="50" width="300" height="252" rx="12"/>
+        <text class="zl" x="268" y="74">COMPOSE + cluster.yml</text>
+        <rect class="box hot" x="268" y="86" width="268" height="112" rx="10"/>
+        <text class="bt" x="284" y="112">crucible-api</text>
+        <text class="cd" x="284" y="134">CRUCIBLE_AWS_LABS=dryrun</text>
+        <text class="bs" x="284" y="156">a fake lab account, never AWS</text>
+        <text class="bs" x="284" y="176">kubeconfig: SA crucible</text>
+        <rect class="box" x="268" y="212" width="126" height="76" rx="10"/>
+        <text class="bt" x="284" y="240">Keycloak</text>
+        <text class="bs" x="284" y="262">sign-in</text>
+        <rect class="box" x="410" y="212" width="126" height="76" rx="10"/>
+        <text class="bt" x="426" y="240">Postgres</text>
+        <text class="bs" x="426" y="262">wiped each run</text>
+
+        <rect class="box hot" x="252" y="336" width="300" height="100" rx="10"/>
+        <text class="bt" x="268" y="364">crucible-agent</text>
+        <text class="bs" x="268" y="388">paired by the test</text>
+        <text class="cd" x="268" y="410">--kubeconfig kind-crucible-m4</text>
+
+        <rect class="group" x="580" y="50" width="392" height="482" rx="12"/>
+        <text class="zl" x="598" y="74">KIND CLUSTER crucible-m4</text>
+        <rect class="box" x="598" y="86" width="356" height="66" rx="10"/>
+        <text class="bt" x="614" y="112">ns crucible</text>
+        <text class="bs" x="614" y="134">service account, RBAC, admission policy</text>
+        <rect class="box dash" x="598" y="164" width="356" height="98" rx="10"/>
+        <text class="bt" x="614" y="190">ns lab-&lt;id&gt; · AWS lab, dry run</text>
+        <text class="bs" x="614" y="214">workspace pod: Docker-in-Docker, aws cli</text>
+        <text class="bs" x="614" y="234">tf-apply and tf-destroy pods</text>
+        <text class="bs" x="614" y="252">the module only unpacks; no AWS calls</text>
+        <rect class="box" x="598" y="274" width="356" height="66" rx="10"/>
+        <text class="bt" x="614" y="300">ns crucible-estimates</text>
+        <text class="bs" x="614" y="322">plan pods; unused here (dry run uses dev rates)</text>
+        <rect class="box" x="598" y="352" width="356" height="78" rx="10"/>
+        <text class="bt" x="614" y="378">ns crucible-probe</text>
+        <text class="bs" x="614" y="400">a neighbour pod and a stand-in IMDS;</text>
+        <text class="bs" x="614" y="418">lab pods must reach neither</text>
+        <rect class="box dash" x="598" y="442" width="356" height="76" rx="10"/>
+        <text class="bt" x="614" y="468">Forge 101's cluster lab</text>
+        <text class="bs" x="614" y="490">a Helm release the trainee fixes</text>
+        <text class="bs" x="614" y="508">from the toolbox terminal</text>
+
+        <path class="ar" d="M230,112 H264" marker-end="url(#ah)"/>
+        <path class="ar" d="M536,176 H566 V212 H594" marker-end="url(#ah)"/>
+        <text class="al" x="540" y="168">K8s API</text>
+        <path class="ar" d="M402,336 V202" marker-end="url(#ah)"/>
+        <text class="al" x="410" y="318">agent link</text>
+        <path class="ar" d="M552,410 H570 V480 H594" marker-end="url(#ah)"/>
+        <text class="al" x="556" y="460">kubeconfig</text>
+      </svg>
+    </div>
+    <div class="cols">
+      <div><h3>What it proves</h3><p>Lab isolation on a real cluster: quota, the default-deny NetworkPolicy, the IMDS block, and that the service account can't write outside lab namespaces. Then the full browser journeys, including an AWS lab from estimate to Ledger and a cluster lab through the agent.</p></div>
+      <div><h3>Why it takes ~35 minutes</h3><p>Most of the time is building and booting: Go binaries, the web build and tests, the API and toolbox images, the kind cluster, the stack, then 12 journeys in sequence (about 8 minutes).</p></div>
+      <div><h3>Faster loop</h3><p>With <code>KEEP=1</code> the stack stays up. Rebuild only the API and re-run one spec. Journeys that expect a fresh trainee need a fresh stack.</p></div>
+    </div>
+  </section>
+
+  <section id="prod" aria-labelledby="prod-h">
+    <div class="head"><span class="eyebrow">deploy/aws/persistent · deploy/aws/main · deploy/aws/labs</span><h2 id="prod-h">Production on AWS</h2>
+      <p>Three Terraform stacks. <strong>persistent</strong> holds what must survive a rebuild: sign-in, the data bucket and Terraform state. <strong>main</strong> is the node and everything around it; it can be torn down and rebuilt from the latest snapshot. <strong>labs</strong> lives in a separate, standalone AWS account, where trainees' AWS labs create real resources inside hard limits.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1200 760" role="img" aria-labelledby="d3t d3d">
+        <title id="d3t">Production on AWS</title>
+        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all reaching the node over HTTPS. The main account holds the persistent stack (Cognito, data bucket, state bucket) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
+
+        <text class="zl" x="20" y="38">OUTSIDE AWS</text>
+        <rect class="box" x="20" y="64" width="190" height="96" rx="10"/>
+        <text class="bt" x="36" y="92">People</text>
+        <text class="bs" x="36" y="116">browser, over HTTPS</text>
+        <text class="bs" x="36" y="136">sign in with Cognito</text>
+        <rect class="box" x="20" y="186" width="190" height="100" rx="10"/>
+        <text class="bt" x="36" y="214">Trainee laptop</text>
+        <text class="bs" x="36" y="238">crucible-agent:</text>
+        <text class="bs" x="36" y="258">laptop and cluster labs</text>
+        <rect class="box" x="20" y="312" width="190" height="96" rx="10"/>
+        <text class="bt" x="36" y="340">Git host</text>
+        <text class="bs" x="36" y="364">training repos; webhook</text>
+        <text class="cd" x="36" y="386">/api/git/hook</text>
+        <rect class="box" x="20" y="434" width="190" height="96" rx="10"/>
+        <text class="bt" x="36" y="462">AWS Price List</text>
+        <text class="bs" x="36" y="486">free public files,</text>
+        <text class="bs" x="36" y="506">fetched weekly</text>
+        <rect class="box" x="20" y="556" width="190" height="76" rx="10"/>
+        <text class="bt" x="36" y="584">Let's Encrypt</text>
+        <text class="bs" x="36" y="608">TLS certificate</text>
+
+        <rect class="zone" x="250" y="14" width="562" height="732" rx="14"/>
+        <text class="zl" x="268" y="40">MAIN AWS ACCOUNT</text>
+
+        <rect class="group" x="266" y="54" width="530" height="150" rx="12"/>
+        <text class="zl" x="282" y="76">persistent · never destroyed</text>
+        <rect class="box" x="282" y="88" width="156" height="102" rx="10"/>
+        <text class="bt" x="298" y="116">Cognito</text>
+        <text class="bs" x="298" y="140">user pool,</text>
+        <text class="bs" x="298" y="160">OIDC sign-in</text>
+        <rect class="box" x="450" y="88" width="184" height="102" rx="10"/>
+        <text class="bt" x="466" y="116">S3 data bucket</text>
+        <text class="cd" x="466" y="138">releases/ current-release</text>
+        <text class="cd" x="466" y="158">snapshots/ latest/</text>
+        <text class="cd" x="466" y="178">uploads/</text>
+        <rect class="box" x="646" y="88" width="136" height="102" rx="10"/>
+        <text class="bt" x="662" y="116">S3 state</text>
+        <text class="bs" x="662" y="140">Terraform state</text>
+        <text class="bs" x="662" y="160">of the main stack</text>
+
+        <rect class="group" x="266" y="218" width="530" height="512" rx="12"/>
+        <text class="zl" x="282" y="240">main · crucible aws up</text>
+        <rect class="box" x="290" y="252" width="232" height="76" rx="10"/>
+        <text class="bt" x="306" y="280">EventBridge Scheduler</text>
+        <text class="bs" x="306" y="304">wake 07:30, sleep 19:30, Mon–Fri</text>
+        <rect class="box" x="548" y="252" width="232" height="76" rx="10"/>
+        <text class="bt" x="564" y="280">SSM Parameter Store</text>
+        <text class="bs" x="564" y="304">env, Helm values, secrets</text>
+        <rect class="box" x="290" y="342" width="232" height="66" rx="10"/>
+        <text class="bt" x="306" y="368">Elastic IP + DNS</text>
+        <text class="bs" x="306" y="390">A record (Route 53 if set)</text>
+        <rect class="box" x="548" y="342" width="232" height="66" rx="10"/>
+        <text class="bt" x="564" y="368">Security group</text>
+        <text class="bs" x="564" y="390">80 and 443 in; shell via SSM</text>
+
+        <rect class="box hot" x="290" y="424" width="490" height="290" rx="12"/>
+        <text class="bt" x="306" y="452">EC2 node · t3a.xlarge · Ubuntu 24.04</text>
+        <text class="bs" x="306" y="474">k3s, Helm, sysbox; the node IAM role</text>
+        <rect class="box" x="306" y="490" width="146" height="62" rx="8"/>
+        <text class="bt" x="320" y="516">Traefik</text>
+        <text class="bs" x="320" y="536">HTTPS ingress</text>
+        <rect class="box hot" x="462" y="490" width="146" height="62" rx="8"/>
+        <text class="bt" x="476" y="516">crucible</text>
+        <text class="bs" x="476" y="536">1 replica</text>
+        <rect class="box" x="618" y="490" width="146" height="62" rx="8"/>
+        <text class="bt" x="632" y="516">Postgres</text>
+        <text class="bs" x="632" y="536">10 GiB volume</text>
+        <rect class="box" x="306" y="562" width="146" height="62" rx="8"/>
+        <text class="bt" x="320" y="588">Backup job</text>
+        <text class="bs" x="320" y="608">pg_dump 19:15</text>
+        <rect class="box dash" x="462" y="562" width="146" height="62" rx="8"/>
+        <text class="bt" x="476" y="588">Estimates</text>
+        <text class="bs" x="476" y="608">plan pods</text>
+        <rect class="box dash" x="618" y="562" width="146" height="62" rx="8"/>
+        <text class="bt" x="632" y="588">lab-&lt;id&gt;</text>
+        <text class="bs" x="632" y="608">workspace, terraform</text>
+        <text class="bs" x="306" y="652">Inside the node in detail: next section.</text>
+        <text class="bs" x="306" y="674">Its role may only assume the three lab-account roles</text>
+        <text class="bs" x="306" y="694">and read its bucket and parameters.</text>
+
+        <rect class="zone" x="838" y="14" width="350" height="732" rx="14"/>
+        <text class="zl aws" x="856" y="40">LAB ACCOUNT · deploy/aws/labs</text>
+        <text class="bs" x="856" y="62">standalone; crucible aws labs-init</text>
+        <rect class="box aws" x="856" y="78" width="316" height="104" rx="10"/>
+        <text class="bt" x="872" y="106">Lab role</text>
+        <text class="bs" x="872" y="128">one STS session per lab, 1 h, refreshed</text>
+        <text class="bs" x="872" y="148">tagged crucible:lab-id</text>
+        <text class="bs" x="872" y="168">inside a permission boundary</text>
+        <rect class="box aws" x="856" y="194" width="316" height="76" rx="10"/>
+        <text class="bt" x="872" y="222">Plan role</text>
+        <text class="bs" x="872" y="246">read-only, 15 min, for estimates</text>
+        <rect class="box aws" x="856" y="282" width="316" height="96" rx="10"/>
+        <text class="bt" x="872" y="310">Ops role</text>
+        <text class="bs" x="872" y="334">find and delete leftovers;</text>
+        <text class="bs" x="872" y="354">read lab state and the billing export</text>
+        <rect class="box dash" x="856" y="390" width="316" height="96" rx="10"/>
+        <text class="bt" x="872" y="418">Lab resources</text>
+        <text class="bs" x="872" y="442">t3/t4g nano and micro, gp2/gp3 ≤ 50 GiB</text>
+        <text class="bs" x="872" y="462">allowed regions only, tagged per lab</text>
+        <rect class="box" x="856" y="498" width="152" height="96" rx="10"/>
+        <text class="bt" x="870" y="526">Lab state</text>
+        <text class="bs" x="870" y="550">S3, one file</text>
+        <text class="cd" x="870" y="572">labs/&lt;id&gt;.tfstate</text>
+        <rect class="box" x="1020" y="498" width="152" height="96" rx="10"/>
+        <text class="bt" x="1034" y="526">Billing export</text>
+        <text class="bs" x="1034" y="550">CUR 2.0, daily,</text>
+        <text class="bs" x="1034" y="570">gzip CSV in S3</text>
+        <rect class="box" x="856" y="606" width="316" height="76" rx="10"/>
+        <text class="bt" x="872" y="634">AWS Budget</text>
+        <text class="bs" x="872" y="658">emails admins at 80% and 100%</text>
+
+        <!-- internet bus: everything outside reaches the node through the Elastic IP, both ways -->
+        <path class="ar soft" d="M210,112 H232 M210,236 H232 M210,360 H232 M210,482 H232 M210,594 H232"/>
+        <path class="ar soft" d="M232,112 V594"/>
+        <path class="ar" d="M232,375 H286" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <path class="ar" d="M232,140 H278" marker-end="url(#ah)"/>
+        <path class="ar" d="M370,408 V486" marker-end="url(#ah)"/>
+        <path class="ar" d="M452,521 H458" marker-end="url(#ah)"/>
+        <path class="ar" d="M608,521 H614" marker-end="url(#ah)"/>
+        <path class="ar" d="M290,290 H276 V460 H286" marker-end="url(#ah)"/>
+        <path class="ar" d="M780,290 H790 V470 H784" marker-end="url(#ah)"/>
+        <path class="ar" d="M535,194 V420" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="al" x="542" y="214">releases, backups</text>
+        <!-- STS bus into the lab account -->
+        <path class="ar" d="M780,640 H824 V130 H852" marker-end="url(#ah)"/>
+        <path class="ar" d="M824,232 H852" marker-end="url(#ah)"/>
+        <path class="ar" d="M824,330 H852" marker-end="url(#ah)"/>
+        <text class="al" transform="translate(818,520) rotate(-90)">sts:AssumeRole</text>
+        <path class="ar soft" d="M1172,130 H1182 V438 H1176" marker-end="url(#ahm)"/>
+      </svg>
+    </div>
+    <div class="cols">
+      <div><h3>persistent</h3><p><code>crucible aws init</code> creates the Cognito user pool, the data bucket (release tarballs, nightly snapshots, the always-kept latest snapshot, trainees' uploads) and the Terraform state bucket. Nothing here is ever destroyed.</p></div>
+      <div><h3>main</h3><p><code>crucible aws up</code> builds one EC2 node with an Elastic IP and installs k3s, Helm and sysbox on first boot. The scheduler stops it at night to save money; <code>teardown</code> then <code>up</code> rebuilds it and restores the newest snapshot.</p></div>
+      <div><h3>labs</h3><p><code>crucible aws labs-init</code> sets up the lab account: three roles, a permission boundary, the lab state bucket, a free billing export and an alert-only AWS Budget. The one manual step is activating the <code>crucible:lab-id</code> cost-allocation tag.</p></div>
+    </div>
+  </section>
+
+  <section id="node" aria-labelledby="node-h">
+    <div class="head"><span class="eyebrow">deploy/helm/crucible · rbac.yaml</span><h2 id="node-h">Inside the node</h2>
+      <p>k3s runs everything on the one node. The Helm chart installs Crucible, Postgres and the backup job in namespace <code>crucible</code>. Each AWS lab gets its own <code>lab-&lt;id&gt;</code> namespace, and estimates run in <code>crucible-estimates</code>. Two guards limit what the API's service account can do, even if the API itself were compromised.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1100 600" role="img" aria-labelledby="d4t d4d">
+        <title id="d4t">Inside the node</title>
+        <desc id="d4d">Traefik routes HTTPS to the crucible Deployment, which uses Postgres and a backup CronJob. Crucible creates plan pods in crucible-estimates and workspace and terraform pods in each lab namespace, which is fenced by a NetworkPolicy, quota and Pod Security baseline. RBAC and an admission policy confine the service account.</desc>
+        <rect class="zone" x="10" y="10" width="1080" height="580" rx="14"/>
+        <text class="zl" x="30" y="38">THE EC2 NODE · k3s, one node, sysbox runtime</text>
+
+        <rect class="box" x="30" y="60" width="220" height="112" rx="10"/>
+        <text class="bt" x="46" y="88">kube-system</text>
+        <text class="bs" x="46" y="112">Traefik ingress</text>
+        <text class="bs" x="46" y="132">Let's Encrypt certificate</text>
+        <text class="bs" x="46" y="152">HTTP redirects to HTTPS</text>
+
+        <rect class="box" x="30" y="192" width="220" height="380" rx="10"/>
+        <text class="bt" x="46" y="220">Guards</text>
+        <text class="cd" x="46" y="248">ClusterRole crucible-labs</text>
+        <text class="bs" x="46" y="268">only the verbs labs need;</text>
+        <text class="bs" x="46" y="288">no pod list, no secret reads</text>
+        <text class="cd" x="46" y="322">ValidatingAdmission-</text>
+        <text class="cd" x="46" y="340">Policy crucible-labs-only</text>
+        <text class="bs" x="46" y="360">writes only in lab-* and</text>
+        <text class="bs" x="46" y="380">crucible-estimates; new lab</text>
+        <text class="bs" x="46" y="400">namespaces must enforce</text>
+        <text class="bs" x="46" y="420">Pod Security baseline</text>
+        <text class="cd" x="46" y="454">Role crucible-estimates</text>
+        <text class="bs" x="46" y="474">plan pods, in that namespace</text>
+        <text class="cd" x="46" y="508">RuntimeClass sysbox-runc</text>
+        <text class="bs" x="46" y="528">Docker inside a pod,</text>
+        <text class="bs" x="46" y="548">without privileged mode</text>
+
+        <rect class="group" x="280" y="50" width="380" height="262" rx="12"/>
+        <text class="zl" x="296" y="72">NS crucible</text>
+        <rect class="box hot" x="298" y="84" width="344" height="104" rx="10"/>
+        <text class="bt" x="314" y="112">crucible Deployment</text>
+        <text class="bs" x="314" y="136">1 replica, Recreate: agent links and</text>
+        <text class="bs" x="314" y="156">locks live in this one process</text>
+        <text class="bs" x="314" y="176">restores the newest snapshot if empty</text>
+        <rect class="box" x="298" y="200" width="166" height="96" rx="10"/>
+        <text class="bt" x="314" y="228">Postgres</text>
+        <text class="bs" x="314" y="252">StatefulSet,</text>
+        <text class="bs" x="314" y="272">10 GiB volume</text>
+        <rect class="box" x="476" y="200" width="166" height="96" rx="10"/>
+        <text class="bt" x="492" y="228">Backup CronJob</text>
+        <text class="bs" x="492" y="252">pg_dump at 19:15</text>
+        <text class="bs" x="492" y="272">to the data bucket</text>
+
+        <rect class="group" x="280" y="330" width="380" height="242" rx="12"/>
+        <text class="zl" x="296" y="352">NS crucible-estimates</text>
+        <rect class="box dash" x="298" y="364" width="344" height="96" rx="10"/>
+        <text class="bt" x="314" y="392">tf-plan-&lt;random&gt; pod</text>
+        <text class="bs" x="314" y="416">terraform plan with no state backend</text>
+        <text class="bs" x="314" y="436">plan-role session, 15 minutes</text>
+        <rect class="box dash" x="298" y="472" width="344" height="86" rx="10"/>
+        <text class="bt" x="314" y="500">Secret + ConfigMap per run</text>
+        <text class="bs" x="314" y="524">credentials and the lab's module;</text>
+        <text class="bs" x="314" y="544">swept after 15 minutes if left</text>
+
+        <rect class="group" x="690" y="50" width="380" height="522" rx="12"/>
+        <text class="zl aws" x="706" y="72">NS lab-&lt;id&gt; · one per AWS lab</text>
+        <rect class="box hot" x="708" y="84" width="344" height="104" rx="10"/>
+        <text class="bt" x="724" y="112">Workspace pod (sysbox)</text>
+        <text class="bs" x="724" y="136">Docker-in-Docker and the aws cli:</text>
+        <text class="bs" x="724" y="156">the trainee's terminal and checks</text>
+        <text class="bs" x="724" y="176">lab credentials mounted at /aws</text>
+        <rect class="box" x="708" y="200" width="344" height="96" rx="10"/>
+        <text class="bt" x="724" y="228">tf-apply / tf-destroy pods</text>
+        <text class="bs" x="724" y="252">lab-role session tagged with the lab id</text>
+        <text class="cd" x="724" y="274">state: labs/&lt;id&gt;.tfstate</text>
+        <rect class="box" x="708" y="308" width="344" height="138" rx="10"/>
+        <text class="bt" x="724" y="336">Fences</text>
+        <text class="bs" x="724" y="360">NetworkPolicy: no IMDS, no Kubernetes</text>
+        <text class="bs" x="724" y="380">API, no kubelet; the internet is allowed</text>
+        <text class="bs" x="724" y="404">ResourceQuota and LimitRange</text>
+        <text class="bs" x="724" y="428">Pod Security baseline</text>
+        <rect class="box" x="708" y="458" width="344" height="96" rx="10"/>
+        <text class="bt" x="724" y="486">Secret + ConfigMap</text>
+        <text class="bs" x="724" y="510">credentials, refreshed about every 45 min;</text>
+        <text class="bs" x="724" y="530">the lab's Terraform module</text>
+
+        <path class="ar" d="M250,116 H294" marker-end="url(#ah)"/>
+        <text class="al" x="256" y="108">HTTPS</text>
+        <path class="ar" d="M381,188 V196" marker-end="url(#ah)"/>
+        <path class="ar" d="M476,248 H468" marker-end="url(#ah)"/>
+        <path class="ar" d="M642,128 H704" marker-end="url(#ah)"/>
+        <path class="ar" d="M675,128 V248 H704" marker-end="url(#ah)"/>
+        <path class="ar" d="M675,248 V412 H646" marker-end="url(#ah)"/>
+        <text class="al" transform="translate(670,330) rotate(-90)" text-anchor="middle">creates pods, opens terminals</text>
+      </svg>
+    </div>
+    <div class="cols">
+      <div><h3>Why one replica</h3><p>The agent links, locks and live terminals are held in memory, so the chart pins <code>replicas: 1</code> and a <code>Recreate</code> rollout. Scaling out would need a shared hub.</p></div>
+      <div><h3>What IMDS is</h3><p>The EC2 metadata service at <code>169.254.169.254</code>, which hands out the node's credentials. Lab pods are cut off from it by the NetworkPolicy, a pod setting and an init guard that waits until the block is in place.</p></div>
+      <div><h3>Backups</h3><p>Every evening at 19:15 a CronJob dumps Postgres to <code>snapshots/</code> (kept 30 days) and <code>latest/</code> (kept for good). <code>sleep</code>, <code>teardown</code> and <code>up</code> take a snapshot first.</p></div>
+    </div>
+  </section>
+
+  <section id="runtimes" aria-labelledby="runtimes-h">
+    <div class="head"><span class="eyebrow">A lab's runtime</span><h2 id="runtimes-h">Where labs run</h2>
+      <p>Only AWS labs use Crucible's own cluster and cost money. Laptop and cluster labs run on the trainee's side, through their agent.</p></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Runtime</th><th scope="col">Runs on</th><th scope="col">Reached through</th><th scope="col">Checks</th><th scope="col">Cost</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Laptop (<code>local</code>)</th><td>The trainee's Docker</td><td>Their crucible-agent</td><td>Self-reported, optional review</td><td>Free</td></tr>
+          <tr><th scope="row">Cluster (<code>cluster</code>)</th><td>The trainee's own Kubernetes cluster, in the toolbox image</td><td>Their agent, with their kubeconfig (<code>crucible-agent cluster up</code> makes a kind cluster)</td><td>Run on the cluster by Crucible</td><td>Free</td></tr>
+          <tr><th scope="row">Terraform (<code>runtime: terraform</code>, <code>cloud: aws</code>)</th><td>Real resources in the lab account; the workspace and Terraform pods on the node</td><td>The browser terminal, into the workspace pod</td><td>Run server-side in the workspace</td><td class="money">Estimated, approved, metered, billed</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="awslab" aria-labelledby="awslab-h">
+    <div class="head"><span class="eyebrow">Free FinOps · no paid services</span><h2 id="awslab-h">An AWS lab, start to finish</h2>
+      <p>Each step names where it runs. Prices come from the free public AWS Price List, and spend from the lab's own Terraform state, then from the free billing export. If price data is missing or stale, the lab can't be requested; Crucible never quotes $0.</p></div>
+    <ol class="steps">
+      <li><h3>Estimate <span class="lane k8s">crucible-estimates</span> <span class="lane aws">plan role</span></h3>
+        <p>A one-off pod runs <code>terraform plan</code> on the lab's module, with a read-only plan-role session (15 minutes) and no state. Crucible prices each planned resource from the price list it refreshes weekly, plus the author's declared prices and stated usage. The plan is cached per content version, and prices are applied fresh on every view.</p></li>
+      <li><h3>Request and approval <span class="lane">crucible</span></h3>
+        <p>Estimate × the lab's hours picks an approval tier. Team budgets and caps are checked before anyone can approve. Over the lab's <code>max_hourly_usd</code>, it can't be requested at all.</p></li>
+      <li><h3>Apply <span class="lane k8s">lab-&lt;id&gt;</span> <span class="lane aws">lab role</span></h3>
+        <p>Crucible creates the lab namespace and a lab-role session tagged with the lab id (one hour, refreshed about every 45 minutes). A <code>tf-apply</code> pod builds the resources and writes <code>labs/&lt;id&gt;.tfstate</code> in the lab account. Crucible reads that state and starts metering.</p></li>
+      <li><h3>Work <span class="lane k8s">workspace pod</span></h3>
+        <p>The trainee uses the browser terminal with the lab's credentials, and Check runs server-side. Crucible re-reads the state every 15 minutes, so resources added from the terminal are metered too.</p></li>
+      <li><h3>End <span class="lane k8s">tf-destroy</span> <span class="lane aws">lab role</span></h3>
+        <p>The trainee ends the lab, or it expires, idles, hits its budget, or an admin stops all labs. A <code>tf-destroy</code> pod removes the resources, then a tag sweep catches anything Terraform didn't own. The meter stops when the destroy succeeds.</p></li>
+      <li><h3>Clean up <span class="lane aws">ops role</span></h3>
+        <p>Every hour the reaper looks for resources still tagged with ended labs and deletes them. A lab's meter stays open until a full run finds nothing left.</p></li>
+      <li><h3>Billed <span class="lane aws">billing export</span></h3>
+        <p>AWS writes the CUR 2.0 export daily. Crucible reads it every six hours, counted before credits. Billed spend replaces metered spend 48 hours after the lab ends. Independently, the AWS Budget emails admins at 80% and 100% of the month.</p></li>
+    </ol>
+  </section>
+
+  <section id="ship" aria-labelledby="ship-h">
+    <div class="head"><span class="eyebrow">internal/awsops · bootstrap.sh.tftpl</span><h2 id="ship-h">Shipping a release</h2>
+      <p>There is no container registry. A release is a tarball in the data bucket that the node imports into containerd.</p></div>
+    <div class="figure small">
+      <svg viewBox="0 0 1000 250" role="img" aria-labelledby="d5t d5d">
+        <title id="d5t">Shipping a release</title>
+        <desc id="d5d">crucible aws deploy builds the image and the chart, uploads them to the data bucket under releases/sha with a current-release pointer, then sends an SSM command; the node pulls the release, imports the image and runs helm upgrade.</desc>
+        <rect class="box hot" x="20" y="40" width="250" height="132" rx="10"/>
+        <text class="bt" x="36" y="68">Your machine</text>
+        <text class="cd" x="36" y="92">crucible aws deploy</text>
+        <text class="bs" x="36" y="116">docker buildx, linux/amd64</text>
+        <text class="bs" x="36" y="136">helm package</text>
+        <text class="bs" x="36" y="156">at the current git commit</text>
+        <rect class="box" x="350" y="40" width="270" height="132" rx="10"/>
+        <text class="bt" x="366" y="68">S3 data bucket</text>
+        <text class="cd" x="366" y="92">releases/&lt;sha&gt;/</text>
+        <text class="cd" x="366" y="112">  crucible-image.tar.gz</text>
+        <text class="cd" x="366" y="132">  chart.tgz</text>
+        <text class="cd" x="366" y="152">current-release</text>
+        <rect class="box hot" x="700" y="40" width="280" height="132" rx="10"/>
+        <text class="bt" x="716" y="68">EC2 node</text>
+        <text class="bs" x="716" y="92">reads current-release</text>
+        <text class="bs" x="716" y="112">imports the image into containerd</text>
+        <text class="bs" x="716" y="132">helm upgrade --install, with</text>
+        <text class="bs" x="716" y="152">values and secrets from SSM</text>
+        <path class="ar" d="M270,90 H346" marker-end="url(#ah)"/>
+        <text class="al on1" x="280" y="82">upload</text>
+        <path class="ar" d="M620,90 H696" marker-start="url(#ah)"/>
+        <text class="al on1" x="630" y="82">node pulls</text>
+        <path class="ar" d="M145,172 V214 H840 V176" marker-end="url(#ah)"/>
+        <text class="al on1" x="420" y="208">aws ssm send-command runs the deploy script</text>
+      </svg>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">You want to</th><th scope="col">Run</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Create sign-in, buckets, state (once)</th><td><code>crucible aws init --region … --domain …</code></td></tr>
+          <tr><th scope="row">Set up the lab account (once, re-run after upgrades)</th><td><code>crucible aws labs-init --budget-usd … --budget-email …</code></td></tr>
+          <tr><th scope="row">Build or change the node</th><td><code>crucible aws up</code></td></tr>
+          <tr><th scope="row">Ship the current commit</th><td><code>crucible aws deploy</code></td></tr>
+          <tr><th scope="row">Snapshot now / stop for the night / start early</th><td><code>crucible aws snapshot</code> · <code>sleep</code> · <code>wake</code></td></tr>
+          <tr><th scope="row">Rebuild from scratch</th><td><code>crucible aws teardown --yes</code>, then <code>crucible aws up</code></td></tr>
+          <tr><th scope="row">Shell on the node</th><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span>Drawn from <code>deploy/compose</code>, <code>deploy/helm/crucible</code>, <code>deploy/aws/{persistent,main,labs}</code>, <code>scripts/cluster-check.sh</code> and <code>docs/runbooks/aws.md</code> on branch <code>feat/free-finops-terraform-mode</code>.</span>
+    <span>For step-by-step setup see the AWS runbook; for AWS newcomers, <code>docs/aws-guide.html</code>.</span>
+  </footer>
+</main>
+</body>
+</html>

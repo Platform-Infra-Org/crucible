@@ -73,13 +73,15 @@ credentials part.
 
 ## 3. Actual spend (agreed)
 
-- **Metered (live):** after each successful apply Crucible reads the lab's Terraform state (its S3 bucket) and
+- **Metered (live):** after each apply, and every 15 minutes while the lab runs (trainees apply from the workspace
+  too), Crucible reads the lab's Terraform state (its S3 bucket) and
   records each priced resource in `lab_resources` (address, type, hourly price, stated usage, started_at); destroy or
   the reaper sets ended_at. Spent so far = Σ hourly × hours alive + stated usage prorated over hours alive, computed
   on read. It replaces estimate-based spend for running labs in budgets, caps and the Ledger.
-- **Billed (free export):** `deploy/aws/labs` creates an AWS Data Exports (CUR 2.0) export — daily, Parquet, with the
-  `crucible:lab-id` cost-allocation tag — into a bucket in the (standalone) lab account. A daily job reads new files
-  with the ops role (S3 only) and upserts per-lab daily costs into `cost_actuals`. The settled rule stays (billed
+- **Billed (free export):** `deploy/aws/labs` creates an AWS Data Exports (CUR 2.0) export — daily, gzip CSV, overwritten in place, with the
+  `crucible:lab-id` cost-allocation tag — into a bucket in the (standalone) lab account. A job every six hours reads the
+  files the export's manifest lists with the ops role (S3 only), skipping credits, refunds and discounts (billed spend
+  errs high), and upserts per-lab daily costs into `cost_actuals`. The settled rule stays (billed
   replaces metered once fresh, 48 h after the lab ends). The Ledger shows estimate, metered and billed per lab.
 - **Backstop:** the same Terraform creates a free alert-only AWS Budget on the lab account (monthly amount from a
   variable) that emails admins at 80 % and 100 %, independent of Crucible.
@@ -94,7 +96,7 @@ credentials part.
   one manual step left is activating the `crucible:lab-id` cost-allocation tag in the Billing console (free).
 - **Tests:** pricers per resource type against a fixture price list; the price download against an `httptest`
   stand-in (stale and missing cases); plan pricing from saved plan JSON; metering from state fixtures; the export
-  reader from a sample Parquet file; `terraform test` with mock providers for the new resources; the dry-run AWS e2e
+  reader from sample gzip CSV files; `terraform test` with mock providers for the new resources; the dry-run AWS e2e
   still estimates, approves and meters. Every money path keeps a test that fails without it.
 - **Docs:** the runbook, `aws-guide.html`, the test guide, spec §4.5/§9.1/§9.3, the authors' pages (`runtime:
   terraform`, `prices:`, `usage:`), `terraform-vs-crossplane.html`.

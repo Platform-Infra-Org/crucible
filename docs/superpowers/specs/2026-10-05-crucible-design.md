@@ -358,7 +358,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - **Global kill switch** (admin): destroys all running labs immediately and blocks new requests until re-enabled.
 
 ### 9.3 Cost data & dashboard
-- Live spend = metered spend per running AWS lab (its Terraform state at list prices), else the runtime estimate. Billed AWS spend = the free CUR 2.0 billing export, read daily from S3 and grouped by the `crucible:lab-id` cost-allocation tag; it replaces metered spend once settled (48 h after the lab ends). A free AWS Budget alerts admins as a backstop. No Cost Explorer. See `2026-10-12-free-finops-and-terraform-mode-design.md` §3.
+- Live spend = metered spend per running AWS lab (its Terraform state at list prices, read after its apply and every 15 minutes while it runs), else the runtime estimate. Billed AWS spend = the free CUR 2.0 billing export (written daily by AWS), read every six hours from S3, before credits, and grouped by the `crucible:lab-id` cost-allocation tag; it replaces metered spend once settled (48 h after the lab ends). A free AWS Budget alerts admins as a backstop. No Cost Explorer. See `2026-10-12-free-finops-and-terraform-mode-design.md` §3.
 - **FinOps page** (themed, in-app): spend by team / training / lab over time, budget burn-down, running labs with cost-so-far and time-to-death, top spenders, estimate-vs-actual accuracy, reaper findings.
 
 ### 9.4 Deployment, hibernate & restore

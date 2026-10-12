@@ -157,8 +157,9 @@ host. With `CRUCIBLE_AWS_LABS=1`, crucible-api refuses to start without `CRUCIBL
 and at start when its prices are more than 6 days old. It keeps on-demand prices (Linux, shared tenancy). Admins see
 **Price data from <date>** on the Ledger. If the prices are missing or more than 30 days old, that line turns red and
 AWS labs can't be estimated or requested: estimates fail closed, never $0. Admins see the last refresh error there
-too. A refresh failure is usually the node's outbound HTTPS to `pricing.us-east-1.amazonaws.com`; restarting the
-api retries it.
+too. A refresh failure is usually the node's outbound HTTPS to `pricing.us-east-1.amazonaws.com`; the job queue
+retries a failed refresh with backoff. Restarting the api downloads again only when the stored prices are more than
+6 days old: fresher prices are kept as they are.
 
 **Estimates.** An estimate is a `terraform plan` against an empty state, run once per content version in a short-lived
 pod in the `crucible-estimates` namespace (the Helm chart creates it, with a namespaced Role for Crucible there). The

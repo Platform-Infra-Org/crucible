@@ -168,7 +168,7 @@ tr.total td { font-weight: 700; }
           to ship new versions, and to run AWS labs in a separate, fenced-off account.</p>
         <figure>
           <div class="diagram" role="img" aria-labelledby="arch-cap">
-            <svg viewBox="0 0 1160 810" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <svg viewBox="0 0 1160 820" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <defs>
                 <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
                 <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-hot" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -293,11 +293,18 @@ tr.total td { font-weight: 700; }
               <!-- lab pods → lab state and lab resources -->
               <path class="ar-iron" d="M750 470 C 845 470, 845 300, 886 300" marker-end="url(#mi)"/>
               <path class="ar-iron" d="M750 500 C 850 500, 850 389, 886 389" marker-end="url(#mi)"/>
+              <!-- Crucible, as the ops role, reads the billing export (and lab state) -->
+              <path class="ar" d="M1128 190 C 1150 190, 1150 483, 1130 483" marker-end="url(#m)"/>
+              <text x="1157" y="400" class="t-sm" transform="rotate(-90 1157 400)">ops role reads the bill</text>
+              <!-- the AWS Budget emails the admins, whatever Crucible is doing -->
+              <path class="ar" d="M886 560 L 852 560 L 852 803 L 10 803 L 10 95 L 18 95" marker-end="url(#m)"/>
+              <rect class="label-bg" x="440" y="795" width="150" height="16"/><text x="442" y="807" class="t-sm">Budget emails admins</text>
             </svg>
           </div>
           <figcaption id="arch-cap">Crucible's account holds the server and everything it needs; the lab account holds the roles labs
             use and the resources labs create. Orange arrows are people's traffic, blue arrows are AWS lab traffic, grey arrows
-            are operations.</figcaption>
+            are operations: among them, Crucible reading the billing export as the ops role, and the AWS Budget emailing the
+            admins at 80% and 100% of the month's spend, even when Crucible is down.</figcaption>
         </figure>
       </section>
 

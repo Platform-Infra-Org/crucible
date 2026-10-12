@@ -246,7 +246,7 @@ body.hide-done .item.done { display: none; }
             <p>In the lab's namespace on Crucible's cluster, a <code>tf-apply</code> pod runs <code>terraform apply</code>. Crucible adds its own
               <code>crucible.tf</code> to the module: an S3 state backend keyed by the lab id, and the AWS provider with default tags
               <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.
-              After each apply Crucible reads the lab's state and meters what it built at list prices.</p></li>
+              After the lab's apply, and every 15 minutes while it runs, Crucible reads the lab's state and meters what it built at list prices.</p></li>
           <li><h3>The trainee works</h3>
             <p>A workspace pod with the AWS CLI, Terraform and kubectl backs the terminals. Checks and setup scripts run there with the lab's
               credentials, out of the trainee's sight. The pods can't reach the node's metadata service, so they can never borrow the node's role.</p></li>

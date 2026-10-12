@@ -67,5 +67,7 @@ test('an aws lab is estimated, approved, provisioned, checked, destroyed and swe
   // Metered from the fake apply's Terraform state (a t3.nano and its root volume) at the dry run's fixture prices:
   // under a cent an hour, so a small dollar figure, not '—' (never metered).
   const headers = await admin.getByTestId('ledger-labs').getByRole('columnheader').allTextContents()
-  await expect(row.getByRole('cell').nth(headers.indexOf('Metered'))).toHaveText(/^\$\d+\.\d{2}$/)
+  const metered = headers.indexOf('Metered')
+  expect(metered).toBeGreaterThanOrEqual(0) // nth(-1) would silently check the last column
+  await expect(row.getByRole('cell').nth(metered)).toHaveText(/^\$\d+\.\d{2}$/)
 })

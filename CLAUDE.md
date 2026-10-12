@@ -49,8 +49,9 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 ## Layout
 
 - `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
-- `internal/` — one package per domain: `labs` (runners: local/cluster/aws, approvals, budgets, sweep, reaper,
-  ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
+- `internal/` — one package per domain: `labs` (runners: local/cluster/aws — `runtime: terraform` + `cloud: aws`,
+  alias `runtime: aws`, keyed "aws" inside — terraform estimates, metering from lab state, approvals, budgets, sweep,
+  reaper, ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
   write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
   (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `pricing`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
@@ -105,7 +106,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.
 - Money: approvals use tiers by estimate; budgets fail closed; cluster labs run on the trainee's own cluster through
   their agent and are free; aws labs are priced by Crucible from the free AWS Price List (a fresh price refresh is
-  required; stale prices fail closed).
+  required; stale prices fail closed). Dry run (`CRUCIBLE_AWS_LABS=dryrun`) prices aws labs from
+  `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds fixture list prices so metering works; fixture prices never price a real lab.
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only

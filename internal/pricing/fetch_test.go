@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // offerServer serves testdata/offers in the public Price List layout.
-func offerServer(t *testing.T) *httptest.Server {
+func offerServer(t *testing.T, failOffer ...string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	idx := `{"offers":{`
@@ -26,7 +27,13 @@ func offerServer(t *testing.T) *httptest.Server {
 		mux.HandleFunc("/offers/v1.0/aws/"+svc+"/current/region_index.json", func(w http.ResponseWriter, _ *http.Request) {
 			w.Write([]byte(`{"regions":{"eu-west-1":{"currentVersionUrl":"/offers/v1.0/aws/` + svc + `/current/eu-west-1/index.json"}}}`))
 		})
-		mux.HandleFunc("/offers/v1.0/aws/"+svc+"/current/eu-west-1/index.json", func(w http.ResponseWriter, _ *http.Request) { w.Write(body) })
+		mux.HandleFunc("/offers/v1.0/aws/"+svc+"/current/eu-west-1/index.json", func(w http.ResponseWriter, _ *http.Request) {
+			if slices.Contains(failOffer, svc) {
+				w.WriteHeader(500)
+				return
+			}
+			w.Write(body)
+		})
 	}
 	idx += `}}`
 	mux.HandleFunc("/offers/v1.0/aws/index.json", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(idx)) })
@@ -75,5 +82,41 @@ func TestFetchFailsOnATruncatedOfferAndAnUnknownRegion(t *testing.T) {
 	}
 	if _, err := parseOffer(strings.NewReader(`{"products":{"E1":{"productFamily":"Comp`), matchEC2); err == nil {
 		t.Fatal("truncated offer must be an error")
+	}
+}
+
+func TestFetchFailsWhenALaterServiceFails(t *testing.T) {
+	srv := offerServer(t, "AWSELB")
+	if rows, err := (&Fetcher{HTTP: srv.Client(), Base: srv.URL}).AWS(context.Background(), []string{"eu-west-1"}); err == nil {
+		t.Fatalf("a partial fetch must not be returned: %v", rows)
+	}
+}
+
+func offerDoc(usd, unit string) string {
+	return `{"products":{"E1":{"productFamily":"Compute Instance","attributes":{"instanceType":"t3.micro","operatingSystem":"Linux",` +
+		`"tenancy":"Shared","preInstalledSw":"NA","capacitystatus":"Used","licenseModel":"No License required","locationType":"AWS Region"}}},` +
+		`"terms":{"OnDemand":{"E1":{"E1.T":{"priceDimensions":{"d":{"unit":"` + unit + `","beginRange":"0","pricePerUnit":{"USD":"` + usd + `"}}}}}}}}`
+}
+
+func TestUnusablePricesAreDropped(t *testing.T) {
+	for _, usd := range []string{"0.0000000000", "NaN", "Inf", "-1"} {
+		if rows, err := parseOffer(strings.NewReader(offerDoc(usd, "Hrs")), matchEC2); err == nil {
+			t.Errorf("%q stored: %v", usd, rows)
+		}
+	}
+	if rows, err := parseOffer(strings.NewReader(offerDoc("0.0114", "Hrs")), matchEC2); err != nil || len(rows) != 1 {
+		t.Fatalf("%v %v", rows, err)
+	}
+}
+
+func TestOnlyTheKeysUnitIsKept(t *testing.T) {
+	if rows, err := parseOffer(strings.NewReader(offerDoc("0.0114", "Quantity")), matchEC2); err == nil {
+		t.Fatalf("a Quantity price is not an hourly price: %v", rows)
+	}
+	for key, unit := range map[string]string{"ec2:x": "Hrs", "nat:hour": "Hrs", "ipv4:hour": "Hrs", "elb:network": "Hrs",
+		"ebs:gp3": "GB-Mo", "s3:standard": "GB-Mo", "nat:gb": "GB"} {
+		if !unitOK(key, unit) || unitOK(key, "Quantity") {
+			t.Errorf("%s %s", key, unit)
+		}
 	}
 }

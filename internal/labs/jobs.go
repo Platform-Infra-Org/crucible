@@ -80,7 +80,7 @@ type PriceWorker struct {
 	S *Service
 }
 
-func (w *PriceWorker) Timeout(*river.Job[PriceArgs]) time.Duration { return 30 * time.Minute }
+func (w *PriceWorker) Timeout(*river.Job[PriceArgs]) time.Duration { return 2 * time.Hour }
 
 func (w *PriceWorker) Work(ctx context.Context, _ *river.Job[PriceArgs]) error {
 	return w.S.RefreshPrices(ctx)

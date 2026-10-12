@@ -6,7 +6,8 @@
    "productFamily": "Storage",
    "attributes": {
     "storageClass": "General Purpose",
-    "volumeType": "Standard"
+    "volumeType": "Standard",
+    "locationType": "AWS Region"
    }
   },
   "B2": {
@@ -14,7 +15,8 @@
    "productFamily": "Storage",
    "attributes": {
     "storageClass": "Infrequent Access",
-    "volumeType": "Standard - Infrequent Access"
+    "volumeType": "Standard - Infrequent Access",
+    "locationType": "AWS Region"
    }
   }
  },

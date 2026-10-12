@@ -87,3 +87,12 @@ func (s *Store) Failed(ctx context.Context, cause error) error {
 	_, err := s.DB.Exec(ctx, `UPDATE price_refresh SET error = $1, error_at = $2 WHERE id = 1`, cause.Error(), s.Now())
 	return err
 }
+
+// FreshWithin reports whether a refresh succeeded less than d ago.
+func (s *Store) FreshWithin(ctx context.Context, d time.Duration) (bool, error) {
+	var okAt *time.Time
+	if err := s.DB.QueryRow(ctx, `SELECT ok_at FROM price_refresh WHERE id = 1`).Scan(&okAt); err != nil {
+		return false, err
+	}
+	return okAt != nil && s.Now().Sub(*okAt) < d, nil
+}

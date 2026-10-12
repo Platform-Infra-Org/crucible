@@ -6,18 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// maxOffer bounds one offer download; real regional EC2 files are a few hundred MB.
-const maxOffer = 2 << 30
+// maxOffer bounds one offer download; real regional EC2 files are several GB for us-east-1.
+const maxOffer = 8 << 30
 
 // Fetcher downloads on-demand list prices from the free public AWS Price List (no keys).
 type Fetcher struct {
-	HTTP *http.Client // nil: a client with a 10-minute timeout
+	HTTP *http.Client // nil: a client with a 30-minute timeout
 	Base string       // https://pricing.us-east-1.amazonaws.com
 }
 
@@ -30,6 +31,9 @@ type matcher func(p product) (key string, ok bool)
 
 func matchEC2(p product) (string, bool) {
 	a := p.Attributes
+	if a["locationType"] != "AWS Region" { // not Local Zones, Wavelength or Outposts
+		return "", false
+	}
 	switch p.ProductFamily {
 	case "Compute Instance":
 		if a["operatingSystem"] == "Linux" && a["tenancy"] == "Shared" && a["preInstalledSw"] == "NA" &&
@@ -56,6 +60,9 @@ func matchVPC(p product) (string, bool) {
 }
 
 func matchELB(p product) (string, bool) {
+	if p.Attributes["locationType"] != "AWS Region" {
+		return "", false
+	}
 	if !strings.HasSuffix(p.Attributes["usagetype"], "LoadBalancerUsage") {
 		return "", false
 	}
@@ -70,7 +77,7 @@ func matchELB(p product) (string, bool) {
 
 func matchS3(p product) (string, bool) {
 	a := p.Attributes
-	return "s3:standard", p.ProductFamily == "Storage" && a["storageClass"] == "General Purpose" && a["volumeType"] == "Standard"
+	return "s3:standard", a["locationType"] == "AWS Region" && p.ProductFamily == "Storage" && a["storageClass"] == "General Purpose" && a["volumeType"] == "Standard"
 }
 
 var services = []struct {
@@ -80,8 +87,9 @@ var services = []struct {
 
 // AWS returns the prices labs use for each region. Any failed download or unknown region fails the whole fetch.
 func (f *Fetcher) AWS(ctx context.Context, regions []string) ([]Row, error) {
+	f = &Fetcher{HTTP: f.HTTP, Base: f.Base} // never write to the shared fetcher
 	if f.HTTP == nil {
-		f.HTTP = &http.Client{Timeout: 10 * time.Minute}
+		f.HTTP = &http.Client{Timeout: 30 * time.Minute}
 	}
 	var idx struct {
 		Offers map[string]struct {
@@ -163,7 +171,7 @@ type capReader struct {
 
 func (c *capReader) Read(p []byte) (int, error) {
 	if c.left <= 0 {
-		return 0, errors.New("offer file larger than 2 GiB")
+		return 0, errors.New("offer file larger than 8 GiB")
 	}
 	if int64(len(p)) > c.left {
 		p = p[:c.left]
@@ -232,7 +240,7 @@ func parseOffer(r io.Reader, m matcher) ([]offerRow, error) {
 								continue
 							}
 							usd, err := strconv.ParseFloat(d.Price["USD"], 64)
-							if err != nil || usd < 0 {
+							if err != nil || !(usd > 0) || math.IsInf(usd, 0) || !unitOK(key, d.Unit) { // !(>0) also drops NaN
 								continue
 							}
 							rows = append(rows, offerRow{key, d.Unit, usd})
@@ -332,4 +340,15 @@ func skip(dec *json.Decoder) error {
 		}
 	}
 	return nil
+}
+
+// unitOK: each key has one unit; a dimension in another (an upfront fee's "Quantity", "LCU-Hrs") is not its price.
+func unitOK(key, unit string) bool {
+	switch {
+	case key == "nat:gb":
+		return unit == "GB"
+	case strings.HasPrefix(key, "ebs:") || key == "s3:standard":
+		return unit == "GB-Mo"
+	}
+	return unit == "Hrs"
 }

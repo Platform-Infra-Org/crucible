@@ -10,7 +10,8 @@
     "tenancy": "Shared",
     "preInstalledSw": "NA",
     "capacitystatus": "Used",
-    "licenseModel": "No License required"
+    "licenseModel": "No License required",
+    "locationType": "AWS Region"
    }
   },
   "E2": {
@@ -22,7 +23,8 @@
     "tenancy": "Shared",
     "preInstalledSw": "NA",
     "capacitystatus": "Used",
-    "licenseModel": "No License required"
+    "licenseModel": "No License required",
+    "locationType": "AWS Region"
    }
   },
   "E3": {
@@ -34,7 +36,8 @@
     "tenancy": "Dedicated",
     "preInstalledSw": "NA",
     "capacitystatus": "Used",
-    "licenseModel": "No License required"
+    "licenseModel": "No License required",
+    "locationType": "AWS Region"
    }
   },
   "E4": {
@@ -46,7 +49,8 @@
     "tenancy": "Shared",
     "preInstalledSw": "NA",
     "capacitystatus": "Reserved",
-    "licenseModel": "No License required"
+    "licenseModel": "No License required",
+    "locationType": "AWS Region"
    }
   },
   "E5": {
@@ -58,7 +62,8 @@
     "tenancy": "Shared",
     "preInstalledSw": "SQL Std",
     "capacitystatus": "Used",
-    "licenseModel": "No License required"
+    "licenseModel": "No License required",
+    "locationType": "AWS Region"
    }
   },
   "S1": {
@@ -66,28 +71,45 @@
    "productFamily": "Storage",
    "attributes": {
     "volumeApiName": "gp3",
-    "usagetype": "EU-EBS:VolumeUsage.gp3"
+    "usagetype": "EU-EBS:VolumeUsage.gp3",
+    "locationType": "AWS Region"
    }
   },
   "N1": {
    "sku": "N1",
    "productFamily": "NAT Gateway",
    "attributes": {
-    "usagetype": "EU-NatGateway-Hours"
+    "usagetype": "EU-NatGateway-Hours",
+    "locationType": "AWS Region"
    }
   },
   "N2": {
    "sku": "N2",
    "productFamily": "NAT Gateway",
    "attributes": {
-    "usagetype": "EU-NatGateway-Bytes"
+    "usagetype": "EU-NatGateway-Bytes",
+    "locationType": "AWS Region"
    }
   },
   "N3": {
    "sku": "N3",
    "productFamily": "NAT Gateway",
    "attributes": {
-    "usagetype": "EU-NatGateway-Other"
+    "usagetype": "EU-NatGateway-Other",
+    "locationType": "AWS Region"
+   }
+  },
+  "E6": {
+   "sku": "E6",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "operatingSystem": "Linux",
+    "tenancy": "Shared",
+    "preInstalledSw": "NA",
+    "capacitystatus": "Used",
+    "licenseModel": "No License required",
+    "instanceType": "t3.micro",
+    "locationType": "AWS Local Zone"
    }
   }
  },
@@ -103,6 +125,15 @@
        "endRange": "Inf",
        "pricePerUnit": {
         "USD": "0.0114"
+       }
+      },
+      "E1.q": {
+       "rateCode": "E1.q",
+       "unit": "Quantity",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "999"
        }
       }
      }
@@ -227,19 +258,56 @@
       }
      }
     }
-   }
-  },
-  "Reserved": {
-   "E1": {
-    "E1.T": {
+   },
+   "E6": {
+    "E6.T": {
      "priceDimensions": {
-      "E1.d": {
-       "rateCode": "E1.d",
+      "E6.d": {
+       "rateCode": "E6.d",
        "unit": "Hrs",
        "beginRange": "0",
        "endRange": "Inf",
        "pricePerUnit": {
-        "USD": "0.0114"
+        "USD": "0.03"
+       }
+      }
+     }
+    }
+   }
+  },
+  "Reserved": {
+   "E1": {
+    "E1.R1": {
+     "priceDimensions": {
+      "E1.R1.a": {
+       "rateCode": "E1.R1.a",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.02"
+       }
+      }
+     }
+    },
+    "E1.R2": {
+     "priceDimensions": {
+      "E1.R2.a": {
+       "rateCode": "E1.R2.a",
+       "unit": "Quantity",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "412"
+       }
+      },
+      "E1.R2.b": {
+       "rateCode": "E1.R2.b",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.007"
        }
       }
      }

@@ -5,14 +5,16 @@
    "sku": "V1",
    "productFamily": "VPC",
    "attributes": {
-    "usagetype": "EU-PublicIPv4:InUseAddress"
+    "usagetype": "EU-PublicIPv4:InUseAddress",
+    "locationType": "AWS Region"
    }
   },
   "V2": {
    "sku": "V2",
    "productFamily": "VPC",
    "attributes": {
-    "usagetype": "EU-PublicIPv4:IdleAddress"
+    "usagetype": "EU-PublicIPv4:IdleAddress",
+    "locationType": "AWS Region"
    }
   }
  },

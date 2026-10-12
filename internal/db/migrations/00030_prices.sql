@@ -4,7 +4,7 @@ CREATE TABLE prices (
   service    TEXT NOT NULL,          -- aws
   region     TEXT NOT NULL,
   key        TEXT NOT NULL,          -- ec2:t3.micro, ebs:gp3, nat:hour, …
-  usd        DOUBLE PRECISION NOT NULL CHECK (usd >= 0),
+  usd        DOUBLE PRECISION NOT NULL CHECK (usd > 0),
   unit       TEXT NOT NULL,          -- Hrs, GB-Mo, GB
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (service, region, key)

@@ -24,12 +24,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"crucible/internal/agentproto"
+	"crucible/internal/pricing"
 	"crucible/internal/yamlx"
 )
 
 type loader struct {
-	root  string
-	probs []Problem
+	root    string
+	probs   []Problem
+	tfTypes map[string]string // awsModule: managed resource type → a file declaring it
 }
 
 func (l *loader) add(path, format string, a ...any) {
@@ -360,6 +362,17 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 		lab.Compose = "compose.yaml"
 	}
 
+	if lab.Runtime == "terraform" { // a Terraform lab runs on its cloud's runtime (spec 2026-10-12 §1)
+		if lab.Cloud != "aws" {
+			l.add(lf, "cloud must be aws for runtime: terraform")
+		}
+		lab.Runtime = "aws"
+	} else if lab.Runtime == "aws" {
+		lab.Cloud = "aws"
+	} else if lab.Cloud != "" {
+		l.add(lf, "cloud is only for runtime: terraform")
+	}
+
 	services := map[string]bool{}
 	switch lab.Runtime {
 	case "local":
@@ -382,7 +395,7 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 		services["workspace"] = true // AWS labs get one workspace container (spec §8.2)
 		l.awsModule(dir, lf, lab)
 	default:
-		l.add(lf, "runtime must be cluster, local or aws")
+		l.add(lf, "runtime must be local, cluster, terraform (or aws)")
 	}
 	if lab.AWS != nil && lab.Runtime != "aws" {
 		l.add(lf, "aws: is only for runtime: aws")
@@ -814,6 +827,26 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || lab.AWS.MaxHourlyUSD <= 0 {
 		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
 	}
+	prices, typeRe := map[string]float64{}, regexp.MustCompile(`^[a-z0-9]+_[a-z0-9_]+$`)
+	addrRe := regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
+	if lab.AWS != nil {
+		prices = lab.AWS.Prices
+		for t, p := range prices {
+			if !typeRe.MatchString(t) || !(p > 0) {
+				l.add(lf, "aws.prices: %s needs a resource type and a price above 0 (USD per hour)", t)
+			}
+		}
+		for a, u := range lab.AWS.Usage {
+			if !addrRe.MatchString(a) {
+				l.add(lf, "aws.usage: %q is not a resource address", a)
+			}
+			for k, v := range u {
+				if v < 0 {
+					l.add(lf, "aws.usage: %s.%s must not be negative", a, k)
+				}
+			}
+		}
+	}
 	root := filepath.Join(dir, "terraform")
 	var tfs []string
 	size, files, tooBig := int64(0), 0, false
@@ -864,8 +897,14 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if tooBig {
 		return
 	}
-	for _, p := range tfs {
+	l.tfTypes = map[string]string{}
+	for _, p := range tfs { // every .tf under terraform/, so local modules (which must live there) are covered
 		l.tfFile(root, p, strings.HasSuffix(strings.ToLower(p), ".json"))
+	}
+	for _, t := range slices.Sorted(maps.Keys(l.tfTypes)) {
+		if _, ok := prices[t]; !ok && !pricing.KnownAWS(t) {
+			l.add(l.tfTypes[t], "%s: Crucible can't price this resource type yet; declare it under aws.prices (USD per hour)", t)
+		}
 	}
 }
 
@@ -903,6 +942,9 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
 		case "resource", "data", "ephemeral", "action":
+			if blk.Type == "resource" && strings.HasPrefix(blk.Labels[0], "aws_") && l.tfTypes[blk.Labels[0]] == "" {
+				l.tfTypes[blk.Labels[0]] = p
+			}
 			if prov, _, _ := strings.Cut(blk.Labels[0], "_"); tfBannedProviders["hashicorp/"+prov] {
 				l.add(p, "%s %q: hashicorp/%s is not allowed (it reads host files or runs commands)", blk.Type, blk.Labels[0], prov)
 			}

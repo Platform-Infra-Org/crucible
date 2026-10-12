@@ -43,6 +43,7 @@ import (
 	"crucible/internal/notify"
 	"crucible/internal/org"
 	"crucible/internal/scoring"
+	"crucible/internal/secrets"
 )
 
 func main() {
@@ -134,11 +135,29 @@ func run(ctx context.Context) error {
 		return err
 	}
 	orgStore := &org.Store{DB: pool}
+	// CRUCIBLE_SECRET_KEY seals the credentials of connected repositories. Unset, public repositories still work and
+	// connecting one with a token is refused: a credential is never written in the clear.
+	if key := os.Getenv("CRUCIBLE_SECRET_KEY"); key != "" {
+		box, err := secrets.New(key)
+		if err != nil {
+			return err
+		}
+		orgStore.Secrets = box
+	} else {
+		slog.Warn("CRUCIBLE_SECRET_KEY is not set: repositories that need a credential cannot be connected")
+	}
 	if err := seed(ctx, orgStore, os.Getenv("CRUCIBLE_SEED_DIR")); err != nil {
 		return err
 	}
 	seedBootstrapAdmin(ctx, pool, os.Getenv("CRUCIBLE_BOOTSTRAP_ADMIN"))
 	dataDir := env("CRUCIBLE_DATA_DIR", "/data")
+	// Repositories connected over SSH get a generated key and a Host alias each, in one ssh config the bot's git
+	// reads. GIT_SSH_COMMAND is inherited by every git the API runs (gitsync.git builds its env from this process).
+	if dir, err := orgStore.UseSSHDir(filepath.Join(dataDir, "ssh")); err != nil {
+		slog.Warn("cannot prepare the SSH key directory; repositories connected that way will not be reachable", "err", err)
+	} else {
+		os.Setenv("GIT_SSH_COMMAND", "ssh -F "+dir)
+	}
 	syncer := gitsync.New(dataDir, orgStore.Platform, slog.Default())
 	if err := syncer.SyncOnce(ctx); err != nil {
 		slog.Warn("initial sync failed; retrying in the background", "err", err)
@@ -180,23 +199,24 @@ func run(ctx context.Context) error {
 		quizSecret = "crucible-dev-quiz-secret"
 	}
 	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Changes: syncer.Changes}
-	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, Platform: func() *config.Platform {
-		if st := syncer.Current(); st != nil {
-			return st.Platform
-		}
-		return nil
-	}, Content: func(team, training string) (title, running, head string) {
-		title = training
-		if st := syncer.Current(); st != nil {
-			if t, _ := st.ProgramTraining(team, training); t != nil {
-				title = t.Title
-			} else if t := st.Training(training, st.Heads[training]); t != nil {
-				title = t.Title
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, CheckRepo: orgStore.Check,
+		BotName: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), BotEmail: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost"), Platform: func() *config.Platform {
+			if st := syncer.Current(); st != nil {
+				return st.Platform
 			}
-			running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
-		}
-		return
-	}}
+			return nil
+		}, Content: func(team, training string) (title, running, head string) {
+			title = training
+			if st := syncer.Current(); st != nil {
+				if t, _ := st.ProgramTraining(team, training); t != nil {
+					title = t.Title
+				} else if t := st.Training(training, st.Heads[training]); t != nil {
+					title = t.Title
+				}
+				running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
+			}
+			return
+		}}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),

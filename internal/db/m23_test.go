@@ -33,7 +33,7 @@ func TestMigration00023ConvertsTeamsAndRoles(t *testing.T) {
 		`INSERT INTO team_members VALUES ('a','x@x','leader'), ('a','m@x','member'), ('a','t@x','trainee'), ('a','y@x','member'),
 			('b','y@x','leader'), ('b','x@x','trainee'), ('b','u@x','trainee')`,
 		`INSERT INTO mentors VALUES ('a','t@x','m@x'), ('b','x@x','y@x')`,
-		`INSERT INTO trainings (id, repo) VALUES ('k', 'r'), ('solo', 'r')`,
+		`INSERT INTO trainings (id, repo) VALUES ('k', 'r'), ('solo', 'r')`, // at 22: trainings still carry the URL
 		`INSERT INTO programs (team, training) VALUES ('a','k'), ('b','k')`,
 		`INSERT INTO enrollments VALUES ('a','k','t@x'), ('b','k','u@x'), ('b','k','x@x')`,
 		`INSERT INTO program_roles VALUES ('a','k','m@x','scorer'), ('b','k','y@x','approver')`,

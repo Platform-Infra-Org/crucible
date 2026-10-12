@@ -53,7 +53,8 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	mustExec(t, pool, `INSERT INTO team_members (team, email, role) VALUES
 		('forge','leader@x','leader'), ('forge','senior@x','senior'), ('forge','trainee@x','trainee')`)
 	mustExec(t, pool, `INSERT INTO team_budgets (team, monthly_usd, hard_cap_usd) VALUES ('forge', 200, 250)`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo, ref) VALUES ('forge-101','https://git/x.git','main')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('https://git/x.git') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository, ref) SELECT 'forge-101', id, 'main' FROM r`)
 	mustExec(t, pool, `INSERT INTO schedules (name, timezone, windows) VALUES
 		('days','UTC','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, budget_usd_month, schedule_name, ttl) VALUES ('forge','forge-101', 100, 'days', '2h')`)
@@ -75,11 +76,14 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	if prog == nil || prog.Training != "forge-101" || prog.Version != 1 {
 		t.Fatalf("program = %+v", prog)
 	}
-	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "senior@x" {
+	// The editors are as given; the admins are the team's leaders, filled in because a training with none could be
+	// managed only by a Crucible admin (config.Resolve). Admins are editors and scorers too.
+	if !slices.Equal(prog.Roles.Scorers, []string{"leader@x", "senior@x"}) {
 		t.Errorf("roles = %+v", prog.Roles)
 	}
-	if len(prog.Roles.Manager) != 0 || !slices.Equal(prog.Access.Editors, []string{"forge_seniors"}) {
-		t.Errorf("roles are as given, no defaults: %+v %+v", prog.Roles, prog.Access)
+	if !slices.Equal(prog.Roles.Manager, []string{"leader@x"}) || !slices.Equal(prog.Access.Editors, []string{"forge_seniors"}) ||
+		!slices.Equal(prog.Access.Admins, []string{"forge_leaders"}) {
+		t.Errorf("editors as given, admins defaulted to the team's leaders: %+v %+v", prog.Roles, prog.Access)
 	}
 	if len(prog.Enrolled) != 1 || prog.Enrolled[0] != "trainee@x" {
 		t.Errorf("enrolled = %v", prog.Enrolled)
@@ -116,7 +120,8 @@ func TestInlineScheduleRoundTripsThroughJSONB(t *testing.T) {
 	pool := dbtest.New(t)
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
 	mustExec(t, pool, `INSERT INTO team_members VALUES ('t','l@x','leader')`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('r') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository) SELECT 'tr', id FROM r`)
 	mustExec(t, pool, `INSERT INTO programs (team, training, inline_schedule) VALUES ('t','tr',
 		'{"timezone":"Europe/Bucharest","windows":[{"days":["sat"],"start":"09:00","end":"12:00"}]}')`)
 	p, err := platform(t, pool)
@@ -165,7 +170,8 @@ func TestMembershipRules(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `INSERT INTO team_members VALUES ('t','d@x','member')`); err == nil {
 		t.Error("member is no longer a tag")
 	}
-	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('r') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository) SELECT 'tr', id FROM r`)
 	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('t','tr')`)
 	if _, err := pool.Exec(context.Background(), `INSERT INTO programs (team, training) VALUES ('u','tr')`); err == nil {
 		t.Error("a training run by two teams must be rejected")
@@ -179,7 +185,8 @@ func TestMembershipRules(t *testing.T) {
 func TestMixedCaseEmailsAreRejected(t *testing.T) {
 	pool := dbtest.New(t)
 	mustExec(t, pool, `INSERT INTO teams (id, name) VALUES ('t','T')`)
-	mustExec(t, pool, `INSERT INTO trainings (id, repo) VALUES ('tr','r')`)
+	mustExec(t, pool, `WITH r AS (INSERT INTO repositories (url) VALUES ('r') ON CONFLICT (url) DO UPDATE SET url = EXCLUDED.url RETURNING id)
+		INSERT INTO trainings (id, repository) SELECT 'tr', id FROM r`)
 	mustExec(t, pool, `INSERT INTO programs (team, training) VALUES ('t','tr')`)
 	for _, q := range []string{
 		`INSERT INTO admins VALUES ('A@x')`,
@@ -274,7 +281,10 @@ func TestPlatformMatchesConfigLoad(t *testing.T) {
 		`INSERT INTO schedules VALUES ('bh','Europe/Bucharest','[{"days":["mon","tue"],"start":"08:00","end":"19:00"}]')`,
 		`INSERT INTO admins VALUES ('boss@x')`,
 		`INSERT INTO quotes (text) VALUES ('one'),('two')`,
-		`INSERT INTO trainings VALUES ('a','https://git/a.git','dev'),('b','https://git/b.git','main')`,
+		`WITH a AS (INSERT INTO repositories (url) VALUES ('https://git/a.git') RETURNING id),
+		     b AS (INSERT INTO repositories (url) VALUES ('https://git/b.git') RETURNING id)
+		INSERT INTO trainings (id, repository, ref) SELECT 'a', a.id, 'dev' FROM a
+		UNION ALL SELECT 'b', b.id, 'main' FROM b`,
 		`INSERT INTO teams (id, name) VALUES ('t','T')`,
 		`INSERT INTO team_members VALUES ('t','l@x','leader'),('t','s2@x','senior'),('t','s1@x','senior'),('t','m@x','junior'),('t','tr@x','trainee')`,
 		`INSERT INTO team_webhooks VALUES ('t','slack','https://hooks/s'),('t','teams','https://hooks/t')`,

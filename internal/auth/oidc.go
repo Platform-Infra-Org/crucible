@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ type OIDC struct {
 	verifier *oidc.IDTokenVerifier
 	store    Store
 	secure   bool
+	// endSession is the provider's RP-initiated logout endpoint, if it advertises one. Ending the provider's own
+	// session is the only way to come back as somebody else: prompt=login only asks the same person for their
+	// password again.
+	endSession string
 }
 
 const oauthCookie = "crucible_oauth"
@@ -40,20 +45,32 @@ func NewOIDC(ctx context.Context, c OIDCConfig, store Store, secure bool) (*OIDC
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery at %s: %w", disc, err)
 	}
+	var meta struct {
+		EndSession string `json:"end_session_endpoint"`
+	}
+	_ = p.Claims(&meta) // optional: a provider without it falls back to asking for the password again
 	return &OIDC{
 		cfg: oauth2.Config{ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURL: c.RedirectURL,
 			Endpoint: p.Endpoint(), Scopes: []string{oidc.ScopeOpenID, "profile", "email"}},
-		verifier: p.Verifier(&oidc.Config{ClientID: c.ClientID}),
-		store:    store,
-		secure:   secure,
+		verifier:   p.Verifier(&oidc.Config{ClientID: c.ClientID}),
+		store:      store,
+		secure:     secure,
+		endSession: meta.EndSession,
 	}, nil
 }
 
+// Login starts the sign-in. With ?switch=1 it asks the identity provider to authenticate again (OIDC prompt=login)
+// rather than reuse the session it still holds: signing out of Crucible does not end that session, so without this
+// the provider hands back the same person without asking, and nobody can change who they are signed in as.
 func (o *OIDC) Login(w http.ResponseWriter, r *http.Request) {
 	state, verifier := newToken(), oauth2.GenerateVerifier()
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: state + "." + verifier, Path: "/auth",
 		MaxAge: 600, HttpOnly: true, Secure: o.secure, SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, o.cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), http.StatusFound)
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier)}
+	if r.URL.Query().Get("switch") == "1" {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"))
+	}
+	http.Redirect(w, r, o.cfg.AuthCodeURL(state, opts...), http.StatusFound)
 }
 
 func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +125,23 @@ func (o *OIDC) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Path: "/", MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Switch signs out here and, where the provider allows it, there too, then starts a fresh sign-in. Without ending
+// the provider's session it would hand back the same person; with prompt=login alone it asks that person for their
+// password rather than letting anyone else in.
+func (o *OIDC) Switch(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(SessionCookie); err == nil {
+		_ = o.store.DeleteSession(r.Context(), c.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: SessionCookie, Path: "/", MaxAge: -1})
+	back := strings.TrimSuffix(o.cfg.RedirectURL, "/auth/callback") + "/auth/login"
+	if o.endSession == "" {
+		http.Redirect(w, r, back+"?switch=1", http.StatusFound)
+		return
+	}
+	q := url.Values{"client_id": {o.cfg.ClientID}, "post_logout_redirect_uri": {back}}
+	http.Redirect(w, r, o.endSession+"?"+q.Encode(), http.StatusFound)
 }
 
 type idClaims struct {

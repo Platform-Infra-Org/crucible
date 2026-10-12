@@ -17,7 +17,9 @@ import (
 // in one JSON file. A person is their email, never their OIDC sub, so a new identity provider (Keycloak → Cognito,
 // one pool → another) links each person back to their history at their first login (auth.Store.UpsertUser).
 //
-// Left out, on purpose: sessions and agent tokens (everyone signs in and pairs again), labs and everything hanging
+// Left out, on purpose: the credential of each connected repository (it is sealed with this instance's
+// CRUCIBLE_SECRET_KEY, which the new one does not have, so each repository is reconnected there), sessions and agent
+// tokens (everyone signs in and pairs again), labs and everything hanging
 // off them (events, check and setup runs, terminal transcripts), spend, alerts, reaper findings, the kill switch, the
 // audit log and content edits. Uploaded files stay in blob storage: submissions keep their keys, so they open again
 // when the new instance uses the same store.
@@ -43,8 +45,8 @@ type table struct {
 }
 
 var exportTables = []table{
-	{name: "settings", defaults: `'{"smith_apprentice":150,"smith_journeyman":500,"smith_smith":1200,"smith_master":2500,"smith_grandmaster":5000}'`}, // 00027
-	{name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "trainings"},
+	{name: "settings", defaults: `'{"smith_apprentice":150,"smith_journeyman":500,"smith_smith":1200,"smith_master":2500,"smith_grandmaster":5000}'`},
+	{name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "repositories"}, {name: "trainings"},
 	{name: "teams"}, {name: "team_members"}, {name: "team_webhooks"}, {name: "team_budgets"},
 	{name: "programs"}, {name: "training_roles"},
 	{name: "users"},
@@ -69,6 +71,11 @@ func (s *Store) Export(ctx context.Context, actor string) ([]byte, error) {
 	for _, t := range exportTables {
 		q := fmt.Sprintf(`SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'), count(*) FROM %s x`, t.name)
 		switch {
+		case t.name == "repositories": // the connection, never its credential: it is sealed with this instance's
+			// CRUCIBLE_SECRET_KEY, which the new instance does not have. Each one is reconnected there.
+			q = `SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'), count(*) FROM (SELECT id, url, 'none' AS auth, username,
+				'' AS secret, '' AS public_key, 'unknown' AS status, NULL::boolean AS can_write, '' AS last_error,
+				NULL::timestamptz AS checked_at, version, created_at FROM repositories) x`
 		case t.name == "users": // one row per email: the oldest, as UpsertUser links a login to
 			q = `SELECT coalesce(jsonb_agg(to_jsonb(x)), '[]'), count(*) FROM (SELECT DISTINCT ON (email) email, name, theme,
 				calm_motion, avatar, created_at FROM users ORDER BY email, id) x`
@@ -158,7 +165,7 @@ func (s *Store) Import(ctx context.Context, actor string, b []byte) error {
 		}
 		counts[t.name] = tag.RowsAffected()
 	}
-	for _, t := range []string{"quotes", "quiz_attempts", "submissions"} { // past the imported ids
+	for _, t := range []string{"quotes", "quiz_attempts", "submissions", "repositories"} { // past the imported ids
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`SELECT setval(pg_get_serial_sequence('%[1]s', 'id'), coalesce(max(id), 0) + 1, false) FROM %[1]s`, t)); err != nil {
 			return err
 		}
@@ -183,6 +190,11 @@ func checkImported(p *config.Platform) error {
 			return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
 		}
 		if _, err := cleanTrainingRef(tr); err != nil {
+			return fmt.Errorf("training %s: %w", id, err)
+		}
+		// The URL comes from the repository this training reads: a file holds it there, so it is checked here, where
+		// the join has put it back, rather than in cleanTrainingRef, which no longer sees one.
+		if err := checkRepo(tr.Repo); err != nil {
 			return fmt.Errorf("training %s: %w", id, err)
 		}
 	}

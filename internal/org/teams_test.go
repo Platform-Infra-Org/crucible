@@ -254,7 +254,7 @@ func TestDeleteTeamThatOwnsTrainingsIsRefused(t *testing.T) {
 	if err := s.CreateTeam(ctx, "a@x", "p", body("P", "lead@x:leader")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateTraining(ctx, "lead@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "p"); err != nil {
+	if err := s.CreateTraining(ctx, "lead@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "p", "leader"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteTeam(ctx, "a@x", "p"); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "k8s") {

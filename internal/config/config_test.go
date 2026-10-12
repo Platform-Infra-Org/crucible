@@ -290,6 +290,21 @@ func TestGroupsResolve(t *testing.T) {
 	}
 }
 
+// Registering a training names the registrant's rank and the ranks above it, as groups, so the list follows the team.
+func TestRankAndAbove(t *testing.T) {
+	for tag, want := range map[string][]string{
+		"leader":  {"forge_leaders"},
+		"senior":  {"forge_leaders", "forge_seniors"},
+		"junior":  {"forge_leaders", "forge_seniors", "forge_juniors"},
+		"trainee": nil,
+		"":        {"forge_leaders"}, // a Crucible admin who is not on the team
+	} {
+		if got := RankAndAbove("forge", tag); !slices.Equal(got, want) {
+			t.Errorf("RankAndAbove(forge, %q) = %v, want %v", tag, got, want)
+		}
+	}
+}
+
 func TestSmithThresholdsDefaultAndValidate(t *testing.T) {
 	var s SmithThresholds
 	if err := s.Fill(); err != nil || !slices.Equal(s.Steps(), []int{0, 150, 500, 1200, 2500, 5000}) {

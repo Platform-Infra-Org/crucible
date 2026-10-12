@@ -72,8 +72,10 @@ func (c Checker) Can(actor string, a Action, team, training, subject string) boo
 	case ViewProgress:
 		return (subject == actor && in(p.Enrolled)) || (training != "" && t.Programs[training] != nil && t.Manages(actor)) ||
 			role == "leader" || role == "senior" || in(p.Roles.Manager) || in(p.Roles.Scorers) || c.oversees(actor, subject)
-	case ManageProgram: // the owning team's leaders, seniors and juniors, and the training's admins
-		return t.Programs[training] != nil && (t.Manages(actor) || in(p.Roles.Manager))
+	case ManageProgram: // the training's admins, named on it; Crucible admins are checked before this (IsAdmin)
+		// Being on the owning team grants nothing by itself: registering a training names the registrant's rank and
+		// above as its admins, and those names can be changed. Otherwise removing one would do nothing.
+		return t.Programs[training] != nil && in(p.Roles.Manager)
 	case Score:
 		return in(p.Roles.Scorers)
 	case ApproveLabs:

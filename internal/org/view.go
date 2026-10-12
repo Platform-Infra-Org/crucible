@@ -26,12 +26,15 @@ type BudgetView struct {
 
 // ProgramView is a training's run as the team and trainings pages show it.
 type ProgramView struct {
-	Training           string            `json:"training"`
-	Title              string            `json:"title"`
-	Team               string            `json:"team"` // the owning team
-	Version            int64             `json:"version"`
-	Roles              config.Access     `json:"roles"`    // as given: people and groups; what a save sends back
-	Resolved           config.Access     `json:"resolved"` // who that is now; read-only
+	Training string        `json:"training"`
+	Title    string        `json:"title"`
+	Team     string        `json:"team"` // the owning team
+	Version  int64         `json:"version"`
+	Roles    config.Access `json:"roles"`    // as given: people and groups; what a save sends back
+	Resolved config.Access `json:"resolved"` // who that is now; read-only
+	// Implied is who holds a role without being named: the owning team's own people. Read-only, and not part of a
+	// save — removing someone here means changing their tag on the team.
+	Implied            config.Access     `json:"implied"`
 	Schedule           string            `json:"schedule"`
 	InlineSchedule     *config.Schedule  `json:"inline_schedule,omitempty"`
 	LabDefaults        map[string]string `json:"lab_defaults"`

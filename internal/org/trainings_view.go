@@ -35,6 +35,13 @@ type TrainingsView struct {
 	Schedules []string       `json:"schedules"`
 	Teams     []TeamOption   `json:"teams"` // admins only: who a training can be given to
 	Trainings []TrainingView `json:"trainings"`
+	Repos     []RepoOption   `json:"repos"` // the connected repositories a training can be registered from
+}
+
+// RepoOption is a connected repository as the registration form needs it: no credential, URL already masked.
+type RepoOption struct {
+	ID  int64  `json:"id"`
+	URL string `json:"url"`
 }
 
 // trainingsPage lists the trainings the caller works on: the ones they manage (their team owns it, or they are one of
@@ -42,7 +49,25 @@ type TrainingsView struct {
 func (a *api) trainingsPage(w http.ResponseWriter, r *http.Request, actor string, c rbac.Checker) error {
 	admin := c.IsAdmin(actor)
 	v := TrainingsView{IsAdmin: admin, CanCreate: c.CanCreateTraining(actor), Schedules: nonNil(slices.Sorted(maps.Keys(c.P.Settings.Schedules))),
-		Teams: []TeamOption{}, Trainings: []TrainingView{}}
+		Teams: []TeamOption{}, Trainings: []TrainingView{}, Repos: []RepoOption{}}
+	if v.CanCreate { // only someone who may register a training needs to know what it could come from
+		rows, err := a.s.DB.Query(r.Context(), `SELECT id, url FROM repositories ORDER BY url`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var o RepoOption
+			if err := rows.Scan(&o.ID, &o.URL); err != nil {
+				return err
+			}
+			o.URL = redactRepo(o.URL)
+			v.Repos = append(v.Repos, o)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
 	if t := c.P.TeamOf(actor); t != nil {
 		v.MyTeam = t.ID
 	}

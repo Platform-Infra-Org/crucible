@@ -22,8 +22,8 @@ describe('Administrator menu', () => {
     expect(at('/labs')).not.toContain('admin-menu-button active')
   })
 
-  test('holds Forge Status, Forge settings and Trainings', () => {
-    expect(adminItems.map((i) => i.label)).toEqual(['Forge Status', 'Forge settings', 'Trainings'])
+  test('holds Forge Status, Forge settings, Repositories and Trainings', () => {
+    expect(adminItems.map((i) => i.label)).toEqual(['Forge Status', 'Forge settings', 'Repositories', 'Trainings'])
     expect(at('/trainings')).not.toContain('admin-menu-button active') // the catalog is everyone's page
   })
 })

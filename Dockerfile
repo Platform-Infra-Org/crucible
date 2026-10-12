@@ -29,7 +29,7 @@ RUN apk add --no-cache curl \
 
 FROM alpine:3.22
 # crucible-api runs git with only this config (no system or global config): see gitsync.git.
-RUN apk add --no-cache git tar ca-certificates \
+RUN apk add --no-cache git tar ca-certificates openssh-client \
  && mkdir -p /etc/crucible \
  && git config --file /etc/crucible/gitconfig --add safe.directory '*' \
  && git config --file /etc/crucible/gitconfig credential.helper '!f() { test "$1" = get && git credential-store --file=/etc/crucible/git-credentials get; }; f' \

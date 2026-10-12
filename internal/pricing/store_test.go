@@ -54,3 +54,38 @@ func TestStalePricesFailClosed(t *testing.T) {
 		t.Fatal("old rows replaced")
 	}
 }
+
+// Dry-run fixture prices never price a real lab: a real store sees them as stale and not fresh (so the refresh runs),
+// and a dry run over real prices simply replaces them.
+func TestFixturePricesNeverServeRealMode(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	pool := dbtest.New(t)
+	dry := &Store{DB: pool, Now: clock, Source: "fixture"}
+	real := &Store{DB: pool, Now: clock}
+	if err := dry.Replace(ctx, Fixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := real.Snapshot(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("real mode must not price from the fixture: %v", err)
+	}
+	if fresh, err := real.FreshWithin(ctx, 6*24*time.Hour); err != nil || fresh {
+		t.Fatalf("fixture prices must not count as a fresh real refresh: %v %v", fresh, err)
+	}
+	if err := real.Replace(ctx, []Row{{Service: "aws", Region: "eu-west-1", Key: "ec2:t3.micro", Unit: "Hrs", USD: 0.0114}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := real.Snapshot(ctx); err != nil {
+		t.Fatalf("after its own refresh: %v", err)
+	}
+	if _, err := dry.Snapshot(ctx); !errors.Is(err, ErrStale) {
+		t.Fatalf("a dry-run store doesn't use real prices before its own seed: %v", err)
+	}
+	if err := dry.Replace(ctx, Fixture()); err != nil {
+		t.Fatal(err)
+	}
+	if snap, err := dry.Snapshot(ctx); err != nil || len(snap) != len(Fixture()) {
+		t.Fatalf("a dry run over real prices replaces them: %d %v", len(snap), err)
+	}
+}

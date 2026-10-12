@@ -13,7 +13,8 @@ CREATE TABLE price_refresh (
   id       INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   ok_at    TIMESTAMPTZ,
   error    TEXT NOT NULL DEFAULT '',
-  error_at TIMESTAMPTZ
+  error_at TIMESTAMPTZ,
+  source   TEXT NOT NULL DEFAULT 'aws'  -- aws, or fixture (a dry run's): a store prices only from its own source
 );
 INSERT INTO price_refresh (id) VALUES (1);
 

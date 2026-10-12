@@ -83,6 +83,10 @@ variable "cognito_user_pool_id" { type = string }
 variable "lab_role_arn" {
   type    = string
   default = ""
+  validation {
+    condition     = var.lab_role_arn == "" || (var.lab_plan_role_arn != "" && var.lab_export_bucket != "" && var.lab_export_name != "")
+    error_message = "aws labs need the plan role and the billing export (lab_plan_role_arn, lab_export_bucket, lab_export_name): re-run `crucible aws labs-init`, then `crucible aws up`."
+  }
 }
 variable "lab_ops_role_arn" {
   type    = string

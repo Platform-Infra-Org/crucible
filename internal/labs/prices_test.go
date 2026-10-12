@@ -107,3 +107,19 @@ func TestRefreshPricesSkipsWhenFresh(t *testing.T) {
 		t.Fatalf("after 6 days it downloads: %v hits=%d", err, hits.Load())
 	}
 }
+
+// A database a dry run seeded with fixture prices, switched to real mode: the refresh downloads at once.
+func TestRefreshPricesReplacesDryRunFixture(t *testing.T) {
+	f := setup(t, true)
+	dry := &pricing.Store{DB: f.s.DB, Now: f.s.Now, Source: "fixture"}
+	if err := dry.Replace(context.Background(), pricing.Fixture()); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Prices = &pricing.Store{DB: f.s.DB, Now: f.s.Now}
+	f.s.AWSRegions = []string{"eu-west-1"}
+	srv, hits := priceServer(t, false)
+	f.s.PriceFetch = &pricing.Fetcher{HTTP: srv.Client(), Base: srv.URL}
+	if err := f.s.RefreshPrices(context.Background()); err == nil || hits.Load() == 0 {
+		t.Fatalf("fixture prices must not pass for a fresh real refresh: %v hits=%d", err, hits.Load())
+	}
+}

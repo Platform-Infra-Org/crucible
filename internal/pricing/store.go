@@ -20,8 +20,9 @@ type Row struct {
 }
 
 type Store struct {
-	DB  *pgxpool.Pool
-	Now func() time.Time
+	DB     *pgxpool.Pool
+	Now    func() time.Time
+	Source string // where this process's prices come from: "fixture" (dry run) or "aws" ("" means aws)
 }
 
 // Snapshot is an in-memory copy of the price rows; it implements Lookup.
@@ -32,9 +33,30 @@ func (s Snapshot) Price(service, region, key string) (float64, bool) {
 	return p, ok
 }
 
-func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
+func (s *Store) source() string {
+	if s.Source == "" {
+		return "aws"
+	}
+	return s.Source
+}
+
+// refreshedAt is when the last refresh from this store's source succeeded; nil when never, or when the rows come from
+// another source (a dry run's fixture never prices a real lab, nor passes for a fresh real refresh).
+func (s *Store) refreshedAt(ctx context.Context) (*time.Time, error) {
 	var okAt *time.Time
-	if err := s.DB.QueryRow(ctx, `SELECT ok_at FROM price_refresh WHERE id = 1`).Scan(&okAt); err != nil {
+	var src string
+	if err := s.DB.QueryRow(ctx, `SELECT ok_at, source FROM price_refresh WHERE id = 1`).Scan(&okAt, &src); err != nil {
+		return nil, err
+	}
+	if src != s.source() {
+		return nil, nil
+	}
+	return okAt, nil
+}
+
+func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
+	okAt, err := s.refreshedAt(ctx)
+	if err != nil {
 		return nil, err
 	}
 	if okAt == nil || s.Now().Sub(*okAt) > maxAge {
@@ -57,7 +79,7 @@ func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
 	return snap, rows.Err()
 }
 
-// Replace swaps the aws rows for rows and records the refresh, in one transaction.
+// Replace swaps the aws rows for rows and records the refresh and its source, in one transaction.
 func (s *Store) Replace(ctx context.Context, rows []Row) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -76,7 +98,7 @@ func (s *Store) Replace(ctx context.Context, rows []Row) error {
 	if err := tx.SendBatch(ctx, b).Close(); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, error = '', error_at = NULL WHERE id = 1`, now); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, error = '', error_at = NULL, source = $2 WHERE id = 1`, now, s.source()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -90,8 +112,8 @@ func (s *Store) Failed(ctx context.Context, cause error) error {
 
 // FreshWithin reports whether a refresh succeeded less than d ago.
 func (s *Store) FreshWithin(ctx context.Context, d time.Duration) (bool, error) {
-	var okAt *time.Time
-	if err := s.DB.QueryRow(ctx, `SELECT ok_at FROM price_refresh WHERE id = 1`).Scan(&okAt); err != nil {
+	okAt, err := s.refreshedAt(ctx)
+	if err != nil {
 		return false, err
 	}
 	return okAt != nil && s.Now().Sub(*okAt) < d, nil

@@ -99,6 +99,10 @@ func awsCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, "--region is required")
 			return 2
 		}
+		if *budgetUSD < 0 {
+			fmt.Fprintln(os.Stderr, "--budget-usd must be positive (or leave it out for the stack's default)")
+			return 2
+		}
 		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs)

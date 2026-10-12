@@ -153,7 +153,14 @@ data "aws_iam_policy_document" "node" {
     for_each = var.lab_role_arn == "" ? [] : [1]
     content {
       actions   = ["sts:AssumeRole", "sts:TagSession"] # lab sessions carry crucible:* tags
-      resources = compact([var.lab_role_arn, var.lab_ops_role_arn, var.lab_plan_role_arn])
+      resources = [var.lab_role_arn, var.lab_ops_role_arn]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.lab_plan_role_arn == "" ? [] : [1]
+    content {
+      actions   = ["sts:AssumeRole"] # estimates' read-only terraform plan; no session tags
+      resources = [var.lab_plan_role_arn]
     }
   }
 }

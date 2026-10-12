@@ -265,6 +265,7 @@ func run(ctx context.Context) error {
 			return err
 		}
 		if fetch == nil { // dry run: fixture prices, refreshed on every start, so metering prices the fake apply
+			prices.Source = "fixture"
 			if err := prices.Replace(ctx, pricing.Fixture()); err != nil {
 				return fmt.Errorf("dry-run prices: %w", err)
 			}

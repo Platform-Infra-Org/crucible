@@ -200,8 +200,12 @@ run "aws_labs_wiring" {
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
-    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops", "arn:aws:iam::444455556666:role/crucible-lab-plan"])
-    error_message = "the node may assume exactly the three lab account roles (lab, ops, plan)"
+    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops"])
+    error_message = "the node may assume and tag sessions of exactly the lab and ops roles"
+  }
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:AssumeRole") && !contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab-plan"])
+    error_message = "the plan role has its own AssumeRole-only statement (estimates use no session tags)"
   }
   assert {
     condition     = output.lab_role_arn == "arn:aws:iam::444455556666:role/crucible-lab"
@@ -211,4 +215,15 @@ run "aws_labs_wiring" {
     condition     = output.node_role_name == "crucible-node"
     error_message = "main publishes its node role name; labs-init trusts exactly that role"
   }
+}
+
+run "aws_labs_need_the_plan_role_and_export" {
+  command = plan
+  variables {
+    lab_role_arn     = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket = "crucible-444455556666-labstate"
+    lab_state_region = "eu-west-1"
+  }
+  expect_failures = [var.lab_role_arn]
 }

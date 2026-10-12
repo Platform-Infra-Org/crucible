@@ -165,6 +165,7 @@ Every one of these was ruled on in a milestone ledger (`.superpowers/sdd/*/progr
 - The lint's code-block detection is a line scanner, not a Markdown parser.
 - Unavailable content neither helps nor hurts a forge rank until it syncs again.
 - A lab started in the instant between an agent reconnect and its reconcile could be ended too (one round trip).
+- Provider mirror for terraform pods (hashicorp/aws) — pods download it from the registry today, signature-checked; add a mirror image when registry egress is closed or init time matters.
 
 **Docs & editor**
 - The legacy `files` map on `POST /api/edits` is translated to puts by `edits.NewEdit`, and `content_edits.files`

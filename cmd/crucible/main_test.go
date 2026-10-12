@@ -31,8 +31,8 @@ func TestLintReportsProblems(t *testing.T) {
 	}
 }
 
-// Crucible prices aws labs itself; lint refuses a resource type it can't price that the lab doesn't declare under
-// aws.prices, with no network and no AWS (no price check runs at all).
+// Task 2's offline rule, surfaced through the CLI: lint refuses an aws resource type Crucible can't price that the lab
+// doesn't declare under aws.prices, and names it.
 func TestLintRefusesUnpricedTypesOffline(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../examples/forge-401")); err != nil {
@@ -46,10 +46,16 @@ func TestLintRefusesUnpricedTypesOffline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "modules/01-cloud-heat/lab/terraform/stream.tf"), []byte(tf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1") // any network call would fail
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	var out bytes.Buffer
 	if code := lint(dir, &out); code != 1 || !strings.Contains(out.String(), "aws_kinesis_stream") {
 		t.Fatalf("exit %d\n%s", code, out.String())
+	}
+}
+
+// A negative budget is refused before anything runs (terraform would reject it only after init).
+func TestLabsInitRefusesANegativeBudget(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	if code := awsCmd([]string{"labs-init", "--region", "eu-west-1", "--budget-usd", "-5"}); code != 2 {
+		t.Fatalf("exit %d", code)
 	}
 }

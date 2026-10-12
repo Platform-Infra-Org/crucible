@@ -66,7 +66,7 @@ var Fields = map[string]Field{
 	"Lab.setup":        {Description: "A script run once when the lab starts."},
 	"Lab.tasks":        {Required: true, Description: "The lab's tasks."},
 	"Lab.cloud":        {Enum: []string{"aws"}, Description: "runtime: terraform only: the cloud the lab runs on. Only aws today."},
-	"Lab.aws":          {Description: "AWS labs only: the region, the hourly cost ceiling, and prices and usage for what Crucible can't price itself."},
+	"Lab.aws":          {Description: "runtime: terraform (cloud: aws) or runtime: aws only: the region, the hourly cost ceiling, and prices and usage for what Crucible can't price itself."},
 	"Lab.cluster":      {Description: "runtime: cluster only: the Helm charts installed, in order, into the lab's namespace."},
 
 	"ClusterLab.charts":       {Required: true, Description: "The charts to install, in order. Each becomes a Helm release in the lab's namespace."},

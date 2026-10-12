@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -782,6 +783,8 @@ func interpolates(n *yaml.Node) bool {
 }
 
 var (
+	tfTypeRe    = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9_]+$`)
+	tfAddrRe    = regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
 	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
 	// required_providers may only name HashiCorp's own providers: anything else is a downloaded binary on the runner
 	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)
@@ -827,21 +830,20 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if lab.AWS == nil || lab.AWS.MaxHourlyUSD <= 0 {
 		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
 	}
-	prices, typeRe := map[string]float64{}, regexp.MustCompile(`^[a-z0-9]+_[a-z0-9_]+$`)
-	addrRe := regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
+	prices := map[string]float64{}
 	if lab.AWS != nil {
 		prices = lab.AWS.Prices
 		for t, p := range prices {
-			if !typeRe.MatchString(t) || !(p > 0) {
+			if !tfTypeRe.MatchString(t) || !(p > 0) || math.IsInf(p, 0) {
 				l.add(lf, "aws.prices: %s needs a resource type and a price above 0 (USD per hour)", t)
 			}
 		}
 		for a, u := range lab.AWS.Usage {
-			if !addrRe.MatchString(a) {
+			if !tfAddrRe.MatchString(a) {
 				l.add(lf, "aws.usage: %q is not a resource address", a)
 			}
 			for k, v := range u {
-				if v < 0 {
+				if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 					l.add(lf, "aws.usage: %s.%s must not be negative", a, k)
 				}
 			}
@@ -942,7 +944,7 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
 		case "resource", "data", "ephemeral", "action":
-			if blk.Type == "resource" && strings.HasPrefix(blk.Labels[0], "aws_") && l.tfTypes[blk.Labels[0]] == "" {
+			if blk.Type == "resource" && l.tfTypes[blk.Labels[0]] == "" {
 				l.tfTypes[blk.Labels[0]] = p
 			}
 			if prov, _, _ := strings.Cut(blk.Labels[0], "_"); tfBannedProviders["hashicorp/"+prov] {

@@ -752,3 +752,30 @@ func TestUnpricedTypeInANestedModuleIsRefused(t *testing.T) {
 		t.Fatalf("declared: %v", probs)
 	}
 }
+
+func TestOnlyManagedResourcesAreTypeChecked(t *testing.T) {
+	tf := func(body string) map[string]string { return map[string]string{"modules/m1/lab/terraform/x.tf": body} }
+	_, probs := Load(awsTree(t, tf("resource \"random_shuffle\" \"s\" {\n  input = [\"a\"]\n}\n")))
+	if !strings.Contains(fmt.Sprint(probs), "random_shuffle") {
+		t.Fatalf("a non-aws unpriced type is refused: %v", probs)
+	}
+	for name, body := range map[string]string{
+		"free random": "resource \"random_id\" \"i\" {\n  byte_length = 4\n}\n",
+		"data source": "data \"aws_kinesis_stream\" \"s\" {\n  name = \"s\"\n}\n",
+	} {
+		if _, probs := Load(awsTree(t, tf(body))); len(probs) > 0 {
+			t.Fatalf("%s: %v", name, probs)
+		}
+	}
+}
+
+func TestPricesRejectNaNAndInf(t *testing.T) {
+	_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  prices: {aws_kinesis_stream: .inf}\n"}))
+	if !strings.Contains(fmt.Sprint(probs), "aws.prices") {
+		t.Fatal(probs)
+	}
+	_, probs = Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  usage: {aws_s3_bucket.data: {storage_gb: .nan}}\n"}))
+	if !strings.Contains(fmt.Sprint(probs), "aws.usage") {
+		t.Fatal(probs)
+	}
+}

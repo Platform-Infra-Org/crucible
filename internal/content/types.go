@@ -66,7 +66,7 @@ type Question struct {
 
 type Lab struct {
 	ID          string         `yaml:"id"`
-	Runtime     string         `yaml:"runtime"` // local | cluster | terraform | aws (aws = terraform on aws); Load turns terraform into its cloud
+	Runtime     string         `yaml:"runtime"` // local | cluster | terraform | aws (aws = terraform on aws: write runtime: terraform with cloud: aws, or runtime: aws); Load turns terraform into its cloud
 	Cloud       string         `yaml:"cloud"`   // runtime terraform: the cloud it runs on (aws)
 	TTL         yamlx.Duration `yaml:"ttl"`     // 0 = use the program default
 	IdleTimeout yamlx.Duration `yaml:"idle_timeout"`

@@ -522,7 +522,7 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 		case errors.Is(err, apperr.Conflict):
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Conflict.Error())
-		case errors.Is(err, apperr.Invalid): // the estimate is over the lab's max_hourly_usd
+		case errors.Is(err, apperr.Invalid): // overCeiling from TerraformEstimator
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Invalid.Error())
 		default:
 			s.Log.Error("lab quote failed", "team", team, "training", training, "module", module, "err", err)
@@ -569,7 +569,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	}
 	hourly, err := est.HourlyUSD(ctx, lab)
 	if errors.Is(err, apperr.Unavailable) || errors.Is(err, apperr.Invalid) {
-		return nil, err // "estimate pending, try again shortly" and "over this lab's max_hourly_usd" reach the trainee as is
+		return nil, err // "estimate pending, try again shortly" and overCeiling reach the trainee as is
 	} else if err != nil {
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}
@@ -613,13 +613,17 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	if lab.Runtime == "aws" && lab.AWS != nil && q.Blocked == "" {
 		switch {
 		case hourly > lab.AWS.MaxHourlyUSD:
-			q.Blocked = fmt.Sprintf("This lab is priced at $%.4f/h, above its $%g/h limit; its maintainers need to make it cheaper.",
-				hourly, lab.AWS.MaxHourlyUSD)
+			q.Blocked = overCeiling(hourly, lab.AWS.MaxHourlyUSD)
 		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
 			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)
 		}
 	}
 	return q, nil
+}
+
+// overCeiling tells the trainee an aws lab costs more than its author allowed (the quote and TerraformEstimator).
+func overCeiling(hourly, limit float64) string {
+	return fmt.Sprintf("This lab is priced at $%.4f/h, above its $%g/h limit; its maintainers need to make it cheaper.", hourly, limit)
 }
 
 // escalateAt is when a request waiting since now moves up a tier: escalation hours counted inside the schedule.
@@ -1528,6 +1532,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.reconcileCluster(ctx)
 	s.refreshAWS(ctx)
+	if ar, ok := s.Runners["aws"].(*AWSRunner); ok && ar.DryRun == nil && ar.Cluster != nil {
+		if err := ar.reapPlans(ctx, now); err != nil {
+			s.Log.Warn("deleting leftover estimate plans failed", "err", err)
+		}
+	}
 }
 
 // alertStuck tells the admins, once per lab, that a destroy never finished (spec §8.1). The conditional UPDATE

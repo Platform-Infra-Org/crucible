@@ -575,3 +575,39 @@ func TestAWSPlanNeverRunsInDryRun(t *testing.T) {
 		t.Fatalf("a dry run prices from fixed rates, never a plan: %v %v", err, cs.Actions())
 	}
 }
+
+// A plan whose API died mid-run leaves its pod, credentials and module behind; the sweep deletes them after 15 minutes.
+func TestSweepDeletesLeakedPlanObjects(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	old, fresh := metav1.NewTime(f.clk.Now().Add(-16*time.Minute)), metav1.NewTime(f.clk.Now().Add(-5*time.Minute))
+	meta := func(ns, name string, at metav1.Time) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: at, Labels: map[string]string{labLabel: estimatesLabel}}
+	}
+	cs := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.Secret{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.ConfigMap{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.Pod{ObjectMeta: meta(estimatesNS, "tf-plan-bbbbbbbbbbbb", fresh)},
+		&corev1.Secret{ObjectMeta: meta(estimatesNS, "tf-plan-bbbbbbbbbbbb", fresh)},
+		&corev1.Pod{ObjectMeta: meta(labNamespace(testID), tfApplyPod, old)},
+		&corev1.Secret{ObjectMeta: meta(labNamespace(testID), awsSecret, old)})
+	a, _, _ := testAWS(cs)
+	f.s.Runners["aws"] = a
+	f.s.Sweep(ctx)
+	gone := func(err error) bool { return apierrors.IsNotFound(err) }
+	core := cs.CoreV1()
+	_, e1 := core.Pods(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	_, e2 := core.Secrets(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	_, e3 := core.ConfigMaps(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	if !gone(e1) || !gone(e2) || !gone(e3) {
+		t.Fatalf("a leaked run is deleted: %v %v %v", e1, e2, e3)
+	}
+	_, e4 := core.Pods(estimatesNS).Get(ctx, "tf-plan-bbbbbbbbbbbb", metav1.GetOptions{})
+	_, e5 := core.Secrets(estimatesNS).Get(ctx, "tf-plan-bbbbbbbbbbbb", metav1.GetOptions{})
+	_, e6 := core.Pods(labNamespace(testID)).Get(ctx, tfApplyPod, metav1.GetOptions{})
+	_, e7 := core.Secrets(labNamespace(testID)).Get(ctx, awsSecret, metav1.GetOptions{})
+	if e4 != nil || e5 != nil || e6 != nil || e7 != nil {
+		t.Fatalf("a running plan and lab objects are left alone: %v %v %v %v", e4, e5, e6, e7)
+	}
+}

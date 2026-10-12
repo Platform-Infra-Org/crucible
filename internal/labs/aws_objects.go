@@ -158,6 +158,10 @@ func planPod(name, image string) *corev1.Pod {
 // planScript plans the module against no backend (planTF), no refresh and no lock, so it reads and writes no state.
 // Data sources still read the account, with the plan role. Everything but the plan JSON goes to stderr; the pod log
 // mixes both streams, so the JSON is its last line, printed by terraform itself after the module's code has run.
+// That last line can be trusted only because lint bans the providers that run commands or write files
+// (content/load.go tfBannedProviders: hashicorp/external, hashicorp/local). A module able to run code could leave a
+// process behind that writes a forged plan to the pod log after `terraform show`, pricing the lab at $0. Relaxing
+// that list reopens plan forgery.
 const planScript = "set -eu\n" + imdsGuard + "tar xzf /module/module.tgz -C /w\n" +
 	"terraform init -input=false -no-color -backend=false >&2\n" +
 	"terraform plan -input=false -no-color -refresh=false -lock=false -var-file=" + tfVarsFile + " -out=/w/p >&2\n" +

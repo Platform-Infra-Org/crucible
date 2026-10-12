@@ -441,3 +441,43 @@ func (a *AWSRunner) Plan(ctx context.Context, lab *content.Lab) ([]byte, error) 
 	out = bytes.TrimSpace(out)
 	return out[bytes.LastIndexByte(out, '\n')+1:], nil
 }
+
+// planLeakAge: a plan run older than this is a leftover (Plan gives up after planDeadline plus three minutes).
+const planLeakAge = 15 * time.Minute
+
+// reapPlans deletes plan runs' pods, credentials and modules older than planLeakAge: an API that died mid-plan never
+// ran Plan's deferred delete. The sweep calls it.
+func (a *AWSRunner) reapPlans(ctx context.Context, now time.Time) error {
+	core := a.Cluster.Client.CoreV1()
+	sel := metav1.ListOptions{LabelSelector: labLabel + "=" + estimatesLabel}
+	var errs []error
+	reap := func(m metav1.ObjectMeta, del func(context.Context, string, metav1.DeleteOptions) error) {
+		if strings.HasPrefix(m.Name, "tf-plan-") && m.CreationTimestamp.Time.Before(now.Add(-planLeakAge)) {
+			if err := del(ctx, m.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, err)
+			}
+		}
+	}
+	pods, err := core.Pods(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, p := range pods.Items {
+		reap(p.ObjectMeta, core.Pods(estimatesNS).Delete)
+	}
+	secrets, err := core.Secrets(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, x := range secrets.Items {
+		reap(x.ObjectMeta, core.Secrets(estimatesNS).Delete)
+	}
+	cms, err := core.ConfigMaps(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, x := range cms.Items {
+		reap(x.ObjectMeta, core.ConfigMaps(estimatesNS).Delete)
+	}
+	return errors.Join(errs...)
+}

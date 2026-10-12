@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -96,6 +97,68 @@ func TestTerraformEstimateFailsClosed(t *testing.T) {
 	}
 }
 
+// The plan is cached per content version, the price is not: stale prices block a lab priced before, and a new
+// weekly price reaches it, both within a minute and without planning again. A price failure is never remembered.
+func TestTerraformEstimateRepricesEveryCall(t *testing.T) {
+	ctx := context.Background()
+	clk := &clock{t: time.Unix(1000, 0)}
+	p := &fakePlanner{plan: mustRead(t, "../pricing/testdata/plan.json")}
+	var fetches int
+	stale := false
+	e := &TerraformEstimator{Plan: p, Now: clk.Now, Prices: func(context.Context) (pricing.Lookup, error) {
+		fetches++
+		if stale {
+			return nil, pricing.ErrStale
+		}
+		return testPrices(), nil
+	}}
+	lab := tfLab("/c/fresh")
+	if h, err := e.HourlyUSD(ctx, lab); err != nil || h <= 0 {
+		t.Fatalf("%v %v", h, err)
+	}
+	stale = true
+	if _, err := e.HourlyUSD(ctx, lab); err != nil || fetches != 1 {
+		t.Fatalf("prices are kept for a minute: %v (%d fetches)", err, fetches)
+	}
+	clk.Add(61 * time.Second)
+	if h, err := e.HourlyUSD(ctx, lab); !errors.Is(err, pricing.ErrStale) || h != 0 {
+		t.Fatalf("stale prices block a lab priced before: %v %v", h, err)
+	}
+	if b, err := e.Breakdown(ctx, lab); err == nil || b.HourlyUSD != 0 {
+		t.Fatalf("and its breakdown: %+v %v", b, err)
+	}
+	stale = false
+	if h, err := e.HourlyUSD(ctx, lab); err != nil || h <= 0 {
+		t.Fatalf("a price failure is not remembered: %v %v", h, err)
+	}
+	if p.calls != 1 {
+		t.Fatalf("the plan is cached per version: %d plans", p.calls)
+	}
+}
+
+func TestTerraformEstimateFollowsNewPrices(t *testing.T) {
+	ctx := context.Background()
+	clk := &clock{t: time.Unix(1000, 0)}
+	p := &fakePlanner{plan: mustRead(t, "../pricing/testdata/plan.json")}
+	ec2 := 0.0114
+	e := &TerraformEstimator{Plan: p, Now: clk.Now, Prices: func(context.Context) (pricing.Lookup, error) {
+		s := testPrices()
+		s[[3]string{"aws", "eu-west-1", "ec2:t3.micro"}] = ec2
+		return s, nil
+	}}
+	lab := tfLab("/c/weekly")
+	before, err := e.HourlyUSD(ctx, lab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ec2 += 0.1
+	clk.Add(2 * time.Minute)
+	after, err := e.HourlyUSD(ctx, lab)
+	if err != nil || math.Abs(after-before-0.1) > 1e-9 || p.calls != 1 {
+		t.Fatalf("the hourly figure follows the price: %v → %v %v (%d plans)", before, after, err, p.calls)
+	}
+}
+
 // More ways to get a $0 or a wrong price: each is an error, never a number.
 func TestTerraformEstimateNeverQuotesWithoutAPrice(t *testing.T) {
 	ctx := context.Background()
@@ -121,7 +184,7 @@ func TestTerraformEstimateNeverQuotesWithoutAPrice(t *testing.T) {
 	over := &TerraformEstimator{Plan: &fakePlanner{plan: mustRead(t, "../pricing/testdata/plan.json")}, Prices: fixedPrices}
 	lab.AWS.MaxHourlyUSD = 0.01
 	if _, err := over.HourlyUSD(ctx, lab); !errors.Is(err, apperr.Invalid) ||
-		!strings.Contains(err.Error(), "is over this lab's max_hourly_usd $0.0100") {
+		!strings.Contains(err.Error(), "This lab is priced at $0.1120/h, above its $0.01/h limit; its maintainers need to make it cheaper.") {
 		t.Fatalf("over the ceiling says why: %v", err)
 	}
 	if _, err := over.HourlyUSD(ctx, &content.Lab{Dir: "/c/3", Runtime: "aws"}); err == nil {
@@ -280,7 +343,7 @@ func TestModuleLabCarriesTheEstimateBreakdown(t *testing.T) {
 	p := &fakePlanner{plan: mustRead(t, "../pricing/testdata/plan.json")}
 	f.s.Estimators["aws"] = &TerraformEstimator{Plan: p, Prices: fixedPrices}
 	m, err := f.s.ModuleLab(ctx, f.u, "forge", "forge-401", "01-cloud-heat") // the fixture plan is over its $0.05/h
-	if err != nil || m.Estimate != nil || !strings.Contains(m.Blocked, "is over this lab's max_hourly_usd $0.0500") {
+	if err != nil || m.Estimate != nil || m.Blocked != "This lab is priced at $0.1088/h, above its $0.05/h limit; its maintainers need to make it cheaper." {
 		t.Fatalf("over the ceiling: %+v %v", m, err)
 	}
 	f.s.Learn.State().Trainings["forge-401@abc"].Module("01-cloud-heat").Lab.AWS.MaxHourlyUSD = 1

@@ -25,12 +25,15 @@ type BudgetView struct {
 
 // ProgramView is a training's run as the team and trainings pages show it.
 type ProgramView struct {
-	Training           string            `json:"training"`
-	Title              string            `json:"title"`
-	Team               string            `json:"team"` // the owning team
-	Version            int64             `json:"version"`
-	Roles              config.Access     `json:"roles"`    // as given: people and groups; what a save sends back
-	Resolved           config.Access     `json:"resolved"` // who that is now; read-only
+	Training string        `json:"training"`
+	Title    string        `json:"title"`
+	Team     string        `json:"team"` // the owning team
+	Version  int64         `json:"version"`
+	Roles    config.Access `json:"roles"`    // as given: people and groups; what a save sends back
+	Resolved config.Access `json:"resolved"` // who that is now; read-only
+	// Implied is who holds a role without being named: the owning team's own people. Read-only, and not part of a
+	// save — removing someone here means changing their tag on the team.
+	Implied            config.Access     `json:"implied"`
 	Schedule           string            `json:"schedule"`
 	InlineSchedule     *config.Schedule  `json:"inline_schedule,omitempty"`
 	LabDefaults        map[string]string `json:"lab_defaults"`
@@ -123,7 +126,14 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 
 func programView(c rbac.Checker, actor, team, tr string, p *config.Program, title, running, head string) ProgramView {
 	a := p.Access
-	return ProgramView{Training: tr, Title: title, Team: team, Version: p.Version,
+	// The owning team's people hold these roles with nobody naming them (rbac.ManageProgram, edits.canPropose), so
+	// the page shows them beside the named ones rather than claiming nobody holds the role.
+	var implied config.Access
+	if t := c.P.Teams[team]; t != nil {
+		implied.Editors = nonNil(slices.Concat(t.Leaders, t.Seniors))
+		implied.Admins = nonNil(slices.Concat(t.Leaders, t.Seniors, t.Juniors))
+	}
+	return ProgramView{Training: tr, Title: title, Team: team, Version: p.Version, Implied: implied,
 		Roles:    config.Access{Participants: nonNil(a.Participants), Editors: nonNil(a.Editors), Admins: nonNil(a.Admins)},
 		Resolved: config.Access{Participants: nonNil(p.Enrolled), Editors: nonNil(p.Editors), Admins: nonNil(p.Roles.Manager)},
 		Schedule: p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,

@@ -259,16 +259,10 @@ function ContentEdits({ t }: { t: ManagedTraining }) {
   )
 }
 
-const ROLES: { key: keyof Access; label: string; one: string; what: string; already?: (team: string) => string }[] = [
+const ROLES: { key: keyof Access; label: string; one: string; what: string }[] = [
   { key: 'participants', label: 'Participants', one: 'a participant', what: 'take the training' },
-  {
-    key: 'editors', label: 'Editors', one: 'an editor', what: 'propose and review content edits, and score answers',
-    already: (team) => `${team ? `${team}'s leaders and seniors` : 'the owning team\u2019s leaders and seniors'} already do, as do the maintainers named in training.yaml and Crucible admins.`,
-  },
-  {
-    key: 'admins', label: 'Admins', one: 'an admin', what: 'do what editors do, manage the training and approve its paid labs',
-    already: (team) => `${team ? `${team}'s leaders, seniors and juniors` : 'the owning team\u2019s leaders, seniors and juniors'} already manage it, as do Crucible admins.`,
-  },
+  { key: 'editors', label: 'Editors', one: 'an editor', what: 'propose and review content edits, and score answers' },
+  { key: 'admins', label: 'Admins', one: 'an admin', what: 'do what editors do, manage the training and approve its paid labs' },
 ]
 
 // Run is the training's one run: who holds each role, how its labs run, and the content version it uses.
@@ -289,7 +283,7 @@ function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: Pe
         : <p className="muted">Read-only: {p.team}&apos;s leaders, seniors and juniors and the training&apos;s admins make changes here.</p>}
       {ROLES.map((r) => (
         <RoleRow key={r.key} id={`${p.training}-${r.key}`} label={r.label} one={r.one} what={r.what} refs={p.roles[r.key]} resolved={p.resolved[r.key]}
-          already={r.already?.(p.team)} people={people} busy={act.busy}
+          implied={p.implied?.[r.key] ?? []} team={p.team} people={people} busy={act.busy}
           onChange={manage ? (list, ok) => void save({ roles: { ...p.roles, [r.key]: list } }, ok) : undefined} />
       ))}
       {manage && (
@@ -303,8 +297,9 @@ function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: Pe
   )
 }
 
-function RoleRow({ id, label, one, what, already, refs, resolved, people, busy, onChange }: {
-  id: string; label: string; one: string; what: string; already?: string; refs: string[]; resolved: string[]
+function RoleRow({ id, label, one, what, implied, team, refs, resolved, people, busy, onChange }: {
+  id: string; label: string; one: string; what: string; implied: string[]; team: string
+  refs: string[]; resolved: string[]
   people?: People; busy: boolean
   onChange?: (list: string[], ok: string) => void
 }) {
@@ -326,8 +321,13 @@ function RoleRow({ id, label, one, what, already, refs, resolved, people, busy, 
       <span className="role-name">{label}</span>
       <div>
         <p className="muted role-default">They {what}.{refs.some(isGroup) && ` Now ${resolved.length} ${resolved.length === 1 ? 'person' : 'people'}.`}</p>
-        {refs.length === 0 && <p className="muted role-default">{already ? `Nobody named \u2014 ${already}` : 'Nobody yet.'}</p>}
+        {refs.length === 0 && implied.length === 0 && <p className="muted role-default">Nobody yet.</p>}
         <ul className="chips" aria-label={label}>
+          {implied.map((who) => (
+            <li key={`implied-${who}`} className="chip implied" title={`On the team that owns this training (${team}), so they hold this role without being named`}>
+              {who}
+            </li>
+          ))}
           {refs.map((ref) => (
             <li key={ref} className={isGroup(ref) ? 'chip group' : 'chip'} title={isGroup(ref) ? describeGroup(ref) : undefined}>
               {isGroup(ref) && <span aria-hidden="true">⚑ </span>}{ref}

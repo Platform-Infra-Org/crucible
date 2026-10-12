@@ -8,6 +8,7 @@ const prog = (over: Partial<ProgramConfig> = {}): ProgramConfig => ({
   team: 'forge', training: 'forge-101', title: 'Forge 101', version: 2,
   roles: { participants: ['all_trainees', 'guest@x'], editors: ['forge_seniors'], admins: [] },
   resolved: { participants: ['a@x', 'b@x', 'guest@x'], editors: ['s@x'], admins: [] },
+  implied: { participants: [], editors: ['lead@x'], admins: ['lead@x'] },
   schedule: '', lab_defaults: { ttl: '', idle_timeout: '', max_extension: '' }, budget_usd_month: 0, review_self_reported: false,
   can_manage: true, running_sha: 'a'.repeat(40), head_sha: 'a'.repeat(40), pinned_ref: '', ...over,
 })

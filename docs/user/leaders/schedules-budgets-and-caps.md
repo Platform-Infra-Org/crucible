@@ -38,11 +38,18 @@ budget, its admins too). A request that
 would pass a hard cap needs an admin, and approving it is an audited override. A running lab ends when its cost
 would reach the cap. Budgets fail closed: if Crucible can't read the spend, it starts nothing.
 
+What counts against a budget is each lab's cost so far. A running lab counts at its hourly estimate until it is
+metered. An AWS lab is metered from what it actually built (read from its Terraform state after each apply) and then
+counts at that. Once its AWS bill settles, about two days after it ends, the billed figure replaces the metered one.
+The [Ledger](/docs/leaders/ledger-and-content-versions) shows all of these figures.
+
 ## How labs are priced
 
 - **Laptop labs** are free.
 - **Cluster labs** are free: they run on the trainee's own cluster.
-- **AWS labs** are estimated from their Terraform with infracost. A lab priced above its own hourly limit, or in a
-  region this Crucible doesn't allow, can't be requested.
+- **AWS labs** are estimated by Crucible itself: it plans the lab's Terraform and prices each resource from AWS list
+  prices, which it refreshes every week. The lab page shows how each estimate was worked out. A lab can't be requested
+  when it is priced above its own hourly limit, runs in a region this Crucible doesn't allow, has a resource Crucible
+  can't price, or when the price data is missing or more than 30 days old.
 
 The estimate is the hourly price times the lab's time limit.

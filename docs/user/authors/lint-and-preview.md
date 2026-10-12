@@ -15,8 +15,9 @@ crucible lint path/to/training-repo
 ```
 
 Runs the same checks Crucible runs when it loads the training, and lists every problem with its file. It also runs
-`shellcheck` on your scripts when you have it installed, and prices AWS labs with `infracost` when you have it and an
-API key. It ends with *Ready for the forge* when all is well, and exits non-zero otherwise, so it fits in CI.
+`shellcheck` on your scripts when you have it installed. For AWS labs it refuses any resource type Crucible can't
+price unless the lab declares its price (see [AWS labs](/docs/authors/aws-labs)); it needs no network or AWS account
+for that. It ends with *Ready for the forge* when all is well, and exits non-zero otherwise, so it fits in CI.
 
 Point it at a platform directory in the seed layout (such as `examples/platform`) and it checks that configuration.
 

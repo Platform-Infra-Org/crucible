@@ -53,7 +53,8 @@ test('an aws lab is estimated, approved, provisioned, checked, destroyed and swe
   await trainee.getByRole('button', { name: 'End lab' }).click()
   await expect(trainee.getByRole('heading', { name: 'The forge has cooled' })).toBeVisible({ timeout: 5 * 60_000 })
 
-  // Swept, and on the Ledger: the hand-made volume the dry run left behind, and the lab's (fake) AWS bill.
+  // Swept, and on the Ledger: the hand-made volume the dry run left behind, what the lab was metered at, and its
+  // (fake) AWS bill.
   const admin = await login(browser, 'admin')
   await admin.getByRole('link', { name: 'Ledger' }).click()
   await admin.getByRole('button', { name: 'Refresh now' }).click()
@@ -63,4 +64,8 @@ test('an aws lab is estimated, approved, provisioned, checked, destroyed and swe
   await expect(findings).toContainText('deleted')
   const row = admin.getByTestId('ledger-labs').getByRole('row').filter({ hasText: 'forge-401 / 01-cloud-heat' })
   await expect(row).toContainText('$0.11 (so far)')
+  // Metered from the fake apply's Terraform state (a t3.nano and its root volume) at the dry run's fixture prices:
+  // under a cent an hour, so a small dollar figure, not '—' (never metered).
+  const headers = await admin.getByTestId('ledger-labs').getByRole('columnheader').allTextContents()
+  await expect(row.getByRole('cell').nth(headers.indexOf('Metered'))).toHaveText(/^\$\d+\.\d{2}$/)
 })

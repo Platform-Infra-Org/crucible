@@ -48,7 +48,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
 | Progression | Configurable per training: `linear` (gated) or `free` |
 | Instant quiz types | single/multi choice, exact/regex, ordering/matching, terminal-inspection |
 | Human-scored items | free text, file/link uploads, lab submissions (incl. override), live sign-offs |
-| FinOps v1 | TTL + idle destroy, schedules, budgets + hard caps, infracost estimate, in-app dashboard |
+| FinOps v1 | TTL + idle destroy, schedules, budgets + hard caps, Crucible's own estimate from list prices (2026-10-12), in-app dashboard |
 | Teardown | Global lab kill switch **and** full platform hibernate/restore |
 | Extras approved | Forge ranks, `crucible lint`/preview CLI, email + Slack/Teams notifications, journey view (mentor pairing removed 2026-10-11) |
 | Themes | Built-in set, per-user choice, admin default |
@@ -80,7 +80,7 @@ Crucible trains new coworkers from zero to hero. It delivers **reading material*
                  └───────────────────────────────────────────────────────────────┘
  Trainee laptop: crucible-agent ──outbound WS──► crucible-api
  Git server ◄── bot (clone/pull/push) ── gitsync
- AWS shared lab account ◄── terraform Jobs / Cost Explorer
+ AWS shared lab account ◄── terraform Jobs / plan pods / CUR 2.0 export (S3)
  Keycloak / OIDC IdP ◄── auth
 ```
 
@@ -182,7 +182,7 @@ questions:
 ### 4.5 Lab manifest
 ```yaml
 id: docker-networking
-runtime: cluster            # cluster | local | aws
+runtime: cluster            # cluster | local | terraform (with cloud: aws; aws is an alias)
 ttl: 2h
 idle_timeout: 30m
 idle_warning: 5m            # "Are you still there?" shown this long before idle destroy
@@ -212,10 +212,12 @@ tasks:
     setup: { script: setup/04-break-nginx.sh, run_in: workstation, timeout: 60s }
     check: { script: checks/04.sh, run_in: workstation, timeout: 30s }
     points: 3
-# aws only:
+# runtime: terraform + cloud: aws (or runtime: aws) only; see 2026-10-12-free-finops-and-terraform-mode-design.md:
 aws:
-  region: eu-west-1
-  max_hourly_usd: 0.50      # lint fails if infracost estimate exceeds this
+  region: eu-west-1         # required
+  max_hourly_usd: 0.50      # Crucible's own estimate (plan priced from AWS list prices) must not exceed this
+  prices: { aws_kinesis_stream: 0.015 }        # USD/h for types Crucible can't price; lint refuses any other
+  usage: { aws_s3_bucket.data: { storage_gb: 5 } }   # monthly usage of usage-priced resources, by address
 ```
 
 ---
@@ -260,7 +262,7 @@ Rules: nobody approves their own lab request or scores their own submission. A t
 - Programs pin a SHA. In-progress attempts finish on their pinned version; manager bumps via UI (diff summary shown first).
 - **Config writes (UI → platform repo):** bot commits directly with message `crucible: <action> by <user email>` and a `Crucible-Actor:` trailer. Optimistic concurrency: fetch → apply → push; on non-fast-forward, rebase and retry up to 3×; a true conflict returns an error to the user. DB caches config but git is authoritative — a manual git edit wins on next sync.
 - **Content edits from UI:** pushed to branch `crucible/edit/<edit-id>`; Crucible shows rendered preview + diff; a training maintainer other than the author approves → bot merges to the tracked branch (merge commit); paths are relative to the training's folder. A training that follows a tag or a commit takes no edits from the UI. Merge conflict → edit marked *stale*, author re-edits on fresh base.
-- **`crucible lint <repo>`**: schema validation, broken links/assets, referenced scripts exist and are executable, check scripts `shellcheck`ed, quiz answers within option ranges, AWS labs pass infracost against `max_hourly_usd`.
+- **`crucible lint <repo>`**: schema validation, broken links/assets, referenced scripts exist and are executable, check scripts `shellcheck`ed, quiz answers within option ranges, AWS labs name a region and use only resource types Crucible prices, lists as free, or the lab declares under `aws.prices` (offline; the plan-based estimate is checked against `max_hourly_usd` when the lab is shown).
 - **`crucible preview <repo>`**: runs the SPA + a local content server against the working tree (reading, quizzes, and `local`-runtime labs).
 
 ---
@@ -288,7 +290,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 ### 8.2 Runtimes
 - **cluster** — Helm charts installed by the trainee's agent on a cluster of their kubeconfig (spec `2026-10-11-cluster-labs-on-your-cluster-design.md`); free, self-reported.
 - **local:** trainee installs `crucible-agent` (macOS, Linux, Windows/WSL2; requires Docker). Agent logs in (device code), holds an outbound WebSocket to the API, receives the compose bundle, runs it, streams PTYs, runs checks. Check results from local labs are flagged **self-reported**; a program can require human review for them. No cloud cost → always auto-approved.
-- **aws:** a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
+- **aws** (`runtime: terraform` + `cloud: aws` since 2026-10-12; `runtime: aws` is an alias): a terraform runner Job (`terraform apply` with the lab's module, state in S3 keyed by lab id) plus a cluster **workspace pod** (aws cli, terraform, kubectl…) for the terminals. Credentials: STS `AssumeRole` into a lab role with **permission boundary** and session tag `crucible:lab-id=<id>`; IAM conditions require that tag on create (`aws:RequestTag`) and on modify/delete (`aws:ResourceTag`). Provider `default_tags` add `crucible:lab-id`, `crucible:team`, `crucible:training`. Destroy = `terraform destroy`, then a tag sweep via Resource Groups Tagging API. A nightly **reaper** lists all tagged resources with no live lab and deletes them, and reports untagged resources created by lab roles (CloudTrail) to admins. Known limitation: shared-account isolation is best-effort — services without tag-condition support are excluded from lab roles by the boundary.
 
 ### 8.3 Lab UI (KodeKloud-style)
 - **Left panel (≈40%):** task list with status pips; current task's Markdown; inline terminal-quiz input; **Check** button (spinner → spark burst on pass, shake + feedback on fail); **Hint** button (§8.4).
@@ -339,7 +341,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 ## 9. FinOps
 
 ### 9.1 Request & approval
-1. Trainee requests a lab → Crucible computes **estimate**: `aws` = infracost on the module × requested TTL; `local` and `cluster` = $0.
+1. Trainee requests a lab → Crucible computes **estimate**: `aws` = Crucible's own hourly price × requested TTL (a read-only `terraform plan` per content version, priced from the free AWS Price List; spec `2026-10-12-free-finops-and-terraform-mode-design.md` §2, which replaced infracost); `local` and `cluster` = $0.
 2. **Cost tiers** (`platform.yaml`; no built-in defaults — install fails validation until set):
    - `local`, `cluster` → always auto-approved.
    - Estimate ≤ `tier1_usd` → program **approver**.
@@ -356,7 +358,7 @@ Every transition is a River job, idempotent, recorded in `lab_events`. `failed` 
 - **Global kill switch** (admin): destroys all running labs immediately and blocks new requests until re-enabled.
 
 ### 9.3 Cost data & dashboard
-- Live spend = runtime estimates per running lab. Actual AWS spend = Cost Explorer daily ingestion grouped by cost-allocation tags (`crucible:*`), reconciled against estimates (~24 h lag shown explicitly).
+- Live spend = metered spend per running AWS lab (its Terraform state at list prices), else the runtime estimate. Billed AWS spend = the free CUR 2.0 billing export, read daily from S3 and grouped by the `crucible:lab-id` cost-allocation tag; it replaces metered spend once settled (48 h after the lab ends). A free AWS Budget alerts admins as a backstop. No Cost Explorer. See `2026-10-12-free-finops-and-terraform-mode-design.md` §3.
 - **FinOps page** (themed, in-app): spend by team / training / lab over time, budget burn-down, running labs with cost-so-far and time-to-death, top spenders, estimate-vs-actual accuracy, reaper findings.
 
 ### 9.4 Deployment, hibernate & restore
@@ -411,7 +413,7 @@ Channels: email (SMTP) and Slack/Teams incoming webhooks (per team in `team.yaml
 - **Accessibility:** keyboard-navigable everything (including terminal tab switching), focus rings, ARIA live regions for check results, contrast checked per theme.
 
 ## 13. Data model (Postgres, core tables)
-`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `cost_actuals` (Cost Explorer) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `sword_ranks` · `smiths`.
+`users`, `teams_cache`, `programs_cache` (git mirrors, rebuildable) · `content_versions` (repo, sha, parsed manifest JSON, valid, errors) · `enrollments` · `item_progress` · `quiz_attempts` · `submissions` (type, payload, files → object storage) · `scores` (auto/human, scorer, override reason) · `lab_instances` (runtime, state, program, requester, ttl, estimate) · `lab_requests` + `approvals` (tier, approver, escalations) · `lab_events` · `check_runs` (stdout, exit code, self_reported) · `hint_reveals` (lab instance, task, hint index, cost, timestamp) · `setup_runs` (lab instance, task or lab-level, attempt, exit code, output, duration) · `terminal_transcripts` (object storage ref) · `cost_samples` (estimates) + `lab_resources` (metered) + `cost_actuals` (billing export) + `prices` (list prices) · `notifications` · `audit_log` (every privileged action, git commit SHA where applicable) · `sword_ranks` · `smiths`.
 Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 
 ## 14. Errors, security, testing
@@ -421,7 +423,7 @@ Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 - gitsync failure → previous version stays live; Forge Status shows the error; maintainers notified.
 - Git push conflict on config → user sees "Someone changed this in git, reload".
 - Agent disconnect → terminals show reconnecting; lab keeps running until idle/TTL.
-- Cost Explorer unavailable → dashboard marks actuals stale; estimates still enforce caps.
+- Billing export missing or late → dashboard marks billed figures stale; metered spend and estimates still enforce caps. Price data missing or older than 30 days → aws labs can't be estimated or requested.
 
 **Security**
 - Check scripts and lab containers never run in the API pod; cluster labs are namespace-isolated with quotas and network policies; sysbox (no privileged pods).
@@ -444,7 +446,7 @@ Files (uploads, transcripts, snapshots) → S3-compatible object storage.
 5. Approvals (tiers, escalation) + schedules + kill switch + notifications.
 6. Human scoring queue + submissions + sign-offs.
 7. Local agent runner.
-8. AWS runner + infracost + reaper + Cost Explorer ingestion + budgets/caps + FinOps page.
+8. AWS runner + infracost + reaper + Cost Explorer ingestion + budgets/caps + FinOps page (infracost and Cost Explorer replaced by Crucible's own pricing and the billing export on 2026-10-12).
 9. Hibernate/restore + snapshots + `deploy/` terraform.
 10. Forge ranks, mentor/journey view, content edit review flow, motion polish, quotes.
 

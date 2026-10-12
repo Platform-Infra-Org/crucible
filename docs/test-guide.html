@@ -218,8 +218,8 @@ body.hide-done .item.done { display: none; }
             <p>The trainee runs <code>crucible-agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
           <div class="rt cluster"><h3>Cluster labs</h3><span class="tag">runtime: cluster</span>
             <p>The trainee's agent installs the lab's Helm charts into their own namespace on a cluster they pick from their kubeconfig (kind on the laptop, or a remote one). Terminals and scripts run in a toolbox container. Free, and results are self-reported.</p></div>
-          <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: aws</span>
-            <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced with infracost, and always approved by a person. Explained in full below.</p></div>
+          <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: terraform · cloud: aws</span>
+            <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced by Crucible from AWS list prices, and always approved by a person. Explained in full below.</p></div>
         </div>
       </section>
 
@@ -230,8 +230,10 @@ body.hide-done .item.done { display: none; }
           price, a person's approval and a way to clean up everything it made. Here is one lab's life.</p>
         <ol class="pour">
           <li><h3>The trainee asks</h3>
-            <p>The lab page shows an estimate: infracost prices the lab's Terraform per hour, times the lab's time limit. A lab above its own
-              <code>max_hourly_usd</code>, or in a region this Crucible doesn't allow, can't be requested.</p></li>
+            <p>The lab page shows an estimate. Crucible runs a read-only <code>terraform plan</code> of the lab once per content version, prices
+              each resource from the AWS list prices it downloads weekly, and multiplies the hourly total by the lab's time limit; <b>How this
+              estimate was worked out</b> shows it resource by resource. A lab above its own <code>max_hourly_usd</code>, in a region this Crucible
+              doesn't allow, with a resource Crucible can't price, or while the price data is missing or over 30 days old can't be requested.</p></li>
           <li><h3>A person approves</h3>
             <p>AWS labs never start on their own. The estimate picks the tier: program approver, team leader, then admin. A request that would pass a
               team or program budget cap needs an admin, as an audited override. Unanswered requests move up a tier after the escalation hours,
@@ -243,7 +245,8 @@ body.hide-done .item.done { display: none; }
           <li><h3>Terraform builds it</h3>
             <p>In the lab's namespace on Crucible's cluster, a <code>tf-apply</code> pod runs <code>terraform apply</code>. Crucible adds its own
               <code>crucible.tf</code> to the module: an S3 state backend keyed by the lab id, and the AWS provider with default tags
-              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.</p></li>
+              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.
+              After each apply Crucible reads the lab's state and meters what it built at list prices.</p></li>
           <li><h3>The trainee works</h3>
             <p>A workspace pod with the AWS CLI, Terraform and kubectl backs the terminals. Checks and setup scripts run there with the lab's
               credentials, out of the trainee's sight. The pods can't reach the node's metadata service, so they can never borrow the node's role.</p></li>
@@ -255,8 +258,10 @@ body.hide-done .item.done { display: none; }
             <p>Anything tagged with a lab that ended over an hour ago is deleted. Resources tagged with a lab Crucible doesn't know, and untagged
               creates seen in CloudTrail, are reported to admins instead.</p></li>
           <li><h3>The real bill arrives</h3>
-            <p>Every six hours Crucible reads Cost Explorer, grouped by the <code>crucible:*</code> cost-allocation tags. The Ledger shows a running lab's
-              estimate, switches to the AWS bill once it settles (24–48 hours), and tracks estimate against actual.</p></li>
+            <p>AWS writes the account's bill into a free billing export (CUR 2.0) every day; every six hours Crucible reads it and adds it up by the
+              <code>crucible:lab-id</code> cost-allocation tag. The Ledger shows a lab's estimate, its metered cost while it runs, and its billed cost,
+              which replaces the metered one once it settles (48 hours after the lab ends). No Cost Explorer. A free AWS Budget emails admins as a
+              backstop.</p></li>
         </ol>
 
         <h3 style="font-size:1.15rem;margin:1.5rem 0 0.75rem">The guardrails</h3>
@@ -272,8 +277,8 @@ body.hide-done .item.done { display: none; }
           <thead><tr><th>Mode</th><th>Set by</th><th>What happens</th><th>Where you test it</th></tr></thead>
           <tbody>
             <tr><td>Off</td><td><code>CRUCIBLE_AWS_LABS</code> unset</td><td>AWS labs can't be requested.</td><td>The plain local stack</td></tr>
-            <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code>, <code>CRUCIBLE_INFRACOST=off</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Prices come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
-            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, an infracost key, the labs stack</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
+            <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Estimates come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>; fixture list prices meter the fake apply. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
+            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, the labs stack (plan role, billing export)</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -541,7 +546,7 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
               <p class="expect"><b>Expect</b><code>tf-apply</code> completed, its log ending <i>dry run … nothing was applied or destroyed</i>, and the workspace pod running. The terminal opens, but AWS commands in it have no real account behind them.</p></div></li>
           <li class="item" data-id="dr-sweep"><label><input type="checkbox" id="c-dr-sweep"><span class="t">End it and watch the sweep</span></label>
             <div class="body"><p><b>End lab</b>. As admin open the <b>Ledger</b> and choose <b>Refresh now</b>.</p>
-              <p class="expect"><b>Expect</b>the lab is cooled; the fake account's stray volume shows under reaper findings as <i>end-of-lab sweep / deleted</i>; the lab gets a small AWS bill to compare with its estimate.</p></div></li>
+              <p class="expect"><b>Expect</b>the lab is cooled; the fake account's stray volume shows under reaper findings as <i>end-of-lab sweep / deleted</i>; the lab's row has a small <b>Metered</b> figure (the fake state's <code>t3.nano</code> and root volume, under a cent an hour) and a <b>Billed</b> figure of <i>$0.11 (so far)</i> to compare with its estimate; under the title, <i>Price data from</i> today.</p></div></li>
           <li class="item" data-id="dr-guards"><label><input type="checkbox" id="c-dr-guards"><span class="t">Money guardrails on a priced lab</span></label>
             <div class="body"><ol class="how"><li>Set the program's monthly budget below the estimate and request again.</li><li>Close the program's schedule window and request again.</li><li>Pause all labs and request again.</li></ol>
               <p class="expect"><b>Expect</b>over a cap only an admin can approve, as an audited override; outside the window the page says when it opens; while paused nothing starts.</p></div></li>
@@ -555,16 +560,16 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
         <ul class="items">
           <li class="item" data-id="aw-init"><label><input type="checkbox" id="c-aw-init"><span class="t">Create the labs stack <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>With lab-account credentials:</p>
-              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1</code></pre></div>
-              <p class="expect"><b>Expect</b>the lab role, permission boundary and state bucket, and account-wide S3 Block Public Access. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
-          <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on cost data and pricing <span class="pill cost">AWS</span></span></label>
-            <div class="body"><ol class="how"><li>In the payer account, activate cost-allocation tags <code>crucible:lab-id</code>, <code>crucible:team</code>, <code>crucible:training</code> (after the first lab; up to 24 hours).</li><li>Open Cost Explorer once in the lab account.</li><li><code>infracost auth login</code>; put the key in <code>crucible.tfvars</code> as <code>infracost_api_key</code>.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li></ol>
-              <p class="expect"><b>Expect</b>AWS labs switch on; without the key, requests say no estimate is available.</p></div></li>
+              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1 --budget-usd 50 --budget-email you@example.com</code></pre></div>
+              <p class="expect"><b>Expect</b>the lab, ops and plan roles, permission boundary, state bucket, the export bucket and CUR 2.0 export, the AWS Budget (alerts at 80% and 100%), and account-wide S3 Block Public Access. <code>--budget-usd -5</code> is refused before anything runs. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
+          <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on billed costs and wire it in <span class="pill cost">AWS</span></span></label>
+            <div class="body"><ol class="how"><li>Billing → Cost allocation tags (in the payer account if the lab account is in an organization): activate <code>crucible:lab-id</code> (it shows up after a tagged resource has existed; up to 24 hours). Free.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li><li>A day later, check the export as the runbook says: <code>aws s3 ls s3://&lt;export_bucket&gt;/cur/ --recursive</code>, and <code>terraform plan</code> of the labs stack shows no changes.</li></ol>
+              <p class="expect"><b>Expect</b>AWS labs switch on; the Ledger says <i>Price data from</i> today; the export bucket holds a manifest and <code>.csv.gz</code> files.</p></div></li>
           <li class="item" data-id="aw-run"><label><input type="checkbox" id="c-aw-run"><span class="t">Run Cloud Heat for real <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Request and approve it, then in the workspace terminal:</p>
               <div class="cmd"><pre><code>aws sts get-caller-identity
 echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.txt</code></pre></div>
-              <p class="expect"><b>Expect</b><code>assumed-role/crucible-lab/crucible-lab-&lt;id&gt;</code>; both tasks pass with <b>Check</b>; on the node, <code>tf-apply</code> completed and <code>lab</code> running.</p></div></li>
+              <p class="expect"><b>Expect</b>before you request, <b>How this estimate was worked out</b> lists the bucket with its stated 1 GB of storage as usage per hour, and a total under the lab's $0.05/h; <code>assumed-role/crucible-lab/crucible-lab-&lt;id&gt;</code>; both tasks pass with <b>Check</b>; on the node, <code>tf-apply</code> completed and <code>lab</code> running; the Ledger shows a <b>Metered</b> figure for the lab.</p></div></li>
           <li class="item" data-id="aw-boundary"><label><input type="checkbox" id="c-aw-boundary"><span class="t">The boundary holds <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Positive controls first: a dry-run <code>t3.micro</code> launch with the lab's tags and own security group returns <i>DryRunOperation</i>. Then each must fail:</p>
               <ul class="how"><li>a volume with no lab tag, another lab's id, or the tag key in other letter case</li><li>an instance in the default security group, a <code>t3.large</code>, dedicated tenancy, an io2 or oversized volume</li><li>removing lab tags, a bucket not named <code>crucible-lab-&lt;id&gt;…</code>, a region outside the allowed list</li><li>reading another lab's Terraform state, <code>aws iam list-roles</code>, reaching the metadata service</li></ul>
@@ -582,11 +587,11 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
             <div class="body"><p>After the boundary tests, Ledger → <b>Refresh now</b>; look up a create in CloudTrail event history.</p>
               <p class="expect"><b>Expect</b>no CloudTrail finding (every successful create was tagged); the user name is the session name <code>crucible-lab-&lt;id&gt;</code>.</p></div></li>
           <li class="item" data-id="aw-ec2"><label><input type="checkbox" id="c-aw-ec2"><span class="t">An EC2 lab end to end <span class="pill cost">AWS</span></span></label>
-            <div class="body"><p>In your sandbox content repo, add the runbook's <code>terraform/ec2.tf</code> (a <code>t3.nano</code>, its own security group, a data volume) next to Cloud Heat's <code>main.tf</code>.</p>
-              <p class="expect"><b>Expect</b>a non-zero infracost estimate; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
+            <div class="body"><p>In your sandbox content repo, add the runbook's <code>terraform/ec2.tf</code> (a <code>t3.nano</code>, its own security group, a data volume) next to Cloud Heat's <code>main.tf</code>, with the declared price the runbook gives for the volume attachment.</p>
+              <p class="expect"><b>Expect</b>a non-zero estimate whose breakdown lists the instance (with its root volume and public IPv4), the data volume, the attachment as <i>declared</i> and the security group and rules as <i>free</i>; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
           <li class="item" data-id="aw-bill"><label><input type="checkbox" id="c-aw-bill"><span class="t">The bill arrives <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>24–48 hours later: Ledger → <b>Refresh now</b>.</p>
-              <p class="expect"><b>Expect</b>the lab's row shows its AWS bill without <i>(so far)</i>, and <i>Estimate vs actual</i> counts it.</p></div></li>
+              <p class="expect"><b>Expect</b>the lab's <b>Billed</b> figure without <i>(so far)</i>, close to its <b>Metered</b> one, and <i>Estimate vs billed</i> counts it.</p></div></li>
         </ul>
       </section>
 

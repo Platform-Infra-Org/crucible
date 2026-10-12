@@ -96,11 +96,15 @@ Verify after `up` (over SSM, as root). Nothing here is covered by `terraform tes
 - **Bootstrap failed.** `deploy` reports "node bootstrap failed" when `/opt/crucible/.failed` exists. Read `sudo tail -f /var/log/crucible-bootstrap.log` over SSM; `.ready` appears only after the first deploy attempt. After fixing the cause, clear the marker with `sudo rm /opt/crucible/.failed` and run `crucible aws deploy` again.
 - **App logs.** `sudo k3s kubectl -n crucible logs deploy/crucible -c api` (and `-c restore`).
 
-## AWS labs (runtime: aws)
+## AWS labs (runtime: terraform, cloud: aws)
 
 AWS labs run terraform in your **lab account** with one-hour credentials scoped to a single lab (spec §8.2). A
 dedicated sandbox account is strongly recommended: the permission boundary limits labs to EC2 and S3, small
 instance types and the allowed regions, but shared-account isolation is best-effort.
+
+Crucible prices AWS labs itself and pays nothing for it (spec 2026-10-12, free FinOps): no infracost, no Cost
+Explorer. Estimates come from a read-only `terraform plan` priced from the public AWS Price List. Spend is metered
+from each lab's Terraform state, then replaced by the free CUR 2.0 billing export. A free AWS Budget is the backstop.
 
 **Setup (once).**
 1. With credentials for the lab account: `go run ./cmd/crucible aws labs-init --region eu-west-1` (add
@@ -110,22 +114,61 @@ instance types and the allowed regions, but shared-account isolation is best-eff
    from main's `node_role_name` output when it can, and otherwise trusts `crucible-node` and says so. If your
    `crucible.tfvars` sets another `name`, run labs-init again after the first `up`. With `allowed_regions`, the list
    must include `--region` (the state bucket's region); the stack refuses it otherwise.
-2. In the **management (payer) account**, open Billing → Cost allocation tags and activate `crucible:lab-id`,
-   `crucible:team` and `crucible:training` (they appear after the first lab has run; activation takes up to 24 h
-   and is not retroactive unless you request a backfill). Open Cost Explorer once in the lab account so its API is
-   enabled. Cost Explorer charges $0.01 per API call; Crucible makes about 4–8 a day.
-3. `infracost auth login` (free), then put the key in `crucible.tfvars` as `infracost_api_key`.
-4. `crucible aws up` (with Crucible-account credentials). It reads the labs stack's outputs and turns aws labs on.
+   labs-init also creates, all free:
+   - the read-only **plan role** that estimates use (`ec2:Describe*`, `s3:GetBucket*`, `s3:ListAllMyBuckets`, inside
+     the lab permission boundary);
+   - the **export bucket** (`<name>-<account>-labexports`) and a **CUR 2.0 export** into it (`<name>-labs`, prefix `cur`,
+     daily, gzip CSV, overwritten in place, with `resource_tags` so each line carries its `crucible:lab-id`). Data
+     Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`;
+   - an alert-only **AWS Budget** (`<name>-labs-monthly`) that emails at 80 % and 100 % of the month's actual spend,
+     independent of Crucible. Set it with `--budget-usd 200 --budget-email ops@example.com` (repeat `--budget-email`,
+     at most 10). Without `--budget-usd` the amount is $100; without any `--budget-email` no budget is created. A
+     negative `--budget-usd` is refused. **Pass the same budget flags every time you re-run labs-init**: the stack
+     doesn't remember them, so a re-run without `--budget-email` removes the budget.
+2. **Activate the cost-allocation tag (the one manual step, free).** In Billing → Cost allocation tags (in the
+   **management (payer) account** if the lab account is in an organization, else in the lab account), activate
+   `crucible:lab-id`. It shows up there only after a tagged resource has existed, which can take up to 24 h, and
+   activation is not retroactive unless you request a backfill. Until it is active the export has no lab ids, so
+   billed spend stays empty and the Ledger keeps showing metered spend.
+3. `crucible aws up` (with Crucible-account credentials). It reads the labs stack's outputs and turns aws labs on.
    **Run this first `up` where `deploy/aws/labs/terraform.tfstate` lives** (the machine you ran labs-init on). If it
    cannot read the labs outputs and aws labs are not wired yet, it leaves them off without an error.
    **A node built before M6 must be rebuilt** (`crucible aws teardown --yes`, then `crucible aws up`): deploy.sh
    changed and user data never updates in place.
+   **Upgrading from a Crucible that used infracost:** re-run labs-init (with your budget flags) **before** `up`.
+   `deploy/aws/main` refuses aws labs without the plan role and export outputs, and says so. Drop
+   `infracost_api_key` from `crucible.tfvars`; it is no longer a variable.
+4. **The first export arrives within about 24 h.** Check it by hand once (lab-account admin credentials):
+   `aws bcm-data-exports list-exports --region us-east-1` lists `<name>-labs`, and after a day
+   `aws s3 ls s3://<export_bucket>/cur/ --recursive` shows a `Manifest.json` and `.csv.gz` files under
+   `<name>-labs/`. Then run `terraform -chdir=deploy/aws/labs plan` with the same `-var`s labs-init passed (region,
+   budget, `crucible_account_id`, `node_role_name`): it must show no changes. The stack leaves the export's
+   `BILLING_VIEW_ARN` to AWS's default (the primary billing view), so if the plan wants to change the export's
+   `table_configurations`, record it here and fix the stack before the next labs-init.
+
+**Server settings.** `crucible aws up` sets these from the labs stack's outputs; set them yourself only on another
+host. With `CRUCIBLE_AWS_LABS=1`, crucible-api refuses to start without `CRUCIBLE_AWS_PLAN_ROLE_ARN`,
+`CRUCIBLE_AWS_EXPORT_BUCKET` and `CRUCIBLE_AWS_EXPORT_NAME` (outputs `plan_role_arn`, `export_bucket`, `export_name`).
+`CRUCIBLE_AWS_EXPORT_PREFIX` defaults to `cur`. `INFRACOST_API_KEY` and `CRUCIBLE_INFRACOST` are gone and ignored.
+
+**Prices.** Crucible downloads the public AWS Price List (free, no credentials) for the allowed regions every week,
+and at start when its prices are more than 6 days old. It keeps on-demand prices (Linux, shared tenancy). Admins see
+**Price data from <date>** on the Ledger. If the prices are missing or more than 30 days old, that line turns red and
+AWS labs can't be estimated or requested: estimates fail closed, never $0. Admins see the last refresh error there
+too. A refresh failure is usually the node's outbound HTTPS to `pricing.us-east-1.amazonaws.com`; restarting the
+api retries it.
+
+**Estimates.** An estimate is a `terraform plan` against an empty state, run once per content version in a short-lived
+pod in the `crucible-estimates` namespace (the Helm chart creates it, with a namespaced Role for Crucible there). The
+pod gets only a 15-minute plan-role session and no state backend, so it can read but never create or change
+anything. The plan is cached per version and priced fresh on every view; a failed plan is retried after 5 minutes.
 
 **What lab modules must look like (content authors).** Crucible adds `crucible.tf` to every aws lab module: the S3
 backend, and `provider "aws"` with the lab's region and `default_tags` carrying `crucible:lab-id`, `crucible:team`
 and `crucible:training`. Modules must not declare their own provider or backend (lint), so every resource gets the
 tags. IAM refuses any EC2 create that does not carry `crucible:lab-id`, so a missing tag fails the apply; it never
-leaks. Two more rules:
+leaks. Lint also refuses any resource type Crucible can't price unless the lab declares it under `aws.prices` (the
+authors' page *AWS labs* lists the types). Two more rules:
 - **Every instance uses the lab's own security group** (`vpc_security_group_ids = [aws_security_group.x.id]`). The
   VPC default group is shared by all labs, so IAM denies launching into it (or any untagged group). Rules may be
   inline on `aws_security_group` or `aws_vpc_security_group_ingress_rule` / `_egress_rule`.
@@ -195,8 +238,8 @@ request "Cloud Heat", approve it, then:
    condition did not match: record the real key here.
    **An untagged bucket is swept (I3).** `aws s3api create-bucket --bucket crucible-lab-$L-untagged --create-bucket-configuration LocationConstraint=eu-west-1`
    (no tags), then end the lab: it is deleted (found by name). `put-bucket-tagging` with another lab's id is allowed
-   (S3 has no tag condition key for it); the sweep goes by the name, but Cost Explorer bills that bucket to the other
-   lab. Accepted: S3 storage for one hour is cents.
+   (S3 has no tag condition key for it); the sweep goes by the name, but the billing export bills that bucket to the
+   other lab. Accepted: S3 storage for one hour is cents.
    **Accepted reads.** `ec2:Describe*` and `tag:GetResources` are account-wide: a trainee can list other labs' ids and
    resource ARNs and the node's user data (which holds no secrets; keep it that way). Use a dedicated lab account if
    that matters.
@@ -220,10 +263,13 @@ request "Cloud Heat", approve it, then:
    name); the Ledger's CloudTrail check matches on it. (c) The deny in step 3 for someone else's lab id proves
    `${aws:PrincipalTag/crucible:lab-id}` resolves; if *your own* tagged create is also denied, the session tag did not
    reach the role (check `sts:TagSession` on the trust policy and the node role).
-9. **Costs.** 24–48 h after a lab ends, Ledger → **Refresh now** shows its AWS bill. Once settled, the lab's row has no
-   "(so far)" and Estimate vs actual counts it.
+9. **Costs.** While the lab runs, its Ledger row shows a **Metered** figure (the resources in its Terraform state at
+   list prices), and **Cost so far** follows it. 24–48 h after the lab ends (once the export has arrived and the tag
+   is active), Ledger → **Refresh now** shows its **Billed** figure. Once settled, the row has no "(so far)",
+   Estimate vs billed counts it, and the billed figure is what counts against budgets.
 10. **The EC2 path.** In your sandbox content repo (not `examples/`), add this as `terraform/ec2.tf` next to Cloud
-    Heat's `main.tf` and sync:
+    Heat's `main.tf`, add `prices: { aws_volume_attachment: 0.0001 }` under `aws:` in its `lab.yaml` (Crucible doesn't
+    list the attachment as free yet, so lint wants a declared price), and sync:
     ```hcl
     data "aws_vpc" "default" { default = true }
     data "aws_ami" "al2023" {
@@ -271,7 +317,9 @@ request "Cloud Heat", approve it, then:
     }
     ```
     Request and approve the lab. Expected:
-    - The request shows a non-zero estimate (t3.nano plus gp3), priced by infracost.
+    - The request shows a non-zero estimate, and the lab page's **How this estimate was worked out** lists the
+      instance (t3.nano with its 8 GiB gp3 root and public IPv4), the data volume (1 GiB gp3), the attachment as
+      declared, and the security group and its rules as free.
     - The lab becomes ready. While `tf-apply` runs, `k3s kubectl -n lab-<id> top pod tf-apply` stays well under its
       1 Gi limit; record the peak here.
     - In the workspace: the group, both rules (`aws ec2 describe-security-group-rules --filters Name=group-id,Values=<sg>`),
@@ -298,7 +346,7 @@ tagging, tf-apply memory) in this section, and fix the code or the labs stack be
 put secrets in terraform state or outputs** (no generated passwords, keys or tokens the trainee should not see).
 
 **Operational notes.**
-- The reaper runs **hourly** (Cost Explorer ingestion stays every 6 h). It deletes what a known lab left behind once
+- The reaper runs **hourly** (billed-spend ingestion from the export every 6 h). It deletes what a known lab left behind once
   the lab has been over for an hour, so leftovers, including any created later with credentials leaked from the
   workspace (valid up to 60 min after End), live at most about 2 h after End.
 - **Removing a region.** The sweep and the reaper only look in `CRUCIBLE_AWS_LAB_REGIONS` (the labs stack's
@@ -315,8 +363,9 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
   this is harmless, but a dedicated lab account is still the safer setup.
 - If crucible-api restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
   the lab up as stuck after **70 minutes** and destroys it again (the hourly cost cap limits what that can cost).
-- `CRUCIBLE_INFRACOST=off` is honoured only with `CRUCIBLE_AWS_LABS=dryrun` (the chart sets both for
-  `awsLabs.dryRun`). Real aws labs always need infracost and its key.
+- `CRUCIBLE_AWS_LABS=dryrun` (Helm `awsLabs.dryRun`) prices aws labs from `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds
+  fixture list prices on every start, so metering works without AWS. Fixture prices never price a real lab: a
+  database that ran in dry run needs one real price refresh (it happens at start) before real estimates work.
 - `crucible aws up` needs the labs stack's outputs once aws labs are on: run it where `deploy/aws/labs/terraform.tfstate`
   lives. If it cannot read them it stops rather than turning aws labs off (running aws labs would lose credential
   refresh, destroy and the sweep). `--no-labs` turns aws labs off on purpose; end every aws lab first.
@@ -325,6 +374,15 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
 
 **Troubleshooting.**
 - A lab sits in "provisioning" and then fails with `terraform apply failed: …`. The trainee sees the log tail. On the node, `k3s kubectl -n lab-<id> get pod tf-apply -o jsonpath='{.status.containerStatuses[0].state.terminated.message}'` shows the same.
-- "no cost estimate is available for aws labs" means `INFRACOST_API_KEY` is unset, or infracost cannot reach its pricing API. Check `k3s kubectl -n crucible logs deploy/crucible -c api | grep infracost`.
-- If the Ledger says actuals are stale, look at Cost Explorer access (the ops role) and the tag activation (step 2). Budgets keep using estimates meanwhile.
+- **A lab can't be requested.** The lab page says why when it is the lab's own limit ("This lab is priced at $X/h,
+  above its $Y/h limit; its maintainers need to make it cheaper.") or a region this server doesn't allow. Anything
+  else (a failed plan, a resource type with no price, missing or stale prices) shows as "the lab can't be requested
+  right now", and the reason is in the api log: `k3s kubectl -n crucible logs deploy/crucible -c api | grep 'lab quote failed'`.
+  `terraform plan failed: …` carries the plan's own error (often a data source the plan role can't read: it has
+  only `ec2:Describe*`, `s3:GetBucket*` and `s3:ListAllMyBuckets`); `no aws price for <key> in <region>` means the
+  price data is missing or stale (see the Ledger's price line); `no price for <type>: declare it under aws.prices`
+  names a type the lab must declare.
+  Plan pods: `k3s kubectl -n crucible-estimates get pods` (`tf-plan-*`; leftovers are removed after 15 minutes).
+- If the Ledger says the billed figures are out of date, look at the export (setup step 4), the ops role's read of
+  the export bucket, and the tag activation (step 2). Budgets keep using metered spend and estimates meanwhile.
 - **Run one Crucible deployment per lab account.** The reaper never deletes resources of labs it does not know. It reports them instead, so a second deployment's labs show up as findings rather than being deleted.

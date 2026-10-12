@@ -161,16 +161,17 @@ type HintResult struct {
 }
 
 type ModuleLab struct {
-	Title          string           `json:"title"`
-	Runtime        string           `json:"runtime"`
-	RuntimeReady   bool             `json:"runtime_ready"`
-	RuntimeMessage string           `json:"runtime_message,omitempty"`
-	EstimateUSD    float64          `json:"estimate_usd"`
-	NeedsApproval  bool             `json:"needs_approval"`
-	Blocked        string           `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
-	Lab            *View            `json:"lab"`
-	ClusterWide    bool             `json:"cluster_wide,omitempty"`
-	Contexts       []ap.KubeContext `json:"contexts,omitempty"`
+	Title          string             `json:"title"`
+	Runtime        string             `json:"runtime"`
+	RuntimeReady   bool               `json:"runtime_ready"`
+	RuntimeMessage string             `json:"runtime_message,omitempty"`
+	EstimateUSD    float64            `json:"estimate_usd"`
+	Estimate       *pricing.Breakdown `json:"estimate_breakdown,omitempty"` // aws labs: the priced plan, line by line
+	NeedsApproval  bool               `json:"needs_approval"`
+	Blocked        string             `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
+	Lab            *View              `json:"lab"`
+	ClusterWide    bool               `json:"cluster_wide,omitempty"`
+	Contexts       []ap.KubeContext   `json:"contexts,omitempty"`
 }
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
@@ -521,12 +522,19 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 		case errors.Is(err, apperr.Conflict):
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Conflict.Error())
+		case errors.Is(err, apperr.Invalid): // the estimate is over the lab's max_hourly_usd
+			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Invalid.Error())
 		default:
 			s.Log.Error("lab quote failed", "team", team, "training", training, "module", module, "err", err)
 			out.Blocked = "the lab can't be requested right now"
 		}
 	} else {
 		out.EstimateUSD, out.NeedsApproval, out.Blocked = q.EstimateUSD, q.Tier != rbac.TierAuto, q.Blocked
+		if te, ok := s.Estimators[m.Lab.Runtime].(*TerraformEstimator); ok && m.Lab.Runtime == "aws" {
+			if b, err := te.Breakdown(ctx, m.Lab); err == nil { // the run quote just used: cached
+				out.Estimate = &b
+			}
+		}
 	}
 	inst, err := s.active(ctx, u.ID, team, training, module)
 	if err != nil {
@@ -560,8 +568,8 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured; an admin must set them before paid labs can be requested")
 	}
 	hourly, err := est.HourlyUSD(ctx, lab)
-	if errors.Is(err, apperr.Unavailable) {
-		return nil, err // "estimate pending, try again shortly" reaches the trainee as is
+	if errors.Is(err, apperr.Unavailable) || errors.Is(err, apperr.Invalid) {
+		return nil, err // "estimate pending, try again shortly" and "over this lab's max_hourly_usd" reach the trainee as is
 	} else if err != nil {
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}

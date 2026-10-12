@@ -1,6 +1,7 @@
 package labs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
@@ -360,4 +362,82 @@ func (a *AWSRunner) Refresh(ctx context.Context, inst *Instance) error {
 		return nil
 	}
 	return a.renew(ctx, inst)
+}
+
+const maxPlanJSON = 16 << 20
+
+var _ Planner = (*AWSRunner)(nil)
+
+// Plan is an estimate's `terraform plan` of the lab's module (spec 2026-10-12 §2): a one-shot planPod in
+// crucible-estimates with the read-only plan role's credentials and nothing else (no lab session, no ops role). It
+// returns `terraform show -json`, read from the pod log (at most 16 MiB). The run's credentials, module and pod are
+// deleted afterwards. A dry run never plans: it prices from fixed rates.
+func (a *AWSRunner) Plan(ctx context.Context, lab *content.Lab) ([]byte, error) {
+	if a.DryRun != nil {
+		return nil, errors.New("a dry run prices aws labs from fixed rates, not a terraform plan")
+	}
+	if lab.AWS == nil {
+		return nil, errors.New("not an aws lab")
+	}
+	module, err := planBundle(lab)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, planDeadline+3*time.Minute) // room to schedule; inside the credentials
+	defer cancel()
+	creds, err := a.Cloud.AssumePlan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting plan credentials: %w", err)
+	}
+	core := a.Cluster.Client.CoreV1()
+	ns, policy := estimatesObjects()
+	if _, err := core.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("creating %s: %w", estimatesNS, err)
+	}
+	_, err = a.Cluster.Client.NetworkingV1().NetworkPolicies(estimatesNS).Create(ctx, policy, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("creating %s: %w", estimatesNS, err)
+	}
+	name := "tf-plan-" + newLabID()
+	meta := metav1.ObjectMeta{Name: name, Namespace: estimatesNS, Labels: map[string]string{labLabel: estimatesLabel}}
+	defer func() { // best effort, even once ctx is spent; the credentials expire within 15 minutes regardless
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer cancel()
+		_ = a.Cluster.deletePod(dctx, estimatesNS, name)
+		_ = core.Secrets(estimatesNS).Delete(dctx, name, metav1.DeleteOptions{})
+		_ = core.ConfigMaps(estimatesNS).Delete(dctx, name, metav1.DeleteOptions{})
+	}()
+	if _, err := core.Secrets(estimatesNS).Create(ctx, &corev1.Secret{ObjectMeta: meta,
+		Data: map[string][]byte{"credentials": creds.File()}}, metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	if _, err := core.ConfigMaps(estimatesNS).Create(ctx, &corev1.ConfigMap{ObjectMeta: meta,
+		BinaryData: map[string][]byte{"module.tgz": module}}, metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	if _, err := core.Pods(estimatesNS).Create(ctx, planPod(name, a.TerraformImage), metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	ok, msg, err := a.Cluster.waitDone(ctx, estimatesNS, name)
+	if err != nil {
+		return nil, fmt.Errorf("terraform plan: %w", err)
+	}
+	if !ok {
+		for _, v := range []string{creds.SessionToken, creds.SecretAccessKey, creds.AccessKeyID} {
+			if v != "" {
+				msg = strings.ReplaceAll(msg, v, "***")
+			}
+		}
+		return nil, fmt.Errorf("terraform plan failed: %s", tailOf([]byte(msg)))
+	}
+	out, err := core.Pods(estimatesNS).GetLogs(name, &corev1.PodLogOptions{Container: "terraform",
+		LimitBytes: ptr.To(int64(maxPlanJSON + 1))}).DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the plan: %w", err)
+	}
+	if len(out) > maxPlanJSON {
+		return nil, errors.New("the plan's output is over 16 MiB")
+	}
+	out = bytes.TrimSpace(out)
+	return out[bytes.LastIndexByte(out, '\n')+1:], nil
 }

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -35,13 +34,13 @@ import (
 	"crucible/internal/edits"
 	"crucible/internal/gitsync"
 	"crucible/internal/httpapi"
-	"crucible/internal/infracost"
 	"crucible/internal/jobs"
 	"crucible/internal/journey"
 	"crucible/internal/labs"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
 	"crucible/internal/org"
+	"crucible/internal/pricing"
 	"crucible/internal/scoring"
 )
 
@@ -250,8 +249,15 @@ func run(ctx context.Context) error {
 				awsRegions = append(awsRegions, r)
 			}
 		}
+		prices := &pricing.Store{DB: pool, Now: time.Now}
 		est, err := awsSetup(ctx, mode, ar, rates, os.Getenv, func(ctx context.Context, c awscloud.Config) (awscloud.Cloud, error) {
 			return awscloud.New(ctx, c)
+		}, func(ctx context.Context) (pricing.Lookup, error) {
+			s, err := prices.Snapshot(ctx)
+			if err != nil {
+				return nil, err // not a nil Snapshot in a non-nil Lookup
+			}
+			return s, nil
 		})
 		if err != nil {
 			return err
@@ -371,11 +377,11 @@ func env(k, def string) string {
 	return def
 }
 
-// awsSetup gives the aws runner its cloud and returns the aws lab estimator (nil: no estimate, so no requests).
-// Dryrun never calls newCloud, the real SDK client. CRUCIBLE_INFRACOST=off prices labs from
+// awsSetup gives the aws runner its cloud and returns the aws lab estimator: a read-only terraform plan priced from
+// prices. Dryrun never calls newCloud, the real SDK client. CRUCIBLE_INFRACOST=off prices labs from
 // CRUCIBLE_DEV_LAB_USD_PER_HOUR, $0 when unset: no budget stop, no over-cap routing, so dryrun only.
 func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.Estimator, getenv func(string) string,
-	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error)) (labs.Estimator, error) {
+	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error), prices func(context.Context) (pricing.Lookup, error)) (labs.Estimator, error) {
 	off := getenv("CRUCIBLE_INFRACOST") == "off"
 	if off && mode != "dryrun" {
 		return nil, errors.New("CRUCIBLE_INFRACOST=off is only allowed with CRUCIBLE_AWS_LABS=dryrun: real aws labs need an infracost estimate")
@@ -388,22 +394,18 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 		if ar.StateBucket == "" || ar.StateRegion == "" {
 			return nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
 		}
-		c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN")})
+		c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN"),
+			PlanRoleARN: getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN")})
 		if err != nil {
 			return nil, fmt.Errorf("aws labs: %w", err)
 		}
 		ar.Cloud = c
 	}
-	_, cliErr := exec.LookPath("infracost")
-	switch {
-	case off:
+	if off {
 		slog.Warn("CRUCIBLE_INFRACOST=off: aws labs are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR")
 		return rates, nil
-	case cliErr != nil || getenv("INFRACOST_API_KEY") == "":
-		slog.Warn("aws labs need the infracost CLI and INFRACOST_API_KEY for an estimate: until then they show no cost estimate and cannot be requested")
-		return nil, nil
 	}
-	return &labs.InfracostEstimator{Run: infracost.Exec}, nil
+	return &labs.TerraformEstimator{Plan: ar, Prices: prices}, nil
 }
 
 func must(k string) string {

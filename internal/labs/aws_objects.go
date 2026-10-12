@@ -1,7 +1,10 @@
 package labs
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -15,6 +18,10 @@ const (
 	tfApplyPod   = "tf-apply"
 	tfDestroyPod = "tf-destroy"
 	tfVarsFile   = "/w/crucible.auto.tfvars.json" // content.LabTFVarsFile, unpacked from module.tgz
+
+	estimatesNS    = "crucible-estimates" // where estimates' plan pods run
+	estimatesLabel = "estimates"          // its crucible.io/lab value: never a lab id, so never taken for a lab
+	planDeadline   = 10 * time.Minute     // a plan pod's; its credentials last 15
 )
 
 var (
@@ -123,3 +130,35 @@ func tfScript(action string, dryRun bool) string {
 	}
 	return s + "terraform apply -input=false -no-color -auto-approve -var-file=" + tfVarsFile + "\n"
 }
+
+// estimatesObjects are the namespace estimates run in and its NetworkPolicy: a lab namespace's (Pod Security
+// baseline, DNS and the public internet only), created on first use.
+func estimatesObjects() (*corev1.Namespace, *networkingv1.NetworkPolicy) {
+	o := clusterObjects(estimatesLabel, "", false)
+	o.Namespace.Name, o.Network.Namespace = estimatesNS, estimatesNS
+	return o.Namespace, o.Network
+}
+
+// planPod is one estimate's terraform plan: an apply pod's lockdown, in crucible-estimates, mounting its own run's
+// credentials secret and module config map (both named like the pod).
+func planPod(name, image string) *corev1.Pod {
+	p := tfPod(estimatesLabel, name, image, planScript)
+	p.Namespace = estimatesNS
+	p.Spec.ActiveDeadlineSeconds = ptr.To(int64(planDeadline.Seconds()))
+	for i := range p.Spec.Volumes {
+		if v := &p.Spec.Volumes[i]; v.Secret != nil {
+			v.Secret.SecretName = name
+		} else if v.ConfigMap != nil {
+			v.ConfigMap.Name = name
+		}
+	}
+	return p
+}
+
+// planScript plans the module against no backend (planTF), no refresh and no lock, so it reads and writes no state.
+// Data sources still read the account, with the plan role. Everything but the plan JSON goes to stderr; the pod log
+// mixes both streams, so the JSON is its last line, printed by terraform itself after the module's code has run.
+const planScript = "set -eu\n" + imdsGuard + "tar xzf /module/module.tgz -C /w\n" +
+	"terraform init -input=false -no-color -backend=false >&2\n" +
+	"terraform plan -input=false -no-color -refresh=false -lock=false -var-file=" + tfVarsFile + " -out=/w/p >&2\n" +
+	"terraform show -no-color -json /w/p\n"

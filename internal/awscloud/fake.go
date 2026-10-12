@@ -92,6 +92,16 @@ func (f *Fake) AssumeLab(_ context.Context, s Session) (Credentials, error) {
 		SessionToken: token(s.LabID), Expires: f.now().Add(time.Hour)}, nil
 }
 
+func (f *Fake) AssumePlan(context.Context) (Credentials, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return Credentials{}, f.Err
+	}
+	return Credentials{AccessKeyID: "ASIAFAKEPLAN", SecretAccessKey: "fake-plan-secret", SessionToken: "fake-plan-token",
+		Expires: f.now().Add(15 * time.Minute)}, nil
+}
+
 func (f *Fake) Tagged(_ context.Context, region, labID string) ([]Resource, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

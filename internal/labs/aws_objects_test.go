@@ -2,6 +2,9 @@ package labs
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"crucible/internal/content"
 )
 
 func TestAWSWorkspaceObjects(t *testing.T) {
@@ -189,5 +194,91 @@ func TestWaitDoneAndDeletePod(t *testing.T) {
 	}
 	if err := r.deletePod(ctx, ns, "never-existed"); err != nil {
 		t.Fatalf("a missing pod is already deleted: %v", err)
+	}
+}
+
+// An estimate runs the author's module (hostile code) with the read-only plan role: the same locked-down pod as an
+// apply, in its own namespace behind the lab NetworkPolicy, and a script that touches no state and no lock.
+func TestPlanPodIsLockedDown(t *testing.T) {
+	const name = "tf-plan-aaaaaaaaaaaa"
+	p := planPod(name, DefaultTerraformImage)
+	s, c := p.Spec, p.Spec.Containers[0]
+	sc := c.Command[2]
+	switch {
+	case p.Namespace != estimatesNS || p.Name != name:
+		t.Fatalf("lives in %s: %+v", estimatesNS, p.ObjectMeta)
+	case c.Image != DefaultTerraformImage:
+		t.Fatalf("image %s", c.Image)
+	case !slices.Contains(c.Env, corev1.EnvVar{Name: "AWS_EC2_METADATA_DISABLED", Value: "true"}) ||
+		!slices.Contains(c.Env, corev1.EnvVar{Name: "AWS_SHARED_CREDENTIALS_FILE", Value: "/aws/credentials"}):
+		t.Fatalf("env %+v", c.Env)
+	case len(c.EnvFrom) != 0 || slices.ContainsFunc(c.Env, func(e corev1.EnvVar) bool { return e.ValueFrom != nil }):
+		t.Fatal("credentials come only from the mounted file, never env")
+	case *s.AutomountServiceAccountToken || *s.EnableServiceLinks || !*s.SecurityContext.RunAsNonRoot ||
+		*c.SecurityContext.AllowPrivilegeEscalation || !*c.SecurityContext.ReadOnlyRootFilesystem:
+		t.Fatal("as locked down as an apply pod")
+	case s.ActiveDeadlineSeconds == nil || *s.ActiveDeadlineSeconds > 15*60-60:
+		t.Fatal("killed before its 15-minute plan credentials expire")
+	case !strings.HasPrefix(sc, "set -eu\n"+imdsGuard):
+		t.Fatalf("no author code before the NetworkPolicy is seen blocking IMDS:\n%s", sc)
+	}
+	for _, want := range []string{"tar xzf /module/module.tgz -C /w", "terraform init -input=false -no-color -backend=false",
+		"-refresh=false", "-lock=false", "-input=false", "-var-file=" + tfVarsFile, "terraform show -no-color -json"} {
+		if !strings.Contains(sc, want) {
+			t.Fatalf("script lacks %q:\n%s", want, sc)
+		}
+	}
+	for _, never := range []string{"apply", "destroy", "backend-config", "import"} {
+		if strings.Contains(sc, never) {
+			t.Fatalf("a plan never runs %q:\n%s", never, sc)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimSpace(sc), "terraform show -no-color -json /w/p") {
+		t.Fatalf("the plan JSON is the last line of the pod's output:\n%s", sc)
+	}
+	var mounts []string
+	for _, v := range s.Volumes {
+		switch {
+		case v.Secret != nil:
+			mounts = append(mounts, "secret:"+v.Secret.SecretName)
+		case v.ConfigMap != nil:
+			mounts = append(mounts, "configmap:"+v.ConfigMap.Name)
+		}
+	}
+	if !slices.Equal(mounts, []string{"secret:" + name, "configmap:" + name}) ||
+		!slices.Contains(c.VolumeMounts, corev1.VolumeMount{Name: "aws", MountPath: "/aws", ReadOnly: true}) {
+		t.Fatalf("its own credentials and module, mounted like a lab's: %v %+v", mounts, c.VolumeMounts)
+	}
+}
+
+func TestEstimatesNamespaceFollowsTheLabPattern(t *testing.T) {
+	ns, np := estimatesObjects()
+	lab := clusterObjects(testID, "compose.yaml", false)
+	if ns.Name != estimatesNS || ns.Labels["pod-security.kubernetes.io/enforce"] != "baseline" || ns.Labels[labLabel] == "" ||
+		validLabID(ns.Labels[labLabel]) {
+		t.Fatalf("labelled like a lab namespace, but never taken for a lab: %+v", ns.ObjectMeta)
+	}
+	if np.Namespace != estimatesNS || !reflect.DeepEqual(np.Spec, lab.Network.Spec) {
+		t.Fatalf("the lab NetworkPolicy (DNS and the public internet only): %+v", np)
+	}
+}
+
+// The estimate's module has no backend, so `init -backend=false` leaves nothing to configure and plan touches no state.
+func TestPlanModuleHasNoBackend(t *testing.T) {
+	lab := &content.Lab{Dir: t.TempDir(), AWS: &content.AWSConfig{Region: "eu-west-1"}}
+	if err := os.MkdirAll(filepath.Join(lab.Dir, "terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lab.Dir, "terraform", content.LabTFFile), []byte(`terraform { backend "s3" {} }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, err := planBundle(lab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := untar(t, b)
+	if strings.Contains(mod[content.LabTFFile], `backend "`) || !strings.Contains(mod[content.LabTFFile], `provider "aws"`) ||
+		!strings.Contains(mod[content.LabTFVarsFile], `"crucible_lab_id":"estimate"`) || !strings.Contains(mod[content.LabTFVarsFile], `"eu-west-1"`) {
+		t.Fatalf("module: %v", mod)
 	}
 }

@@ -504,3 +504,74 @@ func TestAWSDestroyWithoutModuleRunsNoTerraform(t *testing.T) {
 		t.Fatalf("no terraform without a module: %v", got)
 	}
 }
+
+// An estimate plans the module in crucible-estimates with the plan role's credentials only: no lab session, no lab
+// namespace, and nothing left behind.
+func TestAWSPlanRunsWithThePlanRoleOnly(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodSucceeded, "")
+	var secrets []*corev1.Secret
+	var modules []*corev1.ConfigMap
+	cs.PrependReactor("create", "*", func(act k8stesting.Action) (bool, runtime.Object, error) {
+		switch o := act.(k8stesting.CreateAction).GetObject().(type) {
+		case *corev1.Secret:
+			secrets = append(secrets, o.DeepCopy())
+		case *corev1.ConfigMap:
+			modules = append(modules, o.DeepCopy())
+		}
+		return false, nil, nil
+	})
+	a, cloud, _ := testAWS(cs)
+	out, err := a.Plan(ctx, cloudHeat(t))
+	if err != nil || string(out) != "fake logs" { // the fake clientset's pod log
+		t.Fatalf("the plan JSON is the pod's output: %q %v", out, err)
+	}
+	if got := steps(cs, "create"); !slices.Equal(got, []string{"create namespaces", "create networkpolicies", "create secrets",
+		"create configmaps", "create pods"}) {
+		t.Fatalf("namespace and policy first, then the run's credentials, module and pod: %v", got)
+	}
+	plan, _ := (&awscloud.Fake{}).AssumePlan(ctx)
+	if len(secrets) != 1 || secrets[0].Namespace != estimatesNS || string(secrets[0].Data["credentials"]) != string(plan.File()) {
+		t.Fatalf("the plan role's credentials, nothing else: %+v", secrets)
+	}
+	if len(cloud.Assumed()) != 0 {
+		t.Fatalf("no lab session for an estimate: %+v", cloud.Assumed())
+	}
+	if len(modules) != 1 || !strings.Contains(untar(t, modules[0].BinaryData["module.tgz"])["main.tf"], "aws_s3_bucket") {
+		t.Fatalf("the lab's module: %+v", modules)
+	}
+	for _, kind := range []string{"pods", "secrets", "configmaps"} {
+		if !slices.Contains(steps(cs, "delete"), "delete "+kind) {
+			t.Fatalf("the run's %s are deleted afterwards: %v", kind, steps(cs, "delete"))
+		}
+	}
+	if _, err := a.Plan(ctx, cloudHeat(t)); err != nil {
+		t.Fatalf("the namespace and policy already exist the second time: %v", err)
+	}
+}
+
+func TestAWSPlanFailureIsMaskedAndCleanedUp(t *testing.T) {
+	ctx := context.Background()
+	plan, _ := (&awscloud.Fake{}).AssumePlan(ctx)
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodFailed, "Error: AccessDenied for "+plan.SecretAccessKey+" "+plan.SessionToken)
+	a, _, _ := testAWS(cs)
+	_, err := a.Plan(ctx, cloudHeat(t))
+	if err == nil || !strings.Contains(err.Error(), "terraform plan failed: Error: AccessDenied") ||
+		strings.Contains(err.Error(), plan.SecretAccessKey) || strings.Contains(err.Error(), plan.SessionToken) {
+		t.Fatalf("the tail without the credentials: %v", err)
+	}
+	if !slices.Contains(steps(cs, "delete"), "delete secrets") {
+		t.Fatal("the credentials are deleted after a failure too")
+	}
+}
+
+func TestAWSPlanNeverRunsInDryRun(t *testing.T) {
+	cs := fake.NewClientset()
+	a, _, _ := testAWS(cs)
+	a.DryRun = &awscloud.Fake{}
+	if _, err := a.Plan(context.Background(), cloudHeat(t)); err == nil || len(cs.Actions()) != 0 {
+		t.Fatalf("a dry run prices from fixed rates, never a plan: %v %v", err, cs.Actions())
+	}
+}

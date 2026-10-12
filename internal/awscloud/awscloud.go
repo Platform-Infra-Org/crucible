@@ -63,6 +63,8 @@ var ErrTruncated = errors.New("CloudTrail lookup stopped at its page cap; older 
 type Cloud interface {
 	// AssumeLab returns one-hour credentials for the lab role, tagged with the session's lab, team and training.
 	AssumeLab(ctx context.Context, s Session) (Credentials, error)
+	// AssumePlan returns 15-minute credentials for the read-only plan role that estimates run `terraform plan` with.
+	AssumePlan(ctx context.Context) (Credentials, error)
 	// Tagged lists resources in region tagged crucible:lab-id (= labID, or any value when labID is "").
 	Tagged(ctx context.Context, region, labID string) ([]Resource, error)
 	// Delete removes one resource with lab credentials. deleted is false when it was already gone;

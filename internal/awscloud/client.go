@@ -33,8 +33,9 @@ import (
 )
 
 type Config struct {
-	LabRoleARN string // assumed per lab, with session tags (deploy/aws/labs output lab_role_arn)
-	OpsRoleARN string // inventory, CloudTrail and the billing export in S3 (output ops_role_arn)
+	LabRoleARN  string // assumed per lab, with session tags (deploy/aws/labs output lab_role_arn)
+	OpsRoleARN  string // inventory, CloudTrail and the billing export in S3 (output ops_role_arn)
+	PlanRoleARN string // read-only, for estimates' terraform plan (output plan_role_arn); unset = no estimates
 	// The CUR 2.0 export: s3://<ExportBucket>/<ExportPrefix>/<ExportName>/data/BILLING_PERIOD=YYYY-MM/*.csv.gz
 	ExportBucket, ExportPrefix, ExportName string
 	Endpoint                               string // tests only: every service at this URL (S3 path-style)
@@ -92,6 +93,20 @@ func (c *Client) AssumeLab(ctx context.Context, s Session) (Credentials, error) 
 	}
 	out, err := c.sts().AssumeRole(ctx, &sts.AssumeRoleInput{RoleArn: aws.String(c.cfg.LabRoleARN),
 		RoleSessionName: aws.String(SessionName(s.LabID)), DurationSeconds: aws.Int32(3600), Tags: tags})
+	if err != nil {
+		return Credentials{}, err
+	}
+	k := out.Credentials
+	return Credentials{AccessKeyID: aws.ToString(k.AccessKeyId), SecretAccessKey: aws.ToString(k.SecretAccessKey),
+		SessionToken: aws.ToString(k.SessionToken), Expires: aws.ToTime(k.Expiration)}, nil
+}
+
+func (c *Client) AssumePlan(ctx context.Context) (Credentials, error) {
+	if c.cfg.PlanRoleARN == "" {
+		return Credentials{}, errors.New("estimates need the plan role (CRUCIBLE_AWS_PLAN_ROLE_ARN)")
+	}
+	out, err := c.sts().AssumeRole(ctx, &sts.AssumeRoleInput{RoleArn: aws.String(c.cfg.PlanRoleARN),
+		RoleSessionName: aws.String("crucible-plan"), DurationSeconds: aws.Int32(900)})
 	if err != nil {
 		return Credentials{}, err
 	}

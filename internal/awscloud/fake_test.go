@@ -17,6 +17,9 @@ func TestFakeBehavesLikeTheLabAccount(t *testing.T) {
 	}
 	a, _ := f.AssumeLab(ctx, Session{LabID: "aaaaaaaaaaaa", Team: "forge"})
 	b, _ := f.AssumeLab(ctx, Session{LabID: "bbbbbbbbbbbb"})
+	if p, err := f.AssumePlan(ctx); err != nil || p.SessionToken == a.SessionToken || p.AccessKeyID == a.AccessKeyID {
+		t.Fatalf("plan credentials are their own: %+v %v", p, err)
+	}
 	if !a.Expires.Equal(now.Add(time.Hour)) || !strings.Contains(string(a.File()), "aws_session_token = ") {
 		t.Fatalf("one-hour credentials as a shared credentials file: %+v\n%s", a, a.File())
 	}

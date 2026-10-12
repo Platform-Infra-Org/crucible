@@ -118,7 +118,7 @@ type Runner interface {
 }
 
 // Estimator prices one hour of a lab for approval routing and budgets (spec §9.1). Laptop and cluster labs are free;
-// aws labs are priced by infracost on the module.
+// aws labs are priced by TerraformEstimator from a read-only plan of the module.
 type Estimator interface {
 	HourlyUSD(ctx context.Context, lab *content.Lab) (float64, error)
 }

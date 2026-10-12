@@ -64,7 +64,8 @@ func fakeAWS(t *testing.T, reply func(c call) (code int, contentType, body strin
 	node := aws.Config{Region: "eu-west-1", RetryMaxAttempts: 1,
 		Credentials: credentials.NewStaticCredentialsProvider("AKIDNODE", "secret", "")}
 	cl := newClient(node, Config{LabRoleARN: "arn:aws:iam::444455556666:role/crucible-lab",
-		OpsRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-ops", Endpoint: srv.URL})
+		OpsRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-ops", PlanRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-plan",
+		Endpoint: srv.URL})
 	return cl, func() []call { mu.Lock(); defer mu.Unlock(); return append([]call(nil), calls...) }
 }
 
@@ -85,6 +86,31 @@ func TestAssumeLabTagsTheSession(t *testing.T) {
 	}
 	if _, err := cl.AssumeLab(context.Background(), Session{LabID: "AAAA; Deny"}); err == nil || len(calls()) != 1 {
 		t.Fatal("a malformed lab id never reaches STS")
+	}
+}
+
+// Estimates run `terraform plan` with the read-only plan role: an untagged 15-minute session, never the lab or ops role.
+func TestAssumePlanUsesThePlanRole(t *testing.T) {
+	cl, calls := fakeAWS(t, func(call) (int, string, string) { return 500, "text/plain", "" })
+	c, err := cl.AssumePlan(context.Background())
+	if err != nil || c.AccessKeyID != "ASIAcrucible-plan" || c.SessionToken != "token-crucible-plan" {
+		t.Fatalf("credentials: %+v %v", c, err)
+	}
+	all := calls()
+	if len(all) != 1 {
+		t.Fatalf("one STS call: %+v", all)
+	}
+	f := all[0].form
+	want := map[string]string{"RoleArn": "arn:aws:iam::444455556666:role/crucible-lab-plan", "RoleSessionName": "crucible-plan",
+		"DurationSeconds": "900", "Tags.member.1.Key": ""}
+	for k, v := range want {
+		if f.Get(k) != v {
+			t.Fatalf("%s = %q, want %q (form %v)", k, f.Get(k), v, f)
+		}
+	}
+	cl.cfg.PlanRoleARN = ""
+	if _, err := cl.AssumePlan(context.Background()); err == nil || len(calls()) != 1 {
+		t.Fatal("without a plan role there is no estimate, and no STS call")
 	}
 }
 

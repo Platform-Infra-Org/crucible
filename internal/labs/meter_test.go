@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -298,5 +299,28 @@ func TestCommittedNeverSitsBelowSpent(t *testing.T) {
 	}
 	if math.Abs(sp.SpentUSD-40) > 1e-9 || math.Abs(sp.CommittedUSD-(40+22)) > 1e-9 {
 		t.Fatalf("spent %v (want 40), committed %v (want 40 spent + 22 h × $1)", sp.SpentUSD, sp.CommittedUSD)
+	}
+}
+
+// A lab whose content can't be loaded is retried for metering once per 15 minutes, not on every sweep.
+func TestReMeteringWaitsEvenWhenTheContentFails(t *testing.T) {
+	ctx := context.Background()
+	f, _, inst, _ := meterFixture(t, corev1.PodSucceeded)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET sha = 'gone' WHERE id = $1`, inst.ID); err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	f.s.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	tries := func() int { return strings.Count(logs.String(), "metering a running aws lab failed") }
+	f.s.Sweep(ctx)
+	f.clk.Add(time.Minute)
+	f.s.Sweep(ctx)
+	if n := tries(); n != 1 {
+		t.Fatalf("one try per 15 minutes, got %d:\n%s", n, logs.String())
+	}
+	f.clk.Add(15 * time.Minute)
+	f.s.Sweep(ctx)
+	if n := tries(); n != 2 {
+		t.Fatalf("tried again after 15 minutes: %d", n)
 	}
 }

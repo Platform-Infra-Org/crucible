@@ -126,7 +126,16 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
      budget is created. A negative `--budget-usd` is refused. **Re-running labs-init keeps the budget**: a flag you
      leave out keeps the stack's current value (read from its outputs), and a flag you pass replaces only its own
      value (`--budget-email` replaces the whole list). A stack created before these outputs existed has nothing to
-     read back: pass both flags on the first re-run after upgrading.
+     read back: pass both flags on the first re-run after upgrading. **To remove the budget**, labs-init can't (an
+     empty list keeps the current one); run the labs stack's apply yourself with the same values labs-init passes
+     and an empty list, with lab-account credentials, from the repo root (where `up` ran, so main's outputs are
+     readable; leave out `crucible_account_id` if you never passed `--crucible-account`):
+     ```bash
+     terraform -chdir=deploy/aws/labs apply -var region=<region> -var crucible_account_id=<id> \
+       -var node_role_name="$(terraform -chdir=deploy/aws/main output -raw node_role_name)" -var 'budget_emails=[]'
+     ```
+     The plan should destroy only `aws_budgets_budget.labs[0]`; if it shows anything else, a value differs from
+     what labs-init passed: stop and compare.
 2. **Activate the cost-allocation tag (the one manual step, free).** In Billing → Cost allocation tags (in the
    **management (payer) account** if the lab account is in an organization, else in the lab account), activate
    `crucible:lab-id`. It shows up there only after a tagged resource has existed, which can take up to 24 h, and

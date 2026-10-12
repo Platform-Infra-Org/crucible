@@ -28,9 +28,11 @@ var pricedAWS = []string{"aws_instance", "aws_ebs_volume", "aws_nat_gateway", "a
 func KnownAWS(t string) bool { return freeAWS[t] || slices.Contains(pricedAWS, t) }
 
 // PriceAWS prices resources in one region. A declared price never lowers Crucible's own: a type Crucible prices (or
-// lists as free) costs the higher of the two, and the declared price alone only where Crucible's pricer fails closed
-// (provisioned IOPS, dedicated tenancy, a size or type unknown at plan time, a size missing from the price list). A
-// type Crucible can't price costs its declared price; anything else unknown is an error.
+// lists as free) costs the higher of the two, and the declared price alone only where Crucible's pricer fails closed on
+// a setting (provisioned IOPS or throughput, dedicated tenancy, a size or type unknown at plan time). A price missing
+// from the list (a region or size the refresh didn't fetch) is never covered: a declared aws_instance would stand in for
+// the instance, its volumes and its IPv4. A type Crucible can't price costs its declared price; anything else unknown
+// is an error.
 func PriceAWS(res []Resource, region string, declared map[string]float64, usage map[string]map[string]float64, l Lookup) (Breakdown, error) {
 	var b Breakdown
 	var missing []string
@@ -38,7 +40,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		if v, ok := l.Price("aws", region, key); ok {
 			return v, nil
 		}
-		return 0, fmt.Errorf("no aws price for %s in %s (price data missing or out of date)", key, region)
+		return 0, fmt.Errorf("no aws price for %s in %s (%w)", key, region, errNoListPrice)
 	}
 	for _, r := range res {
 		// instances in a dedicated VPC are dedicated; only a declared aws_instance price covers that (aws_vpc's own never does)
@@ -46,7 +48,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 			return b, fmt.Errorf("%s: only shared tenancy is priced (dedicated VPC); declare aws_instance under aws.prices", r.Address)
 		}
 		line, err := priceOwn(get, r, usageFor(usage, r.Address))
-		if p, ok := declared[r.Type]; ok && (err != nil || p > line.HourlyUSD+line.UsageHourlyUSD) {
+		if p, ok := declared[r.Type]; ok && !errors.Is(err, errNoListPrice) && (err != nil || p > line.HourlyUSD+line.UsageHourlyUSD) {
 			line, err = Line{Address: r.Address, Type: r.Type, HourlyUSD: p, Note: "declared"}, nil
 		}
 		if errors.Is(err, errNoPricer) {
@@ -66,7 +68,10 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 	return b, nil
 }
 
-var errNoPricer = errors.New("no pricer")
+var (
+	errNoPricer    = errors.New("no pricer")
+	errNoListPrice = errors.New("price data missing or out of date")
+)
 
 // priceOwn prices one resource from the list prices, or fails closed.
 func priceOwn(get func(string) (float64, error), r Resource, u map[string]float64) (Line, error) {
@@ -100,6 +105,9 @@ func priceOwn(get func(string) (float64, error), r Resource, u map[string]float6
 			return line, err
 		}
 		line.HourlyUSD += size * gbp / HoursPerMonth
+		if r.Unknown["ebs_block_device"] == true {
+			return line, fmt.Errorf("%s: ebs_block_device is unknown until apply; set it literally or declare a price for aws_instance", r.Address)
+		}
 		ebs, _ := r.Values["ebs_block_device"].([]any)
 		for _, e := range ebs { // inline volumes: no defaults, an unknown size or type fails closed
 			d, _ := e.(map[string]any)

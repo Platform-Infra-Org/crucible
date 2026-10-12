@@ -261,7 +261,6 @@ func TestDeclaredNeverLowersAListPrice(t *testing.T) {
 	for _, r := range []Resource{
 		{Address: "aws_instance.d", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "tenancy": "dedicated"}},
 		{Address: "aws_instance.u", Type: "aws_instance", Values: map[string]any{}},
-		{Address: "aws_instance.x", Type: "aws_instance", Values: map[string]any{"instance_type": "x9.huge"}},
 		{Address: "aws_ebs_volume.v", Type: "aws_ebs_volume", Values: map[string]any{"type": "io2", "size": 10.0}},
 		{Address: "aws_ebs_volume.n", Type: "aws_ebs_volume", Values: map[string]any{"type": "gp3"}},
 	} {
@@ -320,5 +319,27 @@ func TestUsageMatchesCountedModules(t *testing.T) {
 		if err != nil || !near(b.HourlyUSD, 0.048+0.048+0.023) {
 			t.Fatalf("%v: %+v %v", usage, b, err)
 		}
+	}
+}
+
+// A price missing from the list (a region or size the refresh didn't fetch) is never covered by a declared price:
+// the declared aws_instance would stand in for the instance, its volumes and its IPv4.
+func TestDeclaredNeverCoversAMissingListPrice(t *testing.T) {
+	inst := []Resource{{Address: "aws_instance.i", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro"}}}
+	declared := map[string]float64{"aws_instance": 0.001}
+	if b, err := PriceAWS(inst, "eu-central-1", declared, nil, prices()); err == nil || !strings.Contains(err.Error(), "no aws price") {
+		t.Fatalf("a region missing from fresh price data must fail closed: %+v %v", b, err)
+	}
+	inst[0].Values["instance_type"] = "x9.huge"
+	if b, err := PriceAWS(inst, "eu-west-1", declared, nil, prices()); err == nil {
+		t.Fatalf("an instance type missing from the list must fail closed: %+v", b)
+	}
+}
+
+func TestUnknownEBSBlockDevicesFailClosed(t *testing.T) {
+	r := Resource{Address: "aws_instance.i", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "ebs_block_device": nil},
+		Unknown: map[string]any{"ebs_block_device": true}}
+	if b, err := priceOne(r, nil); err == nil || !strings.Contains(err.Error(), "aws_instance.i") {
+		t.Fatalf("ebs_block_device unknown until apply must fail closed: %+v %v", b, err)
 	}
 }

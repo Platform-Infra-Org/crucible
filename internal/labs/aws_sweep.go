@@ -112,6 +112,7 @@ func (s *Service) refreshAWS(ctx context.Context) {
 		if !s.meterDue(inst.ID) {
 			continue
 		}
+		s.meterStamp(inst.ID) // before loading the content: a lab whose content fails waits its turn too
 		lab, _, err := s.labContent(ctx, inst)
 		if err == nil {
 			err = s.Meter(ctx, inst, lab)

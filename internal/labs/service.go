@@ -593,7 +593,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}
 	q := &quote{Timing: ResolveTiming(lab, p.Teams[team].Programs[training].LabDefaults), HourlyUSD: hourly}
-	q.EstimateUSD = math.Ceil(hourly*q.Timing.TTL.Hours()*100-1e-9) / 100 // up to the cent: a paid lab never rounds to free
+	q.EstimateUSD = roundEstimate(hourly * q.Timing.TTL.Hours())
 	q.Tier = rbac.Tier(lab.Runtime, q.EstimateUSD, *p.Settings.CostTiers)
 	if q.Tier != rbac.TierAuto {
 		again, err := s.recentlyApproved(ctx, u.ID, team, training, module)
@@ -639,6 +639,9 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	}
 	return q, nil
 }
+
+// roundEstimate rounds up to the cent: a paid lab never rounds to free.
+func roundEstimate(usd float64) float64 { return math.Max(0, math.Ceil(usd*100-1e-9)/100) } // Max: never -0
 
 // overCeiling tells the trainee an aws lab costs more than its author allowed (the quote and TerraformEstimator).
 func overCeiling(hourly, limit float64) string {

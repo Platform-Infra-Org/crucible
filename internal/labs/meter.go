@@ -17,12 +17,7 @@ func (s *Service) Meter(ctx context.Context, inst *Instance, lab *content.Lab) e
 	if !ok || lab.AWS == nil || s.Prices == nil {
 		return errors.New("metering needs the aws runner, an aws lab and list prices")
 	}
-	s.meterMu.Lock()
-	if s.meteredAt == nil {
-		s.meteredAt = map[string]time.Time{}
-	}
-	s.meteredAt[inst.ID] = s.Now() // a failure waits for the next turn too
-	s.meterMu.Unlock()
+	s.meterStamp(inst.ID) // a failure waits for the next turn too
 	raw, err := ar.cloud().ReadState(ctx, ar.StateRegion, ar.StateBucket, "labs/"+inst.ID+".tfstate")
 	if err != nil {
 		return err
@@ -87,6 +82,16 @@ func (s *Service) EndMeter(ctx context.Context, labID string, at time.Time) erro
 
 // meterEvery is how often the sweep meters a ready aws lab again: trainees apply more from the workspace terminal.
 const meterEvery = 15 * time.Minute
+
+// meterStamp records a meter attempt for the lab now.
+func (s *Service) meterStamp(labID string) {
+	s.meterMu.Lock()
+	defer s.meterMu.Unlock()
+	if s.meteredAt == nil {
+		s.meteredAt = map[string]time.Time{}
+	}
+	s.meteredAt[labID] = s.Now()
+}
 
 // meterDue reports whether the lab's last Meter in this process is meterEvery or more ago (or there was none).
 func (s *Service) meterDue(labID string) bool {

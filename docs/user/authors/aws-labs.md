@@ -77,9 +77,10 @@ up per hour. The estimate is that hourly price times the lab's time limit.
 **Anything else** needs a price under `aws.prices`, in US dollars per hour, or lint refuses the lab and names the type.
 A declared price never lowers Crucible's own: for a type Crucible prices (or lists as free), each resource costs the
 higher of the two. A few settings Crucible can't price fail the same way until you declare the type, and then the
-declared price is used: io1 and io2 volumes, gp3 with more than 3000 IOPS or 125 MB/s, dedicated tenancy, an
-instance type missing from the price list, and an instance type, volume size or `ebs_block_device` size or type that
-isn't known until apply.
+declared price is used: io1 and io2 volumes, gp3 with more than 3000 IOPS or 125 MB/s, dedicated tenancy, and an
+instance type, volume size or `ebs_block_device` that isn't known until apply. A declared price never stands in for a
+price missing from AWS's list (an instance type or region Crucible has no price for): that lab can't be requested
+until the price data has it.
 
 **Usage.** Some resources cost by how much they are used. State it under `aws.usage`, by resource address, as a
 monthly amount: `storage_gb` for an `aws_s3_bucket`, `gb_processed` for an `aws_nat_gateway`. Unstated usage counts

@@ -260,3 +260,56 @@ run "no_budget_without_emails" {
     error_message = "no budget without someone to tell"
   }
 }
+
+run "plan_role_actions_fit_the_boundary" {
+  command = apply
+  assert {
+    condition     = toset(flatten([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s.Action])) == toset(["ec2:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets"])
+    error_message = "the plan role has exactly these actions"
+  }
+  assert {
+    condition     = alltrue([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : alltrue([for a in flatten([s.Action]) : contains(["ec2", "s3", "sts", "tag"], split(":", a)[0])])])
+    error_message = "every plan action is inside the boundary's Ceiling, or it is silently denied"
+  }
+}
+
+run "export_query_names_columns" {
+  command = apply
+  assert {
+    condition = alltrue([for c in ["line_item_usage_start_date", "line_item_unblended_cost", "resource_tags"] :
+    strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, c)]) && !strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, "*")
+    error_message = "the export query lists its columns"
+  }
+}
+
+run "export_bucket_policy_guards_confused_deputy" {
+  command = apply
+  assert {
+    condition     = strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:cur:us-east-1:444455556666:definition/*") && strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:bcm-data-exports:us-east-1:444455556666:export/*")
+    error_message = "the export services write only for this account's exports"
+  }
+}
+
+run "ops_export_and_state_reads_are_exact" {
+  command = apply
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadLabState"]).Resource == "arn:aws:s3:::crucible-444455556666-labstate/labs/*" && one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadLabState"]).Action == "s3:GetObject"
+    error_message = "state is read at labs/* only"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Action, "") == "s3:ListBucket"]).Resource == aws_s3_bucket.exports.arn
+    error_message = "ListBucket only on the export bucket"
+  }
+}
+
+run "budget_must_be_positive" {
+  command = plan
+  variables { budget_monthly_usd = 0 }
+  expect_failures = [var.budget_monthly_usd]
+}
+
+run "budget_emails_capped_at_ten" {
+  command = plan
+  variables { budget_emails = [for i in range(11) : "a${i}@example.com"] }
+  expect_failures = [var.budget_emails]
+}

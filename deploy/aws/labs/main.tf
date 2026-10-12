@@ -45,13 +45,21 @@ variable "allowed_instance_types" {
   default = ["t3.nano", "t3.micro", "t3a.nano", "t3a.micro", "t4g.nano", "t4g.micro"]
 }
 variable "budget_monthly_usd" {
-  type        = number
-  default     = 100
+  type    = number
+  default = 100
+  validation {
+    condition     = var.budget_monthly_usd > 0
+    error_message = "budget_monthly_usd must be positive."
+  }
   description = "Monthly AWS Budget (free) for the account; alerts at 80% and 100% of actual spend. A backstop to Crucible's own budgets."
 }
 variable "budget_emails" {
-  type        = list(string)
-  default     = []
+  type    = list(string)
+  default = []
+  validation {
+    condition     = length(var.budget_emails) <= 10
+    error_message = "A budget notification takes at most 10 subscribers."
+  }
   description = "Who the budget alerts. Empty = no budget."
 }
 variable "max_volume_gib" {
@@ -288,7 +296,7 @@ resource "aws_iam_role_policy" "plan" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{ Effect = "Allow", Resource = "*",
-    Action = ["ec2:Describe*", "elasticloadbalancing:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets", "iam:GetRole"] }]
+    Action = ["ec2:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets"] }]
   })
 }
 
@@ -333,17 +341,20 @@ resource "aws_s3_bucket_policy" "exports" {
       { Sid       = "DataExportsWrite", Effect = "Allow",
         Principal = { Service = ["bcm-data-exports.amazonaws.com", "billingreports.amazonaws.com"] },
         Action    = ["s3:PutObject", "s3:GetBucketPolicy"], Resource = [local.exports, "${local.exports}/*"],
-      Condition = { StringEquals = { "aws:SourceAccount" = local.account } } },
+        Condition = { StringEquals = { "aws:SourceAccount" = local.account },
+      StringLike = { "aws:SourceArn" = ["arn:aws:cur:us-east-1:${local.account}:definition/*", "arn:aws:bcm-data-exports:us-east-1:${local.account}:export/*"] } } },
     ]
   })
 }
 
+# BILLING_VIEW_ARN is left to AWS's default (the primary billing view); the runbook's by-hand check covers a diff on
+# first apply.
 resource "aws_bcmdataexports_export" "labs" {
   provider = aws.billing
   export {
     name = local.export
     data_query {
-      query_statement = "SELECT * FROM COST_AND_USAGE_REPORT"
+      query_statement = "SELECT line_item_usage_start_date, line_item_unblended_cost, resource_tags, line_item_resource_id, line_item_product_code, line_item_line_item_type FROM COST_AND_USAGE_REPORT"
       table_configurations = {
         COST_AND_USAGE_REPORT = {
           INCLUDE_RESOURCES                     = "TRUE"

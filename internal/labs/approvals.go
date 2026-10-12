@@ -20,7 +20,7 @@ import (
 	"crucible/internal/smith"
 )
 
-// Spend is month-to-date lab spend for a team or one program: estimates, with Cost Explorer actuals swapped in for
+// Spend is month-to-date lab spend for a team or one program: estimates, with billed actuals swapped in for
 // labs whose actual cost has settled (spec §9.3).
 type Spend struct {
 	SpentUSD     float64 `json:"spent_usd"`     // per lab: settled actual, else hourly estimate × time run this month
@@ -35,11 +35,11 @@ func monthStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
-// labCostSQL selects lab_instances (alias l) with three more columns: actual (Cost Explorer total, NULL when never
+// labCostSQL selects lab_instances (alias l) with three more columns: actual (billed total, NULL when never
 // reported), settled (use the actual instead of the estimate: a positive total, and both the last successful
-// ingestion and the newest actuals row came 48 h or more after the lab ended, so Cost Explorer has caught up; a $0 or
+// ingestion and the newest actuals row came 48 h or more after the lab ended, so the billing export has caught up; a $0 or
 // stale row keeps the estimate) and est_spent (hourly estimate × time run). $1 is now.
-// Conservative on purpose: a lab Cost Explorer never reported keeps its estimate (tags not activated != free).
+// Conservative on purpose: a lab the export never reported keeps its estimate (tags not activated != free).
 const labCostSQL = `SELECT l.*, a.usd AS actual,
 	coalesce(a.usd > 0 AND a.updated_at >= l.destroyed_at + interval '48 hours'
 		AND (SELECT ingest_ok_at FROM aws_ops) >= l.destroyed_at + interval '48 hours', false) AS settled,

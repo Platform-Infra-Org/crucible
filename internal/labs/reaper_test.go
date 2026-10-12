@@ -226,7 +226,6 @@ func TestExportReadFailureLeavesActualsStale(t *testing.T) {
 	if !okAt.Equal(okBefore) || msg == "" {
 		t.Fatalf("a bad export keeps ingest_ok_at and records the error: %v %q", okAt, msg)
 	}
-	f.clk.Add(48 * time.Hour)
 	if l, err := f.s.Ledger(ctx, f.admin); err != nil || !l.ActualsStale {
 		t.Fatalf("the Ledger says actuals are stale: %v %v", l.ActualsStale, err)
 	}

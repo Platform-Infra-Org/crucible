@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -173,24 +172,28 @@ func TestDeleteKnowsItsTypes(t *testing.T) {
 	}
 }
 
-// exportClient is a Client whose export bucket is an httptest S3 holding files (key -> body): ListObjectsV2 + GetObject.
+// exportClient is a Client whose export bucket is an httptest S3 (GetObject only) holding files (key -> body).
+// Each month with data files gets a manifest listing all of them, unless files holds that month's manifest itself.
 func exportClient(t *testing.T, files map[string][]byte) *Client {
 	t.Helper()
-	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
-		key := strings.TrimPrefix(c.path, "/bills/")
-		if c.path == "/bills" || c.path == "/bills/" {
-			prefix := url.Values(mustQuery(c.query)).Get("prefix")
-			var b strings.Builder
-			b.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bills</Name><IsTruncated>false</IsTruncated>`)
-			for k, v := range files {
-				if strings.HasPrefix(k, prefix) {
-					fmt.Fprintf(&b, "<Contents><Key>%s</Key><Size>%d</Size></Contents>", k, len(v))
-				}
-			}
-			b.WriteString("</ListBucketResult>")
-			return 200, "application/xml", b.String()
+	all := map[string][]byte{}
+	months := map[string][]string{}
+	for k, v := range files {
+		all[k] = v
+		if m, ok := strings.CutPrefix(k, exportBase); ok {
+			mo, _, _ := strings.Cut(m, "/")
+			months[mo] = append(months[mo], "s3://bills/"+k)
 		}
-		if v, ok := files[key]; ok {
+	}
+	for mo, keys := range months {
+		mk := exportMeta + mo + "/crucible-labs-Manifest.json"
+		if _, ok := all[mk]; !ok {
+			j, _ := json.Marshal(map[string]any{"dataFiles": keys})
+			all[mk] = j
+		}
+	}
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		if v, ok := all[strings.TrimPrefix(c.path, "/bills/")]; ok {
 			return 200, "application/gzip", string(v)
 		}
 		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
@@ -198,8 +201,6 @@ func exportClient(t *testing.T, files map[string][]byte) *Client {
 	cl.cfg.ExportBucket, cl.cfg.ExportPrefix, cl.cfg.ExportName = "bills", "exports", "crucible-labs"
 	return cl
 }
-
-func mustQuery(q string) url.Values { v, _ := url.ParseQuery(q); return v }
 
 func gzBytes(t *testing.T, s string) []byte {
 	t.Helper()
@@ -221,7 +222,10 @@ func gzFile(t *testing.T, name string) []byte {
 
 func day(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
 
-const exportBase = "exports/crucible-labs/data/BILLING_PERIOD="
+const (
+	exportBase = "exports/crucible-labs/data/BILLING_PERIOD="
+	exportMeta = "exports/crucible-labs/metadata/BILLING_PERIOD="
+)
 
 func TestCostsReadTheExport(t *testing.T) {
 	c := exportClient(t, map[string][]byte{
@@ -252,6 +256,57 @@ func TestCostsMalformedCostFailsTheWholeRead(t *testing.T) {
 	})
 	if got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
 		t.Fatalf("a half-read bill must never settle a lab: %+v", got)
+	}
+}
+
+func TestCostsReadOnlyTheManifestsFiles(t *testing.T) {
+	good := gzFile(t, "part-0.csv")
+	manifest := func(keys ...string) []byte {
+		j, _ := json.Marshal(map[string]any{"dataFiles": keys})
+		return j
+	}
+	// a stale leftover part not in the manifest is not counted
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz":               good,
+		exportBase + "2026-10/old-run.csv.gz":              good,
+		exportMeta + "2026-10/crucible-labs-Manifest.json": manifest("s3://bills/" + exportBase + "2026-10/part-0.csv.gz"),
+	})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 2 || math.Abs(got[0].USD-0.15) > 1e-9 {
+		t.Fatalf("only the manifest's file counts: %+v %v", got, err)
+	}
+	// a listed file that is missing fails the whole read
+	c = exportClient(t, map[string][]byte{
+		exportMeta + "2026-10/crucible-labs-Manifest.json": manifest("s3://bills/" + exportBase + "2026-10/gone.csv.gz"),
+	})
+	if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatal("a missing data file is an error")
+	}
+	// a file in another bucket, or a broken manifest, is an error
+	for _, m := range [][]byte{manifest("s3://elsewhere/x.csv.gz"), []byte("{")} {
+		c = exportClient(t, map[string][]byte{exportMeta + "2026-10/crucible-labs-Manifest.json": m})
+		if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Fatalf("bad manifest %s", m)
+		}
+	}
+}
+
+func TestCostsRejectBadRows(t *testing.T) {
+	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n"
+	tag := `"{""user_crucible:lab-id"":""0123456789ab""}"`
+	for name, body := range map[string]string{
+		"NaN":        "2026-10-05T00:00:00Z,NaN," + tag + "\n",
+		"+Inf":       "2026-10-05T00:00:00Z,+Inf," + tag + "\n",
+		"-Inf":       "2026-10-05T00:00:00Z,-Inf," + tag + "\n",
+		"bad tags":   "2026-10-05T00:00:00Z,0.1,{not-json\n",
+		"bad date":   "yesterday,0.1," + tag + "\n",
+		"short date": "2026,0.1," + tag + "\n",
+		"short row":  "2026-10-05T00:00:00Z,0.1\n",
+	} {
+		c := exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, head+body)})
+		if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Errorf("%s: the read must fail", name)
+		}
 	}
 }
 

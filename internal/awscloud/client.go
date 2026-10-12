@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -279,8 +280,7 @@ func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {
 // maxExportObject bounds one export file after decompression.
 const maxExportObject = 512 << 20
 
-// Costs reads the billed spend from the free CUR 2.0 export in S3 (gzipped CSV, one prefix per billing month the
-// window touches), summed per lab and UTC day over [from, to). Untagged lines are skipped. Any unreadable file or
+// Costs reads the billed spend from the free CUR 2.0 export in S3 (gzipped CSV; per billing month the window touches, the files its manifest lists), summed per lab and UTC day over [from, to). Untagged lines are skipped. Any unreadable file or
 // malformed cell fails the whole read: a half-read bill must never settle a lab. No files yet is no costs.
 func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error) {
 	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) { o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != "" })
@@ -290,23 +290,15 @@ func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, er
 	}
 	sums := map[key]float64{}
 	for m := time.Date(from.Year(), from.Month(), 1, 0, 0, 0, 0, time.UTC); m.Before(to); m = m.AddDate(0, 1, 0) {
-		prefix := strings.Trim(c.cfg.ExportPrefix, "/") + "/" + c.cfg.ExportName + "/data/BILLING_PERIOD=" + m.Format("2006-01") + "/"
-		prefix = strings.TrimPrefix(prefix, "/")
-		p := s3.NewListObjectsV2Paginator(cl, &s3.ListObjectsV2Input{Bucket: aws.String(c.cfg.ExportBucket), Prefix: aws.String(prefix)})
-		for p.HasMorePages() {
-			page, err := p.NextPage(ctx)
-			if err != nil {
-				return nil, err
-			}
-			for _, o := range page.Contents {
-				if !strings.HasSuffix(aws.ToString(o.Key), ".csv.gz") {
-					continue
-				}
-				if err := readExportObject(ctx, cl, c.cfg.ExportBucket, aws.ToString(o.Key), from, to, func(d time.Time, lab string, usd float64) {
-					sums[key{d, lab}] += usd
-				}); err != nil {
-					return nil, fmt.Errorf("export file %s: %w", aws.ToString(o.Key), err)
-				}
+		keys, err := c.manifestFiles(ctx, cl, m)
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range keys {
+			if err := readExportObject(ctx, cl, c.cfg.ExportBucket, k, from, to, func(d time.Time, lab string, usd float64) {
+				sums[key{d, lab}] += usd
+			}); err != nil {
+				return nil, fmt.Errorf("export file %s: %w", k, err)
 			}
 		}
 	}
@@ -321,6 +313,38 @@ func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, er
 		return strings.Compare(a.LabID, b.LabID)
 	})
 	return out, nil
+}
+
+// manifestFiles returns the keys of the month's current data files, from the export's manifest (the data prefix
+// also holds files of earlier runs). No manifest: the export has not run for that month yet.
+func (c *Client) manifestFiles(ctx context.Context, cl *s3.Client, m time.Time) ([]string, error) {
+	base := strings.TrimPrefix(strings.Trim(c.cfg.ExportPrefix, "/")+"/"+c.cfg.ExportName, "/")
+	key := base + "/metadata/BILLING_PERIOD=" + m.Format("2006-01") + "/" + c.cfg.ExportName + "-Manifest.json"
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(c.cfg.ExportBucket), Key: aws.String(key)})
+	var nk *s3types.NoSuchKey
+	if errors.As(err, &nk) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Body.Close()
+	var man struct {
+		DataFiles []string `json:"dataFiles"`
+	}
+	if err := json.NewDecoder(io.LimitReader(obj.Body, 16<<20)).Decode(&man); err != nil {
+		return nil, fmt.Errorf("manifest %s: %w", key, err)
+	}
+	pre := "s3://" + c.cfg.ExportBucket + "/"
+	keys := make([]string, 0, len(man.DataFiles))
+	for _, f := range man.DataFiles {
+		k, ok := strings.CutPrefix(f, pre)
+		if !ok {
+			return nil, fmt.Errorf("manifest %s lists %q outside bucket %s", key, f, c.cfg.ExportBucket)
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
 }
 
 // labTagKeys are the spellings of the lab tag in CUR 2.0's resource_tags JSON.
@@ -388,7 +412,7 @@ func readExportObject(ctx context.Context, cl *s3.Client, bucket, key string, fr
 			return err
 		}
 		usd, err := strconv.ParseFloat(rec[ci], 64)
-		if err != nil {
+		if err != nil || math.IsNaN(usd) || math.IsInf(usd, 0) {
 			return fmt.Errorf("bad cost %q", rec[ci])
 		}
 		if !d.Before(from) && d.Before(to) {

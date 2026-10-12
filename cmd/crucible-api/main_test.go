@@ -37,14 +37,15 @@ func TestDryrunNeverConstructsTheSDKClient(t *testing.T) {
 }
 
 // Leaked lab credentials live up to an hour after End; an hourly reaper bounds their leftovers at about 2 h.
-// Only Cost Explorer costs money, so it stays at 6 h. jobs.New makes each one unique per its period.
-func TestReaperRunsHourlyCostExplorerEverySixHours(t *testing.T) {
+// Cost ingestion lists and reads S3 files, so it stays at 6 h. jobs.New makes each one unique per its period.
+func TestReaperRunsHourlyBilledCostsEverySixHours(t *testing.T) {
 	every := map[string]time.Duration{}
 	for _, p := range periodicJobs() {
 		every[p.Args.Kind()] = p.Every
 	}
 	if every[labs.ReapArgs{}.Kind()] != time.Hour || every[labs.CostArgs{}.Kind()] != 6*time.Hour ||
-		every[labs.SweepArgs{}.Kind()] != 15*time.Second || every[labs.BudgetArgs{}.Kind()] != 5*time.Minute {
+		every[labs.SweepArgs{}.Kind()] != 15*time.Second || every[labs.BudgetArgs{}.Kind()] != 5*time.Minute ||
+		every[labs.PriceArgs{}.Kind()] != 7*24*time.Hour {
 		t.Fatalf("periodic jobs: %v", every)
 	}
 }

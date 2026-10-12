@@ -1,5 +1,5 @@
 // Package awscloud is Crucible's narrow view of the shared AWS lab account (spec §8.2, §9.3): lab credentials with
-// session tags, the tag inventory, deleting leftovers, CloudTrail create calls and Cost Explorer. Client talks to
+// session tags, the tag inventory, deleting leftovers, CloudTrail create calls and the billing export in S3. Client talks to
 // AWS; Fake keeps everything in memory for tests and for CRUCIBLE_AWS_LABS=dryrun.
 package awscloud
 

@@ -30,7 +30,7 @@ type LedgerProgram struct {
 type LedgerDay struct {
 	Day         string  `json:"day"`          // 2026-10-04
 	EstimateUSD float64 `json:"estimate_usd"` // estimated cost of the labs started that day
-	ActualUSD   float64 `json:"actual_usd"`   // Cost Explorer's cost on that day
+	ActualUSD   float64 `json:"actual_usd"`   // billed cost on that day
 }
 
 type LedgerLab struct {
@@ -44,7 +44,7 @@ type LedgerLab struct {
 	HourlyUSD   float64    `json:"hourly_usd"`
 	EstimateUSD float64    `json:"estimate_usd"`
 	CostUSD     float64    `json:"cost_usd"`             // hourly estimate × time run so far
-	ActualUSD   *float64   `json:"actual_usd,omitempty"` // Cost Explorer's total so far
+	ActualUSD   *float64   `json:"actual_usd,omitempty"` // billed total so far
 	Settled     bool       `json:"settled"`              // the actual replaces the estimate in spend
 	CreatedAt   time.Time  `json:"created_at"`
 	EndsAt      *time.Time `json:"ends_at,omitempty"`

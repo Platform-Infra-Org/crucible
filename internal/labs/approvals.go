@@ -35,13 +35,13 @@ func monthStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
-// labCostSQL selects lab_instances (alias l) with three more columns: actual (billed total, NULL when never
+// labCostSQL selects lab_instances (alias l) with four more columns: metered (the list-price spend of what the lab's
+// Terraform state held, NULL when never metered), actual (billed total, NULL when never
 // reported), settled (use the actual instead of the estimate: a positive total, and both the last successful
 // ingestion and the newest actuals row came 48 h or more after the lab ended, so the billing export has caught up; a $0 or
-// stale row keeps the estimate) and est_spent (the metered spend of what the lab's Terraform state held, priced at list
-// price, when it was metered; else hourly estimate × time run). $1 is now.
+// stale row keeps the estimate) and est_spent (metered when it was metered; else hourly estimate × time run). $1 is now.
 // Conservative on purpose: a lab the export never reported keeps its estimate (tags not activated != free).
-const labCostSQL = `SELECT l.*, a.usd AS actual,
+const labCostSQL = `SELECT l.*, m.usd AS metered, a.usd AS actual,
 	coalesce(a.usd > 0 AND a.updated_at >= l.destroyed_at + interval '48 hours'
 		AND (SELECT ingest_ok_at FROM aws_ops) >= l.destroyed_at + interval '48 hours', false) AS settled,
 	coalesce(m.usd, CASE WHEN l.ready_at IS NULL THEN 0

@@ -25,13 +25,13 @@ function Burn({ label, s }: { label: string; s: Spend }) {
 function LabRows({ labs, testid }: { labs: LedgerLab[]; testid: string }) {
   return (
     <div className="table-wrap"><table className="grid" data-testid={testid}>
-      <thead><tr><th>Lab</th><th>Team</th><th>Requested by</th><th>Runtime</th><th>State</th><th>Estimate</th><th>Cost so far</th><th>AWS bill</th></tr></thead>
+      <thead><tr><th>Lab</th><th>Team</th><th>Requested by</th><th>Runtime</th><th>State</th><th>Estimate</th><th>Cost so far</th><th>Metered</th><th>Billed</th></tr></thead>
       <tbody>
         {labs.map((l) => (
           <tr key={l.id}>
             <td>{l.training} / {l.module}</td><td>{l.team}</td><td>{l.requester}</td><td>{l.runtime}</td>
             <td>{l.state}{l.state === 'ready' && l.ends_at ? ` · ends ${new Date(l.ends_at).toLocaleTimeString()}` : ''}</td>
-            <td>{usd(l.estimate_usd)}</td><td>{usd(l.cost_usd)}</td>
+            <td>{usd(l.estimate_usd)}</td><td>{usd(l.cost_usd)}</td><td>{l.metered_usd == null ? '—' : usd(l.metered_usd)}</td>
             <td>{l.actual_usd == null ? '—' : `${usd(l.actual_usd)}${l.settled ? '' : ' (so far)'}`}</td>
           </tr>
         ))}
@@ -62,13 +62,20 @@ export function LedgerPage() {
     <section className="page">
       <h1>Ledger</h1>
       <p className="muted">
-        Lab spend for {l.month}. Running labs count from their hourly estimate. A finished AWS lab switches to its AWS bill
+        Lab spend for {l.month}. Running labs count from their hourly estimate, or from what an AWS lab has built once it is metered. A finished AWS lab switches to its AWS bill
         once the bill has settled (about two days after the lab ends).
       </p>
       {l.aws && (
+        <p role="status" data-testid="prices-status" className={l.prices_stale ? 'error' : 'muted'}>
+          {l.prices_as_of ? `Price data from ${new Date(l.prices_as_of).toLocaleDateString()}.` : 'No price data yet.'}
+          {l.prices_stale && " Out of date: AWS labs can't be estimated or requested until it refreshes."}
+          {l.prices_error && ` Last error: ${l.prices_error}`}
+        </p>
+      )}
+      {l.aws && (
         <p role="status" data-testid="actuals-status" className={l.actuals_stale ? 'error' : 'muted'}>
           {l.actuals_as_of ? `AWS costs as of ${new Date(l.actuals_as_of).toLocaleString()} (AWS reports about 24 h late).` : 'No AWS costs have been read yet.'}
-          {l.actuals_stale && ' STALE: actuals are out of date; estimates keep enforcing the budgets.'}
+          {l.actuals_stale && ' Out of date: the billed figures lag behind; estimates keep enforcing the budgets.'}
           {l.actuals_error && ` Last error: ${l.actuals_error}`}
         </p>
       )}
@@ -89,10 +96,10 @@ export function LedgerPage() {
       ))}
 
       <h2>Day by day</h2>
-      <p className="muted legend"><span className="swatch est" /> estimate (by start day) <span className="swatch act" /> AWS bill</p>
+      <p className="muted legend"><span className="swatch est" /> estimate (by start day) <span className="swatch act" /> billed</p>
       <div className="bars" role="img" aria-label="Daily lab spend this month; the numbers are in the table below">
         {l.daily.map((d, i) => (
-          <div key={d.day} className="bar-day" title={`${d.day}: estimate ${usd(d.estimate_usd)}, AWS ${usd(d.actual_usd)}`}>
+          <div key={d.day} className="bar-day" title={`${d.day}: estimate ${usd(d.estimate_usd)}, billed ${usd(d.actual_usd)}`}>
             <span className="bar est" style={{ height: `${bars[i].estimate}%` }} />
             <span className="bar act" style={{ height: `${bars[i].actual}%` }} />
           </div>
@@ -101,7 +108,7 @@ export function LedgerPage() {
       <details>
         <summary>Numbers</summary>
         <div className="table-wrap"><table className="grid">
-          <thead><tr><th>Day</th><th>Estimate</th><th>AWS bill</th></tr></thead>
+          <thead><tr><th>Day</th><th>Estimate</th><th>Billed</th></tr></thead>
           <tbody>{l.daily.map((d) => <tr key={d.day}><td>{d.day}</td><td>{usd(d.estimate_usd)}</td><td>{usd(d.actual_usd)}</td></tr>)}</tbody>
         </table></div>
       </details>
@@ -120,7 +127,7 @@ export function LedgerPage() {
         </table></div>
       )}
 
-      <h2>Estimate vs actual</h2>
+      <h2>Estimate vs billed</h2>
       <p>{acc === null ? 'No finished AWS lab has a settled bill yet.'
         : `${l.accuracy.labs} settled lab(s): AWS billed ${usd(l.accuracy.actual_usd)} against ${usd(l.accuracy.estimate_usd)} estimated (${acc}%).`}</p>
 

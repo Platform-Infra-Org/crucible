@@ -40,26 +40,26 @@ func (s *Store) source() string {
 	return s.Source
 }
 
-// refreshedAt is when the last refresh from this store's source succeeded; nil when never, or when the rows come from
-// another source (a dry run's fixture never prices a real lab, nor passes for a fresh real refresh).
-func (s *Store) refreshedAt(ctx context.Context) (*time.Time, error) {
-	var okAt *time.Time
+// Status is when the last refresh from this store's source succeeded (nil when never, or when the rows come from
+// another source: a dry run's fixture never prices a real lab, nor passes for a fresh real refresh), whether estimates
+// fail closed for it (missing or older than 30 days), and why the last refresh failed ("" after a success).
+func (s *Store) Status(ctx context.Context) (okAt *time.Time, stale bool, lastErr string, err error) {
 	var src string
-	if err := s.DB.QueryRow(ctx, `SELECT ok_at, source FROM price_refresh WHERE id = 1`).Scan(&okAt, &src); err != nil {
-		return nil, err
+	if err := s.DB.QueryRow(ctx, `SELECT ok_at, source, error FROM price_refresh WHERE id = 1`).Scan(&okAt, &src, &lastErr); err != nil {
+		return nil, true, "", err
 	}
 	if src != s.source() {
-		return nil, nil
+		okAt = nil
 	}
-	return okAt, nil
+	return okAt, okAt == nil || s.Now().Sub(*okAt) > maxAge, lastErr, nil
 }
 
 func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
-	okAt, err := s.refreshedAt(ctx)
+	_, stale, _, err := s.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if okAt == nil || s.Now().Sub(*okAt) > maxAge {
+	if stale {
 		return nil, ErrStale
 	}
 	rows, err := s.DB.Query(ctx, `SELECT service, region, key, usd FROM prices`)
@@ -112,7 +112,7 @@ func (s *Store) Failed(ctx context.Context, cause error) error {
 
 // FreshWithin reports whether a refresh succeeded less than d ago.
 func (s *Store) FreshWithin(ctx context.Context, d time.Duration) (bool, error) {
-	okAt, err := s.refreshedAt(ctx)
+	okAt, _, _, err := s.Status(ctx)
 	if err != nil {
 		return false, err
 	}

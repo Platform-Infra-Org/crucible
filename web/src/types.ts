@@ -55,7 +55,9 @@ export type TaskDetail = TaskView & { instructions: string; hints: string[] | nu
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
 export type HintResult = { index: number; text: string; cost: number; lab: LabView }
 export type ModuleLab = { title: string; runtime: string; runtime_ready: boolean; runtime_message?: string; lab: LabView | null
-  estimate_usd: number; needs_approval: boolean; blocked?: string; contexts?: KubeContext[]; cluster_wide?: boolean }
+  estimate_usd: number; estimate_breakdown?: EstimateBreakdown | null; needs_approval: boolean; blocked?: string; contexts?: KubeContext[]; cluster_wide?: boolean }
+/** An aws lab's planned resources priced line by line; `note` is the server's words ("free", "declared", "usage not stated"…). */
+export type EstimateBreakdown = { hourly_usd: number; lines: { address: string; type: string; hourly_usd: number; usage_hourly_usd: number; note?: string }[] }
 export type KubeContext = { name: string; server: string }
 export type ReleaseStatus = 'healthy' | 'progressing' | 'failing'
 export type Health = { releases: { name: string; status: ReleaseStatus; unready: string[] }[] }
@@ -107,12 +109,13 @@ export type SignOff = { team: string; training: string; module: string; question
 
 export type LedgerLab = {
   id: string; team: string; training: string; module: string; requester: string; runtime: string; state: LabState
-  hourly_usd: number; estimate_usd: number; cost_usd: number; actual_usd?: number; settled: boolean; created_at: string; ends_at?: string
+  hourly_usd: number; estimate_usd: number; cost_usd: number; metered_usd?: number; actual_usd?: number; settled: boolean; created_at: string; ends_at?: string
 }
 export type Finding = { source: 'destroy' | 'reaper' | 'trail'; lab_id: string; arn: string; action: 'deleted' | 'failed' | 'reported'; detail: string; first_at: string; last_at: string }
 export type Accuracy = { labs: number; estimate_usd: number; actual_usd: number }
 export type Ledger = {
   month: string; aws: boolean; actuals_as_of?: string; actuals_stale: boolean; reaper_stale: boolean; reaper_error?: string; actuals_error?: string; reaped_at?: string; can_refresh: boolean
+  prices_as_of?: string; prices_stale: boolean; prices_error?: string
   teams: { id: string; name: string; spend: Spend; programs: { training: string; spend: Spend }[] }[]
   daily: { day: string; estimate_usd: number; actual_usd: number }[]
   running: LedgerLab[]; labs: LedgerLab[]; top_spenders: { requester: string; team: string; usd: number }[]

@@ -12,6 +12,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/audit"
 	"crucible/internal/auth"
+	"crucible/internal/pricing"
 	"crucible/internal/rbac"
 )
 
@@ -43,9 +44,10 @@ type LedgerLab struct {
 	State       State      `json:"state"`
 	HourlyUSD   float64    `json:"hourly_usd"`
 	EstimateUSD float64    `json:"estimate_usd"`
-	CostUSD     float64    `json:"cost_usd"`             // hourly estimate × time run so far
-	ActualUSD   *float64   `json:"actual_usd,omitempty"` // billed total so far
-	Settled     bool       `json:"settled"`              // the actual replaces the estimate in spend
+	CostUSD     float64    `json:"cost_usd"`              // metered, else hourly estimate × time run so far
+	MeteredUSD  *float64   `json:"metered_usd,omitempty"` // what its Terraform state held, at list price; nil when never metered
+	ActualUSD   *float64   `json:"actual_usd,omitempty"`  // billed total so far
+	Settled     bool       `json:"settled"`               // the actual replaces the estimate in spend
 	CreatedAt   time.Time  `json:"created_at"`
 	EndsAt      *time.Time `json:"ends_at,omitempty"`
 }
@@ -86,6 +88,9 @@ type Ledger struct {
 	ActualsAsOf  *time.Time   `json:"actuals_as_of,omitempty"`
 	ActualsStale bool         `json:"actuals_stale"`
 	ActualsError string       `json:"actuals_error,omitempty"` // admins only
+	PricesAsOf   *time.Time   `json:"prices_as_of,omitempty"`  // the price data aws estimates and metering use
+	PricesStale  bool         `json:"prices_stale"`            // missing or older than 30 days: aws labs can't be estimated
+	PricesError  string       `json:"prices_error,omitempty"`  // admins only
 	ReapedAt     *time.Time   `json:"reaped_at,omitempty"`
 	ReaperStale  bool         `json:"reaper_stale"`           // no successful reaper run for 12 hours (or a newer failure)
 	ReaperError  string       `json:"reaper_error,omitempty"` // admins only
@@ -146,10 +151,22 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 		l.ReaperError = reapErr
 		l.ActualsError = ingestErr
 	}
+	if s.Prices != nil {
+		var perr string
+		if l.PricesAsOf, l.PricesStale, perr, err = s.Prices.Status(ctx); err != nil {
+			return nil, err
+		}
+		if perr == "" && l.PricesStale {
+			perr = pricing.ErrStale.Error()
+		}
+		if admin {
+			l.PricesError = perr
+		}
+	}
 
 	rows, err := s.DB.Query(ctx, `WITH labs AS (`+labCostSQL+` WHERE l.team = ANY($2) AND l.created_at >= $3)
 		SELECT labs.id, labs.team, labs.training, labs.module, coalesce(u.email, ''), labs.runtime, labs.state,
-			labs.hourly_usd, labs.estimate_usd, labs.est_spent, labs.actual, labs.settled, labs.created_at, labs.ends_at
+			labs.hourly_usd, labs.estimate_usd, labs.est_spent, labs.metered, labs.actual, labs.settled, labs.created_at, labs.ends_at
 		FROM labs LEFT JOIN users u ON u.id = labs.user_id
 		WHERE labs.runtime <> 'cluster' -- the trainee's own cluster: $0, not in the Ledger (spec 2026-10-11 §3)
 			AND (labs.ready_at IS NOT NULL OR labs.state = 'provisioning' OR labs.actual IS NOT NULL
@@ -161,7 +178,7 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 	for rows.Next() {
 		var x LedgerLab
 		if err := rows.Scan(&x.ID, &x.Team, &x.Training, &x.Module, &x.Requester, &x.Runtime, &x.State, &x.HourlyUSD,
-			&x.EstimateUSD, &x.CostUSD, &x.ActualUSD, &x.Settled, &x.CreatedAt, &x.EndsAt); err != nil {
+			&x.EstimateUSD, &x.CostUSD, &x.MeteredUSD, &x.ActualUSD, &x.Settled, &x.CreatedAt, &x.EndsAt); err != nil {
 			rows.Close()
 			return nil, err
 		}

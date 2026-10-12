@@ -33,6 +33,8 @@ type APIDeps struct {
 	// CheckRepo tries a connected repository and records what it found (Store.RecordCheck). Nil: no test is run and
 	// a repository stays "unknown" until something reads from it.
 	CheckRepo func(ctx context.Context, id int64)
+	// BotName and BotEmail are the committer Crucible writes a starter training as.
+	BotName, BotEmail string
 }
 
 type api struct {
@@ -261,9 +263,10 @@ func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string,
 		return apperr.Wrap(apperr.Forbidden, "only a team's leaders, seniors and juniors, or an admin, can register a training")
 	}
 	var b struct {
-		ID   string `json:"id"`
-		Team string `json:"team"`
-		config.TrainingRef
+		Repository int64  `json:"repository"`
+		Team       string `json:"team"`
+		Ref        string `json:"ref"`
+		Path       string `json:"path"`
 	}
 	if err := httpx.Read(r, &b); err != nil {
 		return err
@@ -278,10 +281,16 @@ func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string,
 		}
 		team = own.ID
 	}
-	if err := a.s.CreateTraining(r.Context(), actor, strings.TrimSpace(b.ID), b.TrainingRef, team); err != nil {
+	// The id and title come from the repository's training.yaml, not from this request: the content says who it is.
+	out, err := a.s.Register(r.Context(), actor, b.Repository, b.Ref, b.Path, team, a.d.BotName, a.d.BotEmail)
+	if err != nil {
 		return err
 	}
-	return a.done(w, r, 1)
+	if a.d.Refresh != nil {
+		_ = a.d.Refresh(r.Context())
+	}
+	httpx.JSON(w, http.StatusOK, out)
+	return nil
 }
 
 // manage checks that actor may manage training (its owning team's leaders, seniors and juniors, its admins, Crucible

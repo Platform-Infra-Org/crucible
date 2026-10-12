@@ -199,23 +199,24 @@ func run(ctx context.Context) error {
 		quizSecret = "crucible-dev-quiz-secret"
 	}
 	cfgSvc := &configapi.Service{DB: pool, State: syncer.Current, Changes: syncer.Changes}
-	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, CheckRepo: orgStore.Check, Platform: func() *config.Platform {
-		if st := syncer.Current(); st != nil {
-			return st.Platform
-		}
-		return nil
-	}, Content: func(team, training string) (title, running, head string) {
-		title = training
-		if st := syncer.Current(); st != nil {
-			if t, _ := st.ProgramTraining(team, training); t != nil {
-				title = t.Title
-			} else if t := st.Training(training, st.Heads[training]); t != nil {
-				title = t.Title
+	orgAPI := org.APIDeps{Refresh: syncer.SyncOnce, CheckPin: syncer.CheckPin, CheckRepo: orgStore.Check,
+		BotName: env("CRUCIBLE_GIT_BOT_NAME", "Crucible"), BotEmail: env("CRUCIBLE_GIT_BOT_EMAIL", "crucible@localhost"), Platform: func() *config.Platform {
+			if st := syncer.Current(); st != nil {
+				return st.Platform
 			}
-			running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
-		}
-		return
-	}}
+			return nil
+		}, Content: func(team, training string) (title, running, head string) {
+			title = training
+			if st := syncer.Current(); st != nil {
+				if t, _ := st.ProgramTraining(team, training); t != nil {
+					title = t.Title
+				} else if t := st.Training(training, st.Heads[training]); t != nil {
+					title = t.Title
+				}
+				running, head = st.ProgramSHAs[team+"/"+training], st.Heads[training]
+			}
+			return
+		}}
 	learnSvc := &learn.Service{DB: pool, State: syncer.Current, Versions: syncer.Version, QuizSecret: quizSecret}
 	notifySvc := &notify.Service{DB: pool, State: syncer.Current, PublicURL: public, Log: slog.Default(),
 		SMTP: notify.SMTPConfig{Addr: os.Getenv("CRUCIBLE_SMTP_ADDR"), From: env("CRUCIBLE_SMTP_FROM", "crucible@localhost"),

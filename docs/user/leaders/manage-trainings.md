@@ -24,15 +24,24 @@ the content from there. Who takes it, edits it and runs it is kept in Crucible, 
 Any leader, senior or junior can choose **+ New training**; their team owns what they register. An admin picks the
 team. Give:
 
-- **Training id**, short and stable (`forge-101`).
-- **Repository URL**: an `https://`, `http://`, `ssh://`, `git://` or `user@host:path` URL. Local paths are refused
-  on an ordinary install. Credentials in the URL are stored so cloning works, but the page and the audit log show
-  them as `***@`.
+- **Repository**: one an admin has connected, under
+  [Administrator → Repositories](/docs/admins/repositories). The credential, if it needs one, lives with the
+  connection, so you never type one here.
 - **Branch, tag or commit**: what Crucible follows, usually `main`. A branch moves: what is merged there reaches
   participants, and the training takes content edits from Crucible. A tag or a commit id stays on that one version,
   and changes only in git, so Crucible offers no **Edit content** for it.
 - **Folder**: where `training.yaml` sits in the repository, such as `trainings/forge-101`. Leave it empty when it
   is at the root. One repository can hold several trainings this way, each in its own folder.
+
+You are not asked for an id or a title: Crucible reads them from the `training.yaml` it finds, because they belong to
+the content. Rename a training by changing its `title` there. Its `id` is what programs, progress and scores are
+keyed by, so changing that makes a different training.
+
+**A repository with nothing in it yet** gets a training to start from — a `training.yaml` and a first module with a
+reading, committed for you and named after the folder you registered (or the repository, at its root). Connect a new
+repository, register it, and go straight to **Edit content**. Crucible only does this when the repository has no
+commits at all; one that has content but no `training.yaml` where you pointed is an error, not an invitation to
+write one.
 
 A training belongs to one team. Its **managers** are that team's leaders, seniors and juniors, and the training's own
 admins. Only a Crucible admin gives a training to another team, under **Team**; its roles, version, schedule and

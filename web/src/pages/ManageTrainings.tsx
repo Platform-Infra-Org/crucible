@@ -83,25 +83,34 @@ export function ManageTrainingsPage() {
 
 function NewTraining({ data, onDone }: { data: TrainingsAdmin; onDone: () => void }) {
   const navigate = useNavigate()
-  const [id, setId] = useState('')
   const [team, setTeam] = useState(data.my_team || data.teams[0]?.id || '')
-  const [repo, setRepo] = useState('')
+  const [repository, setRepository] = useState(data.repos?.[0]?.id ?? 0)
   const [ref, setRef] = useState('main')
   const [path, setPath] = useState('')
   const act = useAct(onDone)
   const owner = data.is_admin ? team : data.my_team
+  // The id and the title come from the repository's training.yaml. An empty repository gets a starter training
+  // written into it, and the answer says which it was.
   const save = async (e: FormEvent) => {
     e.preventDefault()
-    const ok = await act.run(() => api('/api/org/trainings', { method: 'POST', json: { id: id.trim(), team: owner, repo: repo.trim(), ref: ref.trim(), path: path.trim() } }),
-      `${id.trim()} is registered for ${owner}.`)
-    if (ok) navigate(`/trainings/manage/${encodeURIComponent(id.trim())}`)
+    let got: { id: string; title: string; started: boolean } | undefined
+    const ok = await act.run(async () => {
+      got = await api<{ id: string; title: string; started: boolean }>('/api/org/trainings',
+        { method: 'POST', json: { repository, team: owner, ref: ref.trim(), path: path.trim() } })
+    }, '')
+    if (ok && got) {
+      toast(got.started
+        ? `${got.id} is registered for ${owner}, with a training to start from written into the repository.`
+        : `${got.title} is registered for ${owner}.`)
+      navigate(`/trainings/manage/${encodeURIComponent(got.id)}`)
+    }
   }
   return (
     <form className="stack panel" onSubmit={save}>
       <h2>New training</h2>
       <p className="muted">A training&apos;s readings, quizzes and labs live in a git repository (<code>training.yaml</code> and <code>modules/…</code>).
-        Register it here; your team owns it, and you choose who takes it, edits it and runs it.</p>
-      <label>Training id <input required value={id} placeholder="e.g. forge-501" onChange={(e) => setId(e.target.value)} /></label>
+        Choose a connected repository and the folder the training is in; its id and title come from that <code>training.yaml</code>. A repository with nothing in it yet gets a training to start from, which you can
+        then edit here.</p>
       {data.is_admin
         ? (
             <label>Team that owns it
@@ -111,7 +120,16 @@ function NewTraining({ data, onDone }: { data: TrainingsAdmin; onDone: () => voi
             </label>
           )
         : <p>Owned by <strong>{data.my_team}</strong>, your team.</p>}
-      <label>Repository URL <input required value={repo} placeholder="https://git.example.com/trainings/forge-501.git" onChange={(e) => setRepo(e.target.value)} /></label>
+      {data.repos && data.repos.length > 0
+        ? (
+            <label>Repository
+              <select required value={repository} onChange={(e) => setRepository(Number(e.target.value))}>
+                {data.repos.map((r) => <option key={r.id} value={r.id}>{r.url}</option>)}
+              </select>
+            </label>
+          )
+        : <p role="alert" className="warn">No repository is connected yet. An admin connects one under
+            Administrator &rarr; Repositories, then a training can be registered from it.</p>}
       <RefFields gitRef={ref} setRef={setRef} path={path} setPath={setPath} />
       {act.banner}
       <button className="primary" disabled={act.busy || !owner}>Register training</button>

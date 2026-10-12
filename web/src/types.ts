@@ -17,6 +17,7 @@ export type ManagedTraining = {
 }
 export type TrainingsAdmin = {
   is_admin: boolean; can_create: boolean; my_team: string; schedules: string[]; teams: { id: string; name: string }[]; trainings: ManagedTraining[]
+  repos?: { id: number; url: string }[] // the connected repositories a training can be registered from
 }
 export type Person = { email: string; name: string; team: string; tag: Tag | '' }
 export type People = { people: Person[]; groups: string[] }

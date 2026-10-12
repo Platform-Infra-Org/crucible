@@ -3,6 +3,7 @@ package blocks
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -565,4 +566,26 @@ func Apply(dir, id string, values map[string]string) (*Result, error) {
 		return nil, err
 	}
 	return &Result{Ops: ops, Open: open, Line: line, Lines: lines}, nil
+}
+
+// Starter renders the new-training template (template.training): the files a repository needs before anyone can open
+// it in the editor. Crucible writes these into an empty repository when a training is registered from it, so nobody
+// has to create a training.yaml by hand before they can start.
+func Starter(id, title, maintainer string) (map[string]string, error) {
+	b, ok := Find("template.training")
+	if !ok {
+		return nil, errors.New("the new-training template is missing from the catalog")
+	}
+	vals := map[string]string{"id": id, "title": title, "maintainer": maintainer}
+	out := map[string]string{}
+	for p, body := range b.Insert.Files {
+		rp, err := render(p, vals)
+		if err != nil {
+			return nil, err
+		}
+		if out[rp], err = render(body, vals); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

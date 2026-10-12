@@ -11,6 +11,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/db/dbtest"
+	"crucible/internal/secrets"
 )
 
 const sha1 = "0123456789abcdef0123456789abcdef01234567"
@@ -37,7 +38,11 @@ func audits(t *testing.T, s *Store, action string) int {
 }
 
 func orgFixture(t *testing.T) (*Store, context.Context) {
-	s := &Store{DB: dbtest.New(t)}
+	box, err := secrets.New("a-long-enough-development-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{DB: dbtest.New(t), Secrets: box, SSHDir: sshDir(t.TempDir())}
 	mustTeam(t, s, "platform", body("Platform", "lead@x:leader", "senior@x:senior", "new@x:trainee"))
 	mustTeam(t, s, "data", body("Data", "dl@x:leader", "ds@x:senior", "dt@x:trainee"))
 	mustTraining(t, s, "forge-101")

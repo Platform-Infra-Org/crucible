@@ -178,3 +178,50 @@ func TestPlanNullValueFailsClosed(t *testing.T) {
 		t.Fatal("null size must fail")
 	}
 }
+
+func TestRound2(t *testing.T) {
+	res, err := FromPlan(load(t, "plan.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nat Resource
+	for _, r := range res {
+		if r.Type == "aws_nat_gateway" {
+			nat = r
+		}
+	}
+	if nat.Unknown["allocation_id"] != true {
+		t.Fatalf("after_unknown must be kept: %+v", nat)
+	}
+	if b, err := priceOne(nat, nil); err != nil || !near(b.HourlyUSD, 0.048) {
+		t.Fatalf("unknown allocation_id is an EIP counted elsewhere: %+v %v", b, err)
+	}
+	inst := func(v map[string]any) Resource {
+		return Resource{Address: "aws_instance.i", Type: "aws_instance", Values: v}
+	}
+	for _, v := range []any{nil, true} {
+		b, err := priceOne(inst(map[string]any{"instance_type": "t3.micro", "associate_public_ip_address": v}), nil)
+		if err != nil || !near(b.HourlyUSD, 0.0114+8*0.088/730+0.005) {
+			t.Fatalf("public IP %v counts: %+v %v", v, b, err)
+		}
+	}
+	if b, err := priceOne(inst(map[string]any{"instance_type": "t3.micro", "associate_public_ip_address": false}), nil); err != nil || !near(b.HourlyUSD, 0.0114+8*0.088/730) {
+		t.Fatalf("explicit false: %+v %v", b, err)
+	}
+	b, err := priceOne(Resource{Address: "aws_lb.a", Type: "aws_lb", Values: map[string]any{"subnet_mapping": []any{1, 2, 3}}}, nil)
+	if err != nil || !near(b.HourlyUSD, 0.0252+3*0.005) {
+		t.Fatalf("subnet_mapping: %+v %v", b, err)
+	}
+	_, err = priceOne(Resource{Address: "aws_vpc.v", Type: "aws_vpc", Values: map[string]any{"instance_tenancy": "dedicated"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "aws_vpc.v") {
+		t.Fatalf("dedicated vpc: %v", err)
+	}
+	_, err = priceOne(inst(map[string]any{"instance_type": nil}), nil)
+	if err == nil || !strings.Contains(err.Error(), "instance_type unknown") {
+		t.Fatalf("unknown instance_type: %v", err)
+	}
+	_, err = priceOne(inst(map[string]any{"instance_type": "t3.micro", "root_block_device": []any{map[string]any{"volume_type": "io1"}}}), nil)
+	if err == nil || !strings.Contains(err.Error(), "declare aws_instance") {
+		t.Fatalf("root message: %v", err)
+	}
+}

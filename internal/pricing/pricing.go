@@ -1,6 +1,6 @@
 // Package pricing turns Terraform resources into hourly prices from list prices Crucible downloads for free
-// (spec 2026-10-12 §2). A resource it can't price is an error, never $0. The one default is an instance's root volume:
-// 8 GiB gp3 when the plan doesn't say (metering corrects it from the state).
+// (spec 2026-10-12 §2). A resource it can't price is an error, never $0. The only defaults: an instance's root volume is
+// 8 GiB gp3 when the plan doesn't say, and a load balancer spans at least 2 subnets (metering corrects both from the state).
 package pricing
 
 import (
@@ -16,6 +16,7 @@ type Resource struct {
 	Address string
 	Type    string
 	Values  map[string]any
+	Unknown map[string]any // plan only: attributes unknown until apply (after_unknown)
 }
 
 type Lookup interface {
@@ -53,6 +54,7 @@ func FromPlan(b []byte) ([]Resource, error) {
 			Change  struct {
 				Actions []string       `json:"actions"`
 				After   map[string]any `json:"after"`
+				Unknown map[string]any `json:"after_unknown"`
 			} `json:"change"`
 		} `json:"resource_changes"`
 	}
@@ -65,7 +67,7 @@ func FromPlan(b []byte) ([]Resource, error) {
 		if rc.Mode != "managed" || !(slices.Contains(rc.Change.Actions, "create") || slices.Contains(rc.Change.Actions, "update")) {
 			continue
 		}
-		out = append(out, Resource{Address: rc.Address, Type: rc.Type, Values: rc.Change.After})
+		out = append(out, Resource{Address: rc.Address, Type: rc.Type, Values: rc.Change.After, Unknown: rc.Change.Unknown})
 	}
 	return out, nil
 }
@@ -127,8 +129,6 @@ func num(v map[string]any, k string) float64 {
 	switch n := v[k].(type) {
 	case float64:
 		return n
-	case int:
-		return float64(n)
 	}
 	return 0
 }

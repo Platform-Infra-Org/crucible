@@ -46,13 +46,19 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 			continue
 		}
 		switch {
+		case r.Type == "aws_vpc" && str(r.Values, "instance_tenancy") != "" && str(r.Values, "instance_tenancy") != "default":
+			return b, fmt.Errorf("%s: only shared tenancy is priced (dedicated VPC); declare aws_instance under aws.prices", r.Address)
 		case freeAWS[r.Type]:
 			line.Note = "free"
 		case r.Type == "aws_instance":
 			if t := str(r.Values, "tenancy"); (t != "" && t != "default") || str(r.Values, "host_id") != "" {
 				return b, fmt.Errorf("%s: only shared tenancy is priced; declare aws_instance under aws.prices", r.Address)
 			}
-			p, err := get("ec2:" + str(r.Values, "instance_type"))
+			it := str(r.Values, "instance_type")
+			if it == "" {
+				return b, fmt.Errorf("%s: instance_type unknown at plan time; set it literally or declare a price for aws_instance", r.Address)
+			}
+			p, err := get("ec2:" + it)
 			if err != nil {
 				return b, err
 			}
@@ -65,12 +71,12 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 			if size == 0 {
 				size = 8
 			}
-			gbp, err := ebsGB(get, r.Address, rb)
+			gbp, err := ebsGB(get, r.Address, rb, "aws_instance")
 			if err != nil {
 				return b, err
 			}
 			line.HourlyUSD += size * gbp / HoursPerMonth
-			if v, _ := r.Values["associate_public_ip_address"].(bool); v {
+			if v, ok := r.Values["associate_public_ip_address"].(bool); v || !ok { // null or unknown counts: over-estimating is the safe side
 				ip, err := get("ipv4:hour")
 				if err != nil {
 					return b, err
@@ -82,7 +88,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 			if size <= 0 {
 				return b, fmt.Errorf("%s: size unknown at plan time; set size or declare a price for aws_ebs_volume", r.Address)
 			}
-			gb, err := ebsGB(get, r.Address, r.Values)
+			gb, err := ebsGB(get, r.Address, r.Values, "aws_ebs_volume")
 			if err != nil {
 				return b, err
 			}
@@ -93,7 +99,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 				return b, err
 			}
 			line.HourlyUSD = h
-			if str(r.Values, "connectivity_type") != "private" && str(r.Values, "allocation_id") == "" { // with an allocation_id the aws_eip line counts the IP
+			if str(r.Values, "connectivity_type") != "private" && str(r.Values, "allocation_id") == "" && r.Unknown["allocation_id"] != true { // with an allocation_id the aws_eip line counts the IP
 				ip, err := get("ipv4:hour")
 				if err != nil {
 					return b, err
@@ -132,8 +138,10 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 					return b, err
 				}
 				subnets := 2 // at least two when unknown
-				if l, ok := r.Values["subnets"].([]any); ok && len(l) > 2 {
-					subnets = len(l)
+				for _, k := range []string{"subnets", "subnet_mapping"} {
+					if l, ok := r.Values[k].([]any); ok && len(l) > subnets {
+						subnets = len(l)
+					}
 				}
 				line.HourlyUSD += float64(subnets) * ip
 			}
@@ -163,7 +171,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 
 // ebsGB returns the GB-month price of a volume (or root_block_device) block. Provisioned performance isn't priced,
 // so io1/io2 and gp3 above its included 3000 IOPS / 125 MB/s fail closed unless the lab declares a price.
-func ebsGB(get func(string) (float64, error), addr string, v map[string]any) (float64, error) {
+func ebsGB(get func(string) (float64, error), addr string, v map[string]any, declare string) (float64, error) {
 	vt := str(v, "type")
 	if vt == "" {
 		vt = str(v, "volume_type")
@@ -172,7 +180,7 @@ func ebsGB(get func(string) (float64, error), addr string, v map[string]any) (fl
 		vt = "gp3"
 	}
 	if vt == "io1" || vt == "io2" || (vt == "gp3" && (num(v, "iops") > 3000 || num(v, "throughput") > 125)) {
-		return 0, fmt.Errorf("%s: provisioned IOPS or throughput on %s isn't priced; declare a price under aws.prices", addr, vt)
+		return 0, fmt.Errorf("%s: provisioned IOPS or throughput on %s isn't priced; declare %s under aws.prices", addr, vt, declare)
 	}
 	return get("ebs:" + vt)
 }

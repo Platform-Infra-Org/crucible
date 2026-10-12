@@ -784,7 +784,7 @@ func interpolates(n *yaml.Node) bool {
 
 var (
 	tfTypeRe    = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9_]+$`)
-	tfAddrRe    = regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
+	tfAddrRe    = regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+(\[[^\]]+\])?\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
 	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
 	// required_providers may only name HashiCorp's own providers: anything else is a downloaded binary on the runner
 	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)

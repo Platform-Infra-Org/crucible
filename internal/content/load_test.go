@@ -779,3 +779,12 @@ func TestPricesRejectNaNAndInf(t *testing.T) {
 		t.Fatal(probs)
 	}
 }
+
+func TestUsageAcceptsCountedModules(t *testing.T) {
+	for _, a := range []string{`module.net[0].aws_nat_gateway.x`, `module.a[\"k\"].module.b.aws_s3_bucket.y`, `module.a.aws_s3_bucket.y[2]`} {
+		_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  usage: {\"" + a + "\": {storage_gb: 1}}\n"}))
+		if len(probs) > 0 {
+			t.Fatalf("%s: %v", a, probs)
+		}
+	}
+}

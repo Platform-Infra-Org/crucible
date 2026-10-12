@@ -268,8 +268,7 @@ request "Cloud Heat", approve it, then:
    is active), Ledger → **Refresh now** shows its **Billed** figure. Once settled, the row has no "(so far)",
    Estimate vs billed counts it, and the billed figure is what counts against budgets.
 10. **The EC2 path.** In your sandbox content repo (not `examples/`), add this as `terraform/ec2.tf` next to Cloud
-    Heat's `main.tf`, add `prices: { aws_volume_attachment: 0.0001 }` under `aws:` in its `lab.yaml` (Crucible doesn't
-    list the attachment as free yet, so lint wants a declared price), and sync:
+    Heat's `main.tf`, and sync:
     ```hcl
     data "aws_vpc" "default" { default = true }
     data "aws_ami" "al2023" {
@@ -319,7 +318,7 @@ request "Cloud Heat", approve it, then:
     Request and approve the lab. Expected:
     - The request shows a non-zero estimate, and the lab page's **How this estimate was worked out** lists the
       instance (t3.nano with its 8 GiB gp3 root and public IPv4), the data volume (1 GiB gp3), the attachment as
-      declared, and the security group and its rules as free.
+      free, and the security group and its rules as free.
     - The lab becomes ready. While `tf-apply` runs, `k3s kubectl -n lab-<id> top pod tf-apply` stays well under its
       1 Gi limit; record the peak here.
     - In the workspace: the group, both rules (`aws ec2 describe-security-group-rules --filters Name=group-id,Values=<sg>`),

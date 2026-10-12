@@ -3,8 +3,10 @@ package pricing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"crucible/internal/db/dbtest"
 )
@@ -87,5 +89,17 @@ func TestFixturePricesNeverServeRealMode(t *testing.T) {
 	}
 	if snap, err := dry.Snapshot(ctx); err != nil || len(snap) != len(Fixture()) {
 		t.Fatalf("a dry run over real prices replaces them: %d %v", len(snap), err)
+	}
+}
+
+func TestRefreshErrorsAreCleaned(t *testing.T) {
+	ctx := context.Background()
+	s := &Store{DB: dbtest.New(t), Now: func() time.Time { return time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC) }}
+	if err := s.Failed(ctx, errors.New("bad\x00body \xff"+strings.Repeat("x", 10000))); err != nil {
+		t.Fatalf("a raw error with a NUL or invalid UTF-8 must still be recorded: %v", err)
+	}
+	_, _, msg, err := s.Status(ctx)
+	if err != nil || len(msg) > 1100 || strings.ContainsRune(msg, 0) || !utf8.ValidString(msg) || !strings.HasPrefix(msg, "badbody") {
+		t.Fatalf("recorded error must be clean and bounded: %d %q… %v", len(msg), msg[:min(len(msg), 20)], err)
 	}
 }

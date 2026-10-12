@@ -264,10 +264,10 @@ func TestCostsReadTheExport(t *testing.T) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("costs: %+v %v", got, err)
 	}
-	want := []DailyCost{{Day: day("2026-10-11"), LabID: "0123456789ab", USD: 0.14}, {Day: day("2026-10-12"), LabID: "0123456789ab", USD: 0.02}}
+	want := []DailyCost{{Day: day("2026-10-11"), LabID: "0123456789ab", USD: 0.18}, {Day: day("2026-10-12"), LabID: "0123456789ab", USD: 0.02}}
 	for i, w := range want {
 		if !got[i].Day.Equal(w.Day) || got[i].LabID != w.LabID || math.Abs(got[i].USD-w.USD) > 1e-9 {
-			t.Fatalf("row %d: got %+v want %+v (both tag spellings counted, untagged skipped)", i, got[i], w)
+			t.Fatalf("row %d: got %+v want %+v (both tag spellings counted, untagged and credits skipped)", i, got[i], w)
 		}
 	}
 	// a day outside the window is not returned
@@ -320,15 +320,15 @@ func TestCostsReadOnlyTheManifestsFiles(t *testing.T) {
 }
 
 func TestCostsRejectBadRows(t *testing.T) {
-	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n"
+	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
 	tag := `"{""user_crucible:lab-id"":""0123456789ab""}"`
 	for name, body := range map[string]string{
-		"NaN":        "2026-10-05T00:00:00Z,NaN," + tag + "\n",
-		"+Inf":       "2026-10-05T00:00:00Z,+Inf," + tag + "\n",
-		"-Inf":       "2026-10-05T00:00:00Z,-Inf," + tag + "\n",
-		"bad tags":   "2026-10-05T00:00:00Z,0.1,{not-json\n",
-		"bad date":   "yesterday,0.1," + tag + "\n",
-		"short date": "2026,0.1," + tag + "\n",
+		"NaN":        "2026-10-05T00:00:00Z,NaN," + tag + ",Usage\n",
+		"+Inf":       "2026-10-05T00:00:00Z,+Inf," + tag + ",Usage\n",
+		"-Inf":       "2026-10-05T00:00:00Z,-Inf," + tag + ",Usage\n",
+		"bad tags":   "2026-10-05T00:00:00Z,0.1,{not-json,Usage\n",
+		"bad date":   "yesterday,0.1," + tag + ",Usage\n",
+		"short date": "2026,0.1," + tag + ",Usage\n",
 		"short row":  "2026-10-05T00:00:00Z,0.1\n",
 	} {
 		c := exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, head+body)})
@@ -340,9 +340,9 @@ func TestCostsRejectBadRows(t *testing.T) {
 
 func TestExportIngestEdges(t *testing.T) {
 	ctx := context.Background()
-	csvHead := "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n"
+	csvHead := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
 	row := func(day, cost, lab string) string {
-		return day + "T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""` + lab + `""}"` + "\n"
+		return day + "T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""` + lab + `""}",Usage` + "\n"
 	}
 	// (a) no files yet: no error, no costs
 	if got, err := exportClient(t, nil).Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 0 {
@@ -366,7 +366,7 @@ func TestExportIngestEdges(t *testing.T) {
 	// (d) a net-negative day passes through; IngestCosts clamps it to 0
 	c = exportClient(t, map[string][]byte{exportBase + "2026-10/part-0.csv.gz": gzBytes(t, csvHead+row("2026-10-05", "-0.40", "0123456789ab"))})
 	if got, err := c.Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 1 || got[0].USD != -0.40 {
-		t.Fatalf("credits pass through to the clamp: %+v %v", got, err)
+		t.Fatalf("a negative usage line passes through to the clamp: %+v %v", got, err)
 	}
 }
 
@@ -510,5 +510,39 @@ func TestReadStateUsesTheOpsRoleInTheStateRegion(t *testing.T) {
 	}
 	if _, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/cccccccccccc.tfstate"); err == nil {
 		t.Fatal("no state is an error, not an empty lab")
+	}
+}
+
+func TestCostsUseTheExportRegion(t *testing.T) {
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
+	})
+	cl.cfg.ExportBucket, cl.cfg.ExportPrefix, cl.cfg.ExportName, cl.cfg.ExportRegion = "bills", "exports", "crucible-labs", "eu-central-1"
+	if _, err := cl.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err != nil {
+		t.Fatal(err)
+	}
+	all := calls()
+	if last := all[len(all)-1]; !strings.Contains(last.auth, "/eu-central-1/s3/") || !strings.Contains(last.auth, "ASIAcrucible-ops") {
+		t.Fatalf("the export bucket is read in its own region (not the node's eu-west-1) as the ops role: %q", last.auth)
+	}
+}
+
+func TestCreditsDontReduceBilledSpend(t *testing.T) {
+	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
+	row := func(cost, typ string) string {
+		return "2026-10-05T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""0123456789ab""}",` + typ + "\n"
+	}
+	body := head + row("1.00", "Usage") + row("0.10", "Tax")
+	for _, typ := range []string{"Credit", "Refund", "SavingsPlanNegation", "BundledDiscount", "EdpDiscount", "PrivateRateDiscount"} {
+		body += row("-0.40", typ)
+	}
+	c := exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, body)})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 1 || math.Abs(got[0].USD-1.10) > 1e-9 {
+		t.Fatalf("billed spend is gross of credits, refunds and discounts: %+v %v", got, err)
+	}
+	c = exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n")})
+	if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatal("without the line item type a credit can't be told apart: the read must fail")
 	}
 }

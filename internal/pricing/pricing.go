@@ -6,6 +6,7 @@ package pricing
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -112,16 +113,21 @@ func FromState(b []byte) ([]Resource, error) {
 	return out, nil
 }
 
-// usageFor finds the stated monthly usage for an address, by exact address or the address without its index.
+// usageFor finds the stated monthly usage for an address: by exact address, then without its own index, then without
+// any index (a usage stated for module.net.aws_nat_gateway.x applies to every instance of a counted module).
 func usageFor(usage map[string]map[string]float64, addr string) map[string]float64 {
 	if u, ok := usage[addr]; ok {
 		return u
 	}
 	if i := strings.LastIndex(addr, "["); i > 0 && strings.HasSuffix(addr, "]") {
-		return usage[addr[:i]]
+		if u, ok := usage[addr[:i]]; ok {
+			return u
+		}
 	}
-	return nil
+	return usage[indexRe.ReplaceAllString(addr, "")]
 }
+
+var indexRe = regexp.MustCompile(`\[[^\]]*\]`)
 
 func str(v map[string]any, k string) string { s, _ := v[k].(string); return s }
 

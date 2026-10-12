@@ -91,8 +91,8 @@ func TestRealAWSLabsEstimateFromATerraformPlan(t *testing.T) {
 		t.Fatalf("the terraform estimator plans with the aws runner: %T %v", est, err)
 	}
 	if got.LabRoleARN != "lab" || got.OpsRoleARN != "ops" || got.PlanRoleARN != "plan" ||
-		got.ExportBucket != "exports" || got.ExportPrefix != "cur" || got.ExportName != "crucible-labs" {
-		t.Fatalf("roles and export (prefix defaults to cur): %+v", got)
+		got.ExportBucket != "exports" || got.ExportPrefix != "cur" || got.ExportName != "crucible-labs" || got.ExportRegion != "eu-west-1" {
+		t.Fatalf("roles and export (prefix defaults to cur; the export bucket is in the labs stack's region): %+v", got)
 	}
 	if fetch == nil || fetch.Base != "https://pricing.us-east-1.amazonaws.com" {
 		t.Fatalf("real labs refresh prices from the public AWS Price List: %+v", fetch)

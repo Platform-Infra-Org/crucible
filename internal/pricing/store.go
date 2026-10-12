@@ -3,6 +3,7 @@ package pricing
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -104,9 +105,14 @@ func (s *Store) Replace(ctx context.Context, rows []Row) error {
 	return tx.Commit(ctx)
 }
 
-// Failed records why a refresh failed; the old rows stay.
+// Failed records why a refresh failed; the old rows stay. The text is cleaned (no NUL, valid UTF-8) and bounded:
+// it may quote a response body.
 func (s *Store) Failed(ctx context.Context, cause error) error {
-	_, err := s.DB.Exec(ctx, `UPDATE price_refresh SET error = $1, error_at = $2 WHERE id = 1`, cause.Error(), s.Now())
+	msg := strings.ToValidUTF8(strings.ReplaceAll(cause.Error(), "\x00", ""), "\uFFFD")
+	if r := []rune(msg); len(r) > 1000 {
+		msg = string(r[:1000]) + "…"
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE price_refresh SET error = $1, error_at = $2 WHERE id = 1`, msg, s.Now())
 	return err
 }
 

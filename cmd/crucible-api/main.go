@@ -410,7 +410,7 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 	}
 	c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN"),
 		PlanRoleARN: getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN"), ExportBucket: getenv("CRUCIBLE_AWS_EXPORT_BUCKET"), ExportPrefix: prefix,
-		ExportName: getenv("CRUCIBLE_AWS_EXPORT_NAME")})
+		ExportName: getenv("CRUCIBLE_AWS_EXPORT_NAME"), ExportRegion: ar.StateRegion}) // the labs stack keeps both buckets in its region
 	if err != nil {
 		return nil, nil, fmt.Errorf("aws labs: %w", err)
 	}

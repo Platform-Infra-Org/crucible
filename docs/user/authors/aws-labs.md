@@ -51,7 +51,7 @@ up per hour. The estimate is that hourly price times the lab's time limit.
 
 | Type | Priced by |
 |---|---|
-| `aws_instance` | instance type, plus its root volume (8 GiB gp3 unless set) and a public IPv4 unless `associate_public_ip_address = false` |
+| `aws_instance` | instance type, plus its root volume (8 GiB gp3 unless set), each `ebs_block_device` by size and type, and a public IPv4 unless `associate_public_ip_address = false` |
 | `aws_ebs_volume` | size and type, per GB-month |
 | `aws_nat_gateway` | per hour, its public IPv4 (unless private or given an `allocation_id`), plus stated `gb_processed` |
 | `aws_eip` | the public IPv4, per hour |
@@ -64,14 +64,16 @@ up per hour. The estimate is that hourly price times the lab's time limit.
 `aws_default_security_group`, `aws_key_pair`, `aws_lb_listener`, `aws_lb_target_group`,
 `aws_lb_target_group_attachment`, `aws_s3_bucket_versioning`, `aws_s3_bucket_public_access_block`,
 `aws_s3_bucket_server_side_encryption_configuration`, `aws_s3_bucket_policy`, `aws_s3_bucket_ownership_controls`,
-`aws_s3_object`, `aws_network_interface`, `aws_eip_association`, and the helpers `random_id`, `random_string`,
+`aws_s3_object`, `aws_network_interface`, `aws_eip_association`, `aws_volume_attachment`, and the helpers `random_id`, `random_string`,
 `random_password`, `random_pet`, `random_integer`, `tls_private_key`, `terraform_data`, `null_resource` and
 `time_sleep`.
 
 **Anything else** needs a price under `aws.prices`, in US dollars per hour, or lint refuses the lab and names the type.
-A declared price also wins over Crucible's own for that type. A few settings Crucible can't price fail the same way
-until you declare the type: io1 and io2 volumes, gp3 with more than 3000 IOPS or 125 MB/s, dedicated tenancy, and an
-instance type or volume size that isn't known until apply.
+A declared price never lowers Crucible's own: for a type Crucible prices (or lists as free), each resource costs the
+higher of the two. A few settings Crucible can't price fail the same way until you declare the type, and then the
+declared price is used: io1 and io2 volumes, gp3 with more than 3000 IOPS or 125 MB/s, dedicated tenancy, an
+instance type missing from the price list, and an instance type, volume size or `ebs_block_device` size or type that
+isn't known until apply.
 
 **Usage.** Some resources cost by how much they are used. State it under `aws.usage`, by resource address, as a
 monthly amount: `storage_gb` for an `aws_s3_bucket`, `gb_processed` for an `aws_nat_gateway`. Unstated usage counts

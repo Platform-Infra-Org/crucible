@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -15,7 +16,7 @@ var freeAWS = map[string]bool{
 	"aws_s3_bucket_versioning": true, "aws_s3_bucket_public_access_block": true,
 	"aws_s3_bucket_server_side_encryption_configuration": true, "aws_s3_bucket_policy": true,
 	"aws_s3_bucket_ownership_controls": true, "aws_s3_object": true,
-	"aws_network_interface": true, "aws_eip_association": true,
+	"aws_network_interface": true, "aws_eip_association": true, "aws_volume_attachment": true,
 	"random_id": true, "random_string": true, "random_password": true, "random_pet": true, "random_integer": true,
 	"tls_private_key": true, "terraform_data": true, "null_resource": true, "time_sleep": true,
 }
@@ -26,7 +27,10 @@ var pricedAWS = []string{"aws_instance", "aws_ebs_volume", "aws_nat_gateway", "a
 // KnownAWS: Crucible can price this type (or it's free) without a declaration.
 func KnownAWS(t string) bool { return freeAWS[t] || slices.Contains(pricedAWS, t) }
 
-// PriceAWS prices resources in one region. Declared prices win over Crucible's own; anything else unknown is an error.
+// PriceAWS prices resources in one region. A declared price never lowers Crucible's own: a type Crucible prices (or
+// lists as free) costs the higher of the two, and the declared price alone only where Crucible's pricer fails closed
+// (provisioned IOPS, dedicated tenancy, a size or type unknown at plan time, a size missing from the price list). A
+// type Crucible can't price costs its declared price; anything else unknown is an error.
 func PriceAWS(res []Resource, region string, declared map[string]float64, usage map[string]map[string]float64, l Lookup) (Breakdown, error) {
 	var b Breakdown
 	var missing []string
@@ -37,129 +41,20 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		return 0, fmt.Errorf("no aws price for %s in %s (price data missing or out of date)", key, region)
 	}
 	for _, r := range res {
-		line := Line{Address: r.Address, Type: r.Type}
-		u := usageFor(usage, r.Address)
 		// instances in a dedicated VPC are dedicated; only a declared aws_instance price covers that (aws_vpc's own never does)
 		if _, ok := declared["aws_instance"]; r.Type == "aws_vpc" && !ok && str(r.Values, "instance_tenancy") != "" && str(r.Values, "instance_tenancy") != "default" {
 			return b, fmt.Errorf("%s: only shared tenancy is priced (dedicated VPC); declare aws_instance under aws.prices", r.Address)
 		}
-		if p, ok := declared[r.Type]; ok {
-			line.HourlyUSD, line.Note = p, "declared"
-			b.Lines = append(b.Lines, line)
-			b.HourlyUSD += p
-			continue
+		line, err := priceOwn(get, r, usageFor(usage, r.Address))
+		if p, ok := declared[r.Type]; ok && (err != nil || p > line.HourlyUSD+line.UsageHourlyUSD) {
+			line, err = Line{Address: r.Address, Type: r.Type, HourlyUSD: p, Note: "declared"}, nil
 		}
-		switch {
-		case freeAWS[r.Type]:
-			line.Note = "free"
-		case r.Type == "aws_instance":
-			if t := str(r.Values, "tenancy"); (t != "" && t != "default") || str(r.Values, "host_id") != "" {
-				return b, fmt.Errorf("%s: only shared tenancy is priced; declare aws_instance under aws.prices", r.Address)
-			}
-			it := str(r.Values, "instance_type")
-			if it == "" {
-				return b, fmt.Errorf("%s: instance_type unknown at plan time; set it literally or declare a price for aws_instance", r.Address)
-			}
-			p, err := get("ec2:" + it)
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD = p
-			rb := first(r.Values, "root_block_device")
-			if rb == nil {
-				rb = map[string]any{} // the root volume defaults to 8 GiB gp3; metering corrects it from the state
-			}
-			size := num(rb, "volume_size")
-			if size == 0 {
-				size = 8
-			}
-			gbp, err := ebsGB(get, r.Address, rb, "aws_instance")
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD += size * gbp / HoursPerMonth
-			if v, ok := r.Values["associate_public_ip_address"].(bool); v || !ok { // null or unknown counts: over-estimating is the safe side
-				ip, err := get("ipv4:hour")
-				if err != nil {
-					return b, err
-				}
-				line.HourlyUSD += ip
-			}
-		case r.Type == "aws_ebs_volume":
-			size := num(r.Values, "size")
-			if size <= 0 {
-				return b, fmt.Errorf("%s: size unknown at plan time; set size or declare a price for aws_ebs_volume", r.Address)
-			}
-			gb, err := ebsGB(get, r.Address, r.Values, "aws_ebs_volume")
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD = size * gb / HoursPerMonth
-		case r.Type == "aws_nat_gateway":
-			h, err := get("nat:hour")
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD = h
-			if str(r.Values, "connectivity_type") != "private" && str(r.Values, "allocation_id") == "" && r.Unknown["allocation_id"] != true { // with an allocation_id the aws_eip line counts the IP
-				ip, err := get("ipv4:hour")
-				if err != nil {
-					return b, err
-				}
-				line.HourlyUSD += ip
-			}
-			if gbs, ok := u["gb_processed"]; ok {
-				gb, err := get("nat:gb")
-				if err != nil {
-					return b, err
-				}
-				line.UsageHourlyUSD = gbs * gb / HoursPerMonth
-			} else {
-				line.Note = "usage not stated"
-			}
-		case r.Type == "aws_eip":
-			ip, err := get("ipv4:hour")
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD = ip
-		case r.Type == "aws_lb" || r.Type == "aws_alb":
-			kind := str(r.Values, "load_balancer_type")
-			if kind == "" {
-				kind = "application"
-			}
-			h, err := get("elb:" + kind)
-			if err != nil {
-				return b, err
-			}
-			line.HourlyUSD = h
-			line.Note = "LCU usage not priced"
-			if internal, _ := r.Values["internal"].(bool); !internal {
-				ip, err := get("ipv4:hour")
-				if err != nil {
-					return b, err
-				}
-				subnets := 2 // at least two when unknown
-				for _, k := range []string{"subnets", "subnet_mapping"} {
-					if l, ok := r.Values[k].([]any); ok && len(l) > subnets {
-						subnets = len(l)
-					}
-				}
-				line.HourlyUSD += float64(subnets) * ip
-			}
-		case r.Type == "aws_s3_bucket":
-			if gbs, ok := u["storage_gb"]; ok {
-				gb, err := get("s3:standard")
-				if err != nil {
-					return b, err
-				}
-				line.UsageHourlyUSD = gbs * gb / HoursPerMonth
-			} else {
-				line.Note = "usage not stated"
-			}
-		default:
+		if errors.Is(err, errNoPricer) {
 			missing = append(missing, r.Type)
 			continue
+		}
+		if err != nil {
+			return b, err
 		}
 		b.Lines = append(b.Lines, line)
 		b.HourlyUSD += line.HourlyUSD + line.UsageHourlyUSD
@@ -169,6 +64,137 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		return b, &Unpriced{Types: slices.Compact(missing)}
 	}
 	return b, nil
+}
+
+var errNoPricer = errors.New("no pricer")
+
+// priceOwn prices one resource from the list prices, or fails closed.
+func priceOwn(get func(string) (float64, error), r Resource, u map[string]float64) (Line, error) {
+	line := Line{Address: r.Address, Type: r.Type}
+	switch {
+	case freeAWS[r.Type]:
+		line.Note = "free"
+	case r.Type == "aws_instance":
+		if t := str(r.Values, "tenancy"); (t != "" && t != "default") || str(r.Values, "host_id") != "" {
+			return line, fmt.Errorf("%s: only shared tenancy is priced; declare aws_instance under aws.prices", r.Address)
+		}
+		it := str(r.Values, "instance_type")
+		if it == "" {
+			return line, fmt.Errorf("%s: instance_type unknown at plan time; set it literally or declare a price for aws_instance", r.Address)
+		}
+		p, err := get("ec2:" + it)
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD = p
+		rb := first(r.Values, "root_block_device")
+		if rb == nil {
+			rb = map[string]any{} // the root volume defaults to 8 GiB gp3; metering corrects it from the state
+		}
+		size := num(rb, "volume_size")
+		if size == 0 {
+			size = 8
+		}
+		gbp, err := ebsGB(get, r.Address, rb, "aws_instance")
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD += size * gbp / HoursPerMonth
+		ebs, _ := r.Values["ebs_block_device"].([]any)
+		for _, e := range ebs { // inline volumes: no defaults, an unknown size or type fails closed
+			d, _ := e.(map[string]any)
+			if num(d, "volume_size") <= 0 || str(d, "volume_type") == "" {
+				return line, fmt.Errorf("%s: an ebs_block_device's volume_size or volume_type is unknown at plan time; set both or declare a price for aws_instance", r.Address)
+			}
+			gbp, err := ebsGB(get, r.Address, d, "aws_instance")
+			if err != nil {
+				return line, err
+			}
+			line.HourlyUSD += num(d, "volume_size") * gbp / HoursPerMonth
+		}
+		if v, ok := r.Values["associate_public_ip_address"].(bool); v || !ok { // null or unknown counts: over-estimating is the safe side
+			ip, err := get("ipv4:hour")
+			if err != nil {
+				return line, err
+			}
+			line.HourlyUSD += ip
+		}
+	case r.Type == "aws_ebs_volume":
+		size := num(r.Values, "size")
+		if size <= 0 {
+			return line, fmt.Errorf("%s: size unknown at plan time; set size or declare a price for aws_ebs_volume", r.Address)
+		}
+		gb, err := ebsGB(get, r.Address, r.Values, "aws_ebs_volume")
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD = size * gb / HoursPerMonth
+	case r.Type == "aws_nat_gateway":
+		h, err := get("nat:hour")
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD = h
+		if str(r.Values, "connectivity_type") != "private" && str(r.Values, "allocation_id") == "" && r.Unknown["allocation_id"] != true { // with an allocation_id the aws_eip line counts the IP
+			ip, err := get("ipv4:hour")
+			if err != nil {
+				return line, err
+			}
+			line.HourlyUSD += ip
+		}
+		if gbs, ok := u["gb_processed"]; ok {
+			gb, err := get("nat:gb")
+			if err != nil {
+				return line, err
+			}
+			line.UsageHourlyUSD = gbs * gb / HoursPerMonth
+		} else {
+			line.Note = "usage not stated"
+		}
+	case r.Type == "aws_eip":
+		ip, err := get("ipv4:hour")
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD = ip
+	case r.Type == "aws_lb" || r.Type == "aws_alb":
+		kind := str(r.Values, "load_balancer_type")
+		if kind == "" {
+			kind = "application"
+		}
+		h, err := get("elb:" + kind)
+		if err != nil {
+			return line, err
+		}
+		line.HourlyUSD = h
+		line.Note = "LCU usage not priced"
+		if internal, _ := r.Values["internal"].(bool); !internal {
+			ip, err := get("ipv4:hour")
+			if err != nil {
+				return line, err
+			}
+			subnets := 2 // at least two when unknown
+			for _, k := range []string{"subnets", "subnet_mapping"} {
+				if l, ok := r.Values[k].([]any); ok && len(l) > subnets {
+					subnets = len(l)
+				}
+			}
+			line.HourlyUSD += float64(subnets) * ip
+		}
+	case r.Type == "aws_s3_bucket":
+		if gbs, ok := u["storage_gb"]; ok {
+			gb, err := get("s3:standard")
+			if err != nil {
+				return line, err
+			}
+			line.UsageHourlyUSD = gbs * gb / HoursPerMonth
+		} else {
+			line.Note = "usage not stated"
+		}
+	default:
+		return line, errNoPricer
+	}
+	return line, nil
 }
 
 // ebsGB returns the GB-month price of a volume (or root_block_device) block. Provisioned performance isn't priced,

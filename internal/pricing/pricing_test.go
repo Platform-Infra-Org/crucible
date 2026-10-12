@@ -96,7 +96,7 @@ func TestUnpricedAndDeclared(t *testing.T) {
 	if _, err := PriceAWS([]Resource{{Address: "aws_instance.x", Type: "aws_instance", Values: map[string]any{"instance_type": "x9.huge"}}}, "eu-west-1", nil, nil, prices()); err == nil {
 		t.Fatal("an instance type with no price must fail, never $0")
 	}
-	if !KnownAWS("aws_instance") || !KnownAWS("aws_route_table") || KnownAWS("aws_kinesis_stream") {
+	if !KnownAWS("aws_instance") || !KnownAWS("aws_route_table") || !KnownAWS("aws_volume_attachment") || KnownAWS("aws_kinesis_stream") {
 		t.Fatal("KnownAWS")
 	}
 }
@@ -236,5 +236,89 @@ func TestDedicatedVPC(t *testing.T) {
 	}
 	if _, err := priceOne(vpc, nil); err == nil || !strings.Contains(err.Error(), "aws_vpc.v") {
 		t.Fatalf("dedicated VPC alone: %v", err)
+	}
+}
+
+func TestDeclaredNeverLowersAListPrice(t *testing.T) {
+	inst := Resource{Address: "aws_instance.i", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "associate_public_ip_address": false}}
+	own := 0.0114 + 8*0.088/730
+	if b, err := priceOne(inst, map[string]float64{"aws_instance": 0.001}); err != nil || !near(b.HourlyUSD, own) {
+		t.Fatalf("a declared price below the list price must not lower it: %+v %v", b, err)
+	}
+	if b, err := priceOne(inst, map[string]float64{"aws_instance": 0.5}); err != nil || !near(b.HourlyUSD, 0.5) || b.Lines[0].Note != "declared" {
+		t.Fatalf("a declared price above the list price wins: %+v %v", b, err)
+	}
+	// a free type declared costs its declared price; usage-priced lines compare their total
+	if b, err := priceOne(Resource{Address: "aws_vpc.v", Type: "aws_vpc"}, map[string]float64{"aws_vpc": 0.01}); err != nil || !near(b.HourlyUSD, 0.01) {
+		t.Fatalf("declared free type: %+v %v", b, err)
+	}
+	s3 := []Resource{{Address: "aws_s3_bucket.d", Type: "aws_s3_bucket"}}
+	b, err := PriceAWS(s3, "eu-west-1", map[string]float64{"aws_s3_bucket": 0.0001}, map[string]map[string]float64{"aws_s3_bucket.d": {"storage_gb": 730}}, prices())
+	if err != nil || !near(b.HourlyUSD, 0.023) {
+		t.Fatalf("stated usage above the declared price: %+v %v", b, err)
+	}
+	// where Crucible's own pricer fails closed, the declared price is the remedy
+	for _, r := range []Resource{
+		{Address: "aws_instance.d", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "tenancy": "dedicated"}},
+		{Address: "aws_instance.u", Type: "aws_instance", Values: map[string]any{}},
+		{Address: "aws_instance.x", Type: "aws_instance", Values: map[string]any{"instance_type": "x9.huge"}},
+		{Address: "aws_ebs_volume.v", Type: "aws_ebs_volume", Values: map[string]any{"type": "io2", "size": 10.0}},
+		{Address: "aws_ebs_volume.n", Type: "aws_ebs_volume", Values: map[string]any{"type": "gp3"}},
+	} {
+		b, err := priceOne(r, map[string]float64{r.Type: 0.3})
+		if err != nil || !near(b.HourlyUSD, 0.3) || b.Lines[0].Note != "declared" {
+			t.Fatalf("%s: the declared price covers what Crucible can't price: %+v %v", r.Address, b, err)
+		}
+	}
+}
+
+func TestInstanceEBSBlockDevicesArePriced(t *testing.T) {
+	base := 0.0114 + 8*0.088/730 // the instance and its default root
+	plan := `{"resource_changes":[{"address":"aws_instance.i","mode":"managed","type":"aws_instance","change":{"actions":["create"],
+		"after":{"instance_type":"t3.micro","associate_public_ip_address":false,"ebs_block_device":[{"device_name":"/dev/sdf","volume_size":50,"volume_type":"gp3"},{"device_name":"/dev/sdg","volume_size":10,"volume_type":"gp3"}]},
+		"after_unknown":{"ebs_block_device":[{"volume_id":true},{"volume_id":true}]}}}]}`
+	res, err := FromPlan([]byte(plan))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := priceOne(res[0], nil); err != nil || !near(b.HourlyUSD, base+60*0.088/730) {
+		t.Fatalf("plan: each inline volume is priced: %+v %v", b, err)
+	}
+	state := `{"version":4,"resources":[{"mode":"managed","type":"aws_instance","name":"i","instances":[{"attributes":
+		{"instance_type":"t3.micro","associate_public_ip_address":false,"root_block_device":[{"volume_size":8,"volume_type":"gp3"}],
+		"ebs_block_device":[{"device_name":"/dev/sdf","volume_size":100,"volume_type":"gp3","iops":3000,"throughput":125}]}}]}]}`
+	if res, err = FromState([]byte(state)); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := priceOne(res[0], nil); err != nil || !near(b.HourlyUSD, base+100*0.088/730) {
+		t.Fatalf("state: each inline volume is priced: %+v %v", b, err)
+	}
+	inst := func(d map[string]any) Resource {
+		return Resource{Address: "aws_instance.i", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "ebs_block_device": []any{d}}}
+	}
+	for _, d := range []map[string]any{
+		{"volume_type": "gp3"},                                           // size unknown at plan time
+		{"volume_size": 10.0},                                            // type unknown at plan time
+		{"volume_size": 10.0, "volume_type": nil},                        // type null
+		{"volume_size": 10.0, "volume_type": "io2", "iops": 1000.0},      // provisioned IOPS
+		{"volume_size": 10.0, "volume_type": "gp3", "throughput": 500.0}, // gp3 throughput above 125
+	} {
+		if _, err := priceOne(inst(d), nil); err == nil || !strings.Contains(err.Error(), "aws_instance.i") {
+			t.Fatalf("must fail closed: %v %v", d, err)
+		}
+	}
+}
+
+func TestUsageMatchesCountedModules(t *testing.T) {
+	res := []Resource{{Address: `module.net[0].aws_nat_gateway.x`, Type: "aws_nat_gateway", Values: map[string]any{"connectivity_type": "private"}},
+		{Address: `module.a["k"].module.b.aws_s3_bucket.y[1]`, Type: "aws_s3_bucket"}}
+	for _, usage := range []map[string]map[string]float64{
+		{`module.net[0].aws_nat_gateway.x`: {"gb_processed": 730}, `module.a["k"].module.b.aws_s3_bucket.y`: {"storage_gb": 730}},
+		{`module.net.aws_nat_gateway.x`: {"gb_processed": 730}, `module.a.module.b.aws_s3_bucket.y`: {"storage_gb": 730}},
+	} {
+		b, err := PriceAWS(res, "eu-west-1", nil, usage, prices())
+		if err != nil || !near(b.HourlyUSD, 0.048+0.048+0.023) {
+			t.Fatalf("%v: %+v %v", usage, b, err)
+		}
 	}
 }

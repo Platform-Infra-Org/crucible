@@ -38,6 +38,7 @@ type Config struct {
 	PlanRoleARN string // read-only, for estimates' terraform plan (output plan_role_arn); unset = no estimates
 	// The CUR 2.0 export: s3://<ExportBucket>/<ExportPrefix>/<ExportName>/data/BILLING_PERIOD=YYYY-MM/*.csv.gz
 	ExportBucket, ExportPrefix, ExportName string
+	ExportRegion                           string // the export bucket's region: the labs stack's (CRUCIBLE_AWS_STATE_REGION)
 	Endpoint                               string // tests only: every service at this URL (S3 path-style)
 }
 
@@ -317,10 +318,16 @@ func (c *Client) ReadState(ctx context.Context, region, bucket, key string) ([]b
 // maxExportObject bounds one export file after decompression.
 const maxExportObject = 512 << 20
 
-// Costs reads the billed spend from the free CUR 2.0 export in S3 (gzipped CSV; per billing month the window touches, the files its manifest lists), summed per lab and UTC day over [from, to). Untagged lines are skipped. Any unreadable file or
+// Costs reads the billed spend from the free CUR 2.0 export in S3 (gzipped CSV; per billing month the window touches, the files its manifest lists), summed per lab and UTC day over [from, to). Untagged lines are skipped, and so are
+// credits, refunds and discounts: billed spend is gross, so it errs high. Any unreadable file or
 // malformed cell fails the whole read: a half-read bill must never settle a lab. No files yet is no costs.
 func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error) {
-	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) { o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != "" })
+	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
+		o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != ""
+		if c.cfg.ExportRegion != "" {
+			o.Region = c.cfg.ExportRegion
+		}
+	})
 	type key struct {
 		day time.Time
 		lab string
@@ -411,8 +418,9 @@ func readExportObject(ctx context.Context, cl *s3.Client, bucket, key string, fr
 	di, ok1 := col["line_item_usage_start_date"]
 	ci, ok2 := col["line_item_unblended_cost"]
 	ti, ok3 := col["resource_tags"]
-	if !ok1 || !ok2 || !ok3 {
-		return errors.New("missing line_item_usage_start_date, line_item_unblended_cost or resource_tags column")
+	yi, ok4 := col["line_item_line_item_type"]
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return errors.New("missing line_item_usage_start_date, line_item_unblended_cost, resource_tags or line_item_line_item_type column")
 	}
 	for {
 		rec, err := r.Read()
@@ -425,8 +433,11 @@ func readExportObject(ctx context.Context, cl *s3.Client, bucket, key string, fr
 		if lr.N <= 0 {
 			return errors.New("file larger than 512 MiB uncompressed")
 		}
-		if len(rec) <= max(di, ci, ti) {
+		if len(rec) <= max(di, ci, ti, yi) {
 			return errors.New("short row")
+		}
+		if t := rec[yi]; t == "Credit" || t == "Refund" || t == "SavingsPlanNegation" || strings.HasSuffix(t, "Discount") {
+			continue // gross of credits: a credit may run out, and spend that errs high is the safe side
 		}
 		var tags map[string]string
 		if t := rec[ti]; t != "" && json.Unmarshal([]byte(t), &tags) != nil {

@@ -1,0 +1,85 @@
+{
+ "formatVersion": "v1.0",
+ "products": {
+  "V1": {
+   "sku": "V1",
+   "productFamily": "VPC",
+   "attributes": {
+    "usagetype": "EU-PublicIPv4:InUseAddress"
+   }
+  },
+  "V2": {
+   "sku": "V2",
+   "productFamily": "VPC",
+   "attributes": {
+    "usagetype": "EU-PublicIPv4:IdleAddress"
+   }
+  }
+ },
+ "terms": {
+  "OnDemand": {
+   "V1": {
+    "V1.T": {
+     "priceDimensions": {
+      "V1.d": {
+       "rateCode": "V1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.005"
+       }
+      }
+     }
+    }
+   },
+   "V2": {
+    "V2.T": {
+     "priceDimensions": {
+      "V2.d": {
+       "rateCode": "V2.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.005"
+       }
+      }
+     }
+    }
+   }
+  },
+  "Reserved": {
+   "V1": {
+    "V1.T": {
+     "priceDimensions": {
+      "V1.d": {
+       "rateCode": "V1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.005"
+       }
+      }
+     }
+    }
+   },
+   "V2": {
+    "V2.T": {
+     "priceDimensions": {
+      "V2.d": {
+       "rateCode": "V2.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.005"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,370 @@
+{
+ "formatVersion": "v1.0",
+ "products": {
+  "E1": {
+   "sku": "E1",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "instanceType": "t3.micro",
+    "operatingSystem": "Linux",
+    "tenancy": "Shared",
+    "preInstalledSw": "NA",
+    "capacitystatus": "Used",
+    "licenseModel": "No License required"
+   }
+  },
+  "E2": {
+   "sku": "E2",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "instanceType": "t3.micro",
+    "operatingSystem": "Windows",
+    "tenancy": "Shared",
+    "preInstalledSw": "NA",
+    "capacitystatus": "Used",
+    "licenseModel": "No License required"
+   }
+  },
+  "E3": {
+   "sku": "E3",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "instanceType": "t3.micro",
+    "operatingSystem": "Linux",
+    "tenancy": "Dedicated",
+    "preInstalledSw": "NA",
+    "capacitystatus": "Used",
+    "licenseModel": "No License required"
+   }
+  },
+  "E4": {
+   "sku": "E4",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "instanceType": "t3.micro",
+    "operatingSystem": "Linux",
+    "tenancy": "Shared",
+    "preInstalledSw": "NA",
+    "capacitystatus": "Reserved",
+    "licenseModel": "No License required"
+   }
+  },
+  "E5": {
+   "sku": "E5",
+   "productFamily": "Compute Instance",
+   "attributes": {
+    "instanceType": "t3.micro",
+    "operatingSystem": "Linux",
+    "tenancy": "Shared",
+    "preInstalledSw": "SQL Std",
+    "capacitystatus": "Used",
+    "licenseModel": "No License required"
+   }
+  },
+  "S1": {
+   "sku": "S1",
+   "productFamily": "Storage",
+   "attributes": {
+    "volumeApiName": "gp3",
+    "usagetype": "EU-EBS:VolumeUsage.gp3"
+   }
+  },
+  "N1": {
+   "sku": "N1",
+   "productFamily": "NAT Gateway",
+   "attributes": {
+    "usagetype": "EU-NatGateway-Hours"
+   }
+  },
+  "N2": {
+   "sku": "N2",
+   "productFamily": "NAT Gateway",
+   "attributes": {
+    "usagetype": "EU-NatGateway-Bytes"
+   }
+  },
+  "N3": {
+   "sku": "N3",
+   "productFamily": "NAT Gateway",
+   "attributes": {
+    "usagetype": "EU-NatGateway-Other"
+   }
+  }
+ },
+ "terms": {
+  "OnDemand": {
+   "E1": {
+    "E1.T": {
+     "priceDimensions": {
+      "E1.d": {
+       "rateCode": "E1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0114"
+       }
+      }
+     }
+    }
+   },
+   "E2": {
+    "E2.T": {
+     "priceDimensions": {
+      "E2.d": {
+       "rateCode": "E2.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0172"
+       }
+      }
+     }
+    }
+   },
+   "E3": {
+    "E3.T": {
+     "priceDimensions": {
+      "E3.d": {
+       "rateCode": "E3.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.9"
+       }
+      }
+     }
+    }
+   },
+   "E4": {
+    "E4.T": {
+     "priceDimensions": {
+      "E4.d": {
+       "rateCode": "E4.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.5"
+       }
+      }
+     }
+    }
+   },
+   "E5": {
+    "E5.T": {
+     "priceDimensions": {
+      "E5.d": {
+       "rateCode": "E5.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.7"
+       }
+      }
+     }
+    }
+   },
+   "S1": {
+    "S1.T": {
+     "priceDimensions": {
+      "S1.d": {
+       "rateCode": "S1.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.088"
+       }
+      }
+     }
+    }
+   },
+   "N1": {
+    "N1.T": {
+     "priceDimensions": {
+      "N1.d": {
+       "rateCode": "N1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.048"
+       }
+      }
+     }
+    }
+   },
+   "N2": {
+    "N2.T": {
+     "priceDimensions": {
+      "N2.d": {
+       "rateCode": "N2.d",
+       "unit": "GB",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.048"
+       }
+      }
+     }
+    }
+   },
+   "N3": {
+    "N3.T": {
+     "priceDimensions": {
+      "N3.d": {
+       "rateCode": "N3.d",
+       "unit": "GB",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "9"
+       }
+      }
+     }
+    }
+   }
+  },
+  "Reserved": {
+   "E1": {
+    "E1.T": {
+     "priceDimensions": {
+      "E1.d": {
+       "rateCode": "E1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0114"
+       }
+      }
+     }
+    }
+   },
+   "E2": {
+    "E2.T": {
+     "priceDimensions": {
+      "E2.d": {
+       "rateCode": "E2.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0172"
+       }
+      }
+     }
+    }
+   },
+   "E3": {
+    "E3.T": {
+     "priceDimensions": {
+      "E3.d": {
+       "rateCode": "E3.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.9"
+       }
+      }
+     }
+    }
+   },
+   "E4": {
+    "E4.T": {
+     "priceDimensions": {
+      "E4.d": {
+       "rateCode": "E4.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.5"
+       }
+      }
+     }
+    }
+   },
+   "E5": {
+    "E5.T": {
+     "priceDimensions": {
+      "E5.d": {
+       "rateCode": "E5.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.7"
+       }
+      }
+     }
+    }
+   },
+   "S1": {
+    "S1.T": {
+     "priceDimensions": {
+      "S1.d": {
+       "rateCode": "S1.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.088"
+       }
+      }
+     }
+    }
+   },
+   "N1": {
+    "N1.T": {
+     "priceDimensions": {
+      "N1.d": {
+       "rateCode": "N1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.048"
+       }
+      }
+     }
+    }
+   },
+   "N2": {
+    "N2.T": {
+     "priceDimensions": {
+      "N2.d": {
+       "rateCode": "N2.d",
+       "unit": "GB",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.048"
+       }
+      }
+     }
+    }
+   },
+   "N3": {
+    "N3.T": {
+     "priceDimensions": {
+      "N3.d": {
+       "rateCode": "N3.d",
+       "unit": "GB",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "9"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

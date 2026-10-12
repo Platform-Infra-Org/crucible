@@ -31,6 +31,7 @@ import (
 	"crucible/internal/content"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/pricing"
 	"crucible/internal/rbac"
 	"crucible/internal/ready"
 	"crucible/internal/scoring"
@@ -54,6 +55,8 @@ type Service struct {
 	Blobs      blob.Store       // transcripts (Task 6)
 	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
+	Prices     *pricing.Store   // list prices for aws estimates; nil when unset
+	PriceFetch *pricing.Fetcher // downloads them from the public AWS Price List weekly; nil when unset
 
 	Jobs *river.Client[pgx.Tx] // queue for "Refresh now" on the Ledger; nil in tests that don't need it
 

@@ -1,0 +1,103 @@
+{
+ "formatVersion": "v1.0",
+ "products": {
+  "B1": {
+   "sku": "B1",
+   "productFamily": "Storage",
+   "attributes": {
+    "storageClass": "General Purpose",
+    "volumeType": "Standard"
+   }
+  },
+  "B2": {
+   "sku": "B2",
+   "productFamily": "Storage",
+   "attributes": {
+    "storageClass": "Infrequent Access",
+    "volumeType": "Standard - Infrequent Access"
+   }
+  }
+ },
+ "terms": {
+  "OnDemand": {
+   "B1": {
+    "B1.T": {
+     "priceDimensions": {
+      "B1.d": {
+       "rateCode": "B1.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.023"
+       }
+      },
+      "B1.d2": {
+       "unit": "GB-Mo",
+       "beginRange": "51200",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.022"
+       }
+      }
+     }
+    }
+   },
+   "B2": {
+    "B2.T": {
+     "priceDimensions": {
+      "B2.d": {
+       "rateCode": "B2.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0125"
+       }
+      }
+     }
+    }
+   }
+  },
+  "Reserved": {
+   "B1": {
+    "B1.T": {
+     "priceDimensions": {
+      "B1.d": {
+       "rateCode": "B1.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.023"
+       }
+      },
+      "B1.d2": {
+       "unit": "GB-Mo",
+       "beginRange": "51200",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.022"
+       }
+      }
+     }
+    }
+   },
+   "B2": {
+    "B2.T": {
+     "priceDimensions": {
+      "B2.d": {
+       "rateCode": "B2.d",
+       "unit": "GB-Mo",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0125"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -40,7 +40,7 @@ func TestPricesAPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := 0.0114 + 10*0.088/730 + // instance + its 10 GiB root volume
+	want := 0.0114 + 0.005 + 10*0.088/730 + // instance, its public IPv4 (flag unset), its 10 GiB root volume
 		20*0.088/730 + // the data volume
 		5*0.088/730 + // the replaced volume (delete+create still exists afterwards)
 		0.048 + 10*0.048/730 + // NAT hour (its IP is the EIP below), 10 GB processed

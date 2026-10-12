@@ -221,17 +221,17 @@ func TestLedgerShowsMeteredAndPriceAge(t *testing.T) {
 		now.Add(-31*24*time.Hour), now); err != nil {
 		t.Fatal(err)
 	}
-	if l, _ := f.s.Ledger(ctx, f.leader); !l.PricesStale || l.PricesError != "" || l.PricesAsOf == nil {
+	if l, err := f.s.Ledger(ctx, f.leader); err != nil || !l.PricesStale || l.PricesError != "" || l.PricesAsOf == nil {
 		t.Fatalf("31 days old: stale to everyone, but the error is for admins: %+v", l)
 	}
-	if a, _ := f.s.Ledger(ctx, f.admin); !a.PricesStale || !strings.Contains(a.PricesError, "503") {
+	if a, err := f.s.Ledger(ctx, f.admin); err != nil || !a.PricesStale || !strings.Contains(a.PricesError, "503") {
 		t.Fatalf("admins see why the refresh failed: %+v", a)
 	}
 
 	if _, err := f.s.DB.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, error = '', error_at = NULL, source = 'fixture'`, now); err != nil {
 		t.Fatal(err)
 	}
-	if a, _ := f.s.Ledger(ctx, f.admin); !a.PricesStale || a.PricesAsOf != nil || a.PricesError == "" {
+	if a, err := f.s.Ledger(ctx, f.admin); err != nil || !a.PricesStale || a.PricesAsOf != nil || a.PricesError == "" {
 		t.Fatalf("a dry run's fixture prices never pass for real ones: stale, no date, and admins are told why: %+v", a)
 	}
 }

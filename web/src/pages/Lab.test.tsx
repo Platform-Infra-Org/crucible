@@ -1,10 +1,12 @@
-import { expect, test, vi } from 'vitest'
+import { beforeEach, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { LabPage } from './Lab'
 import type { ModuleLab } from '../types'
 
-let info = { title: 'Cluster heat', runtime: 'cluster', runtime_ready: false, runtime_message: 'Your laptop agent is offline.', lab: null, contexts: [] } as unknown as ModuleLab
+const clusterInfo = { title: 'Cluster heat', runtime: 'cluster', runtime_ready: false, runtime_message: 'Your laptop agent is offline.', lab: null, contexts: [] } as unknown as ModuleLab
+let info: ModuleLab
+beforeEach(() => { info = clusterInfo })
 vi.mock('../useFetch', () => ({ useFetch: () => ({ data: info, error: undefined }) }))
 
 const page = () => renderToStaticMarkup(<MemoryRouter><LabPage /></MemoryRouter>)

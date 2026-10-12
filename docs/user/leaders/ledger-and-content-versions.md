@@ -15,7 +15,7 @@ spend for the teams you may see:
 - **Day by day**: spend per day.
 - **Running now** and **Labs this month**: each lab with who asked, its runtime and state, and four figures:
   - **Estimate**: what the lab was expected to cost for its full time when it was requested.
-  - **Cost so far**: what counts against the budget now.
+  - **Cost so far**: metered spend, or hourly estimate × time run; it counts against the budget until the bill settles.
   - **Metered** (AWS labs): what the lab actually built, priced at AWS list prices for as long as it existed. Crucible
     reads it from the lab's Terraform state. Once an AWS lab has a metered figure, it becomes the cost so far.
   - **Billed** (AWS labs): what AWS charged, from the billing export. It arrives about a day late, and shows "(so far)"

@@ -43,8 +43,8 @@ function EstimateLines({ b }: { b: EstimateBreakdown }) {
     <details className="lab-settings cost-breakdown">
       <summary>How this estimate was worked out</summary>
       <p className="muted">
-        What the lab's Terraform plan creates, priced per hour from AWS list prices. The estimate is the total per hour
-        for the lab's full time.
+        What the lab's Terraform plan creates, priced per hour from AWS list prices or the lab's own declared price. The
+        estimate is the total per hour times the lab's full time.
       </p>
       <div className="table-wrap"><table className="grid">
         <thead><tr><th>Resource</th><th>Type</th><th>Per hour</th><th>Usage per hour</th><th>Note</th></tr></thead>

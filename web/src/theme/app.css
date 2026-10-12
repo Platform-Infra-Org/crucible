@@ -157,7 +157,7 @@ button.tag-pill:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, 
 @media (max-width: 640px) {
   .cost-breakdown :is(th, td):nth-child(2) { display: none; }
   .cost-breakdown :is(th, td) { padding-inline: 0.3rem; }
-  .cost-breakdown td:first-child { min-width: 7.5rem; }
+  .cost-breakdown td:first-child { min-width: 6rem; }
 }
 a.button-link { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; }
 a.button-link:hover { border-color: var(--accent); }

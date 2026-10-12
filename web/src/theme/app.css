@@ -799,7 +799,3 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .sheet-head { margin: 0 0 0.25rem; }
 .sheet-head h2 { margin: 0; }
 .sheet form.stack { margin-top: 0.5rem; }
-
-/* A role someone holds through the team that owns the training, rather than by being named on it: shown beside the
-   named ones, with no way to remove it here — that means changing their tag on the team. */
-.chip.implied { border-style: dashed; color: var(--muted); }

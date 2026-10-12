@@ -25,7 +25,7 @@ type Registered struct {
 }
 
 // Register adds a training by reading its identity from repo at ref and root.
-func (s *Store) Register(ctx context.Context, actor string, repoID int64, ref, root, team, botName, botEmail string) (Registered, error) {
+func (s *Store) Register(ctx context.Context, actor string, repoID int64, ref, root, team, tag, botName, botEmail string) (Registered, error) {
 	url, shown, err := s.repoURL(ctx, repoID)
 	if err != nil {
 		return Registered{}, err
@@ -56,7 +56,7 @@ func (s *Store) Register(ctx context.Context, actor string, repoID int64, ref, r
 	if !config.ValidTrainingID(out.ID) {
 		return Registered{}, apperr.Wrap(apperr.Invalid, fmt.Sprintf("that training.yaml has the id %q, which Crucible cannot use", out.ID))
 	}
-	if err := s.CreateTraining(ctx, actor, out.ID, config.TrainingRef{Repo: shown, Ref: ref, Path: root}, team); err != nil {
+	if err := s.CreateTraining(ctx, actor, out.ID, config.TrainingRef{Repo: shown, Ref: ref, Path: root}, team, tag); err != nil {
 		return Registered{}, err
 	}
 	return out, nil

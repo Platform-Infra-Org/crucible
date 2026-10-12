@@ -79,11 +79,14 @@ func TestPlatformReadsTeamsProgramsAndRoles(t *testing.T) {
 	if prog == nil || prog.Training != "forge-101" || prog.Version != 1 {
 		t.Fatalf("program = %+v", prog)
 	}
-	if len(prog.Roles.Scorers) != 1 || prog.Roles.Scorers[0] != "senior@x" {
+	// The editors are as given; the admins are the team's leaders, filled in because a training with none could be
+	// managed only by a Crucible admin (config.Resolve). Admins are editors and scorers too.
+	if !slices.Equal(prog.Roles.Scorers, []string{"leader@x", "senior@x"}) {
 		t.Errorf("roles = %+v", prog.Roles)
 	}
-	if len(prog.Roles.Manager) != 0 || !slices.Equal(prog.Access.Editors, []string{"forge_seniors"}) {
-		t.Errorf("roles are as given, no defaults: %+v %+v", prog.Roles, prog.Access)
+	if !slices.Equal(prog.Roles.Manager, []string{"leader@x"}) || !slices.Equal(prog.Access.Editors, []string{"forge_seniors"}) ||
+		!slices.Equal(prog.Access.Admins, []string{"forge_leaders"}) {
+		t.Errorf("editors as given, admins defaulted to the team's leaders: %+v %+v", prog.Roles, prog.Access)
 	}
 	if len(prog.Enrolled) != 1 || prog.Enrolled[0] != "trainee@x" {
 		t.Errorf("enrolled = %v", prog.Enrolled)

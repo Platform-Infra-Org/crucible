@@ -418,6 +418,12 @@ func nonNilStrings(s []string) []string {
 func (p *Platform) Resolve() {
 	for _, t := range p.Teams {
 		for _, pr := range t.Programs {
+			// A training with no admin could be managed only by a Crucible admin, and the team running it would be
+			// locked out of its own training. One that names none gets its team's leaders, written down rather than
+			// implied, so the page shows who manages it and a save can take them away for somebody else.
+			if len(pr.Access.Admins) == 0 {
+				pr.Access.Admins = []string{t.ID + "_leaders"}
+			}
 			admins := p.resolve(pr.Access.Admins)
 			pr.Enrolled = p.resolve(pr.Access.Participants)
 			pr.Editors = p.resolve(pr.Access.Editors, pr.Access.Admins)
@@ -675,6 +681,30 @@ func lower(in []string) []string {
 	out := make([]string, len(in))
 	for i, s := range in {
 		out[i] = strings.ToLower(strings.TrimSpace(s))
+	}
+	return out
+}
+
+// RankAndAbove names the groups of team for tag and every tag above it: a senior gets <team>_seniors and
+// <team>_leaders. It is how registering a training picks its first admins — the registrant's own rank and the ranks
+// that outrank them, as groups, so the list follows the team as people join and change tags. A trainee outranks
+// nobody and gets nothing; an empty tag (a Crucible admin not on the team) gets the leaders.
+func RankAndAbove(team, tag string) []string {
+	if tag == "trainee" {
+		return nil
+	}
+	if tag == "" {
+		return []string{team + "_leaders"}
+	}
+	var out []string
+	for _, t := range Tags {
+		if t == "trainee" {
+			break
+		}
+		out = append(out, team+"_"+t+"s")
+		if t == tag {
+			break
+		}
 	}
 	return out
 }

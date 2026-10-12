@@ -79,7 +79,7 @@ func TestEnrollStoresRolesAsGiven(t *testing.T) {
 		t.Error("enroll must be audited once")
 	}
 	// one run per training: another team can't take it too
-	if err := s.Enroll(ctx, "admin@x", "data", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Conflict) {
+	if err := s.Enroll(ctx, "admin@x", "data", "forge-101", ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}}, BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("a second team = %v, want Conflict", err)
 	}
 	if audits(t, s, "program.enroll") != 1 {
@@ -89,16 +89,17 @@ func TestEnrollStoresRolesAsGiven(t *testing.T) {
 
 func TestSetProgramReplacesRoles(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}, Admins: []string{"platform_leaders"}}}); err != nil {
 		t.Fatal(err)
 	}
-	b := ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Roles: config.Access{Participants: []string{"data"}, Editors: []string{"Lead@x"}}}
+	b := ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Roles: config.Access{Participants: []string{"data"}, Editors: []string{"Lead@x"}, Admins: []string{"platform_leaders"}}}
 	if err := s.SetProgram(ctx, "lead@x", "platform", "forge-101", b); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
 	prog := p.Teams["platform"].Programs["forge-101"]
-	if !slices.Equal(prog.Enrolled, []string{"dl@x", "ds@x", "dt@x"}) || !slices.Equal(prog.Editors, []string{"lead@x"}) || len(prog.Roles.Manager) != 0 {
+	if !slices.Equal(prog.Enrolled, []string{"dl@x", "ds@x", "dt@x"}) || !slices.Equal(prog.Editors, []string{"lead@x"}) ||
+		!slices.Equal(prog.Roles.Manager, []string{"lead@x"}) {
 		t.Errorf("enrolled = %v editors = %v admins = %v", prog.Enrolled, prog.Editors, prog.Roles.Manager)
 	}
 	if prog.Version != 2 {
@@ -107,13 +108,16 @@ func TestSetProgramReplacesRoles(t *testing.T) {
 	if err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", b); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("stale version = %v, want Conflict", err)
 	}
-	if err := s.SetProgram(ctx, "admin@x", "platform", "nope", ProgramBody{BudgetUSDMonth: usd(0), Version: 1}); !errors.Is(err, apperr.NotFound) {
+	if err := s.SetProgram(ctx, "admin@x", "platform", "nope", ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), Version: 1}); !errors.Is(err, apperr.NotFound) {
 		t.Errorf("missing program = %v, want NotFound", err)
 	}
 	if audits(t, s, "program.update") != 1 {
 		t.Errorf("update audits = %d, want 1: refused saves are not changes", audits(t, s, "program.update"))
 	}
 }
+
+// adminOnly is the least a program may name: one admin, so somebody other than a Crucible admin can manage it.
+var adminOnly = config.Access{Admins: []string{"platform_leaders"}}
 
 func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 	s, ctx := orgFixture(t)
@@ -122,14 +126,14 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		b    ProgramBody
 		want string
 	}{
-		"unknown schedule": {ProgramBody{BudgetUSDMonth: usd(0), Schedule: "nights"}, "nights"},
-		"both schedules":   {ProgramBody{BudgetUSDMonth: usd(0), Schedule: "nights", InlineSchedule: inline}, "not both"},
-		"bad ttl":          {ProgramBody{BudgetUSDMonth: usd(0), TTL: "banana"}, "ttl"},
-		"negative idle":    {ProgramBody{BudgetUSDMonth: usd(0), IdleTimeout: "-5m"}, "idle_timeout"},
-		"bad extension":    {ProgramBody{BudgetUSDMonth: usd(0), MaxExtension: "2 hours"}, "max_extension"},
-		"negative budget":  {ProgramBody{BudgetUSDMonth: usd(-1)}, "negative"},
-		"bad ref":          {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"not an email"}}}, "not an email"},
-		"unknown team":     {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ghost_seniors"}}}, `no team "ghost"`},
+		"unknown schedule": {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), Schedule: "nights"}, "nights"},
+		"both schedules":   {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), Schedule: "nights", InlineSchedule: inline}, "not both"},
+		"bad ttl":          {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), TTL: "banana"}, "ttl"},
+		"negative idle":    {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), IdleTimeout: "-5m"}, "idle_timeout"},
+		"bad extension":    {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), MaxExtension: "2 hours"}, "max_extension"},
+		"negative budget":  {ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(-1)}, "negative"},
+		"bad ref":          {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"not an email"}, Admins: []string{"platform_leaders"}}}, "not an email"},
+		"unknown team":     {ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Editors: []string{"ghost_seniors"}, Admins: []string{"platform_leaders"}}}, `no team "ghost"`},
 	} {
 		err := s.Enroll(ctx, "admin@x", "platform", "forge-101", c.b)
 		if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), c.want) {
@@ -140,16 +144,16 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		t.Error("refused enrolls must leave no program and no audit row")
 	}
 	// an unknown training is refused too
-	if err := s.Enroll(ctx, "admin@x", "platform", "ghost", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "ghost") {
+	if err := s.Enroll(ctx, "admin@x", "platform", "ghost", ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}}, BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "ghost") {
 		t.Errorf("unknown training = %v", err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.NotFound) && !errors.Is(err, apperr.Invalid) {
+	if err := s.Enroll(ctx, "admin@x", "nope", "forge-101", ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}}, BudgetUSDMonth: usd(0)}); !errors.Is(err, apperr.NotFound) && !errors.Is(err, apperr.Invalid) {
 		t.Errorf("unknown team = %v", err)
 	}
 	if err := s.SetSchedule(ctx, "admin@x", "days", *inline); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Schedule: "days", TTL: "2h", IdleTimeout: "20m", MaxExtension: "1h", BudgetUSDMonth: usd(50)}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}}, Schedule: "days", TTL: "2h", IdleTimeout: "20m", MaxExtension: "1h", BudgetUSDMonth: usd(50)}); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
@@ -158,7 +162,7 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 		t.Errorf("program = %+v", pr)
 	}
 	// SetProgram with an unknown named schedule: refused naming it, no audit
-	err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Version: 1, Schedule: "nights"})
+	err := s.SetProgram(ctx, "admin@x", "platform", "forge-101", ProgramBody{Roles: adminOnly, BudgetUSDMonth: usd(0), Version: 1, Schedule: "nights"})
 	if !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "nights") {
 		t.Errorf("update with unknown schedule = %v", err)
 	}
@@ -169,7 +173,7 @@ func TestProgramRefusesUnknownScheduleAndBadLabDefaults(t *testing.T) {
 
 func TestSetPinRecordsTheSHAAndIsAudited(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}}, BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"main", "abc", sha1[:39], sha1 + "0", strings.Repeat("g", 40)} {
@@ -213,7 +217,7 @@ func TestSetPinRecordsTheSHAAndIsAudited(t *testing.T) {
 
 func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0), Roles: config.Access{Participants: []string{"new@x"}, Admins: []string{"platform_leaders"}}}); err != nil {
 		t.Fatal(err)
 	}
 	// a restored snapshot can lack the foreign key's guarantee; replica mode skips the check
@@ -242,7 +246,7 @@ func TestPlatformIgnoresAProgramWhoseTrainingWasRemoved(t *testing.T) {
 // gets a fresh run.
 func TestSetOwnerMovesTheRun(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(7), Roles: config.Access{Participants: []string{"new@x"}}}); err != nil {
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(7), Roles: config.Access{Participants: []string{"new@x"}, Admins: []string{"platform_leaders"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetPin(ctx, "admin@x", "platform", "forge-101", sha1); err != nil {
@@ -280,17 +284,17 @@ func TestSetOwnerMovesTheRun(t *testing.T) {
 // Registering a training gives it to the team at once, with an empty run.
 func TestCreateTraining(t *testing.T) {
 	s, ctx := orgFixture(t)
-	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git", Path: "courses/k8s"}, "platform"); err != nil {
+	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git", Path: "courses/k8s"}, "platform", "leader"); err != nil {
 		t.Fatal(err)
 	}
 	p, _ := s.Platform(ctx)
 	if ref := p.Trainings["k8s"]; ref.Ref != "main" || ref.Path != "courses/k8s" || p.Teams["platform"].Programs["k8s"] == nil {
 		t.Fatalf("k8s = %+v, run %v", ref, p.Teams["platform"].Programs["k8s"])
 	}
-	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "platform"); !errors.Is(err, apperr.Conflict) {
+	if err := s.CreateTraining(ctx, "senior@x", "k8s", config.TrainingRef{Repo: "https://git/k.git"}, "platform", "leader"); !errors.Is(err, apperr.Conflict) {
 		t.Errorf("a taken id = %v, want Conflict", err)
 	}
-	if err := s.CreateTraining(ctx, "senior@x", "k9s", config.TrainingRef{Repo: "https://git/k.git"}, "ghost"); err == nil {
+	if err := s.CreateTraining(ctx, "senior@x", "k9s", config.TrainingRef{Repo: "https://git/k.git"}, "ghost", "leader"); err == nil {
 		t.Error("an unknown team is refused")
 	}
 	if _, ok := mustPlatform(t, s).Trainings["k9s"]; ok {

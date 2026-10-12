@@ -126,14 +126,7 @@ func (a *api) getTeam(w http.ResponseWriter, r *http.Request, actor string, c rb
 
 func programView(c rbac.Checker, actor, team, tr string, p *config.Program, title, running, head string) ProgramView {
 	a := p.Access
-	// The owning team's people hold these roles with nobody naming them (rbac.ManageProgram, edits.canPropose), so
-	// the page shows them beside the named ones rather than claiming nobody holds the role.
-	var implied config.Access
-	if t := c.P.Teams[team]; t != nil {
-		implied.Editors = nonNil(slices.Concat(t.Leaders, t.Seniors))
-		implied.Admins = nonNil(slices.Concat(t.Leaders, t.Seniors, t.Juniors))
-	}
-	return ProgramView{Training: tr, Title: title, Team: team, Version: p.Version, Implied: implied,
+	return ProgramView{Training: tr, Title: title, Team: team, Version: p.Version,
 		Roles:    config.Access{Participants: nonNil(a.Participants), Editors: nonNil(a.Editors), Admins: nonNil(a.Admins)},
 		Resolved: config.Access{Participants: nonNil(p.Enrolled), Editors: nonNil(p.Editors), Admins: nonNil(p.Roles.Manager)},
 		Schedule: p.Schedule, InlineSchedule: p.Inline, BudgetUSDMonth: p.BudgetUSDMonth, ReviewSelfReported: p.ReviewSelfReported,

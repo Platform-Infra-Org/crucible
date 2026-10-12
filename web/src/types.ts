@@ -8,7 +8,6 @@ export type LabDefaults = { ttl: string; idle_timeout: string; max_extension: st
 // A training's one run, under the team that owns it.
 export type ProgramConfig = {
   training: string; title: string; team: string; version: number; inline_schedule?: object; roles: Access; resolved: Access
-  implied: Access // who holds a role through the owning team, without being named; read-only
   schedule: string
   lab_defaults: LabDefaults; budget_usd_month: number; review_self_reported: boolean; can_manage: boolean
   running_sha: string; head_sha: string; pinned_ref: string

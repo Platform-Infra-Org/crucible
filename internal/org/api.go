@@ -282,7 +282,12 @@ func (a *api) postTraining(w http.ResponseWriter, r *http.Request, actor string,
 		team = own.ID
 	}
 	// The id and title come from the repository's training.yaml, not from this request: the content says who it is.
-	out, err := a.s.Register(r.Context(), actor, b.Repository, b.Ref, b.Path, team, a.d.BotName, a.d.BotEmail)
+	// The registrant's tag on the owning team decides the training's first admins (config.RankAndAbove).
+	tag := ""
+	if t := c.P.Teams[team]; t != nil {
+		tag = t.RoleOf(actor)
+	}
+	out, err := a.s.Register(r.Context(), actor, b.Repository, b.Ref, b.Path, team, tag, a.d.BotName, a.d.BotEmail)
 	if err != nil {
 		return err
 	}
@@ -305,7 +310,7 @@ func manage(c rbac.Checker, actor, training string) error {
 	if t, _ := c.P.Owner(training); t != nil && c.Can(actor, rbac.ManageProgram, t.ID, training, "") {
 		return nil
 	}
-	return apperr.Wrap(apperr.Forbidden, "only the training's managers (its team's leaders, seniors and juniors, and its admins) can change it")
+	return apperr.Wrap(apperr.Forbidden, "only this training's admins can change it; ask one of them, or a Crucible admin")
 }
 
 // putSource points a training at another repo, ref or folder. An empty repo keeps the stored one.

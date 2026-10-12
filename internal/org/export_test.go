@@ -102,8 +102,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 	}
 	var roles int
 	mustScan(t, dst.DB, `SELECT count(*) FROM training_roles WHERE training = 'b'`, &roles)
-	if roles != 0 {
-		t.Errorf("a training with no roles has none after an import: %d rows", roles)
+	// A program the file named no admin for was seeded with its team's leaders, since a training with no admin could
+	// be managed only by a Crucible admin; the import carries that across.
+	if roles != 1 {
+		t.Errorf("roles for a training the file left bare = %d rows, want the one defaulted admin", roles)
 	}
 	var sub string
 	mustScan(t, dst.DB, `SELECT sub FROM users WHERE email = 'new-boss@x'`, &sub)

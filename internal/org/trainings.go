@@ -109,7 +109,7 @@ func (s *Store) AddTraining(ctx context.Context, actor, id string, ref config.Tr
 
 // CreateTraining registers a new training owned by team, with an empty run: no roles, any time, no budget. The
 // route decides who may create one for which team.
-func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config.TrainingRef, team string) error {
+func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config.TrainingRef, team, actorTag string) error {
 	if !config.ValidTrainingID(id) {
 		return apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid training id %q", id))
 	}
@@ -117,7 +117,10 @@ func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config
 	if err != nil {
 		return err
 	}
-	detail := map[string]any{"repo": redactRepo(ref.Repo), "ref": ref.Ref, "path": ref.Path, "team": team}
+	// The registrant's rank and the ranks above it manage the new training, as groups, so the list follows the team.
+	// A Crucible admin who is not on the team leaves it with the team's leaders.
+	admins := config.RankAndAbove(team, actorTag)
+	detail := map[string]any{"repo": redactRepo(ref.Repo), "ref": ref.Ref, "path": ref.Path, "team": team, "admins": admins}
 	return s.inTx(ctx, actor, "training.create", id, detail, func(tx pgx.Tx) error {
 		repo, err := repoIDFor(ctx, tx, ref.Repo)
 		if err != nil {
@@ -131,8 +134,15 @@ func (s *Store) CreateTraining(ctx context.Context, actor, id string, ref config
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO programs (team, training) VALUES ($1, $2)`, team, id)
-		return fkError(err, team, id, nil)
+		if _, err := tx.Exec(ctx, `INSERT INTO programs (team, training) VALUES ($1, $2)`, team, id); err != nil {
+			return fkError(err, team, id, nil)
+		}
+		for _, ref := range admins {
+			if _, err := tx.Exec(ctx, `INSERT INTO training_roles (training, ref, role) VALUES ($1, $2, 'admin')`, id, ref); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

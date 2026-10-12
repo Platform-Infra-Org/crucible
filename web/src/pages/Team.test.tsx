@@ -10,7 +10,6 @@ import { CreateTeam, TeamPage, TeamsIndex } from './Team'
 const prog: ProgramConfig = {
   training: 'forge-101', title: 'Forge 101', team: 'platform', version: 7,
   roles: { participants: ['platform_trainees'], editors: ['l@x'], admins: [] }, resolved: { participants: ['a@x'], editors: ['l@x'], admins: [] },
-  implied: { participants: [], editors: [], admins: [] },
   schedule: '', lab_defaults: { ttl: '', idle_timeout: '', max_extension: '' }, budget_usd_month: 0, review_self_reported: false,
   can_manage: true, running_sha: '', head_sha: '', pinned_ref: '',
 }

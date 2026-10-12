@@ -55,7 +55,7 @@ func TestTeamReadCarriesVersionsAndNeverAWebhook(t *testing.T) {
 func TestProgramAndBudgetRoutesByRole(t *testing.T) {
 	f := newAPI(t)
 	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
-	prog := fmt.Sprintf(`{"version":%d,"roles":{"participants":["new@x"]},"budget_usd_month":0}`, pv)
+	prog := fmt.Sprintf(`{"version":%d,"roles":{"participants":["new@x"],"admins":["lead@x"]},"budget_usd_month":0}`, pv)
 	path := "/api/org/teams/platform/programs/forge-101"
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for _, who := range []string{"new@x", "boss@x", "nobody@x"} {
@@ -71,8 +71,11 @@ func TestProgramAndBudgetRoutesByRole(t *testing.T) {
 	if count(t, f.s, `SELECT count(*) FROM audit_log`) != before || f.refreshes != 0 {
 		t.Fatal("refused requests changed something")
 	}
-	if w := f.do("senior@x", "PUT", path, prog); w.Code != 200 || !strings.Contains(w.Body.String(), fmt.Sprintf(`"version":%d`, pv+1)) {
-		t.Fatalf("a senior of the owning team PUT = %d %s", w.Code, w.Body)
+	if w := f.do("senior@x", "PUT", path, prog); w.Code != 403 {
+		t.Fatalf("a senior who is not one of its admins PUT = %d %s", w.Code, w.Body)
+	}
+	if w := f.do("lead@x", "PUT", path, prog); w.Code != 200 || !strings.Contains(w.Body.String(), fmt.Sprintf(`"version":%d`, pv+1)) {
+		t.Fatalf("the training's admin PUT = %d %s", w.Code, w.Body)
 	}
 	if w := f.do("admin@x", "PUT", "/api/org/teams/other/programs/forge-101", prog); w.Code != 404 {
 		t.Errorf("a team that does not own it = %d, want 404", w.Code)
@@ -93,7 +96,7 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	}
 	before := count(t, f.s, `SELECT count(*) FROM audit_log`)
 	for _, c := range []struct{ path, body string }{
-		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"roles":{"participants":["x@x"]},"budget_usd_month":0}`, pv+7)},
+		{"/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"roles":{"participants":["x@x"],"admins":["lead@x"]},"budget_usd_month":0}`, pv+7)},
 		{"/api/org/teams/platform/budget", `{"version":0,"monthly_usd":99}`},
 		{"/api/org/teams/platform/budget", `{"version":9,"monthly_usd":99}`},
 	} {
@@ -105,7 +108,8 @@ func TestStaleVersionIs409AndWritesNothing(t *testing.T) {
 	if err := f.s.DB.QueryRow(t.Context(), `SELECT monthly_usd FROM team_budgets WHERE team = 'platform'`).Scan(&monthly); err != nil || monthly != 5 {
 		t.Errorf("budget = %v (%v), want it untouched at 5", monthly, err)
 	}
-	if n := count(t, f.s, `SELECT count(*) FROM training_roles`); n != 0 {
+	// Only what the fixture named is there: a refused save adds nobody.
+	if n := count(t, f.s, `SELECT count(*) FROM training_roles WHERE ref = 'x@x'`); n != 0 {
 		t.Errorf("a stale program save enrolled %d people", n)
 	}
 	if count(t, f.s, `SELECT count(*) FROM audit_log`) != before {
@@ -129,7 +133,7 @@ func TestNewRoutesRefuseUnknownFields(t *testing.T) {
 func TestGetThenPutBackKeepsGroups(t *testing.T) {
 	f := newAPI(t)
 	pv := f.snap.Teams["platform"].Programs["forge-101"].Version
-	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"budget_usd_month":0,"roles":{"participants":["platform_trainees"],"editors":["senior@x"]}}`, pv)); w.Code != 200 {
+	if w := f.do("lead@x", "PUT", "/api/org/teams/platform/programs/forge-101", fmt.Sprintf(`{"version":%d,"budget_usd_month":0,"roles":{"participants":["platform_trainees"],"editors":["senior@x"],"admins":["platform_leaders"]}}`, pv)); w.Code != 200 {
 		t.Fatal(w.Body)
 	}
 	m, _, body := f.teamJSON("lead@x", "platform")

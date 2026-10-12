@@ -10,7 +10,7 @@ order: 5
 who takes it, who edits it and who runs it, set how its labs run, and edit the content.
 
 Open it with **Manage trainings** at the top of the **Trainings** page, from **Administrator → Trainings**, or with
-**Manage** next to a training on your team page. It is there for leaders, seniors and juniors, for anyone who edits or
+**Manage** next to a training on your team page. It is there for its admins and editors, for anyone who edits or
 runs a training, and for admins.
 
 The page lists, on the left, the trainings you work on: the ones your team owns, the ones you are an editor or admin
@@ -43,8 +43,14 @@ repository, register it, and go straight to **Edit content**. Crucible only does
 commits at all; one that has content but no `training.yaml` where you pointed is an error, not an invitation to
 write one.
 
-A training belongs to one team. Its **managers** are that team's leaders, seniors and juniors, and the training's own
-admins. Only a Crucible admin gives a training to another team, under **Team**; its roles, version, schedule and
+A training belongs to one team, and the people who manage it are the **admins named on it** — nobody manages a
+training just for being on the team that owns it, so an admin you remove really loses it. Registering names your own
+rank and the ranks above it, as groups: register as a senior and `<team>_seniors` and `<team>_leaders` become its
+admins; as a junior, the juniors too. Those are groups, so they follow the team as people join and change tags, and
+you can change them afterwards. A training can never be left with no admins at all. Crucible admins manage every
+training and are not listed on any of them.
+
+Only a Crucible admin gives a training to another team, under **Team**; its roles, version, schedule and
 budget move with it. A training no team owns yet (registered before teams owned trainings) waits there for an admin to
 give it to one.
 
@@ -74,8 +80,9 @@ Each training has three roles:
 - **Participants** take the training: only they see it on their Hearth.
 - **Editors** propose content edits and review other people's, and score written answers, uploads and lab reviews on
   the [Anvil](/docs/scorers/the-anvil). Nobody scores a training they take, or their own work.
-- **Admins** do what editors do, manage the training like its team's leaders, seniors and juniors, and approve its
-  paid labs up to the first cost line (see [Approvals](/docs/leaders/approvals-and-extensions)).
+- **Admins** do what editors do, manage the training — its roles, labs, budget and content version — and approve its
+  paid labs up to the first cost line (see [Approvals](/docs/leaders/approvals-and-extensions)). Keep at least one
+  admin: a save that removes the last one is refused, since only Crucible admins could then change the training.
 
 Give a role to anyone Crucible knows, from any team, or to a group (see
 [Teams and tags](/docs/leaders/teams-and-programs)): `all`, `all_trainees`, `platform`, `platform_seniors`… Type in the

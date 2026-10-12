@@ -47,7 +47,9 @@ func newAPIWith(t *testing.T, withPinCheck bool) *apiFixture {
 	if err := s.AddAdmin(ctx, "root", "admin@x"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101", ProgramBody{BudgetUSDMonth: usd(0)}); err != nil {
+	// forge-101 is managed by the team's leader and edited by its seniors, which is what registering as a leader gives.
+	if err := s.Enroll(ctx, "admin@x", "platform", "forge-101",
+		ProgramBody{Roles: config.Access{Admins: []string{"lead@x"}, Editors: []string{"platform_seniors"}}, BudgetUSDMonth: usd(0)}); err != nil {
 		t.Fatal(err)
 	}
 	f := &apiFixture{t: t, s: s}
@@ -522,14 +524,18 @@ func TestTrainingManagers(t *testing.T) {
 			t.Errorf("%s giving roles = %d, want 403", who, w.Code)
 		}
 	}
-	if w := put("senior@x", `{"participants":["all_trainees","Guest@corp"],"editors":["data_seniors"],"admins":["dl@x"]}`); w.Code != 200 {
-		t.Fatalf("a senior of the owning team = %d %s", w.Code, w.Body)
+	// forge-101 names only its leader as admin, so a senior of the owning team is not one of its managers.
+	if w := put("senior@x", `{"participants":["all"],"admins":["dl@x"]}`); w.Code != 403 {
+		t.Fatalf("a senior who is not an admin of it = %d %s", w.Code, w.Body)
+	}
+	if w := put("lead@x", `{"participants":["all_trainees","Guest@corp"],"editors":["data_seniors"],"admins":["dl@x","platform_leaders"]}`); w.Code != 200 {
+		t.Fatalf("the training's admin = %d %s", w.Code, w.Body)
 	}
 	pr := f.snap.Teams["platform"].Programs["forge-101"]
-	if !slices.Equal(pr.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(pr.Editors, []string{"dl@x", "ds@x"}) {
+	if !slices.Equal(pr.Enrolled, []string{"dt@x", "guest@corp", "new@x"}) || !slices.Equal(pr.Editors, []string{"dl@x", "ds@x", "lead@x"}) {
 		t.Fatalf("resolved: %v %v", pr.Enrolled, pr.Editors)
 	}
-	if w := put("senior@x", `{"editors":["ghost_seniors"]}`); w.Code != 400 {
+	if w := put("lead@x", `{"editors":["ghost_seniors"],"admins":["platform_leaders"]}`); w.Code != 400 {
 		t.Errorf("a group of no team = %d, want 400", w.Code)
 	}
 	// dl@x is now one of the training's admins: they manage it from another team.

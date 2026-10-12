@@ -283,7 +283,7 @@ function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: Pe
         : <p className="muted">Read-only: {p.team}&apos;s leaders, seniors and juniors and the training&apos;s admins make changes here.</p>}
       {ROLES.map((r) => (
         <RoleRow key={r.key} id={`${p.training}-${r.key}`} label={r.label} one={r.one} what={r.what} refs={p.roles[r.key]} resolved={p.resolved[r.key]}
-          implied={p.implied?.[r.key] ?? []} team={p.team} people={people} busy={act.busy}
+          people={people} busy={act.busy}
           onChange={manage ? (list, ok) => void save({ roles: { ...p.roles, [r.key]: list } }, ok) : undefined} />
       ))}
       {manage && (
@@ -297,9 +297,8 @@ function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: Pe
   )
 }
 
-function RoleRow({ id, label, one, what, implied, team, refs, resolved, people, busy, onChange }: {
-  id: string; label: string; one: string; what: string; implied: string[]; team: string
-  refs: string[]; resolved: string[]
+function RoleRow({ id, label, one, what, refs, resolved, people, busy, onChange }: {
+  id: string; label: string; one: string; what: string; refs: string[]; resolved: string[]
   people?: People; busy: boolean
   onChange?: (list: string[], ok: string) => void
 }) {
@@ -321,13 +320,8 @@ function RoleRow({ id, label, one, what, implied, team, refs, resolved, people, 
       <span className="role-name">{label}</span>
       <div>
         <p className="muted role-default">They {what}.{refs.some(isGroup) && ` Now ${resolved.length} ${resolved.length === 1 ? 'person' : 'people'}.`}</p>
-        {refs.length === 0 && implied.length === 0 && <p className="muted role-default">Nobody yet.</p>}
+        {refs.length === 0 && <p className="muted role-default">Nobody yet.</p>}
         <ul className="chips" aria-label={label}>
-          {implied.map((who) => (
-            <li key={`implied-${who}`} className="chip implied" title={`On the team that owns this training (${team}), so they hold this role without being named`}>
-              {who}
-            </li>
-          ))}
           {refs.map((ref) => (
             <li key={ref} className={isGroup(ref) ? 'chip group' : 'chip'} title={isGroup(ref) ? describeGroup(ref) : undefined}>
               {isGroup(ref) && <span aria-hidden="true">⚑ </span>}{ref}

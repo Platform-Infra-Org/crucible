@@ -101,11 +101,23 @@ variable "lab_regions" {
   default     = ""
   description = "Comma-separated regions aws labs may use (the labs stack's allowed_regions)"
 }
-variable "infracost_api_key" {
+variable "lab_plan_role_arn" {
   type        = string
   default     = ""
-  sensitive   = true
-  description = "Free key from `infracost auth login`. Without it aws labs cannot be priced, so they cannot be requested."
+  description = "The read-only role cost estimates plan with"
+}
+variable "lab_export_bucket" {
+  type        = string
+  default     = ""
+  description = "The billing export (CUR 2.0) bucket billed spend is read from"
+}
+variable "lab_export_prefix" {
+  type    = string
+  default = "cur"
+}
+variable "lab_export_name" {
+  type    = string
+  default = ""
 }
 variable "bootstrap_admin" {
   type        = string

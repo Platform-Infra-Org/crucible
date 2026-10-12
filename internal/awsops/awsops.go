@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -136,9 +137,10 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 	return o.Deploy(ctx)
 }
 
-// LabsInit creates the shared lab account stack (roles, permission boundary, state bucket). Run it with credentials
-// for the lab account; pass the Crucible account when that is a different one.
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error {
+// LabsInit creates the shared lab account stack (roles, permission boundary, state bucket, billing export). Run it
+// with credentials for the lab account; pass the Crucible account when that is a different one. budgetUSD (> 0) and
+// budgetEmails set the account's AWS Budget alert; unset, the stack's defaults apply.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails []string) error {
 	d := o.dir("labs")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -146,6 +148,13 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error
 	args := []string{"-chdir=" + d, "apply", "-var", "region=" + region}
 	if crucibleAccount != "" {
 		args = append(args, "-var", "crucible_account_id="+crucibleAccount)
+	}
+	if budgetUSD > 0 {
+		args = append(args, "-var", "budget_monthly_usd="+strconv.FormatFloat(budgetUSD, 'f', -1, 64))
+	}
+	if len(budgetEmails) > 0 {
+		b, _ := json.Marshal(budgetEmails) // a JSON list is an HCL list
+		args = append(args, "-var", "budget_emails="+string(b))
 	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {
@@ -160,7 +169,9 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error
 // labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.
 func labVars(l map[string]string) []string {
 	return []string{"-var", "lab_role_arn=" + l["lab_role_arn"], "-var", "lab_ops_role_arn=" + l["ops_role_arn"],
-		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"]}
+		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"],
+		"-var", "lab_plan_role_arn=" + l["plan_role_arn"], "-var", "lab_export_bucket=" + l["export_bucket"],
+		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").

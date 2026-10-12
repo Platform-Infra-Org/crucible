@@ -71,7 +71,6 @@ locals {
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
     quiz_secret        = random_password.quiz.result
-    infracost_api_key  = var.infracost_api_key == "" ? "none" : var.infracost_api_key
   }
 }
 
@@ -106,12 +105,17 @@ resource "aws_ssm_parameter" "helm_values" {
       stateBucket = var.lab_state_bucket
       stateRegion = var.lab_state_region
       regions     = var.lab_regions == "" ? var.region : var.lab_regions
+      # estimates (plan role) and billed spend (the billing export)
+      planRoleArn  = var.lab_plan_role_arn
+      exportBucket = var.lab_export_bucket
+      exportPrefix = var.lab_export_prefix
+      exportName   = var.lab_export_name
     }
   })
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "infracost_api_key"])
+  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]
@@ -149,7 +153,7 @@ data "aws_iam_policy_document" "node" {
     for_each = var.lab_role_arn == "" ? [] : [1]
     content {
       actions   = ["sts:AssumeRole", "sts:TagSession"] # lab sessions carry crucible:* tags
-      resources = [var.lab_role_arn, var.lab_ops_role_arn]
+      resources = compact([var.lab_role_arn, var.lab_ops_role_arn, var.lab_plan_role_arn])
     }
   }
 }

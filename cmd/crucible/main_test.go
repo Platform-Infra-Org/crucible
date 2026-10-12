@@ -2,15 +2,10 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"crucible/internal/content"
-	"crucible/internal/infracost"
 )
 
 func TestLintExamplesPass(t *testing.T) {
@@ -36,52 +31,25 @@ func TestLintReportsProblems(t *testing.T) {
 	}
 }
 
-func TestPriceCheck(t *testing.T) {
-	tr, probs := content.Load("../../examples/forge-401")
-	if len(probs) > 0 {
-		t.Fatal(probs)
-	}
-	price := func(p string) infracost.Runner {
-		return func(context.Context, string, []string, ...string) ([]byte, error) {
-			return []byte(`{"projects":[{}],"totalHourlyCost":"` + p + `"}`), nil
-		}
-	}
-	var out bytes.Buffer
-	if p := priceCheck(tr, &out, nil); len(p) != 0 || !strings.Contains(out.String(), "price check skipped") {
-		t.Fatalf("no key: a note, no problems: %v %q", p, out.String())
-	}
-	if p := priceCheck(tr, &out, price("0.04")); len(p) != 0 {
-		t.Fatalf("within the ceiling: %v", p)
-	}
-	if p := priceCheck(tr, &out, price("0.06")); len(p) != 1 || !strings.Contains(p[0].Msg, "above aws.max_hourly_usd") {
-		t.Fatalf("over the ceiling: %v", p)
-	}
-	failing := func(context.Context, string, []string, ...string) ([]byte, error) { return nil, errors.New("boom") }
-	if p := priceCheck(tr, &out, failing); len(p) != 1 {
-		t.Fatalf("a failing estimate fails lint: %v", p)
-	}
-}
-
-// infracost never runs on content lint has just rejected.
-func TestLintSkipsPriceCheckOnProblems(t *testing.T) {
+// Crucible prices aws labs itself; lint refuses a resource type it can't price that the lab doesn't declare under
+// aws.prices, with no network and no AWS (no price check runs at all).
+func TestLintRefusesUnpricedTypesOffline(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.CopyFS(dir, os.DirFS("../../examples/forge-401")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "modules/01-cloud-heat/lab/terraform/p.tf"), []byte(`provider "aws" {}`+"\n"), 0o644); err != nil {
+	tf := `resource "aws_kinesis_stream" "s" {
+  name        = "s-${var.crucible_lab_id}"
+  shard_count = 1
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "modules/01-cloud-heat/lab/terraform/stream.tf"), []byte(tf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ran := false
-	old := priceRunner
-	priceRunner = func() infracost.Runner {
-		return func(context.Context, string, []string, ...string) ([]byte, error) {
-			ran = true
-			return []byte(`{"projects":[{}],"totalHourlyCost":"0.01"}`), nil
-		}
-	}
-	defer func() { priceRunner = old }()
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1") // any network call would fail
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	var out bytes.Buffer
-	if code := lint(dir, &out); code != 1 || ran {
-		t.Fatalf("exit %d, infracost ran: %v\n%s", code, ran, out.String())
+	if code := lint(dir, &out); code != 1 || !strings.Contains(out.String(), "aws_kinesis_stream") {
+		t.Fatalf("exit %d\n%s", code, out.String())
 	}
 }

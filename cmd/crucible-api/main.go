@@ -238,6 +238,8 @@ func run(ctx context.Context) error {
 	}
 	var cloud awscloud.Cloud
 	var awsRegions []string
+	var priceStore *pricing.Store
+	var priceFetch *pricing.Fetcher
 	switch mode := os.Getenv("CRUCIBLE_AWS_LABS"); mode {
 	case "":
 	case "1", "dryrun":
@@ -250,7 +252,7 @@ func run(ctx context.Context) error {
 			}
 		}
 		prices := &pricing.Store{DB: pool, Now: time.Now}
-		est, err := awsSetup(ctx, mode, ar, rates, os.Getenv, func(ctx context.Context, c awscloud.Config) (awscloud.Cloud, error) {
+		est, fetch, err := awsSetup(ctx, mode, ar, rates, os.Getenv, func(ctx context.Context, c awscloud.Config) (awscloud.Cloud, error) {
 			return awscloud.New(ctx, c)
 		}, func(ctx context.Context) (pricing.Lookup, error) {
 			s, err := prices.Snapshot(ctx)
@@ -262,16 +264,19 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if est != nil {
-			estimators["aws"] = est
+		if fetch == nil { // dry run: fixture prices, refreshed on every start, so metering prices the fake apply
+			if err := prices.Replace(ctx, pricing.Fixture()); err != nil {
+				return fmt.Errorf("dry-run prices: %w", err)
+			}
 		}
+		estimators["aws"], priceStore, priceFetch = est, prices, fetch
 		runners["aws"], cloud = ar, ar.Cloud
 		slog.Info("aws labs enabled", "mode", mode, "regions", awsRegions)
 	default:
 		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
-		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube}
+		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
 		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))
@@ -377,35 +382,39 @@ func env(k, def string) string {
 	return def
 }
 
-// awsSetup gives the aws runner its cloud and returns the aws lab estimator: a read-only terraform plan priced from
-// prices. Dryrun never calls newCloud, the real SDK client. CRUCIBLE_INFRACOST=off prices labs from
-// CRUCIBLE_DEV_LAB_USD_PER_HOUR, $0 when unset: no budget stop, no over-cap routing, so dryrun only.
+// awsSetup gives the aws runner its cloud and returns the aws lab estimator and the price list fetcher. Real labs are
+// priced from a read-only terraform plan and prices, refreshed weekly by the fetcher; they need the plan role and the
+// billing export (billed spend), so a missing one refuses to start. A dry run never calls newCloud (the real SDK
+// client) and never fetches prices: it prices labs from CRUCIBLE_DEV_LAB_USD_PER_HOUR (rates).
 func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.Estimator, getenv func(string) string,
-	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error), prices func(context.Context) (pricing.Lookup, error)) (labs.Estimator, error) {
-	off := getenv("CRUCIBLE_INFRACOST") == "off"
-	if off && mode != "dryrun" {
-		return nil, errors.New("CRUCIBLE_INFRACOST=off is only allowed with CRUCIBLE_AWS_LABS=dryrun: real aws labs need an infracost estimate")
-	}
+	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error), prices func(context.Context) (pricing.Lookup, error)) (labs.Estimator, *pricing.Fetcher, error) {
 	if mode == "dryrun" {
 		fake := &awscloud.Fake{}
 		ar.Cloud, ar.DryRun = fake, fake
-		slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in). Development only")
-	} else {
-		if ar.StateBucket == "" || ar.StateRegion == "" {
-			return nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
-		}
-		c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN"),
-			PlanRoleARN: getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN")})
-		if err != nil {
-			return nil, fmt.Errorf("aws labs: %w", err)
-		}
-		ar.Cloud = c
+		slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in) " +
+			"and are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR. Development only")
+		return rates, nil, nil
 	}
-	if off {
-		slog.Warn("CRUCIBLE_INFRACOST=off: aws labs are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR")
-		return rates, nil
+	if ar.StateBucket == "" || ar.StateRegion == "" {
+		return nil, nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
 	}
-	return &labs.TerraformEstimator{Plan: ar, Prices: prices}, nil
+	for _, k := range []string{"CRUCIBLE_AWS_PLAN_ROLE_ARN", "CRUCIBLE_AWS_EXPORT_BUCKET", "CRUCIBLE_AWS_EXPORT_NAME"} {
+		if getenv(k) == "" {
+			return nil, nil, fmt.Errorf("CRUCIBLE_AWS_LABS=1 needs %s (a deploy/aws/labs output)", k)
+		}
+	}
+	prefix := getenv("CRUCIBLE_AWS_EXPORT_PREFIX")
+	if prefix == "" {
+		prefix = "cur"
+	}
+	c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN"),
+		PlanRoleARN: getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN"), ExportBucket: getenv("CRUCIBLE_AWS_EXPORT_BUCKET"), ExportPrefix: prefix,
+		ExportName: getenv("CRUCIBLE_AWS_EXPORT_NAME")})
+	if err != nil {
+		return nil, nil, fmt.Errorf("aws labs: %w", err)
+	}
+	ar.Cloud = c
+	return &labs.TerraformEstimator{Plan: ar, Prices: prices}, &pricing.Fetcher{Base: "https://pricing.us-east-1.amazonaws.com"}, nil
 }
 
 func must(k string) string {

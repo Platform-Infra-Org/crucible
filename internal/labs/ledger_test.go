@@ -46,7 +46,7 @@ func TestLedgerNumbersAndStaleness(t *testing.T) {
 	now := f.clk.Now()
 	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // est $2, will settle at $0.40
 	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
-	f.spent(t, "aaaaaaaaaaa2", "forge-101", 1) // est $1, Cost Explorer never reported it
+	f.spent(t, "aaaaaaaaaaa2", "forge-101", 1) // est $1, the billing export never reported it
 	run := &Instance{ID: "aaaaaaaaaaa3", UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "02-first-lab", SHA: "abc",
 		Runtime: "local", State: Ready, CreatedAt: now, LastActivityAt: now, TTL: 2 * time.Hour, IdleTimeout: 30 * time.Minute,
 		Tier: "approver", HourlyUSD: 1, EstimateUSD: 2}
@@ -80,7 +80,7 @@ func TestLedgerNumbersAndStaleness(t *testing.T) {
 	}
 	today := l.Daily[len(l.Daily)-1]
 	if today.Day != now.Format(time.DateOnly) || !closeTo(today.ActualUSD, 0.4) || len(l.Daily) != now.Day() {
-		t.Fatalf("one entry per day this month, actuals on Cost Explorer's day: %+v", l.Daily)
+		t.Fatalf("one entry per day this month, actuals on the billed day: %+v", l.Daily)
 	}
 	if _, err := f.s.DB.Exec(ctx, `UPDATE aws_ops SET ingest_ok_at = $1`, now.Add(-40*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestLedgerShowsFailedAWSLabsWithActualsAndDestroyingOnes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("bbbbbbbbbbb1", Failed)     // apply failed after 50 minutes; Cost Explorer reported it
+	add("bbbbbbbbbbb1", Failed)     // apply failed after 50 minutes; the billing export reported it
 	add("bbbbbbbbbbb2", Failed)     // failed, nothing reported: nothing to show
 	add("bbbbbbbbbbb3", Destroying) // failed apply, terraform destroy running
 	if _, err := f.s.DB.Exec(ctx, `INSERT INTO cost_actuals (lab_id, day, usd, updated_at) VALUES ('bbbbbbbbbbb1', $1::timestamptz::date, 0.3, $1::timestamptz)`, now); err != nil {

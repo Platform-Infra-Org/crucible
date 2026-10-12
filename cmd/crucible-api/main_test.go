@@ -15,15 +15,65 @@ func envOf(m map[string]string) func(string) string { return func(k string) stri
 
 func noPrices(context.Context) (pricing.Lookup, error) { return nil, pricing.ErrStale }
 
-func TestInfracostOffOnlyWithDryrun(t *testing.T) {
-	newCloud := func(context.Context, awscloud.Config) (awscloud.Cloud, error) { return &awscloud.Fake{}, nil }
-	env := envOf(map[string]string{"CRUCIBLE_INFRACOST": "off", "CRUCIBLE_AWS_STATE_BUCKET": "b", "CRUCIBLE_AWS_STATE_REGION": "eu-west-1"})
-	_, err := awsSetup(context.Background(), "1", &labs.AWSRunner{StateBucket: "b", StateRegion: "eu-west-1"}, labs.FixedRates{}, env, newCloud, noPrices)
-	if err == nil || !strings.Contains(err.Error(), "only allowed with CRUCIBLE_AWS_LABS=dryrun") {
-		t.Fatalf("real aws labs with a $0 estimate must refuse to start: %v", err)
+// real labs: the variables every real aws lab install sets (deploy/aws/labs outputs).
+var real = map[string]string{"CRUCIBLE_AWS_LAB_ROLE_ARN": "lab", "CRUCIBLE_AWS_OPS_ROLE_ARN": "ops", "CRUCIBLE_AWS_PLAN_ROLE_ARN": "plan",
+	"CRUCIBLE_AWS_EXPORT_BUCKET": "exports", "CRUCIBLE_AWS_EXPORT_NAME": "crucible-labs"}
+
+func without(k string) map[string]string {
+	m := map[string]string{}
+	for a, b := range real {
+		if a != k {
+			m[a] = b
+		}
 	}
-	if est, err := awsSetup(context.Background(), "dryrun", &labs.AWSRunner{}, labs.FixedRates{}, env, newCloud, noPrices); err != nil || est == nil {
-		t.Fatalf("dryrun prices from the dev rates: %v %v", est, err)
+	return m
+}
+
+// Without the plan role there is no estimate, and without the export no billed spend: refuse to start, naming it.
+func TestAWSSetupNeedsThePlanRoleAndExport(t *testing.T) {
+	newCloud := func(context.Context, awscloud.Config) (awscloud.Cloud, error) { return &awscloud.Fake{}, nil }
+	for _, k := range []string{"CRUCIBLE_AWS_PLAN_ROLE_ARN", "CRUCIBLE_AWS_EXPORT_BUCKET", "CRUCIBLE_AWS_EXPORT_NAME"} {
+		_, _, err := awsSetup(context.Background(), "1", &labs.AWSRunner{StateBucket: "b", StateRegion: "eu-west-1"}, labs.FixedRates{},
+			envOf(without(k)), newCloud, noPrices)
+		if err == nil || !strings.Contains(err.Error(), k) {
+			t.Errorf("missing %s must refuse to start, naming it: %v", k, err)
+		}
+	}
+}
+
+// A dry run prices aws labs from CRUCIBLE_DEV_LAB_USD_PER_HOUR and never downloads the price list.
+func TestDryRunPricesFromDevRates(t *testing.T) {
+	rates := labs.FixedRates{"cloud-heat": 0.04}
+	est, fetch, err := awsSetup(context.Background(), "dryrun", &labs.AWSRunner{}, rates, envOf(nil), nil, noPrices)
+	if fr, ok := est.(labs.FixedRates); err != nil || !ok || fr["cloud-heat"] != 0.04 {
+		t.Fatalf("dryrun estimator: %T %v %v", est, est, err)
+	}
+	if fetch != nil {
+		t.Fatal("a dry run never constructs a price fetcher")
+	}
+}
+
+// The dry-run fixture prices what the fake apply leaves in state (a t3.nano with an 8 GiB gp3 root and a bucket), in
+// the regions the examples use, so metering works in a dry run.
+func TestDryRunFixturePricesTheFakeApply(t *testing.T) {
+	snap := pricing.Snapshot{}
+	for _, r := range pricing.Fixture() {
+		snap[[3]string{r.Service, r.Region, r.Key}] = r.USD
+	}
+	for _, region := range []string{"eu-west-1", "us-east-1"} {
+		fake := &awscloud.Fake{}
+		fake.SimulateApply(region, awscloud.Session{LabID: "abc"})
+		st, err := fake.ReadState(context.Background(), "", "", "labs/abc.tfstate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := pricing.FromState(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, err := pricing.PriceAWS(res, region, nil, nil, snap); err != nil || b.HourlyUSD <= 0 {
+			t.Fatalf("%s: %+v %v", region, b, err)
+		}
 	}
 }
 
@@ -34,15 +84,18 @@ func TestRealAWSLabsEstimateFromATerraformPlan(t *testing.T) {
 		got = c
 		return &awscloud.Fake{}, nil
 	}
-	env := envOf(map[string]string{"CRUCIBLE_AWS_LAB_ROLE_ARN": "lab", "CRUCIBLE_AWS_OPS_ROLE_ARN": "ops", "CRUCIBLE_AWS_PLAN_ROLE_ARN": "plan"})
 	ar := &labs.AWSRunner{StateBucket: "b", StateRegion: "eu-west-1"}
-	est, err := awsSetup(context.Background(), "1", ar, labs.FixedRates{}, env, newCloud, noPrices)
+	est, fetch, err := awsSetup(context.Background(), "1", ar, labs.FixedRates{}, envOf(real), newCloud, noPrices)
 	te, ok := est.(*labs.TerraformEstimator)
 	if err != nil || !ok || te.Plan != labs.Planner(ar) || te.Prices == nil {
 		t.Fatalf("the terraform estimator plans with the aws runner: %T %v", est, err)
 	}
-	if got.LabRoleARN != "lab" || got.OpsRoleARN != "ops" || got.PlanRoleARN != "plan" {
-		t.Fatalf("roles: %+v", got)
+	if got.LabRoleARN != "lab" || got.OpsRoleARN != "ops" || got.PlanRoleARN != "plan" ||
+		got.ExportBucket != "exports" || got.ExportPrefix != "cur" || got.ExportName != "crucible-labs" {
+		t.Fatalf("roles and export (prefix defaults to cur): %+v", got)
+	}
+	if fetch == nil || fetch.Base != "https://pricing.us-east-1.amazonaws.com" {
+		t.Fatalf("real labs refresh prices from the public AWS Price List: %+v", fetch)
 	}
 	if _, err := te.Prices(context.Background()); err != pricing.ErrStale {
 		t.Fatalf("prices come from the store: %v", err)
@@ -51,7 +104,7 @@ func TestRealAWSLabsEstimateFromATerraformPlan(t *testing.T) {
 
 func TestDryrunNeverConstructsTheSDKClient(t *testing.T) {
 	ar := &labs.AWSRunner{}
-	_, err := awsSetup(context.Background(), "dryrun", ar, labs.FixedRates{}, envOf(nil),
+	_, _, err := awsSetup(context.Background(), "dryrun", ar, labs.FixedRates{}, envOf(nil),
 		func(context.Context, awscloud.Config) (awscloud.Cloud, error) {
 			t.Fatal("dryrun called the real AWS client constructor")
 			return nil, nil

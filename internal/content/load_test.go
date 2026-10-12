@@ -481,7 +481,7 @@ AWS`, "AWS", aws, 1)
 		"paren key":              {tf("v.tf", "terraform {\n  required_providers {\n    y = { (\"source\") = \"evil2/y\" }\n  }\n}\n"), "keys must be literal"},
 		"too many files":         {manyTF(201), "files"},
 		"big file":               {tf("big.tf", "# "+strings.Repeat("x", 200<<10)+"\n"), "keep each file under 128 KiB"},
-		// fix round 1 (task-5-review I3): infracost evaluates the module in the API pod, so file reads stay inside it
+		// fix round 1 (task-5-review I3): the estimate's plan evaluates the module, so file reads stay inside it
 		"file abs":            {tf("f.tf", "locals {\n  x = file(\"/var/run/secrets/x\")\n}\n"), "file reads"},
 		"file dotdot":         {tf("f.tf", "locals {\n  x = file(\"../x\")\n}\n"), "file reads"},
 		"file var":            {tf("f.tf", "locals {\n  x = file(var.p)\n}\n"), "file reads"},

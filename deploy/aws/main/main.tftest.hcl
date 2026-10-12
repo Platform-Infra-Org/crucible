@@ -172,8 +172,12 @@ run "aws_labs_off_by_default" {
     error_message = "the node assumes no lab role by default"
   }
   assert {
-    condition     = strcontains(aws_instance.node.user_data, "/helm-values") && strcontains(aws_instance.node.user_data, "-f \"$work/values.yaml\"") && strcontains(aws_instance.node.user_data, "INFRACOST_API_KEY")
-    error_message = "deploy.sh passes the helm values from SSM and the infracost key"
+    condition     = strcontains(aws_instance.node.user_data, "/helm-values") && strcontains(aws_instance.node.user_data, "-f \"$work/values.yaml\"")
+    error_message = "deploy.sh passes the helm values from SSM"
+  }
+  assert {
+    condition     = toset(keys(aws_ssm_parameter.secret)) == toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+    error_message = "Crucible prices aws labs itself from the free AWS Price List: no pricing API key among the secrets"
   }
 }
 
@@ -185,20 +189,19 @@ run "aws_labs_wiring" {
     lab_state_bucket  = "crucible-444455556666-labstate"
     lab_state_region  = "eu-west-1"
     lab_regions       = "eu-west-1"
-    infracost_api_key = "ico-test"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_prefix = "cur"
+    lab_export_name   = "crucible-labs"
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
-    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops"])
-    error_message = "the node may assume exactly the two lab account roles"
-  }
-  assert {
-    condition     = !strcontains(aws_instance.node.user_data, "ico-test") && aws_ssm_parameter.secret["infracost_api_key"].type == "SecureString"
-    error_message = "the infracost key is a SecureString, never in user data"
+    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops", "arn:aws:iam::444455556666:role/crucible-lab-plan"])
+    error_message = "the node may assume exactly the three lab account roles (lab, ops, plan)"
   }
   assert {
     condition     = output.lab_role_arn == "arn:aws:iam::444455556666:role/crucible-lab"

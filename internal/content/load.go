@@ -817,7 +817,7 @@ var (
 // awsModule checks an aws lab (spec §4.5, §8.2). Region and price ceiling are required. terraform/ holds a module
 // Crucible runs as-is after adding its own provider, backend and variables, so the module must not declare provider,
 // backend, cloud or import blocks nor ship tfvars or state; providers must be HashiCorp's; module sources must be local
-// so neither infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed
+// so terraform never fetches code from the network. Every .tf and .tf.json is parsed
 // with HCL: a regex cannot be made sound for this. This runs inside crucible-api on an author's push, so sizes are
 // capped before anything is parsed, nesting depth is capped before the (recursive) parser runs, and no expression is
 // ever evaluated: the values lint cares about must be literal strings. hashicorp/local and hashicorp/external (host
@@ -984,8 +984,8 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 	}
 }
 
-// tfFileFuncs are terraform's functions that read files. infracost evaluates the module inside crucible-api, so a
-// read of the pod's own files (service account token, mounted config) could steer the price shown to trainees.
+// tfFileFuncs are terraform's functions that read files. the estimate's terraform plan evaluates the module, so a
+// read outside it (the pod's mounted credentials and config) could leak them or steer the price shown to trainees.
 var tfFileFuncs = map[string]bool{"file": true, "filebase64": true, "filemd5": true, "filesha1": true,
 	"filesha256": true, "filesha512": true, "filebase64sha256": true, "filebase64sha512": true, "fileexists": true,
 	"fileset": true, "templatefile": true}

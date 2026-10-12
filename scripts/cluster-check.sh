@@ -42,7 +42,8 @@ render() { # $1 = true for the dev (privileged) policy, false for the production
     --set clusterLabs.iUnderstandPrivilegedLabsAreUnsafe="$1" \
     --set backup.bucket=unused --set backup.region=unused --set oidc.issuer=https://unused --show-only templates/rbac.yaml \
     --set awsLabs.enabled=true --set awsLabs.labRoleArn=unused --set awsLabs.opsRoleArn=unused --set awsLabs.stateBucket=unused \
-    | kubectl --context "$ctx" -n crucible apply -f -
+    --set awsLabs.planRoleArn=unused --set awsLabs.exportBucket=unused --set awsLabs.exportName=unused \
+    | kubectl --context "$ctx" apply -f -   # no -n: the estimates Role and RoleBinding live in crucible-estimates
 }
 render true
 

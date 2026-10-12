@@ -52,7 +52,7 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - `internal/` — one package per domain: `labs` (runners: local/cluster/aws, approvals, budgets, sweep, reaper,
   ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
   write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
-  (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
+  (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `pricing`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
 - `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`, styles in `web/src/theme/app.css`
 - `.claude/skills/crucible-ui/` — the UI design skill (tokens, components, motion, accessibility, how to check a page)
@@ -104,7 +104,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.
 - Money: approvals use tiers by estimate; budgets fail closed; cluster labs run on the trainee's own cluster through
-  their agent and are free; aws labs need infracost (or `CRUCIBLE_INFRACOST=off` in dryrun only).
+  their agent and are free; aws labs are priced by Crucible from the free AWS Price List (a fresh price refresh is
+  required; stale prices fail closed).
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only

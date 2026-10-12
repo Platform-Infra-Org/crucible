@@ -35,6 +35,10 @@ awsLabs:
   opsRoleArn: ""
   stateBucket: ""
   stateRegion: ""           # default: backup.region
+  planRoleArn: ""           # read-only role cost estimates run terraform plan with
+  exportBucket: ""          # billing export (CUR 2.0) bucket: billed spend
+  exportPrefix: cur
+  exportName: ""
   regions: eu-west-1        # comma-separated; must match the labs stack's allowed_regions
   # Pinned by digest (multi-arch index): these pods hold lab credentials. Bump deliberately, with
   # `docker buildx imagetools inspect <image>:<tag>`; keep in step with internal/labs (DefaultTerraformImage).

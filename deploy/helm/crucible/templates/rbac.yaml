@@ -3,7 +3,7 @@
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
-metadata: { name: crucible }
+metadata: { name: crucible, namespace: {{ .Release.Namespace }} }
 automountServiceAccountToken: false   # the Deployment opts in only when Crucible's lab cluster is on (AWS lab workspaces)
 {{- if .Values.clusterLabs.enabled }}
 ---
@@ -59,7 +59,7 @@ spec:
       {{- if .Values.awsLabs.enabled }}
       - { apiGroups: [""], apiVersions: [v1], operations: [CREATE, UPDATE], resources: [secrets] }
       - { apiGroups: [""], apiVersions: [v1], operations: [CREATE], resources: [configmaps] }
-      - { apiGroups: [""], apiVersions: [v1], operations: [DELETE], resources: [pods] }
+      - { apiGroups: [""], apiVersions: [v1], operations: [DELETE], resources: [pods, secrets, configmaps] }
       {{- end }}
   matchConditions:
     - name: crucible-api-only
@@ -72,11 +72,17 @@ spec:
         request.resource.resource != 'namespaces' ||
         (variables.target.metadata.name.startsWith('lab-') && has(variables.target.metadata.labels) &&
          'crucible.io/lab' in variables.target.metadata.labels)
-      message: crucible-api may only create and delete lab-<id> namespaces
+        {{- if .Values.awsLabs.enabled }} ||
+        (request.operation == 'CREATE' && object.metadata.name == 'crucible-estimates' && has(object.metadata.labels) &&
+         'crucible.io/lab' in object.metadata.labels && object.metadata.labels['crucible.io/lab'] == 'estimates')
+        {{- end }}
+      message: crucible-api may only create and delete lab-<id> namespaces{{ if .Values.awsLabs.enabled }} (and create crucible-estimates){{ end }}
     - expression: >-
         request.resource.resource == 'namespaces' ||
-        (namespaceObject != null && has(namespaceObject.metadata.labels) && 'crucible.io/lab' in namespaceObject.metadata.labels)
-      message: crucible-api may only create lab pods, policies and terminals inside lab namespaces
+        (namespaceObject != null &&
+         (namespaceObject.metadata.name.startsWith('lab-'){{ if .Values.awsLabs.enabled }} || namespaceObject.metadata.name == 'crucible-estimates'{{ end }}) &&
+         has(namespaceObject.metadata.labels) && 'crucible.io/lab' in namespaceObject.metadata.labels)
+      message: crucible-api may only create lab pods, policies and terminals inside lab namespaces{{ if .Values.awsLabs.enabled }} (and run estimates in crucible-estimates){{ end }}
     {{- if not .Values.clusterLabs.unsafePrivileged }}
     - expression: >-
         request.resource.resource != 'namespaces' || request.operation != 'CREATE' ||
@@ -91,4 +97,38 @@ metadata: { name: crucible-labs-only }
 spec:
   policyName: crucible-labs-only
   validationActions: [Deny]
+{{- if .Values.awsLabs.enabled }}
+---
+# Estimates (internal/labs aws.go Plan): one-shot terraform plan pods, each with its own credentials secret and module
+# config map, in this namespace only. Labelled like estimatesObjects (crucible.io/lab=estimates, never a lab id, and
+# Pod Security baseline); the Go code also creates it on first use and tolerates it existing.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crucible-estimates
+  labels:
+    crucible.io/lab: estimates
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: crucible-estimates, namespace: crucible-estimates }
+rules:
+  - apiGroups: [""]
+    resources: [pods, secrets, configmaps]
+    verbs: [create, get, list, watch, delete]   # a plan run's pod, credentials and module; the sweep lists and reaps leftovers
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]                                # the plan JSON is the pod log's last line
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create]                             # the namespace's egress policy (DNS and the public internet only)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: crucible-estimates, namespace: crucible-estimates }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: crucible-estimates }
+subjects:
+  - { kind: ServiceAccount, name: crucible, namespace: {{ .Release.Namespace }} }
+{{- end }}
 {{- end }}

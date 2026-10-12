@@ -9,7 +9,7 @@ const (
 )
 
 // LabTF is added to every aws lab module. It declares the S3 backend (configured per lab at init), the AWS provider
-// with the lab's region and the crucible:* default tags that IAM, the tag sweep, the reaper and Cost Explorer rely
+// with the lab's region and the crucible:* default tags that IAM, the tag sweep, the reaper and the billing export rely
 // on, and the variables a module may use (var.crucible_lab_id names lab buckets: crucible-lab-<id>…). Lab modules
 // must not declare a provider "aws" or a backend themselves (lint). The provider version is pinned here, in the
 // provider block, so apply and destroy run the same build: a required_providers block in this file would clash with a

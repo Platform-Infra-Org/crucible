@@ -1,5 +1,6 @@
 // Package pricing turns Terraform resources into hourly prices from list prices Crucible downloads for free
-// (spec 2026-10-12 §2). It never guesses: a resource it can't price is an error, never $0.
+// (spec 2026-10-12 §2). A resource it can't price is an error, never $0. The one default is an instance's root volume:
+// 8 GiB gp3 when the plan doesn't say (metering corrects it from the state).
 package pricing
 
 import (
@@ -41,7 +42,8 @@ func (u *Unpriced) Error() string {
 	return "no price for " + strings.Join(u.Types, ", ") + ": declare it under aws.prices (USD per hour)"
 }
 
-// FromPlan reads `terraform show -json` output: every resource the plan creates or keeps.
+// FromPlan reads `terraform show -json` output: every managed resource the plan creates or updates
+// (a replace includes "create"); an estimate plans against an empty state, so that is what will exist.
 func FromPlan(b []byte) ([]Resource, error) {
 	var p struct {
 		ResourceChanges []struct {

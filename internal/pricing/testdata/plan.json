@@ -1,11 +1,13 @@
 {"format_version":"1.2","terraform_version":"1.9.0","resource_changes":[
 {"address":"aws_instance.web","mode":"managed","type":"aws_instance","name":"web","change":{"actions":["create"],"after":{"instance_type":"t3.micro","root_block_device":[{"volume_size":10,"volume_type":"gp3"}]}}},
 {"address":"aws_ebs_volume.data","mode":"managed","type":"aws_ebs_volume","name":"data","change":{"actions":["create"],"after":{"size":20,"type":"gp3"}}},
-{"address":"module.net.aws_nat_gateway.this[0]","module_address":"module.net","mode":"managed","type":"aws_nat_gateway","name":"this","index":0,"change":{"actions":["create"],"after":{"connectivity_type":"public"}}},
+{"address":"module.net.aws_nat_gateway.this[0]","module_address":"module.net","mode":"managed","type":"aws_nat_gateway","name":"this","index":0,"change":{"actions":["create"],"after":{"connectivity_type":"public","allocation_id":"eipalloc-1"}}},
 {"address":"aws_eip.ip","mode":"managed","type":"aws_eip","name":"ip","change":{"actions":["create"],"after":{"domain":"vpc"}}},
 {"address":"aws_lb.app","mode":"managed","type":"aws_lb","name":"app","change":{"actions":["create"],"after":{"load_balancer_type":"application"}}},
 {"address":"aws_s3_bucket.data","mode":"managed","type":"aws_s3_bucket","name":"data","change":{"actions":["create"],"after":{"bucket":"x"}}},
 {"address":"aws_security_group.web","mode":"managed","type":"aws_security_group","name":"web","change":{"actions":["create"],"after":{"name":"web"}}},
 {"address":"random_id.suffix","mode":"managed","type":"random_id","name":"suffix","change":{"actions":["create"],"after":{"byte_length":4}}},
+{"address":"aws_ebs_volume.replaced","mode":"managed","type":"aws_ebs_volume","name":"replaced","change":{"actions":["delete","create"],"after":{"size":5,"type":"gp3"}}},
+{"address":"aws_instance.gone","mode":"managed","type":"aws_instance","name":"gone","change":{"actions":["delete"],"after":null}},
 {"address":"aws_instance.old","mode":"managed","type":"aws_instance","name":"old","change":{"actions":["no-op"],"after":{"instance_type":"m5.24xlarge"}}}
 ]}

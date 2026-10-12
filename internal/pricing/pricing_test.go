@@ -42,16 +42,17 @@ func TestPricesAPlan(t *testing.T) {
 	}
 	want := 0.0114 + 10*0.088/730 + // instance + its 10 GiB root volume
 		20*0.088/730 + // the data volume
-		0.048 + 0.005 + 10*0.048/730 + // NAT hour, its public IPv4, 10 GB processed
+		5*0.088/730 + // the replaced volume (delete+create still exists afterwards)
+		0.048 + 10*0.048/730 + // NAT hour (its IP is the EIP below), 10 GB processed
 		0.005 + // the EIP
-		0.0252 + // the ALB hour
+		0.0252 + 2*0.005 + // the ALB hour, and an IPv4 per subnet (2 when unknown)
 		100*0.023/730 // 100 GB in S3
 	if !near(b.HourlyUSD, want) {
 		t.Fatalf("hourly %v, want %v\n%+v", b.HourlyUSD, want, b.Lines)
 	}
 	for _, l := range b.Lines {
-		if l.Address == "aws_instance.old" {
-			t.Fatalf("a no-op resource must be ignored: %+v", l)
+		if l.Address == "aws_instance.old" || l.Address == "aws_instance.gone" {
+			t.Fatalf("no-op and delete-only resources must be ignored: %+v", l)
 		}
 		if strings.HasPrefix(l.Address, "aws_security_group") || strings.HasPrefix(l.Address, "random_id") {
 			if l.HourlyUSD != 0 || l.Note != "free" {
@@ -107,5 +108,73 @@ func TestFromStateReadsManagedInstances(t *testing.T) {
 	}
 	if len(res) != 2 || res[0].Address != "aws_instance.web" || res[1].Address != "module.net.aws_nat_gateway.this[0]" {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func priceOne(r Resource, declared map[string]float64) (Breakdown, error) {
+	return PriceAWS([]Resource{r}, "eu-west-1", declared, nil, prices())
+}
+
+func TestFailClosedOnWhatItCannotPrice(t *testing.T) {
+	vol := func(v map[string]any) Resource {
+		return Resource{Address: "aws_ebs_volume.v", Type: "aws_ebs_volume", Values: v}
+	}
+	inst := func(v map[string]any) Resource {
+		v["instance_type"] = "t3.micro"
+		return Resource{Address: "aws_instance.i", Type: "aws_instance", Values: v}
+	}
+	bad := []Resource{
+		vol(map[string]any{"type": "gp3"}),                                                     // size unknown
+		vol(map[string]any{"type": "gp3", "size": nil}),                                        // size null
+		vol(map[string]any{"type": "io2", "size": 10.0, "iops": 1000.0}),                       // provisioned IOPS
+		vol(map[string]any{"type": "gp3", "size": 10.0, "iops": 6000.0}),                       // gp3 IOPS above 3000
+		vol(map[string]any{"type": "gp3", "size": 10.0, "throughput": 250.0}),                  // gp3 throughput above 125
+		inst(map[string]any{"root_block_device": []any{map[string]any{"volume_type": "io1"}}}), // root io1
+		inst(map[string]any{"tenancy": "dedicated"}),
+		inst(map[string]any{"host_id": "h-1"}),
+	}
+	for _, r := range bad {
+		if _, err := priceOne(r, nil); err == nil {
+			t.Fatalf("must fail closed: %+v", r)
+		}
+	}
+	if _, err := priceOne(vol(map[string]any{"type": "gp3"}), nil); err == nil || !strings.Contains(err.Error(), "aws_ebs_volume.v") {
+		t.Fatalf("error must name the address: %v", err)
+	}
+	if b, err := priceOne(vol(map[string]any{"type": "io2"}), map[string]float64{"aws_ebs_volume": 0.5}); err != nil || !near(b.HourlyUSD, 0.5) {
+		t.Fatalf("declared wins: %+v %v", b, err)
+	}
+	if _, err := priceOne(vol(map[string]any{"type": "gp3", "size": 10.0, "iops": 3000.0, "throughput": 125.0}), nil); err != nil {
+		t.Fatalf("gp3 baseline is included in the GB price: %v", err)
+	}
+}
+
+func TestDefaultRootAndPublicIPs(t *testing.T) {
+	b, err := priceOne(Resource{Address: "aws_instance.i", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.micro", "associate_public_ip_address": true}}, nil)
+	if err != nil || !near(b.HourlyUSD, 0.0114+8*0.088/730+0.005) {
+		t.Fatalf("default 8 GiB gp3 root plus public IPv4: %+v %v", b, err)
+	}
+	b, err = priceOne(Resource{Address: "aws_lb.a", Type: "aws_lb", Values: map[string]any{"internal": true}}, nil)
+	if err != nil || !near(b.HourlyUSD, 0.0252) || b.Lines[0].Note != "LCU usage not priced" {
+		t.Fatalf("internal lb: %+v %v", b, err)
+	}
+	b, err = priceOne(Resource{Address: "aws_lb.a", Type: "aws_lb", Values: map[string]any{"subnets": []any{"a", "b", "c"}}}, nil)
+	if err != nil || !near(b.HourlyUSD, 0.0252+3*0.005) {
+		t.Fatalf("internet-facing lb: %+v %v", b, err)
+	}
+	b, err = priceOne(Resource{Address: "aws_nat_gateway.n", Type: "aws_nat_gateway", Values: map[string]any{"connectivity_type": "public"}}, nil)
+	if err != nil || !near(b.HourlyUSD, 0.048+0.005) {
+		t.Fatalf("nat without allocation_id counts its IP: %+v %v", b, err)
+	}
+}
+
+func TestPlanNullValueFailsClosed(t *testing.T) {
+	plan := `{"resource_changes":[{"address":"aws_ebs_volume.s","mode":"managed","type":"aws_ebs_volume","change":{"actions":["create"],"after":{"size":null,"snapshot_id":"snap-1","type":"gp3"}}}]}`
+	res, err := FromPlan([]byte(plan))
+	if err != nil || len(res) != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if _, err := priceOne(res[0], nil); err == nil {
+		t.Fatal("null size must fail")
 	}
 }

@@ -34,7 +34,7 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		if v, ok := l.Price("aws", region, key); ok {
 			return v, nil
 		}
-		return 0, fmt.Errorf("no %s price for %s in %s (price data missing or out of date)", "aws", key, region)
+		return 0, fmt.Errorf("no aws price for %s in %s (price data missing or out of date)", key, region)
 	}
 	for _, r := range res {
 		line := Line{Address: r.Address, Type: r.Type}
@@ -49,43 +49,51 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		case freeAWS[r.Type]:
 			line.Note = "free"
 		case r.Type == "aws_instance":
+			if t := str(r.Values, "tenancy"); (t != "" && t != "default") || str(r.Values, "host_id") != "" {
+				return b, fmt.Errorf("%s: only shared tenancy is priced; declare aws_instance under aws.prices", r.Address)
+			}
 			p, err := get("ec2:" + str(r.Values, "instance_type"))
 			if err != nil {
 				return b, err
 			}
 			line.HourlyUSD = p
-			if rb := first(r.Values, "root_block_device"); rb != nil {
-				vt := str(rb, "volume_type")
-				if vt == "" {
-					vt = "gp3"
-				}
-				size := num(rb, "volume_size")
-				if size == 0 {
-					size = 8 // the smallest common AMI root; the real size is metered from the state
-				}
-				gb, err := get("ebs:" + vt)
-				if err != nil {
-					return b, err
-				}
-				line.HourlyUSD += size * gb / HoursPerMonth
+			rb := first(r.Values, "root_block_device")
+			if rb == nil {
+				rb = map[string]any{} // the root volume defaults to 8 GiB gp3; metering corrects it from the state
 			}
-		case r.Type == "aws_ebs_volume":
-			vt := str(r.Values, "type")
-			if vt == "" {
-				vt = "gp3"
+			size := num(rb, "volume_size")
+			if size == 0 {
+				size = 8
 			}
-			gb, err := get("ebs:" + vt)
+			gbp, err := ebsGB(get, r.Address, rb)
 			if err != nil {
 				return b, err
 			}
-			line.HourlyUSD = num(r.Values, "size") * gb / HoursPerMonth
+			line.HourlyUSD += size * gbp / HoursPerMonth
+			if v, _ := r.Values["associate_public_ip_address"].(bool); v {
+				ip, err := get("ipv4:hour")
+				if err != nil {
+					return b, err
+				}
+				line.HourlyUSD += ip
+			}
+		case r.Type == "aws_ebs_volume":
+			size := num(r.Values, "size")
+			if size <= 0 {
+				return b, fmt.Errorf("%s: size unknown at plan time; set size or declare a price for aws_ebs_volume", r.Address)
+			}
+			gb, err := ebsGB(get, r.Address, r.Values)
+			if err != nil {
+				return b, err
+			}
+			line.HourlyUSD = size * gb / HoursPerMonth
 		case r.Type == "aws_nat_gateway":
 			h, err := get("nat:hour")
 			if err != nil {
 				return b, err
 			}
 			line.HourlyUSD = h
-			if str(r.Values, "connectivity_type") != "private" {
+			if str(r.Values, "connectivity_type") != "private" && str(r.Values, "allocation_id") == "" { // with an allocation_id the aws_eip line counts the IP
 				ip, err := get("ipv4:hour")
 				if err != nil {
 					return b, err
@@ -117,6 +125,18 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 				return b, err
 			}
 			line.HourlyUSD = h
+			line.Note = "LCU usage not priced"
+			if internal, _ := r.Values["internal"].(bool); !internal {
+				ip, err := get("ipv4:hour")
+				if err != nil {
+					return b, err
+				}
+				subnets := 2 // at least two when unknown
+				if l, ok := r.Values["subnets"].([]any); ok && len(l) > 2 {
+					subnets = len(l)
+				}
+				line.HourlyUSD += float64(subnets) * ip
+			}
 		case r.Type == "aws_s3_bucket":
 			if gbs, ok := u["storage_gb"]; ok {
 				gb, err := get("s3:standard")
@@ -139,4 +159,20 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		return b, &Unpriced{Types: slices.Compact(missing)}
 	}
 	return b, nil
+}
+
+// ebsGB returns the GB-month price of a volume (or root_block_device) block. Provisioned performance isn't priced,
+// so io1/io2 and gp3 above its included 3000 IOPS / 125 MB/s fail closed unless the lab declares a price.
+func ebsGB(get func(string) (float64, error), addr string, v map[string]any) (float64, error) {
+	vt := str(v, "type")
+	if vt == "" {
+		vt = str(v, "volume_type")
+	}
+	if vt == "" {
+		vt = "gp3"
+	}
+	if vt == "io1" || vt == "io2" || (vt == "gp3" && (num(v, "iops") > 3000 || num(v, "throughput") > 125)) {
+		return 0, fmt.Errorf("%s: provisioned IOPS or throughput on %s isn't priced; declare a price under aws.prices", addr, vt)
+	}
+	return get("ebs:" + vt)
 }

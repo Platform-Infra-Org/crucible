@@ -43,6 +43,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== start stack"
+# Every run starts from the seed: a stack a KEEP=1 run left behind (and anything done in it by hand) is wiped first,
+# or the specs that expect a fresh trainee (locked modules, a first answer) fail.
+$compose down -v >/dev/null 2>&1 || true
 $compose up -d --build --wait
 
 echo "== end-to-end"

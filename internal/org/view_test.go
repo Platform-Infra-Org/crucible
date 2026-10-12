@@ -160,7 +160,7 @@ func TestTeamPageListsMembersByTag(t *testing.T) {
 	f := newAPI(t)
 	mustExec(t, f.s.DB, `INSERT INTO users (sub, email, name) VALUES ('s1', 'Senior@x', 'Sen Smith')`)
 	m, _, _ := f.teamJSON("new@x", "platform")
-	if got := fmt.Sprint(m["members"]); got != "[map[email:lead@x name: tag:leader] map[email:senior@x name:Sen Smith tag:senior] map[email:new@x name: tag:trainee]]" {
+	if got := fmt.Sprint(m["members"]); got != "[map[email:lead@x name: smith:map[level:0 title:Bellows Hand] tag:leader] map[email:senior@x name:Sen Smith smith:map[level:0 title:Bellows Hand] tag:senior] map[email:new@x name: smith:map[level:0 title:Bellows Hand] tag:trainee]]" {
 		t.Errorf("members = %s", got)
 	}
 	if m["can_edit_team"] != false || m["is_admin"] != false {
@@ -168,5 +168,53 @@ func TestTeamPageListsMembersByTag(t *testing.T) {
 	}
 	if m, _, _ := f.teamJSON("lead@x", "platform"); m["can_edit_team"] != true {
 		t.Error("the leader retags")
+	}
+}
+
+const journeyman = `{"level":2,"title":"Journeyman"}`
+const bellows = `{"level":0,"title":"Bellows Hand"}`
+
+func (f *apiFixture) giveSmith(email string) {
+	mustExec(f.t, f.s.DB, `INSERT INTO users (sub, email, name) VALUES ('sub-'||$1::text, $1, '')`, email)
+	mustExec(f.t, f.s.DB, `INSERT INTO smiths (user_id, xp, level, seen) SELECT id, 600, 2, true FROM users WHERE email = $1`, email)
+}
+
+func TestTeamPageCarriesSmithRanks(t *testing.T) {
+	f := newAPI(t)
+	f.giveSmith("senior@x")
+	m, code, body := f.teamJSON("lead@x", "platform")
+	if code != 200 {
+		t.Fatal(body)
+	}
+	got := map[string]string{}
+	for _, x := range m["members"].([]any) {
+		mm := x.(map[string]any)
+		b, _ := json.Marshal(mm["smith"])
+		got[mm["email"].(string)] = string(b)
+	}
+	if got["senior@x"] != journeyman || got["new@x"] != bellows {
+		t.Errorf("member smiths = %v", got)
+	}
+}
+
+func TestPeoplePickerCarriesSmithRanks(t *testing.T) {
+	f := newAPI(t)
+	f.giveSmith("senior@x")
+	w := f.do("senior@x", "GET", "/api/org/people", "")
+	var got struct {
+		People []struct {
+			Email string          `json:"email"`
+			Smith json.RawMessage `json:"smith"`
+		} `json:"people"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	by := map[string]string{}
+	for _, p := range got.People {
+		by[p.Email] = string(p.Smith)
+	}
+	if by["senior@x"] != journeyman || by["new@x"] != bellows {
+		t.Errorf("people smiths = %v", by)
 	}
 }

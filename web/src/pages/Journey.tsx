@@ -3,9 +3,10 @@ import { Link, useParams, useSearchParams } from 'react-router'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
 import type { Heat, JourneyRow, TeamSummary } from '../types'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
-import { Cells, Flags, Legend } from '../components/HeatMap'
+import { Cells, ClusterLabs, Flags, Legend } from '../components/HeatMap'
 import { Avatar } from '../components/Avatar'
 import { average, group, options, pick, type By, type Group } from '../lib/journey'
 import { toast } from '../lib/alerts'
@@ -100,13 +101,14 @@ function JourneyGroup({ g, by }: { g: Group; by: By }) {
   const first = g.rows[0]
   const look = g.rows.reduce((n, r) => n + r.flags.length, 0)
   return (
-    <section className="panel journey-group" aria-label={by === 'person' ? first.name || first.email : first.title}>
+    <section className="panel journey-group" aria-label={by === 'person' ? first.name || first.email : first.title}
+      data-testid={by === 'person' ? `journey-person-${first.email}` : undefined}>
       <div className="journey-group-head">
         {by === 'person' ? <Avatar user={{ name: first.name, email: first.email, avatar: first.avatar ?? '' }} /> : <span className="journey-mark" aria-hidden="true">⚒</span>}
         <div>
           <h2>{by === 'person' ? first.name || first.email : first.title}</h2>
           <span className="muted">
-            {by === 'person' ? `${first.email} · ${g.rows.length} ${g.rows.length === 1 ? 'training' : 'trainings'}` : `${g.rows.length} ${g.rows.length === 1 ? 'person' : 'people'}`}
+            {by === 'person' && first.smith && <><SmithMark smith={first.smith} /> · </>}{by === 'person' ? `${first.email} · ${g.rows.length} ${g.rows.length === 1 ? 'training' : 'trainings'}` : `${g.rows.length} ${g.rows.length === 1 ? 'person' : 'people'}`}
           </span>
         </div>
         <span className="spacer" />
@@ -123,16 +125,17 @@ function JourneyLine({ r, label }: { r: JourneyRow; label: string }) {
   return (
     <div className="journey-line" aria-label={`${r.name || r.email} in ${r.title}`} data-testid={`journey-${r.email}-${r.training}`}>
       <div className="journey-line-head">
-        <strong>{label}</strong>
+        <strong>{label}</strong>{label === (r.name || r.email) && <> <SmithMark smith={r.smith} /></>}
         <span className="muted">{n('forged')} complete, {n('glowing')} in progress, {n('cold')} not started</span>
       </div>
       <div className="journey-progress">
         <div className="molten-bar" role="progressbar" aria-label={`${label}: forged`} aria-valuenow={r.percent} aria-valuemin={0} aria-valuemax={100}>
           <div className="fill" style={{ width: `${r.percent}%` }} />
         </div>
-        <span>{r.percent}%</span>
+        <span>{r.percent}%{r.sword && <> <span className="badge">{r.sword.rank}</span></>}</span>
       </div>
       <Cells r={r} />
+      <ClusterLabs r={r} />
       <Flags flags={r.flags} />
     </div>
   )
@@ -164,7 +167,7 @@ function QuizReset({ rows }: { rows: JourneyRow[] }) {
   return (
     <section className="card" aria-label="Reset a quiz">
       <h2>Reset a quiz (admin)</h2>
-      <p className="muted">Forge ranks are never lowered by a reset.</p>
+      <p className="muted">Sword and smith ranks are never lowered by a reset.</p>
       <div className="row">
         <label>Trainee <select value={i} onChange={(e) => setI(Number(e.target.value))}>
           {rows.map((r, n) => <option key={r.email + r.training} value={n}>{r.name || r.email} · {r.title}</option>)}

@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -21,7 +22,7 @@ import (
 
 func (f *fx) request(t *testing.T, u *auth.User) *View {
 	t.Helper()
-	v, err := f.s.Start(context.Background(), u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(context.Background(), u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,5 +371,26 @@ func TestDecideRefusesWhilePausedAndWhenNoLongerEnrolled(t *testing.T) {
 	}
 	if _, err := f.s.Decide(ctx, f.leader, v.ID, false, ""); err != nil {
 		t.Fatalf("rejecting is still fine: %v", err)
+	}
+}
+
+func TestApprovalsCarryTheRequestersSmithRank(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.rates["first-heat"] = 0.5
+	f.request(t, f.u)
+	list, err := f.s.Approvals(ctx, f.leader)
+	if err != nil || len(list) != 1 {
+		t.Fatal(list, err)
+	}
+	if b, _ := json.Marshal(list[0]); !strings.Contains(string(b), `"requester_smith":{"level":0,"title":"Bellows Hand"}`) {
+		t.Fatalf("no smith row: %s", b)
+	}
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO smiths (user_id, xp, level, seen) VALUES ($1, 600, 2, true) ON CONFLICT (user_id) DO UPDATE SET xp = 600, level = 2`, f.u.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = f.s.Approvals(ctx, f.leader)
+	if b, _ := json.Marshal(list[0]); !strings.Contains(string(b), `"requester_smith":{"level":2,"title":"Journeyman"}`) {
+		t.Fatalf("with a smith row: %s", b)
 	}
 }

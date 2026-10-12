@@ -119,7 +119,7 @@ func TestKillSwitch(t *testing.T) {
 	if got.EndReason != "kill_switch" {
 		t.Fatalf("end reason %q", got.EndReason)
 	}
-	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab"); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "paused") {
+	if _, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{}); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "paused") {
 		t.Fatalf("requests blocked while paused: %v", err)
 	}
 	if ml, _ := f.s.ModuleLab(ctx, f.u, "forge", "forge-101", "02-first-lab"); ml.Blocked != "Labs are paused by an admin." {
@@ -148,7 +148,7 @@ func TestKillSwitchStopsProvisioningLab(t *testing.T) {
 	f := setup(t, true)
 	release := make(chan struct{})
 	f.run.provision = func() { <-release }
-	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab")
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-101", "02-first-lab", StartOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,8 @@ const (
 	TPTYResize = "pty_resize" // API → agent
 	TPTYClose  = "pty_close"  // both ways
 	TResult    = "result"     // agent → API: answer to a request with the same ID
-	THello     = "hello"      // agent → API right after connecting: Data = JSON array of lab IDs present on the laptop
+	THello     = "hello"      // agent → API right after connecting: Data = JSON array of lab IDs present on the laptop, Contexts = the kubeconfig's contexts
+	TContexts  = "contexts"   // agent → API whenever the kubeconfig's contexts change: Contexts
 )
 
 // MaxOutput caps script output kept and sent back (spec: 64 KiB).
@@ -35,6 +36,8 @@ type Msg struct {
 	ExitCode  int               `json:"exit_code"`
 	TimedOut  bool              `json:"timed_out,omitempty"`
 	Error     string            `json:"error,omitempty"`
+	Cluster   *ClusterSpec      `json:"cluster,omitempty"`  // provision of a cluster lab
+	Contexts  []KubeContext     `json:"contexts,omitempty"` // hello and contexts: the agent's kubeconfig contexts
 }
 
 // Capped keeps the first MaxOutput bytes written to it and silently drops the rest. Safe for concurrent writers
@@ -58,3 +61,30 @@ func (c *Capped) Bytes() []byte {
 	defer c.mu.Unlock()
 	return bytes.Clone(c.buf.Bytes())
 }
+
+// KubeContext is one context of the agent's kubeconfig: its name and its API server's host. Never credentials.
+type KubeContext struct {
+	Name   string `json:"name"`
+	Server string `json:"server"`
+}
+
+// Chart is one Helm chart a cluster lab installs, in order.
+type Chart struct {
+	Name     string `json:"name"`             // the release name
+	Path     string `json:"path"`             // a folder in the lab bundle
+	Values   string `json:"values,omitempty"` // a file in the lab bundle
+	TimeoutS int64  `json:"timeout_s"`        // helm --wait --timeout
+}
+
+// ClusterSpec is what a cluster lab's provision carries besides its bundle.
+type ClusterSpec struct {
+	Context     string  `json:"context"`
+	Charts      []Chart `json:"charts"`
+	ClusterWide bool    `json:"cluster_wide"`
+	Toolbox     string  `json:"toolbox"` // the toolbox image the server pins
+}
+
+// ClusterScopedKinds are the kinds a chart may create only when its lab declares cluster_wide.
+var ClusterScopedKinds = map[string]bool{"CustomResourceDefinition": true, "ClusterRole": true, "ClusterRoleBinding": true,
+	"Namespace": true, "StorageClass": true, "PriorityClass": true, "MutatingWebhookConfiguration": true,
+	"ValidatingWebhookConfiguration": true, "PersistentVolume": true, "IngressClass": true, "APIService": true}

@@ -17,6 +17,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 // Spend is month-to-date lab spend for a team or one program: estimates, with Cost Explorer actuals swapped in for
@@ -93,27 +94,28 @@ type ScheduleInfo struct {
 
 // Approval is one pending request with what an approver needs to decide (spec §9.1.3).
 type Approval struct {
-	ID            string       `json:"id"`
-	Requester     string       `json:"requester"`
-	RequesterName string       `json:"requester_name"`
-	Team          string       `json:"team"`
-	Training      string       `json:"training"`
-	Module        string       `json:"module"`
-	LabTitle      string       `json:"lab_title"`
-	Runtime       string       `json:"runtime"`
-	HourlyUSD     float64      `json:"hourly_usd"`
-	EstimateUSD   float64      `json:"estimate_usd"`
-	TTLS          int          `json:"ttl_s"`
-	Tier          string       `json:"tier"`
-	OverCap       bool         `json:"over_cap"`
-	RequestedAt   time.Time    `json:"requested_at"`
-	EscalateAt    *time.Time   `json:"escalate_at,omitempty"`
-	TeamSpend     Spend        `json:"team_spend"`
-	ProgramSpend  Spend        `json:"program_spend"`
-	Recent        []RecentLab  `json:"recent"`
-	Schedule      ScheduleInfo `json:"schedule"`
-	Kind          string       `json:"kind"` // request | extension (spec §8.6)
-	ExtendUntil   *time.Time   `json:"extend_until,omitempty"`
+	ID             string       `json:"id"`
+	Requester      string       `json:"requester"`
+	RequesterName  string       `json:"requester_name"`
+	RequesterSmith smith.Ref    `json:"requester_smith"`
+	Team           string       `json:"team"`
+	Training       string       `json:"training"`
+	Module         string       `json:"module"`
+	LabTitle       string       `json:"lab_title"`
+	Runtime        string       `json:"runtime"`
+	HourlyUSD      float64      `json:"hourly_usd"`
+	EstimateUSD    float64      `json:"estimate_usd"`
+	TTLS           int          `json:"ttl_s"`
+	Tier           string       `json:"tier"`
+	OverCap        bool         `json:"over_cap"`
+	RequestedAt    time.Time    `json:"requested_at"`
+	EscalateAt     *time.Time   `json:"escalate_at,omitempty"`
+	TeamSpend      Spend        `json:"team_spend"`
+	ProgramSpend   Spend        `json:"program_spend"`
+	Recent         []RecentLab  `json:"recent"`
+	Schedule       ScheduleInfo `json:"schedule"`
+	Kind           string       `json:"kind"` // request | extension (spec §8.6)
+	ExtendUntil    *time.Time   `json:"extend_until,omitempty"`
 }
 
 func scheduleInfo(p *config.Platform, team, training string, now time.Time) ScheduleInfo {
@@ -234,6 +236,17 @@ func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, erro
 		a.Kind, a.ExtendUntil, a.EstimateUSD, a.Tier, a.OverCap, a.EscalateAt = "extension", inst.ExtUntil, inst.ExtEstimateUSD, inst.ExtTier, over, nil
 		a.RequestedAt = *inst.ExtRequestedAt
 		out = append(out, *a)
+	}
+	emails := make([]string, len(out))
+	for i, a := range out {
+		emails[i] = a.Requester
+	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].RequesterSmith = refs.Of(out[i].Requester)
 	}
 	return out, nil
 }

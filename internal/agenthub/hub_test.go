@@ -213,3 +213,25 @@ func TestDropDisconnectsWithTheStopCode(t *testing.T) {
 	}
 	waitFor(t, func() bool { return !h.Online(7) })
 }
+
+func TestHubKeepsTheAgentsContexts(t *testing.T) {
+	h := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, server(t, h), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(m ap.Msg) {
+		b, _ := json.Marshal(m)
+		if err := ws.Write(ctx, websocket.MessageText, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(ap.Msg{Type: ap.THello, Data: []byte("[]"), Contexts: []ap.KubeContext{{Name: "kind-dev", Server: "127.0.0.1:1"}}})
+	waitFor(t, func() bool { return len(h.Contexts(7)) == 1 })
+	send(ap.Msg{Type: ap.TContexts, Contexts: []ap.KubeContext{{Name: "a"}, {Name: "b"}}})
+	waitFor(t, func() bool { return len(h.Contexts(7)) == 2 })
+	_ = ws.CloseNow()
+	waitFor(t, func() bool { return len(h.Contexts(7)) == 0 && !h.Online(7) })
+}

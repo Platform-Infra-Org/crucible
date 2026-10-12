@@ -52,7 +52,14 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 	r.Post(mod, func(w http.ResponseWriter, r *http.Request) {
-		v, err := s.Start(r.Context(), user(r), p(r, "team"), p(r, "training"), p(r, "module"))
+		var opt StartOptions
+		if r.ContentLength != 0 {
+			if err := httpx.Read(r, &opt); err != nil {
+				httpx.Error(w, err)
+				return
+			}
+		}
+		v, err := s.Start(r.Context(), user(r), p(r, "team"), p(r, "training"), p(r, "module"), opt)
 		reply(w, v, err)
 	})
 	r.Get("/api/approvals", func(w http.ResponseWriter, r *http.Request) {

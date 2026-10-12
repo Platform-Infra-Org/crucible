@@ -270,6 +270,7 @@ a.button-link:hover { border-color: var(--accent); }
 .badge.complete { color: var(--ok); }
 .badge.in_progress { color: var(--accent-2); }
 .badge.warn { color: var(--accent-2); }
+.badge.failing { color: var(--danger); }
 
 .prose { max-width: 72ch; }
 .prose pre { background: var(--surface-2); padding: 0.75rem; border-radius: 8px; overflow: auto; }
@@ -327,6 +328,13 @@ a.button-link:hover { border-color: var(--accent); }
 .lab-head h1 { font-size: 1.1rem; margin: 0; }
 .lab-head button { white-space: nowrap; } /* "Hide tasks", "End lab" stay one line; the note beside them wraps instead */
 .lab-body { display: grid; min-height: 0; }
+/* A cluster lab's start panel: the context picker and the cluster-wide consent. */
+.stack.cluster-pick, p.cluster-pick { margin: 0.75rem auto 1.25rem; width: min(100%, 32rem); text-align: left; }
+.stack.cluster-pick { grid-template-columns: minmax(0, 1fr); } /* a long context name wraps in the select instead of widening the page */
+.cluster-pick select { width: 100%; min-width: 0; }
+/* A cluster lab's releases and what is not ready yet. */
+.release-health ul ul { margin: 0.25rem 0 0.5rem 1rem; }
+.release-health > ul { list-style: none; padding: 0; margin: 0; }
 .tasks { overflow: auto; padding: 1rem 1.25rem; background: var(--surface); position: relative; }
 .task-pips { display: flex; gap: 0.4rem; list-style: none; padding: 0; margin: 0 0 1rem; }
 .pip { width: 2.2rem; height: 2.2rem; border-radius: 50%; padding: 0; }
@@ -436,6 +444,7 @@ meter { width: 8rem; vertical-align: middle; }
 .heat-cells.calm .heat-forged { box-shadow: none; }
 .heat-summary { margin: 0; }
 .flags { list-style: none; padding: 0; margin: 0; }
+.cluster-labs { list-style: none; padding: 0; margin: 0.25rem 0; }
 .flags .warn { color: var(--text); }
 
 /* the team Journey: grouped by person or by training, one panel each, a molten bar per training a person takes */
@@ -799,3 +808,25 @@ meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--danger); }
 .sheet-head { margin: 0 0 0.25rem; }
 .sheet-head h2 { margin: 0; }
 .sheet form.stack { margin-top: 0.5rem; }
+/* A person's smith rank beside their name: the hammer's metal deepens with the rank, the title says it in words. */
+.smith-mark { display: inline-flex; gap: 0.25em; align-items: center; font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+.smith-mark > span[aria-hidden] { color: color-mix(in srgb, var(--accent) 35%, var(--muted)); }
+.smith-mark.l0 > span[aria-hidden] { color: var(--muted); }
+.smith-mark.l2 > span[aria-hidden] { color: color-mix(in srgb, var(--accent) 60%, var(--muted)); }
+.smith-mark.l3 > span[aria-hidden] { color: var(--accent); }
+.smith-mark.l4 > span[aria-hidden] { color: var(--accent-2); }
+.smith-mark.l5 > span[aria-hidden] { color: var(--spark); text-shadow: 0 0 6px var(--glow); }
+/* Your swords on the Hearth: one line per training. */
+.sword-list { list-style: none; padding: 0; margin: 0 0 0.75rem; display: grid; gap: 0.35rem; }
+/* A training's own sword, above its progress bar. */
+.sword-line { margin: 0 0 0.5rem; color: var(--muted); }
+/* The experience meter inside the user card. */
+.user-card .molten-bar { margin-top: 0.6rem; }
+/* On the craft card the smith rank is the headline, not a footnote. */
+.rank-name .smith-mark { font-size: inherit; color: var(--text); }
+/* Phone width: the user card spans the page gutter instead of hanging off a button that may sit at the left. */
+@media (max-width: 640px) {
+  .nav { position: relative; }
+  .user-menu { position: static; }
+  .user-card { left: 1rem; right: 1rem; width: auto; }
+}

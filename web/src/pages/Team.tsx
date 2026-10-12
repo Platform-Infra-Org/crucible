@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-r
 import { api, ApiError } from '../api'
 import { useFetch } from '../useFetch'
 import type { Member, People, Tag, TeamSummary, TeamView } from '../types'
+import { SmithMark } from '../components/SmithMark'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { useMe } from '../me'
@@ -166,7 +167,7 @@ function Roster({ team, onSaved }: { team: TeamView; onSaved: () => void }) {
         <tbody>
           {rows.map((m) => (
             <tr key={m.email}>
-              <td>{m.name ? <><strong>{m.name}</strong> <span className="muted">{m.email}</span></> : m.email}</td>
+              <td>{m.name ? <><strong>{m.name}</strong> <span className="muted">{m.email}</span></> : m.email} <SmithMark smith={m.smith} /></td>
               <td><TagPicker member={m} editable={team.can_edit_team} busy={busy} onPick={(t) => setTag(m, t)} /></td>
               {team.is_admin && (
                 <td className="actions">

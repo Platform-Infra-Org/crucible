@@ -15,7 +15,7 @@ const prog = (over: Partial<ProgramConfig> = {}): ProgramConfig => ({
 let page: TrainingsAdmin
 const me = { can_edit_content: false }
 const other: Record<string, unknown> = {
-  '/api/org/people': { people: [{ email: 'guest@x', name: '', team: '', tag: '' }, { email: 'a@x', name: 'Ann', team: 'forge', tag: 'trainee' }],
+  '/api/org/people': { people: [{ email: 'guest@x', name: '', team: '', tag: '' }, { email: 'a@x', name: 'Ann', team: 'forge', tag: 'trainee', smith: { level: 3, title: 'Smith' } }],
     groups: ['all', 'all_trainees', 'forge', 'forge_seniors'] },
   '/api/content': [{ id: 'forge-101', title: 'Forge 101' }],
   '/api/edits': [{ id: 7, training: 'forge-101', title: 'Sharper intro', author: 'l@x', status: 'pending' },
@@ -38,11 +38,13 @@ describe('manage trainings', () => {
     expect(h).toContain('<dt>Branch, tag or commit</dt><dd><code>main</code></dd><dt>Folder</dt><dd>the repository root</dd>')
     expect(h).toContain('forge-101 · forge · 3 taking it')
     expect(h).toContain('aria-label="Remove guest@x from participants"')
+    expect(h).toContain('>Ann · Smith · trainee on forge</option>') // an option holds text only, so the title is in words
+    expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
     expect(h).toContain('aria-label="Remove all_trainees from participants"')
     expect(h).toContain('title="the trainees of every team"') // a group says who it is
     expect(h).toContain('Now 3 people.')
     expect(h).toContain('<option value="forge_seniors">the seniors of forge</option>')
-    expect(h).toContain('<option value="a@x">Ann · trainee on forge</option>')
+    expect(h).toContain('<option value="a@x">Ann · Smith · trainee on forge</option>')
     expect(h).toContain('+ New training')
     expect(h).toMatch(/<button type="button" class="ghost danger-text">Delete training<\/button>/)
     expect(h).not.toContain('Give to this team') // only admins move a training

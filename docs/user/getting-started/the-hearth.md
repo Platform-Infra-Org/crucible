@@ -12,8 +12,9 @@ The Hearth is your home in Crucible: everything you are working on, and how far 
 
 - **Your trainings.** One card per training you take, with its heat bar: how much of it you have forged.
   Open a card to see its modules.
-- **Your rank.** Ore to Masterwork, with the next rank and how far away it is. A rank you have earned is never lost.
-  Badges for the trainings you have finished sit under it.
+- **Your craft** (your smith rank and experience) and **Your swords** (one per training, Ore to Masterwork, with the
+  next rank and how far away it is). A rank you have earned is never lost. Badges for the trainings you have
+  finished sit under them.
 - **Content unavailable.** If a card says so, the training's content can't be read right now. Your progress is safe;
   try again later or tell your team's leaders.
 

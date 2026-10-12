@@ -275,7 +275,7 @@ func TestWholeLabScoreWinsOverLaterOverride(t *testing.T) {
 	}
 }
 
-func TestClusterLabInFlaggedProgramCompletesAtOnce(t *testing.T) {
+func TestClusterLabInFlaggedProgramGoesToAScorer(t *testing.T) {
 	ctx := context.Background()
 	f := setupSelfReport(t)
 	f.s.Runners["cluster"] = f.run
@@ -283,10 +283,10 @@ func TestClusterLabInFlaggedProgramCompletesAtOnce(t *testing.T) {
 	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET runtime = 'cluster' WHERE id = $1`, v.ID); err != nil {
 		t.Fatal(err)
 	}
-	if v = f.doFirstLab(t, v.ID); !v.Complete || v.SelfReported {
-		t.Fatalf("cluster results are not self-reported: %+v", v)
+	if v = f.doFirstLab(t, v.ID); v.Complete || !v.SelfReported {
+		t.Fatalf("cluster results are self-reported and wait for a scorer: %+v", v)
 	}
-	if st, _ := f.labItem(t); st != "complete" || f.labSub(t) != nil {
+	if st, _ := f.labItem(t); st != "pending_review" || f.labSub(t) == nil {
 		t.Fatalf("cluster lab: %q", st)
 	}
 }

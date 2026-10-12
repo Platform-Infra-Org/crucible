@@ -46,18 +46,17 @@ test('an admin registers a training for a team and gives its roles to groups and
   // An admin adds the newcomer to The Forge as a trainee.
   await admin.goto('/teams/forge')
   await admin.getByLabel('Person to add').fill(newcomer)
-  await admin.getByLabel('Their tag').selectOption('trainee')
+  await admin.getByLabel('Their tag', { exact: true }).selectOption('trainee') // each person's tag button says "Change their tag"
   await admin.getByRole('button', { name: 'Add to team' }).click()
-  await expect(admin.getByRole('list', { name: 'Trainees' })).toContainText(newcomer)
+  await expect(admin.getByRole('button', { name: `${newcomer} is a trainee. Change their tag` })).toBeVisible()
   await expect(admin.getByRole('link', { name: 'Manage' }).first()).toBeVisible()
 
-  // The leader picks the newcomer from the team and makes them a junior.
+  // The leader finds the newcomer in the team's list and makes them a junior, choosing the tag in place.
   const leader = await login(browser, 'leader')
   await leader.goto('/teams/forge')
-  await leader.getByLabel('Team member').fill(newcomer)
-  await leader.getByLabel('New tag').selectOption('junior')
-  await leader.getByRole('button', { name: 'Set tag' }).click()
-  await expect(leader.getByRole('list', { name: 'Juniors' })).toContainText(newcomer)
+  await leader.getByRole('button', { name: `${newcomer} is a trainee. Change their tag` }).click()
+  await leader.getByRole('menuitemradio', { name: 'junior' }).click()
+  await expect(leader.getByRole('button', { name: `${newcomer} is a junior. Change their tag` })).toBeVisible()
   await expect(leader.getByRole('button', { name: 'Add to team' })).toHaveCount(0) // only admins add people
 
   // The trainee finds the new training on the Hearth and reads it.

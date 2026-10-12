@@ -140,7 +140,7 @@ body.hide-done .item.done { display: none; }
     <span class="eyebrow">Proving run · every capability, end to end</span>
     <h1>Crucible Test Guide</h1>
     <p>Work through Crucible from a fresh local stack to labs in a real AWS account: creating trainings, laptop labs, cluster labs on
-      your own machine and cloud labs. Each step says how to test it and what you should see. Your ticks stay in this browser.</p>
+      a cluster of your own and cloud labs. Each step says how to test it and what you should see. Your ticks stay in this browser.</p>
     <div class="meter-row">
       <div class="meter" role="progressbar" aria-label="Checks done" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="bar"></span></div>
       <span class="meter-label" id="overall">0 of 0 checked</span>
@@ -172,10 +172,10 @@ body.hide-done .item.done { display: none; }
         <div class="caps">
           <div class="cap"><span class="who">Trainees</span><h3>Learn</h3>
             <ul>
-              <li>The Hearth: your trainings, progress, rank and badges</li>
+              <li>The Hearth: your trainings, progress, your craft (smith rank), your swords and badges</li>
               <li>Readings, then quizzes scored at once (choice, exact, pattern, order, match) or by a person (written, upload, live sign-off)</li>
               <li>Modules in order or free, as the training sets</li>
-              <li>Ranks from Ore to Masterwork, which only ever rise; a badge per finished training</li>
+              <li>A sword per training, from Ore to Masterwork, and a smith rank from experience, from Bellows Hand to Grandmaster; both only ever rise; a badge per finished training</li>
             </ul></div>
           <div class="cap"><span class="who">Trainees</span><h3>Labs</h3>
             <ul>
@@ -217,7 +217,7 @@ body.hide-done .item.done { display: none; }
           <div class="rt"><h3>Laptop labs</h3><span class="tag">runtime: local</span>
             <p>The trainee runs <code>crucible-agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
           <div class="rt cluster"><h3>Cluster labs</h3><span class="tag">runtime: cluster</span>
-            <p>Each lab gets its own Kubernetes namespace on Crucible's cluster: one pod (sysbox in production) runs the Compose file, with a quota and a deny-by-default network policy. Nothing to install. Priced by the platform's hourly rate; unset means unavailable, never free.</p></div>
+            <p>The trainee's agent installs the lab's Helm charts into their own namespace on a cluster they pick from their kubeconfig (kind on the laptop, or a remote one). Terminals and scripts run in a toolbox container. Free, and results are self-reported.</p></div>
           <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: aws</span>
             <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced with infracost, and always approved by a person. Explained in full below.</p></div>
         </div>
@@ -333,9 +333,6 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
           <li class="item" data-id="cfg-tiers"><label><input type="checkbox" id="c-cfg-tiers"><span class="t">Cost tiers</span></label>
             <div class="body"><ol class="how"><li>Set auto-approve 0, program approver 5, admin above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
               <p class="expect"><b>Expect</b>the out-of-order save is refused with the reason; with tiers cleared, a banner warns that labs costing money can't be approved.</p></div></li>
-          <li class="item" data-id="cfg-cluster-rate"><label><input type="checkbox" id="c-cfg-cluster-rate"><span class="t">Cluster lab rate</span></label>
-            <div class="body"><p>Clear <b>Cluster lab rate</b>, then set it to 0.5.</p>
-              <p class="expect"><b>Expect</b>empty makes cluster labs unavailable, never free; a value prices them per hour.</p></div></li>
           <li class="item" data-id="cfg-schedule"><label><input type="checkbox" id="c-cfg-schedule"><span class="t">Lab schedules</span></label>
             <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a program that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
               <p class="expect"><b>Expect</b>outside the window the lab page says when the next one opens; the delete is refused while in use.</p></div></li>
@@ -343,8 +340,8 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
             <div class="body"><p>With one admin, note the warning. Add <code>senior@crucible.local</code>, then remove them again.</p>
               <p class="expect"><b>Expect</b>the warning goes once there are two; the last admin can't be removed.</p></div></li>
           <li class="item" data-id="cfg-ranks"><label><input type="checkbox" id="c-cfg-ranks"><span class="t">Ranks, quotes and default theme</span></label>
-            <div class="body"><p>Change a rank threshold, edit the loading quotes, change the default theme.</p>
-              <p class="expect"><b>Expect</b>quotes appear on the Hearth and loading screens; a person who never picked a theme gets the new default.</p></div></li>
+            <div class="body"><p>In Settings, change a threshold under <b>Sword ranks</b> (% of a training) and one under <b>Smith ranks</b> (experience); edit the loading quotes, change the default theme.</p>
+              <p class="expect"><b>Expect</b>each threshold must be higher than the one before; quotes appear on the Hearth and loading screens; a person who never picked a theme gets the new default.</p></div></li>
           <li class="item" data-id="cfg-status"><label><input type="checkbox" id="c-cfg-status"><span class="t">Forge Status and the audit trail</span></label>
             <div class="body"><p>Administrator → Forge Status.</p>
               <p class="expect"><b>Expect</b>every training synced with a head commit and no problems; your changes above listed under <b>Recent privileged actions</b>.</p></div></li>
@@ -458,8 +455,8 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>As senior: score one, return the other with feedback; mark a live sign-off passed.</p>
               <p class="expect"><b>Expect</b>the trainee sees the feedback; a returned answer can be sent again; a scored one is final (an admin can reset it from the Journey).</p></div></li>
           <li class="item" data-id="ln-rank"><label><input type="checkbox" id="c-ln-rank"><span class="t">Ranks and badges</span></label>
-            <div class="body"><p>Finish Forge 102 as trainee.</p>
-              <p class="expect"><b>Expect</b>a badge on the Hearth and a rank-up moment when a threshold is passed; ranks never drop.</p></div></li>
+            <div class="body"><p>Finish Forge 102 as trainee. Then sign in as leader and open Team and Journey.</p>
+              <p class="expect"><b>Expect</b>the Hearth shows <b>Your craft</b> (smith rank and experience) and <b>Your swords</b>, with a badge for Forge 102; the training page reads "Your sword: …"; the user card (your name, top right) shows the smith title and its meter; a rank-up moment on the Hearth when a sword or the smith rank rises, and a new smith rank also sends the rank-up notification. The leader sees the trainee's smith mark on Team and Journey, and the sword rank on each Journey row. Ranks never drop.</p></div></li>
           <li class="item" data-id="ln-mentor"><label><input type="checkbox" id="c-ln-mentor"><span class="t">Journey</span></label>
             <div class="body"><p>As leader and as senior: the team's Journey.</p>
               <p class="expect"><b>Expect</b>the heat map for the team's people, and flags for someone stuck or quiet. There is no <b>Mentor</b> link anywhere.</p></div></li>
@@ -497,31 +494,34 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
         </ul>
       </section>
 
-      <section class="phase" id="p-cluster" data-title="Cluster labs on your machine">
-        <div class="phase-head"><h2>8 · Cluster labs on your machine</h2><span class="count"></span></div>
-        <p class="lede">A local kind cluster stands in for k3s. Docker Desktop can't run sysbox, so lab pods are privileged Docker-in-Docker here; everything else is real: namespaces, quotas, network policy, exec terminals and the chart's RBAC.</p>
+      <section class="phase" id="p-cluster" data-title="Cluster labs on your cluster">
+        <div class="phase-head"><h2>8 · Cluster labs on your cluster</h2><span class="count"></span></div>
+        <p class="lede">A throwaway kind cluster with its own kubeconfig file stands in for yours. Crucible never touches <code>~/.kube/config</code> here, and nothing is priced.</p>
         <ul class="items">
           <li class="item" data-id="cl-run"><label><input type="checkbox" id="c-cl-run"><span class="t">Run the cluster check and keep it</span></label>
             <div class="body"><p>Needs <code>kind</code> 0.24 or later, <code>kubectl</code> and <code>helm</code>. It uses its own kubeconfig in <code>.local/kind</code> and never touches <code>~/.kube/config</code>.</p>
               <div class="cmd"><pre><code>KEEP=1 KEYCLOAK_PORT=8081 make cluster-check</code></pre></div>
-              <p class="expect"><b>Expect</b>it ends with <i>Cluster check passed. The crucible holds.</i> and leaves the kind cluster <code>crucible-m4</code> and the stack running with cluster labs and AWS dry run on.</p></div></li>
-          <li class="item" data-id="cl-price"><label><input type="checkbox" id="c-cl-price"><span class="t">Price and approval</span></label>
-            <div class="body"><p>With a cluster rate set, open Forge 101 → <i>Into the Crucible</i> as trainee. Then raise the rate above the auto-approve tier.</p>
-              <p class="expect"><b>Expect</b>the estimate on the lab page; under auto-approve it starts at once, above it goes to the approver.</p></div></li>
+              <p class="expect"><b>Expect</b>it ends with <i>Cluster check passed. The crucible holds.</i> and leaves the stack running with AWS dry run on (used in 9a).</p></div></li>
+          <li class="item" data-id="cl-kind"><label><input type="checkbox" id="c-cl-kind"><span class="t">Make a throwaway cluster</span></label>
+            <div class="body"><p>The agent makes one itself; it needs only Docker.</p>
+              <div class="cmd"><pre><code>crucible-agent cluster up --name crucible-try</code></pre></div>
+              <p>Then run the agent, with the token from <b>Connect your laptop</b>. No <code>--kubeconfig</code> is needed: it also reads <code>~/.crucible/kubeconfig</code>, where the cluster's kubeconfig went.</p>
+              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; crucible-agent --server http://localhost:8080</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Ready. Your agent sees it as kind-crucible-try</i>; <code>~/.kube/config</code> is unchanged; the Connect page lists the context <code>kind-crucible-try</code> without any credentials. Running <code>cluster up</code> again says the cluster already exists.</p></div></li>
+          <li class="item" data-id="cl-pick"><label><input type="checkbox" id="c-cl-pick"><span class="t">Pick the cluster</span></label>
+            <div class="body"><p>As trainee open Forge 101 → <i>Into the Crucible</i>. Under <b>Run it on</b> choose <code>kind-crucible-try</code>, then <b>Ignite the forge</b>.</p>
+              <p class="expect"><b>Expect</b>no estimate and no approval: it starts at once, free.</p></div></li>
           <li class="item" data-id="cl-lab"><label><input type="checkbox" id="c-cl-lab"><span class="t">Work the lab</span></label>
-            <div class="body"><p><b>Ignite the forge</b>: terminals <code>shell</code> and <code>web</code>; task 2's setup breaks nginx for you to fix.</p>
-              <p class="expect"><b>Expect</b>nothing to install; checks run on the server, so results are not self-reported.</p></div></li>
-          <li class="item" data-id="cl-inspect"><label><input type="checkbox" id="c-cl-inspect"><span class="t">Inspect the namespace</span></label>
-            <div class="body"><div class="cmd"><pre><code>export KUBECONFIG=$PWD/.local/kind/admin.kubeconfig
-kubectl get ns -l crucible.io/lab
-kubectl -n lab-&lt;id&gt; get pod,resourcequota,networkpolicy</code></pre></div>
-              <p class="expect"><b>Expect</b>one <code>lab-&lt;id&gt;</code> namespace with the <code>lab</code> pod running, a quota and the network policy. The script already proved the pod can't reach the metadata service, the Kubernetes API or other pods.</p></div></li>
+            <div class="body"><p>In the <code>shell</code> terminal scale the <code>forge</code> deployment to two replicas and choose <b>Check</b>. Task 2's setup breaks the image: fix it with <code>kubectl set image</code> and check again.</p>
+              <p class="expect"><b>Expect</b>the panel <b>On your cluster</b> shows the release as <i>Starting</i> or <i>Failing</i> while broken and <i>Ready</i> once fixed; both tasks pass. Results are marked self-reported.</p></div></li>
           <li class="item" data-id="cl-end"><label><input type="checkbox" id="c-cl-end"><span class="t">End it</span></label>
-            <div class="body"><p><b>End lab</b>, then list the lab namespaces again.</p>
-              <p class="expect"><b>Expect</b>the namespace is gone within a minute.</p></div></li>
+            <div class="body"><p><b>End lab</b>, then list the namespaces on the throwaway cluster.</p>
+              <div class="cmd"><pre><code>kubectl --kubeconfig ~/.crucible/kubeconfig --context kind-crucible-try get ns</code></pre></div>
+              <p class="expect"><b>Expect</b>no <code>lab-&lt;id&gt;</code> namespace is left.</p></div></li>
           <li class="item" data-id="cl-clean"><label><input type="checkbox" id="c-cl-clean"><span class="t">Clean up</span></label>
-            <div class="body"><div class="cmd"><pre><code>kind delete cluster --name crucible-m4</code></pre></div>
-              <p class="expect"><b>Expect</b>only <code>crucible-m4</code> is removed. Leave any other kind cluster (such as <code>platform</code>) alone.</p></div></li>
+            <div class="body"><div class="cmd"><pre><code>crucible-agent cluster down --name crucible-try
+kind delete cluster --name crucible-m4</code></pre></div>
+              <p class="expect"><b>Expect</b><i>Removed the cluster crucible-try from this laptop.</i>, and <code>~/.crucible/kubeconfig</code> is gone if it held nothing else. Only those two clusters are removed. Leave any other kind cluster (such as <code>platform</code>) alone; a second <code>cluster down</code> says there is no such cluster.</p></div></li>
         </ul>
       </section>
 

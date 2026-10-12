@@ -30,6 +30,7 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
+	"crucible/internal/smith"
 )
 
 const (
@@ -53,30 +54,31 @@ type File struct {
 }
 
 type Submission struct {
-	ID        int64      `json:"id"`
-	UserID    int64      `json:"-"`
-	Email     string     `json:"trainee"`
-	Name      string     `json:"trainee_name"`
-	Team      string     `json:"team"`
-	Training  string     `json:"training"`
-	Module    string     `json:"module"`
-	SHA       string     `json:"-"`
-	Kind      string     `json:"kind"`
-	Item      string     `json:"item"`
-	LabID     string     `json:"lab_id,omitempty"`
-	QType     string     `json:"type"`
-	Prompt    string     `json:"prompt"`
-	Rubric    string     `json:"-"` // never serialized: scorers get ScorerView(), trainees Feedback()
-	MaxPoints float64    `json:"max_points"`
-	Answer    string     `json:"answer"`
-	Files     []File     `json:"files"`
-	Keys      []string   `json:"-"`
-	Status    string     `json:"status"`
-	Points    float64    `json:"points"`
-	Note      string     `json:"feedback"` // the scorer's written feedback
-	ScoredBy  string     `json:"scored_by,omitempty"`
-	ScoredAt  *time.Time `json:"scored_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID           int64      `json:"id"`
+	UserID       int64      `json:"-"`
+	Email        string     `json:"trainee"`
+	Name         string     `json:"trainee_name"`
+	TraineeSmith smith.Ref  `json:"trainee_smith"`
+	Team         string     `json:"team"`
+	Training     string     `json:"training"`
+	Module       string     `json:"module"`
+	SHA          string     `json:"-"`
+	Kind         string     `json:"kind"`
+	Item         string     `json:"item"`
+	LabID        string     `json:"lab_id,omitempty"`
+	QType        string     `json:"type"`
+	Prompt       string     `json:"prompt"`
+	Rubric       string     `json:"-"` // never serialized: scorers get ScorerView(), trainees Feedback()
+	MaxPoints    float64    `json:"max_points"`
+	Answer       string     `json:"answer"`
+	Files        []File     `json:"files"`
+	Keys         []string   `json:"-"`
+	Status       string     `json:"status"`
+	Points       float64    `json:"points"`
+	Note         string     `json:"feedback"` // the scorer's written feedback
+	ScoredBy     string     `json:"scored_by,omitempty"`
+	ScoredAt     *time.Time `json:"scored_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
 }
 
 // Feedback is what trainees see of their own submission. It deliberately has no rubric (an answer key).
@@ -259,7 +261,11 @@ func collectSubs(rows pgx.Rows, err error) ([]*Submission, error) {
 }
 
 func (s *Service) get(ctx context.Context, id int64) (*Submission, error) {
-	return scanSub(s.DB.QueryRow(ctx, `SELECT `+subCols+subFrom+`WHERE s.id = $1`, id))
+	x, err := scanSub(s.DB.QueryRow(ctx, `SELECT `+subCols+subFrom+`WHERE s.id = $1`, id))
+	if err != nil {
+		return nil, err
+	}
+	return x, s.addSmiths(ctx, []*Submission{x})
 }
 
 // Latest returns the newest submission per item of one kind for a trainee's module.

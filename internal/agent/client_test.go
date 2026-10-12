@@ -2,11 +2,14 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"crucible/internal/agent"
 	"crucible/internal/agenthub"
 	ap "crucible/internal/agentproto"
+	"github.com/coder/websocket"
 )
 
 type echo struct {
@@ -50,12 +54,19 @@ type fakeExec struct {
 	mu              sync.Mutex
 	provisioned     map[string]string
 	destroyAllCalls int
+	clusterSpecs    []ap.ClusterSpec
 }
 
 func (f *fakeExec) Provision(_ context.Context, labID string, _ []byte, compose string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.provisioned[labID] = compose
+	return nil
+}
+func (f *fakeExec) ProvisionCluster(_ context.Context, labID string, _ []byte, s ap.ClusterSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clusterSpecs = append(f.clusterSpecs, s)
 	return nil
 }
 func (f *fakeExec) Destroy(context.Context, string) error { return nil }
@@ -154,12 +165,17 @@ func TestClientServesHubRequests(t *testing.T) {
 
 func startAgent(t *testing.T, fx *fakeExec) (*agenthub.Hub, func()) {
 	t.Helper()
+	return startAgentKube(t, fx, nil)
+}
+
+func startAgentKube(t *testing.T, fx *fakeExec, kube *agent.Watcher) (*agenthub.Hub, func()) {
+	t.Helper()
 	hub := agenthub.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hub.Serve(w, r, 1) }))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: fx, Log: slog.Default()}).Run(ctx)
+		_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: fx, Log: slog.Default(), Kube: kube}).Run(ctx)
 		close(done)
 	}()
 	for i := 0; i < 200 && !hub.Online(1); i++ {
@@ -253,5 +269,99 @@ func TestRevokedAgentStopsWithItsOwnMessage(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("the revoked agent kept running")
+	}
+}
+
+func TestAgentContextsReachTheHub(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "config")
+	write := func(names ...string) {
+		y := "clusters:\n- name: c\n  cluster: {server: 'https://127.0.0.1:6443'}\nusers:\n- name: u\n  user: {}\ncontexts:\n"
+		for _, n := range names {
+			y += "- name: " + n + "\n  context: {cluster: c, user: u}\n"
+		}
+		if err := os.WriteFile(kc, []byte(y), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("one")
+	w := &agent.Watcher{Kubeconfig: kc, Every: 20 * time.Millisecond}
+	wctx, stopW := context.WithCancel(context.Background())
+	defer stopW()
+	go w.Run(wctx)
+	hub, stop := startAgentKube(t, &fakeExec{provisioned: map[string]string{}}, w)
+	defer stop()
+	waitCtx := func(n int) {
+		for i := 0; i < 200 && len(hub.Contexts(1)) != n; i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if got := hub.Contexts(1); len(got) != n {
+			t.Fatalf("want %d contexts, got %v", n, got)
+		}
+	}
+	waitCtx(1)
+	write("one", "two")
+	waitCtx(2)
+}
+
+func TestClusterProvisionReachesTheClusterExecutor(t *testing.T) {
+	fx := &fakeExec{provisioned: map[string]string{}}
+	hub, stop := startAgent(t, fx)
+	defer stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := hub.Call(ctx, 1, ap.Msg{Type: ap.TProvision, LabID: "0123456789ab", Cluster: &ap.ClusterSpec{Context: "kind-dev"}}); err != nil {
+		t.Fatal(err)
+	}
+	fx.mu.Lock()
+	defer fx.mu.Unlock()
+	if len(fx.clusterSpecs) != 1 || fx.clusterSpecs[0].Context != "kind-dev" || len(fx.provisioned) != 0 {
+		t.Fatalf("cluster %+v, compose %v", fx.clusterSpecs, fx.provisioned)
+	}
+}
+
+// The hello carries a snapshot of the contexts; a contexts message sent before it would be overwritten by that older
+// snapshot. With a change already pending at connect, hello must still be the first message, every time.
+func TestHelloComesBeforeAnyContextsMessage(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kc, []byte("clusters: [{name: c, cluster: {server: 'https://127.0.0.1:6443'}}]\nusers: [{name: u, user: {}}]\ncontexts: [{name: one, context: {cluster: c, user: u}}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		w := &agent.Watcher{Kubeconfig: kc, Every: time.Hour}
+		wctx, stopW := context.WithCancel(context.Background())
+		go w.Run(wctx)
+		for j := 0; j < 200 && len(w.Current()) == 0; j++ {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(5 * time.Millisecond) // the first list is now pending on Changes
+		first := make(chan string, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+			ws, err := websocket.Accept(rw, r, nil)
+			if err != nil {
+				return
+			}
+			defer ws.CloseNow()
+			_, data, _ := ws.Read(r.Context())
+			var m ap.Msg
+			_ = json.Unmarshal(data, &m)
+			select {
+			case first <- m.Type:
+			default:
+			}
+		}))
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			_ = (&agent.Client{Server: srv.URL, Token: "x", Exec: &fakeExec{provisioned: map[string]string{}}, Log: slog.Default(), Kube: w}).Run(ctx)
+			close(done)
+		}()
+		got := <-first
+		cancel()
+		<-done
+		srv.Close()
+		stopW()
+		if got != ap.THello {
+			t.Fatalf("run %d: first message %q, want hello", i, got)
+		}
 	}
 }

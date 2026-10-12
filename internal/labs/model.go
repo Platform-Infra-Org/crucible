@@ -9,10 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"crucible/internal/apperr"
 	"crucible/internal/config"
 	"crucible/internal/content"
-	"crucible/internal/gitsync"
 )
 
 type State string
@@ -29,6 +27,7 @@ const (
 )
 
 type Instance struct {
+	ClusterContext                              string // runtime cluster: the kubeconfig context it runs on (display only)
 	ID                                          string
 	UserID                                      int64
 	Team, Training, Module, SHA, Runtime        string
@@ -118,8 +117,8 @@ type Runner interface {
 	Destroy(ctx context.Context, inst *Instance) error
 }
 
-// Estimator prices one hour of a lab for approval routing and budgets (spec §9.1). local labs are free; cluster
-// (M4: internal rate card from platform.yaml) and aws (M6: infracost on the module) plug in here per runtime.
+// Estimator prices one hour of a lab for approval routing and budgets (spec §9.1). Laptop and cluster labs are free;
+// aws labs are priced by infracost on the module.
 type Estimator interface {
 	HourlyUSD(ctx context.Context, lab *content.Lab) (float64, error)
 }
@@ -130,27 +129,6 @@ type FixedRates map[string]float64
 
 func (f FixedRates) HourlyUSD(_ context.Context, lab *content.Lab) (float64, error) {
 	return f[lab.ID], nil
-}
-
-// PlatformRate prices cluster labs from platform.yaml cluster_usd_per_hour (one rate: the lab size is fixed).
-// Fail closed: no platform or no rate configured is Unavailable, never $0. Override (the dev env, by lab id) wins.
-type PlatformRate struct {
-	State    func() *gitsync.State
-	Override FixedRates
-}
-
-func (r PlatformRate) HourlyUSD(_ context.Context, lab *content.Lab) (float64, error) {
-	if v, ok := r.Override[lab.ID]; ok {
-		return v, nil
-	}
-	var st *gitsync.State
-	if r.State != nil {
-		st = r.State()
-	}
-	if st == nil || st.Platform == nil || st.Platform.Settings.ClusterUSDPerHour == nil {
-		return 0, apperr.Wrap(apperr.Unavailable, "cluster labs have no price: set cluster_usd_per_hour in platform.yaml")
-	}
-	return *st.Platform.Settings.ClusterUSDPerHour, nil
 }
 
 // ParseRates reads "lab-id=0.5,other=1".

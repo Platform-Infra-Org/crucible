@@ -35,8 +35,11 @@ describe('EditReviewPage', () => {
   })
 
   test('a decided edit shows its note with the reviewer and no actions', () => {
-    edit = { ...base, status: 'rejected', reviewer: 'senior@x', note: 'Needs a lab.' }
+    edit = { ...base, status: 'rejected', reviewer: 'senior@x', note: 'Needs a lab.', author_smith: { level: 3, title: 'Smith' }, reviewer_smith: { level: 5, title: 'Grandmaster' } }
     const h = render()
+    expect(h).toContain('smith-mark l3')
+    expect(h).toContain('Grandmaster</span>')
+    expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
     expect(h).toContain('Review note from senior@x:</span> Needs a lab.')
     expect(h).not.toContain('<form')
   })

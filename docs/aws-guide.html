@@ -222,7 +222,7 @@ tr.total td { font-weight: 700; }
               <rect class="box" x="620" y="392" width="130" height="54" rx="9"/>
               <text x="632" y="414">Backup job</text><text x="632" y="432" class="t-sm">nightly pg_dump</text>
               <rect class="box" x="310" y="392" width="295" height="54" rx="9"/>
-              <text x="322" y="414">Cluster lab namespaces</text><text x="322" y="432" class="t-sm">one per lab, Docker inside sysbox</text>
+              <text x="322" y="414">Lab namespaces</text><text x="322" y="432" class="t-sm">one per AWS lab, Docker inside sysbox</text>
               <rect class="box-iron" x="310" y="456" width="440" height="84" rx="9"/>
               <text x="322" y="478" class="t-iron">AWS lab namespace (one per AWS lab)</text>
               <text x="322" y="498" class="t-sm">tf-apply pod: runs terraform apply / destroy</text>
@@ -347,7 +347,7 @@ tr.total td { font-weight: 700; }
         <div class="table-wrap"><table>
           <thead><tr><th>Component</th><th>AWS service</th><th>What it is for</th></tr></thead>
           <tbody>
-            <tr><td>The node</td><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB. Runs k3s with Crucible, Postgres, Traefik and cluster labs. Starts from Ubuntu 24.04.</td></tr>
+            <tr><td>The node</td><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB. Runs k3s with Crucible, Postgres, Traefik and the AWS lab workspaces and Terraform runs. Cluster labs run on trainees' own clusters, not here. Starts from Ubuntu 24.04.</td></tr>
             <tr><td>Disk</td><td>EBS gp3, 60 GiB, encrypted</td><td>The database and everything on the server.</td></tr>
             <tr><td>Public address</td><td>Elastic IP</td><td>A fixed IP your domain points at.</td></tr>
             <tr><td>Firewall</td><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, redirect) and 443 (HTTPS). No SSH port at all.</td></tr>
@@ -412,7 +412,7 @@ tr.total td { font-weight: 700; }
             <p>The first visit can take about a minute while Let's Encrypt issues the certificate. If <code>up</code> ends with "isn't answering yet", DNS is still settling: wait and check.</p>
             <div class="cmd"><pre><code>crucible aws status</code></pre></div></li>
           <li><h4>Invite yourself and sign in</h4>
-            <p>Invite your <code>bootstrap_admin</code> email in Cognito (see <code>docs/runbooks/cognito.md</code>), sign in, and set up Crucible under <b>Administrator → Forge settings</b>: cost tiers, cluster lab rate, schedules, more admins. Then create teams and register trainings.</p></li>
+            <p>Invite your <code>bootstrap_admin</code> email in Cognito (see <code>docs/runbooks/cognito.md</code>), sign in, and set up Crucible under <b>Administrator → Forge settings</b>: cost tiers, schedules, more admins. Then create teams and register trainings.</p></li>
           <li><h4>Give the bot access to your training repos</h4>
             <p>Set <code>git_credentials</code> (read, and push for content edits) and <code>git_bot_email</code> in your settings, and point your git host's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code> with the secret from Parameter Store.</p></li>
         </ol>
@@ -420,7 +420,7 @@ tr.total td { font-weight: 700; }
         <h3>What happens when the server boots</h3>
         <p class="prose">The server configures itself from a startup script ("user data") the first time it starts:</p>
         <ol class="steps">
-          <li><h4>Install</h4><p>Sysbox (so cluster labs can run Docker safely), k3s, Helm and the AWS CLI. Traefik is set up to get Let's Encrypt certificates and redirect HTTP to HTTPS.</p></li>
+          <li><h4>Install</h4><p>Sysbox (so AWS lab workspaces can run Docker safely), k3s, Helm and the AWS CLI. Traefik is set up to get Let's Encrypt certificates and redirect HTTP to HTTPS.</p></li>
           <li><h4>Read its settings</h4><p>From Parameter Store, using its role. No secret is baked into the image or the disk.</p></li>
           <li><h4>Restore, if the database is empty</h4><p>On a rebuilt server, an init step loads the newest snapshot from the data bucket before Crucible starts.</p></li>
           <li><h4>Deploy the current release</h4><p><code>/opt/crucible/deploy.sh</code> downloads the release named in <code>s3://…/current-release</code>, imports the image into k3s and installs the Helm chart.</p></li>

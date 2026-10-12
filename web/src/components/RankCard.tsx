@@ -3,16 +3,40 @@ import { motion } from 'motion/react'
 import { api } from '../api'
 import { useCalm } from '../me'
 import type { Forge } from '../types'
+import { article, seenBody } from '../lib/forge'
 import { MoltenBar } from './MoltenBar'
+import { SmithMark } from './SmithMark'
 
-export function RankCard({ forge }: { forge: Forge }) {
-  const next = forge.ladder[forge.level + 1]
+export function ExperienceMeter({ smith }: { smith: Forge['smith'] }) {
+  const pct = smith.next ? Math.min(100, Math.floor((smith.xp / smith.next.at) * 100)) : 100
+  const caption = smith.next ? `${smith.xp.toLocaleString()} / ${smith.next.at.toLocaleString()} to ${smith.next.title}` : `${smith.xp.toLocaleString()} experience`
+  return <MoltenBar percent={pct} label="Experience" caption={caption} />
+}
+
+export function CraftCard({ forge }: { forge: Forge }) {
   return (
-    <section className="rank-card" aria-labelledby="rank-heading">
-      <h2 id="rank-heading" className="sr-only">Your forge rank</h2>
-      <p className="rank-name"><span aria-hidden="true">⚒</span> <strong data-testid="rank">{forge.rank}</strong></p>
-      <MoltenBar percent={Math.floor(forge.percent)} label="Training forged" caption={`${forge.percent}% of your training forged`} />
-      <p className="muted">{next ? `Next: ${next.name} at ${next.at}%` : 'The highest rank. The forge salutes you.'}</p>
+    <section className="rank-card craft" aria-labelledby="craft-heading">
+      <h2 id="craft-heading">Your craft</h2>
+      <p className="rank-name"><SmithMark smith={forge.smith} /></p>
+      <ExperienceMeter smith={forge.smith} />
+      <p className="muted">{forge.smith.next ? `Next: ${forge.smith.next.title} at ${forge.smith.next.at.toLocaleString()} experience` : 'The highest rank. The forge salutes you.'}</p>
+    </section>
+  )
+}
+
+export function SwordList({ forge }: { forge: Forge }) {
+  return (
+    <section className="rank-card swords" aria-labelledby="swords-heading">
+      <h2 id="swords-heading">Your swords</h2>
+      {forge.swords.length === 0 ? <p className="muted empty">No trainings yet: each one you take forges a sword.</p> : (
+        <ul className="sword-list">
+          {forge.swords.map((s) => (
+            <li key={s.training}>
+              <strong>{s.title}</strong> <span className="badge">{s.rank}</span> <span className="muted">{s.percent}%{s.next ? ` · ${s.next.name} at ${s.next.at}%` : ' · finished'}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {forge.badges.length > 0 && (
         <ul className="badges" data-testid="badges" aria-label="Badges">
           {forge.badges.map((b) => <li key={b.training} className="badge-token"><span aria-hidden="true">🏅</span> {b.title} <span className="muted">· earned {new Date(b.earned_at).toLocaleDateString()}</span></li>)}
@@ -23,11 +47,12 @@ export function RankCard({ forge }: { forge: Forge }) {
 }
 
 // RankUp celebrates a new rank once: hammer strike + glow, or a static line under calm motion. It never blocks the page or takes focus. Mount it inside a persistent role="status" region (see RankUpSlot) so it is announced.
-export function RankUp({ rank, level, onDone }: { rank: string; level: number; onDone: () => void }) {
+// title is the new rank's name; training (a sword) is its id for the server and its title for the words.
+export function RankUp({ kind, training, title, level, onDone }: { kind: 'smith' | 'sword'; training?: { id: string; title: string }; title: string; level: number; onDone: () => void }) {
   const calm = useCalm()
   useEffect(() => {
-    api('/api/me/forge/seen', { method: 'POST', json: { level } }).catch(() => {})
-  }, [level])
+    api('/api/me/forge/seen', { method: 'POST', json: seenBody({ key: '', kind, trainingId: training?.id, title, level }) }).catch(() => {})
+  }, [kind, training?.id, level])
   return (
     <section className="rank-up" aria-label="Rank up">
       {!calm && (
@@ -36,7 +61,8 @@ export function RankUp({ rank, level, onDone }: { rank: string; level: number; o
         </motion.span>
       )}
       {!calm && <motion.span className="strike-glow" aria-hidden="true" initial={{ scale: 0.4, opacity: 0.9 }} animate={{ scale: 2.2, opacity: 0 }} transition={{ duration: 0.9, delay: 0.45 }} />}
-      <strong>You reached {rank}.</strong> <span className="muted">Steel is forged in fire.</span>
+      <strong>{kind === 'smith' ? `You are now ${article(title)} ${title}.` : `Your ${training?.title} sword is now ${article(title)} ${title}.`}</strong>{' '}
+      <span className="muted">{kind === 'smith' ? 'Your craft grows.' : 'Steel is forged in fire.'}</span>
       <button className="ghost" onClick={onDone}>Nice</button>
     </section>
   )

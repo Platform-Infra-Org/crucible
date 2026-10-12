@@ -23,6 +23,7 @@ import (
 	"crucible/internal/auth"
 	"crucible/internal/config"
 	"crucible/internal/gitsync"
+	"crucible/internal/smith"
 )
 
 type apiFixture struct {
@@ -565,8 +566,8 @@ func TestPeopleList(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
 		t.Fatalf("people = %d %s", w.Code, w.Body)
 	}
-	if !slices.Contains(got.People, Person{Email: "new@x", Team: "platform", Tag: "trainee"}) ||
-		!slices.Contains(got.People, Person{Email: "loner@x", Name: "Lone Smith"}) || !slices.Contains(got.Groups, "data_seniors") {
+	if !slices.Contains(got.People, Person{Email: "new@x", Team: "platform", Tag: "trainee", Smith: smith.RefFor(0)}) ||
+		!slices.Contains(got.People, Person{Email: "loner@x", Name: "Lone Smith", Smith: smith.RefFor(0)}) || !slices.Contains(got.Groups, "data_seniors") {
 		t.Errorf("people %+v groups %v", got.People, got.Groups)
 	}
 	if w := f.do("new@x", "GET", "/api/org/people", ""); w.Code != 403 {

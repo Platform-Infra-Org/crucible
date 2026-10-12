@@ -86,7 +86,7 @@ func (s *Service) applyLab(ctx context.Context, inst *Instance, lab *content.Lab
 
 // labReview returns the latest whole-lab submission of this trainee's module (nil for labs that are not local).
 func (s *Service) labReview(ctx context.Context, inst *Instance) (*scoring.Submission, error) {
-	if s.Scoring == nil || inst.Runtime != "local" {
+	if s.Scoring == nil || !selfReported(inst.Runtime) {
 		return nil, nil
 	}
 	latest, err := s.Scoring.Latest(ctx, inst.UserID, inst.Team, inst.Training, inst.Module, scoring.KindLab)
@@ -97,7 +97,7 @@ func (s *Service) labReview(ctx context.Context, inst *Instance) (*scoring.Submi
 // reviewed (spec §8.2). wait reports that the lab item must stay pending_review; points is the scorer's decision once
 // one exists.
 func (s *Service) selfReportReview(ctx context.Context, inst *Instance, lab *content.Lab, maxScore float64, done map[string]taskRow) (wait bool, points *float64, err error) {
-	if maxScore == 0 || s.Scoring == nil || inst.Runtime != "local" {
+	if maxScore == 0 || s.Scoring == nil || !selfReported(inst.Runtime) {
 		return false, nil, nil
 	}
 	// An existing decision or waiting submission counts whatever the flag says now; the flag only gates filing a new one.
@@ -130,7 +130,7 @@ func (s *Service) selfReportReview(ctx context.Context, inst *Instance, lab *con
 		return false, nil, err
 	}
 	var b strings.Builder
-	b.WriteString("Results the laptop agent reported (self-reported, local runtime):\n")
+	b.WriteString("Results the laptop agent reported (self-reported, " + inst.Runtime + " runtime):\n")
 	for _, tk := range lab.Tasks {
 		r := done[tk.ID]
 		fmt.Fprintf(&b, "- %s (%s): %s, %.2f / %g points\n", tk.ID, taskTitle(lab, tk), r.Status, r.Points, tk.Points)
@@ -283,7 +283,7 @@ func (s *Service) Evidence(ctx context.Context, labID string) (*scoring.LabEvide
 		return nil, err
 	}
 	statuses := taskStatuses(lab, done, setups, reviews)
-	ev := &scoring.LabEvidence{Runtime: inst.Runtime, SelfReported: inst.Runtime == "local", Tasks: []scoring.TaskEvidence{},
+	ev := &scoring.LabEvidence{Runtime: inst.Runtime, SelfReported: selfReported(inst.Runtime), Tasks: []scoring.TaskEvidence{},
 		Transcripts: []scoring.Transcript{}}
 	idx := map[string]int{}
 	for _, t := range lab.Tasks {

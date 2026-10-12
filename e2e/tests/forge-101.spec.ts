@@ -119,4 +119,16 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'The forge has cooled' })).toBeVisible({ timeout: 60_000 })
   await page.getByRole('link', { name: 'Back to the training' }).click()
   await expect(page.getByTestId('module-02-first-lab')).toHaveClass(/complete/)
+
+  // The Hearth: a rank-up banner may be showing (dismiss it); the swords list names Forge 101; the card shows the smith rank
+  await page.getByRole('link', { name: 'Hearth', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Your swords' })).toBeVisible()
+  const nice = page.getByRole('button', { name: 'Nice' })
+  if (await nice.first().isVisible()) await nice.first().click()
+  await expect(page.locator('.sword-list')).toContainText('Forge 101')
+  await page.locator('.user-button').click()
+  await expect(page.locator('.user-card-head .smith-mark')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.getByRole('link', { name: /Forge 101/ }).click()
+  await expect(page.getByText(/Your sword: /)).toBeVisible()
 })

@@ -18,6 +18,8 @@ import (
 	"crucible/internal/gitsync"
 	"crucible/internal/learn"
 	"crucible/internal/rbac"
+	"crucible/internal/ready"
+	"crucible/internal/smith"
 )
 
 type Service struct {
@@ -41,16 +43,32 @@ type Flag struct {
 }
 
 type Row struct {
-	Email      string     `json:"email"`
-	Name       string     `json:"name"`
-	Avatar     string     `json:"avatar"` // the person's forge icon, "" for initials
-	Team       string     `json:"team"`
-	Training   string     `json:"training"`
-	Title      string     `json:"title"`
-	Percent    int        `json:"percent"`
-	Cells      []Cell     `json:"cells"`
-	Flags      []Flag     `json:"flags"`
-	LastActive *time.Time `json:"last_active,omitempty"`
+	Email       string       `json:"email"`
+	Name        string       `json:"name"`
+	Avatar      string       `json:"avatar"` // the person's forge icon, "" for initials
+	Team        string       `json:"team"`
+	Training    string       `json:"training"`
+	Title       string       `json:"title"`
+	Percent     int          `json:"percent"`
+	Cells       []Cell       `json:"cells"`
+	Flags       []Flag       `json:"flags"`
+	LastActive  *time.Time   `json:"last_active,omitempty"`
+	Smith       smith.Ref    `json:"smith"`
+	Sword       *SwordRef    `json:"sword,omitempty"` // the stored sword rank for this training, if any
+	ClusterLabs []ClusterLab `json:"cluster_labs,omitempty"`
+}
+
+type SwordRef struct {
+	Level int    `json:"level"`
+	Rank  string `json:"rank"`
+}
+
+// ClusterLab is a running cluster lab: the context of the trainee's kubeconfig it runs on (Crucible never connects to
+// it) and its releases' health as of the last check, self-reported.
+type ClusterLab struct {
+	Module  string        `json:"module"`
+	Context string        `json:"context"`
+	Health  *ready.Report `json:"health,omitempty"`
 }
 
 // want is one (training, person) pair a page shows; team owns the training.
@@ -177,6 +195,7 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, ws []want, people
 		}
 		r.Percent = sd.Percent
 		r.Flags = append(r.Flags, sig.flags[k]...)
+		r.ClusterLabs = sig.cluster[k]
 		r.LastActive = sig.last[k]
 		// Enrolment time is not stored, so with no activity the honest statement is "not started", not a day count.
 		if sd.Percent < 100 && !sig.wait[k] {
@@ -187,6 +206,26 @@ func (s *Service) rows(ctx context.Context, st *gitsync.State, ws []want, people
 			}
 		}
 		out = append(out, r)
+	}
+	emails := make([]string, len(out))
+	for i, r := range out {
+		emails[i] = r.Email
+	}
+	refs, err := smith.Lookup(ctx, s.DB, emails)
+	if err != nil {
+		return nil, err
+	}
+	swords, err := s.Learn.SwordRanks(ctx, uids)
+	if err != nil {
+		return nil, err
+	}
+	ladder := learn.Ladder(st.Platform.Settings.Ranks)
+	for i := range out {
+		r := &out[i]
+		r.Smith = refs.Of(r.Email)
+		if lvl, ok := swords[people[r.Email].id][r.Training]; ok && lvl < len(ladder) {
+			r.Sword = &SwordRef{Level: lvl, Rank: ladder[lvl].Name}
+		}
 	}
 	return out, nil
 }

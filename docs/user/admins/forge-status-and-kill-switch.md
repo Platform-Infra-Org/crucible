@@ -18,7 +18,8 @@ paused labs and when. Both actions are audited.
 ## Needs attention
 
 - Content edits waiting for review, with a link to **Edits**.
-- Labs that failed to start or are stuck being destroyed, with the trainee, training, state and error.
+- Labs that failed to start or are stuck being destroyed, with the trainee, training, state and error. A cluster lab
+  also names the cluster it ran on (a context of the trainee's kubeconfig).
 
 ## Training versions
 

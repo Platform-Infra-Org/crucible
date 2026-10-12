@@ -43,7 +43,7 @@ export function ForgeStatusPage() {
         <div className="table-wrap"><table className="grid">
           <thead><tr><th>Lab</th><th>Trainee</th><th>Program</th><th>State</th><th>Since</th><th>Error</th></tr></thead>
           <tbody>{p.attention.map((a) => (
-            <tr key={a.id}><td><code>{a.id}</code></td><td>{a.trainee}</td><td>{a.team}/{a.training} · {a.module}</td>
+            <tr key={a.id}><td><code>{a.id}</code>{a.cluster_context && <> on <code>{a.cluster_context}</code></>}</td><td>{a.trainee}</td><td>{a.team}/{a.training} · {a.module}</td>
               <td className={a.state === 'failed' ? 'error' : 'warn'}>{a.state}</td><td>{new Date(a.since).toLocaleString()}</td><td>{a.error}</td></tr>
           ))}</tbody>
         </table></div>

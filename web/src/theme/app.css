@@ -183,13 +183,18 @@ a.button-link:hover { border-color: var(--accent); }
 .user-button { display: inline-flex; align-items: center; gap: 0.5rem; background: none; border: 1px solid transparent; border-radius: 999px;
   padding: 0.15rem 0.75rem 0.15rem 0.15rem; font: inherit; color: var(--muted); cursor: pointer; }
 .user-button:hover, .user-button[aria-expanded="true"] { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-.user-card { position: absolute; left: 0; top: calc(100% + 0.5rem);  /* its button sits at the left of the nav: opening rightwards keeps the card on screen */ z-index: 20; width: min(21rem, 92vw); padding: 0 1.1rem 1rem; overflow: hidden;
+.user-card { position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 20; width: min(21rem, 92vw); padding: 0 1.1rem 1rem; overflow: hidden;
   border: 1px solid transparent; border-radius: 14px; color: var(--text);
   background: linear-gradient(var(--surface), var(--surface)) padding-box,
     linear-gradient(165deg, var(--accent-2), var(--border) 35%, var(--border) 70%, var(--accent)) border-box;
   box-shadow: var(--glow), 0 18px 40px rgba(0, 0, 0, 0.35); animation: card-cast 0.22s ease-out; }
 @keyframes card-cast { from { opacity: 0; transform: translateY(-6px) scale(0.98); } }
 /* the pour: the primary button's molten churn, cooling into the card where the avatar sits */
+.user-card.from-left { left: 0; right: auto; } /* its button has wrapped to the left of the nav: open rightwards instead */
+/* Too narrow for the card to sit beside its button either way: pin it to the screen, under where the button is. */
+@media (max-width: 640px) {
+  .user-card, .user-card.from-left { position: fixed; left: 0.75rem; right: 0.75rem; top: var(--card-top, 4.5rem); width: auto; }
+}
 .user-card-band { height: 4.25rem; margin: 0 -1.1rem; position: relative;
   background:
     radial-gradient(ellipse 45% 90% at 50% 50%, var(--accent-2), transparent 70%) 0 50% / 220% 200%,

@@ -55,6 +55,18 @@ export function UserMenu() {
   // person. /auth/switch ends that session too, then starts a fresh sign-in.
   const changeUser = () => { window.location.href = '/auth/switch' }
 
+  // The nav wraps, so this button sits at the right on a wide screen and at the left once it has wrapped. Opening
+  // always to one side hangs the card off that edge of the screen, so pick the side with room when it opens.
+  const [fromLeft, setFromLeft] = useState(false)
+  const [top, setTop] = useState(0)
+  useEffect(() => {
+    if (!open) return
+    const r = button.current?.getBoundingClientRect()
+    if (!r) return
+    setFromLeft(r.left < window.innerWidth / 2)
+    setTop(r.bottom + 8) // for the narrow layout, where the card is pinned to the screen rather than to the button
+  }, [open])
+
   return (
     <div className="user-menu" ref={box} onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); close() } }}>
       <button ref={button} type="button" className="user-button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -62,7 +74,8 @@ export function UserMenu() {
         <span>{u.name || u.email}</span>
       </button>
       {open && (
-        <div className="user-card" role="dialog" aria-label="Your user card">
+        <div className={fromLeft ? 'user-card from-left' : 'user-card'} role="dialog" aria-label="Your user card"
+          style={{ '--card-top': `${top}px` } as CSSProperties}>
           <div className="user-card-band" aria-hidden="true">
             {MOTES.map((m, i) => (
               <span key={i} className="mote" style={{ '--x': m.x, '--y': `${m.y}%`, '--s': `${m.s}px`, '--d': `${m.d}s`, '--delay': `${-m.d * m.x / 100}s`,

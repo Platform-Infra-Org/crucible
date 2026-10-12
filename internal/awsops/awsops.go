@@ -65,8 +65,13 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	}
 	out := map[string]string{}
 	for k, v := range parsed {
-		if v.Value != nil {
-			out[k] = fmt.Sprint(v.Value)
+		switch x := v.Value.(type) {
+		case nil:
+		case string:
+			out[k] = x
+		default: // numbers and lists as JSON, which is also HCL: they can be passed back as -var
+			b, _ := json.Marshal(x)
+			out[k] = string(b)
 		}
 	}
 	need, first := map[string]string{"persistent": "state_bucket", "main": "instance_id", "labs": "lab_role_arn"}[stack], map[string]string{"persistent": "init", "main": "up", "labs": "labs-init"}[stack]
@@ -139,7 +144,8 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 
 // LabsInit creates the shared lab account stack (roles, permission boundary, state bucket, billing export). Run it
 // with credentials for the lab account; pass the Crucible account when that is a different one. budgetUSD (> 0) and
-// budgetEmails set the account's AWS Budget alert; unset, the stack's defaults apply.
+// budgetEmails set the account's AWS Budget alert; each one left unset keeps the stack's current value (its outputs),
+// so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
 func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails []string) error {
 	d := o.dir("labs")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
@@ -149,12 +155,17 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	if crucibleAccount != "" {
 		args = append(args, "-var", "crucible_account_id="+crucibleAccount)
 	}
+	cur, _ := o.outputs(ctx, "labs") // nil on a new stack
 	if budgetUSD > 0 {
 		args = append(args, "-var", "budget_monthly_usd="+strconv.FormatFloat(budgetUSD, 'f', -1, 64))
+	} else if v := cur["budget_monthly_usd"]; v != "" {
+		args = append(args, "-var", "budget_monthly_usd="+v)
 	}
 	if len(budgetEmails) > 0 {
 		b, _ := json.Marshal(budgetEmails) // a JSON list is an HCL list
 		args = append(args, "-var", "budget_emails="+string(b))
+	} else if v := cur["budget_emails"]; v != "" && v != "[]" {
+		args = append(args, "-var", "budget_emails="+v)
 	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {

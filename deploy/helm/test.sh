@@ -92,10 +92,14 @@ for want in 'name: crucible-estimates' 'crucible.io/lab: estimates' 'pod-securit
   grep -q -- "$want" <<<"$ns" || { echo "estimates namespace: missing $want"; exit 1; }
 done
 role=$(docof Role)
-for want in 'namespace: crucible-estimates' 'resources: \[pods, secrets, configmaps\]' 'verbs: \[create, get, list, watch, delete\]' \
-  'resources: \[pods/log\]' 'resources: \[networkpolicies\]'; do
+for want in 'namespace: crucible-estimates' 'resources: \[pods/log\]' 'resources: \[networkpolicies\]'; do
   grep -q -- "$want" <<<"$role" || { echo "estimates Role: missing $want"; exit 1; }
 done
+# least privilege: what aws.go Plan and reapPlans call. Pods are created, polled (get), listed and deleted; a run's
+# credentials secret and module config map are only created, listed and deleted, never read back (no get or watch).
+grep -A1 'resources: \[pods\]$' <<<"$role" | grep -q 'verbs: \[create, get, list, delete\]' || { echo "estimates Role: pods create, get, list, delete"; exit 1; }
+grep -A1 'resources: \[secrets, configmaps\]$' <<<"$role" | grep -q 'verbs: \[create, list, delete\]' || { echo "estimates Role: secrets and config maps create, list, delete only"; exit 1; }
+if grep -E 'secrets|configmaps' -A1 <<<"$role" | grep -qE '\b(get|watch)\b'; then echo "estimates Role: never get or watch secrets or config maps"; exit 1; fi
 grep -A2 'resources: \[pods/log\]' <<<"$role" | grep -q 'verbs: \[get\]' || { echo "estimates Role: pods/log get only"; exit 1; }
 grep -A2 'resources: \[networkpolicies\]' <<<"$role" | grep -q 'verbs: \[create\]' || { echo "estimates Role: networkpolicies create only"; exit 1; }
 rb=$(docof RoleBinding)

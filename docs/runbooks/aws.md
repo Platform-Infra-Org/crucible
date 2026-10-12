@@ -122,9 +122,11 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
      Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`;
    - an alert-only **AWS Budget** (`<name>-labs-monthly`) that emails at 80 % and 100 % of the month's actual spend,
      independent of Crucible. Set it with `--budget-usd 200 --budget-email ops@example.com` (repeat `--budget-email`,
-     at most 10). Without `--budget-usd` the amount is $100; without any `--budget-email` no budget is created. A
-     negative `--budget-usd` is refused. **Pass the same budget flags every time you re-run labs-init**: the stack
-     doesn't remember them, so a re-run without `--budget-email` removes the budget.
+     at most 10). On the first run, without `--budget-usd` the amount is $100 and without any `--budget-email` no
+     budget is created. A negative `--budget-usd` is refused. **Re-running labs-init keeps the budget**: a flag you
+     leave out keeps the stack's current value (read from its outputs), and a flag you pass replaces only its own
+     value (`--budget-email` replaces the whole list). A stack created before these outputs existed has nothing to
+     read back: pass both flags on the first re-run after upgrading.
 2. **Activate the cost-allocation tag (the one manual step, free).** In Billing → Cost allocation tags (in the
    **management (payer) account** if the lab account is in an organization, else in the lab account), activate
    `crucible:lab-id`. It shows up there only after a tagged resource has existed, which can take up to 24 h, and

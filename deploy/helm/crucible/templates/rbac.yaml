@@ -115,8 +115,11 @@ kind: Role
 metadata: { name: crucible-estimates, namespace: crucible-estimates }
 rules:
   - apiGroups: [""]
-    resources: [pods, secrets, configmaps]
-    verbs: [create, get, list, watch, delete]   # a plan run's pod, credentials and module; the sweep lists and reaps leftovers
+    resources: [pods]
+    verbs: [create, get, list, delete]          # a plan run's pod (polled until done); the sweep lists and reaps leftovers
+  - apiGroups: [""]
+    resources: [secrets, configmaps]
+    verbs: [create, list, delete]               # its credentials and module: never read back; leftovers listed and reaped
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]                                # the plan JSON is the pod log's last line

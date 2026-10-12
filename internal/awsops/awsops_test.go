@@ -455,3 +455,27 @@ func TestLabsInitPassesTheBudget(t *testing.T) {
 		t.Fatalf("no flags, no budget vars:\n%s", strings.Join(r.calls, "\n"))
 	}
 }
+
+// Re-running labs-init without the budget flags keeps the stack's budget; a flag given replaces its own value only.
+func TestLabsInitKeepsTheBudget(t *testing.T) {
+	labs := func(cmd string) string {
+		if strings.Contains(cmd, filepath.Join("deploy", "aws", "labs")+" output -json") {
+			return `{"lab_role_arn":{"value":"arn:aws:iam::1:role/crucible-lab"},"budget_monthly_usd":{"value":250},"budget_emails":{"value":["ops@example.com","fin@example.com"]}}`
+		}
+		return fakeAWS(cmd)
+	}
+	r := &recorder{output: labs}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var budget_monthly_usd=250 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
+		t.Fatalf("without the flags the current budget is kept, not reset:\n%s", strings.Join(r.calls, "\n"))
+	}
+	r = &recorder{output: labs}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 300, nil); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var budget_monthly_usd=300 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
+		t.Fatalf("a new amount keeps the emails:\n%s", strings.Join(r.calls, "\n"))
+	}
+}

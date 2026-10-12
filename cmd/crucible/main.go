@@ -30,7 +30,8 @@ const usage = `usage:
 
 lint is offline: an aws lab whose resources Crucible can't price fails unless aws.prices declares their USD per
 hour (aws.usage states monthly usage, such as storage_gb, for usage-priced resources).
-labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email).
+labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
+a re-run without them keeps the current budget.
 --var-file defaults to deploy/aws/main/crucible.tfvars in the repo root.
 --no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
@@ -69,7 +70,7 @@ func awsCmd(args []string) int {
 	yes := fs.Bool("yes", false, "confirm teardown")
 	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
-	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: the stack's default)")
+	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
 	var budgetEmails []string
 	fs.Func("budget-email", "labs-init: who the AWS Budget alerts (repeat for more)", func(v string) error {
 		budgetEmails = append(budgetEmails, v)

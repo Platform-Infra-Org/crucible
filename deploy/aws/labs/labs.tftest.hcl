@@ -251,6 +251,10 @@ run "export_and_budget" {
     condition     = aws_budgets_budget.labs[0].limit_amount == "100" && length(aws_budgets_budget.labs[0].notification) == 2
     error_message = "a monthly budget alerting at 80% and 100%"
   }
+  assert {
+    condition     = output.budget_monthly_usd == 100 && output.budget_emails == tolist(["admin@example.com"])
+    error_message = "labs-init reads the budget back from the outputs to keep it on a re-run"
+  }
 }
 
 run "no_budget_without_emails" {

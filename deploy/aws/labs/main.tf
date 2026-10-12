@@ -411,3 +411,6 @@ output "export_name" { value = local.export }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "state_region" { value = var.region }
 output "regions" { value = join(",", local.regions) }
+# labs-init passes these back when re-run without --budget-usd/--budget-email, so a re-run keeps the budget.
+output "budget_monthly_usd" { value = var.budget_monthly_usd }
+output "budget_emails" { value = var.budget_emails }

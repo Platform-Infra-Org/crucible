@@ -1,6 +1,6 @@
 # Free FinOps and a Terraform lab mode
 
-Status: **draft for the owner's review** (sections 1 agreed in conversation; 2–4 presented, awaiting approval).
+Status: **draft for the owner's review** (sections 1, 2 and credentials agreed; 3–4 awaiting approval).
 Replaces infracost and AWS Cost Explorer (spec §9.1, §9.3) and turns `runtime: aws` into a Terraform mode with a
 cloud interface. Owner's decisions, 2026-10-12. Scope: **AWS only**; other clouds plug into the same interface later.
 
@@ -29,14 +29,13 @@ aws:
   the same hardened lint. Trainees work on the result from the workspace terminal, as today.
 - **Region:** Crucible writes the provider block (lint refuses `provider` blocks) so it controls credentials, tags
   and state; it needs the region for that, for pricing, for the allowed-regions guardrail and for the reaper.
-  Modules read it as `var.crucible_region`. Required, as today (open: make it optional, defaulting to the first
-  allowed region).
+  Modules read it as `var.crucible_region`. **Required** (owner's decision): a lab names its region.
 - Inside Crucible the AWS runner becomes a cloud-neutral Terraform runner plus a `Cloud` interface with one
   implementation (AWS): lab credentials (STS, as today) and read-only plan credentials; the injected provider and
   backend files with the lab-id tags; the lint provider allowlist; a pricer; a billing-export reader; the sweep and
   reaper. Workspace pod, apply/destroy pods, timers, approvals and budgets are unchanged.
 
-## 2. Estimating
+## 2. Estimating (agreed)
 
 - **Price data:** a weekly job downloads the free public AWS Price List files for the services labs may use (EC2,
   EBS, VPC/NAT/Elastic IP, ELB, S3, CloudWatch) in the allowed regions, keeps on-demand prices (Linux, shared
@@ -51,6 +50,26 @@ aws:
   content version (as the infracost estimate is today, two at a time, failures remembered briefly). Hourly =
   Σ hourly prices + Σ (stated usage × price) ÷ 730. Unstated usage counts $0 and is said so. Request estimate =
   hourly × TTL, routed as today. Lint and the lab page show the breakdown per resource.
+
+## Credentials (agreed)
+
+No stored keys: every credential is a short-lived AWS session for one job, and none leaves Crucible's cluster.
+
+| Step | Who acts | Credential | What it can do |
+|---|---|---|---|
+| Crucible itself | the API pod | its node or pod identity | only `sts:AssumeRole` into the three roles below |
+| Estimate (on publish) | a short-lived plan pod | **plan-role** session (~15 min) | read-only `Describe*`/`Get*` for data sources; plans against an empty state, never touches real state |
+| Apply | the Terraform pod in `lab-<id>` | **lab-role** session (1 h), session tags `crucible:lab-id`, team, training | create only resources tagged with its lab id, change or delete only its own, its own state key only, inside the permission boundary |
+| Trainee's terminal | the workspace pod | the same lab session, mounted at `/aws` | the same: only that lab's resources |
+| Refresh | the sweep | a new lab session about every 45 min, into the lab's secret | no running lab holds a credential older than an hour |
+| Destroy | a destroy pod | a fresh lab session for that lab id | its own resources only |
+| Cleanup, metering, billed spend | Crucible's jobs | **ops-role** session | `tag:GetResources` (sweep, reaper), CloudTrail lookups, read lab state files, read the CUR export bucket (replaces `ce:GetCostAndUsage`) |
+
+The lab role's permission boundary is the hard ceiling (services, regions, instance types, volume types and sizes, no
+Marketplace AMIs); its trust policy requires the `crucible:lab-id` session tag. Pods can't reach the instance
+metadata service, and the trainee's laptop gets no AWS credentials. New versus today: the plan role, and the ops
+role's switch from Cost Explorer to the export bucket and state reads. In the design this is the `Cloud` interface's
+credentials part.
 
 ## 3. Actual spend
 

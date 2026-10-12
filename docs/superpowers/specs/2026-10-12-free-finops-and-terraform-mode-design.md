@@ -1,6 +1,6 @@
 # Free FinOps and a Terraform lab mode
 
-Status: **draft for the owner's review** (sections 1, 2 and credentials agreed; 3–4 awaiting approval).
+Status: **agreed** with the owner, 2026-10-12 (all sections).
 Replaces infracost and AWS Cost Explorer (spec §9.1, §9.3) and turns `runtime: aws` into a Terraform mode with a
 cloud interface. Owner's decisions, 2026-10-12. Scope: **AWS only**; other clouds plug into the same interface later.
 
@@ -71,7 +71,7 @@ metadata service, and the trainee's laptop gets no AWS credentials. New versus t
 role's switch from Cost Explorer to the export bucket and state reads. In the design this is the `Cloud` interface's
 credentials part.
 
-## 3. Actual spend
+## 3. Actual spend (agreed)
 
 - **Metered (live):** after each successful apply Crucible reads the lab's Terraform state (its S3 bucket) and
   records each priced resource in `lab_resources` (address, type, hourly price, stated usage, started_at); destroy or
@@ -85,7 +85,7 @@ credentials part.
   variable) that emails admins at 80 % and 100 %, independent of Crucible.
 - Budgets, caps, the kill switch, alerts and approvals are unchanged apart from reading metered spend.
 
-## 4. Migration, setup and testing
+## 4. Migration, setup and testing (agreed)
 
 - **Removed:** `internal/infracost`, `InfracostEstimator`, `INFRACOST_API_KEY`, `CRUCIBLE_INFRACOST` (dry run uses
   price fixtures), `infracost_api_key` in `deploy/aws/main`, the Cost Explorer client and `ce:GetCostAndUsage` on the

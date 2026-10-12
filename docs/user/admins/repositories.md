@@ -14,15 +14,18 @@ repository can hold several trainings, a folder each.
 
 Give the repository's URL and say how Crucible should sign in:
 
-- **Nothing — the repository is public.** Anyone can read it, so Crucible needs no credential. Note that Crucible
-  still cannot *write* to it, so approved edits will not merge.
+- **Nothing — the repository is public.** Anyone can read it, so Crucible needs no credential. It cannot write to
+  it either, so content here cannot be edited in Crucible.
 - **An access token.** For a private `https://` repository, or any whose content people will edit in Crucible.
 - **A deploy key Crucible makes.** For an `ssh://` or `git@host:path` repository. Crucible generates the pair,
   keeps the private half and shows you the public half to add at your host. Nothing secret ever leaves your side,
   the key can be shown again whenever you need it, and unlike a token it does not expire.
 
-The token needs to **read and write** the repository's contents. Write matters: merging an approved edit pushes a
-commit. A read-only token looks fine until the first edit is approved, and then the merge fails.
+The credential needs to **read and write** the repository's contents if anyone will edit this training's content in
+Crucible. Write is needed earlier than you might expect: **submitting** an edit for review pushes it to a
+`crucible/edit/…` branch of your repository, before any reviewer sees it. With read-only access, syncing, reading,
+quizzes and labs all work, and so does the editor itself — drafts are kept in Crucible — but the author loses their
+work at the moment they submit it. Connect it read-only only if you mean the content to be authored in git.
 
 - **GitHub**: Settings → Developer settings → Fine-grained tokens, limited to that one repository,
   *Contents: Read and write*. An organisation may have to approve it. Note that these tokens expire — a year at

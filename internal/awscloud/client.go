@@ -149,7 +149,7 @@ func (c *Client) Tagged(ctx context.Context, region, labID string) ([]Resource, 
 // labBuckets adds the region's lab buckets found by name to res: an untagged (or retagged) bucket is swept too.
 func (c *Client) labBuckets(ctx context.Context, region, labID string, res []Resource) ([]Resource, error) {
 	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
-		o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != ""
+		o.Region, o.BaseEndpoint, o.UsePathStyle = region, c.endpoint(), c.cfg.Endpoint != ""
 	})
 	seen := map[string]bool{}
 	for _, r := range res {

@@ -11,7 +11,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
@@ -200,24 +204,60 @@ func TestReaperEndsTheMeterOfEndedLabs(t *testing.T) {
 	live, ended, recent, leftover := f.awsRow(t, Ready, 0), f.awsRow(t, Destroyed, 2*time.Hour), f.awsRow(t, Destroyed, 10*time.Minute),
 		f.awsRow(t, Destroyed, 2*time.Hour)
 	cloud.Add("eu-west-1", awscloud.Resource{ARN: vol(leftover), LabID: leftover})
+	cloud.NotYet(vol(leftover), 1)                               // still attached: the first delete is refused
 	for _, id := range []string{live, ended, recent, leftover} { // terraform destroy failed: the meters stayed open
 		if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_resources VALUES ($1, 'aws_instance.web', 'aws_instance', 0.01, 0, $2, NULL)`,
 			id, f.clk.Now().Add(-3*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	open := func(id string) bool { return len(openRows(t, f, id)) == 1 }
+	f.s.AWSRegions = nil
+	_ = f.s.Reap(ctx)
+	if !open(ended) {
+		t.Fatal("no region listed is no complete run: the meter stays open")
+	}
+	f.s.AWSRegions = []string{"eu-west-1"}
 	cloud.Err = errors.New("throttled")
 	_ = f.s.Reap(ctx)
-	if len(openRows(t, f, ended)) != 1 {
+	if !open(ended) {
 		t.Fatal("without the inventory the reaper can't know nothing is left: the meter stays open")
 	}
 	cloud.Err = nil
-	if err := f.s.Reap(ctx); err != nil {
+	_ = f.s.Reap(ctx)
+	for id, want := range map[string]bool{live: true, recent: true, ended: false, leftover: true} {
+		if open(id) != want {
+			t.Fatalf("lab %s: meter open = %v, want %v (a leftover AWS refused to delete still bills)", id, !want, want)
+		}
+	}
+	_ = f.s.Reap(ctx) // deletes the leftover: listed in this run, so its meter still runs
+	if cloud.Has(vol(leftover)) || !open(leftover) {
+		t.Fatal("a lab listed in this run keeps its meter")
+	}
+	_ = f.s.Reap(ctx)
+	if open(leftover) {
+		t.Fatal("the first complete run that lists nothing for the lab ends its meter")
+	}
+}
+
+func TestDestroyWithoutTerraformKeepsTheMeter(t *testing.T) {
+	ctx := context.Background()
+	f, cloud, inst, lab := meterFixture(t, corev1.PodSucceeded)
+	cloud.SetState(inst.ID, stateWith("aws_instance.web"))
+	ar := f.s.Runners["aws"].(*AWSRunner)
+	if err := f.s.provisionLab(ctx, ar, inst, lab); err != nil {
 		t.Fatal(err)
 	}
-	for id, open := range map[string]bool{live: true, recent: true, ended: false, leftover: false} {
-		if (len(openRows(t, f, id)) == 1) != open {
-			t.Fatalf("lab %s: meter open = %v, want %v", id, !open, open)
-		}
+	// the namespace is already terminating: terraform destroy can't run, so everything it created still runs
+	ar.Cluster.Client.(*fake.Clientset).PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{Status: metav1.StatusFailure, Code: 403,
+			Reason: metav1.StatusReasonForbidden, Details: &metav1.StatusDetails{
+				Causes: []metav1.StatusCause{{Type: corev1.NamespaceTerminatingCause}}}}}
+	})
+	if err := f.s.destroyRuntime(ctx, inst); err != nil {
+		t.Fatalf("as before, a lab whose namespace is going away counts as destroyed: %v", err)
+	}
+	if len(openRows(t, f, inst.ID)) != 1 {
+		t.Fatal("terraform destroy never ran: the meter runs until the reaper has cleaned up")
 	}
 }

@@ -45,8 +45,9 @@ func (s *Service) Meter(ctx context.Context, inst *Instance, lab *content.Lab) e
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 	var state State
-	// FOR SHARE: a destroy's state change waits for this commit, so its EndMeter sees every row written here
-	if err := tx.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1 FOR SHARE`, inst.ID).Scan(&state); err != nil {
+	// FOR UPDATE: a destroy's state change waits for this commit, so its EndMeter sees every row written here, and two
+	// Meter calls for one lab take turns, so neither inserts a second open row for the same address
+	if err := tx.QueryRow(ctx, `SELECT state FROM lab_instances WHERE id = $1 FOR UPDATE`, inst.ID).Scan(&state); err != nil {
 		return err
 	}
 	if state != Provisioning && state != Ready {

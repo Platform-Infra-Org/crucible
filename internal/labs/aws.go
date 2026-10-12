@@ -314,7 +314,7 @@ func stuckReason(p *corev1.Pod) bool { r, _ := stuckOneShot(p); return r != "" }
 // Destroy stops a running apply (cancelling an in-process ProvisionLab, then deleting the apply pod), runs terraform
 // destroy (with fresh credentials), then deletes the namespace. Service.destroyRuntime runs the tag sweep afterwards.
 // Without a namespace, or with one already terminating, there is nothing to run terraform in: the tag sweep and the
-// reaper clean up instead.
+// reaper clean up instead, and Destroy returns errTerraformSkipped.
 func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 	if !validLabID(inst.ID) {
 		return errors.New("invalid lab id")
@@ -333,13 +333,16 @@ func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 		return apierrors.IsNotFound(err) || apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause)
 	}
 	var errs []error
+	skipped := false
 	if err := a.Cluster.deletePod(ctx, labNamespace(inst.ID), tfApplyPod); err != nil {
 		errs = append(errs, fmt.Errorf("stopping terraform apply: %w", err))
 	} else if !a.moduleExists(ctx, inst.ID) {
 		// provisioning failed before the module existed: no apply ever ran, so there is nothing for terraform
 	} else if err := a.runTF(ctx, inst, tfDestroyPod, "destroy"); err != nil && !gone(err) {
 		errs = append(errs, err)
-	} else if err == nil && a.DryRun != nil {
+	} else if err != nil {
+		skipped = true
+	} else if a.DryRun != nil {
 		a.DryRun.SimulateDestroy(inst.ID)
 	}
 	// Terraform may have used up ctx; the namespace (with live credentials) is deleted regardless.
@@ -349,8 +352,16 @@ func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 		errs = append(errs, err)
 	}
 	a.prune(inst.ID)
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil || !skipped {
+		return err
+	}
+	return errTerraformSkipped
 }
+
+// errTerraformSkipped: Destroy otherwise worked, but terraform destroy could not run (no namespace, or one already
+// terminating), so what the apply created runs until the tag sweep and the reaper delete it. destroyRuntime treats it
+// as success and leaves the lab's meter running.
+var errTerraformSkipped = errors.New("terraform destroy did not run")
 
 // Refresh re-assumes the lab role when the mounted credentials have less than refreshBefore left (spec §14: one
 // hour, auto-refreshed); kubelet updates the mounted file within about a minute. After a restart nothing is

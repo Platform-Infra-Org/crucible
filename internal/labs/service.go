@@ -1439,18 +1439,23 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 // destroyRuntime tears a lab's environment down. For aws labs, terraform destroy is followed by a tag sweep (spec
 // §8.2) with its own few minutes: terraform may have used up ctx. Every path that ends a lab (End, expiry, idle, the
 // kill switch, a failed or hung provisioning, the stuck-destroy retry) comes through here; a successful destroy ends
-// the lab's meter. A failed one leaves it running until the reaper has cleaned up.
+// the lab's meter. A failed one, or one where terraform destroy could not run, leaves it running until the reaper has
+// cleaned up.
 func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
 		return err
 	}
 	err = r.Destroy(ctx, inst)
+	tfDestroyed := err == nil
+	if errors.Is(err, errTerraformSkipped) {
+		err = nil // as before: the lab ends; the tag sweep and the reaper delete what terraform left
+	}
 	if inst.Runtime == "aws" {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		s.sweepLab(sctx, inst.ID)
-		if err == nil {
+		if tfDestroyed {
 			if merr := s.EndMeter(sctx, inst.ID, s.Now()); merr != nil {
 				s.Log.Error("ending the lab's meter failed; the reaper ends it", "lab", inst.ID, "err", merr)
 			}

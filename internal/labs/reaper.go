@@ -20,8 +20,11 @@ import (
 // reconcileCluster removed without terraform destroy). Resources with an unknown or malformed lab id are reported,
 // never deleted: they may belong to another deployment or to a restored database. Successful create calls by lab
 // sessions without the lab tag (CloudTrail) are reported. If the database cannot be read, nothing is deleted.
-// After a run that listed every region, the meters of labs that ended over an hour ago end (a failed terraform
-// destroy left them running; the tag sweep and this run cleaned up after it).
+// After a run that listed every region, the meters of labs that ended over an hour ago and had nothing tagged left
+// in any region end (a failed terraform destroy left them running; the tag sweep or an earlier run cleaned up after
+// it). A lab with leftovers listed in this run, deleted or not, keeps its meter until a run lists nothing for it.
+// ponytail: lab_instances has no region; a region dropped from CRUCIBLE_AWS_LAB_REGIONS after a lab ran there is no
+// longer listed, so that lab's meter ends with the next complete run. Store the region if regions ever shrink.
 // Deletes AWS refuses for now (awscloud.ErrNotYet) are retried by the next run. Admins get one summary when
 // something new turns up.
 func (s *Service) Reap(ctx context.Context) error {
@@ -31,7 +34,8 @@ func (s *Service) Reap(ctx context.Context) error {
 	now := s.Now()
 	var errs []error
 	report := func(source, labID, arn, detail string) { s.finding(ctx, source, labID, arn, "reported", detail) }
-	complete := true // every region listed and every ended lab's leftovers handled: meters of ended labs can end
+	complete := len(s.AWSRegions) > 0 // every region listed and every ended lab's leftovers handled: meters of ended labs can end
+	listed := []string{}              // labs with tagged resources in this run: their meters stay open
 	for _, region := range s.AWSRegions {
 		res, err := s.Cloud.Tagged(ctx, region, "")
 		if err != nil {
@@ -51,6 +55,7 @@ func (s *Service) Reap(ctx context.Context) error {
 			}
 			byLab[r.LabID] = append(byLab[r.LabID], r)
 		}
+		listed = append(listed, ids...)
 		ended, known, err := s.labsEnded(ctx, ids, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: reading labs: %w", region, err))
@@ -90,7 +95,7 @@ func (s *Service) Reap(ctx context.Context) error {
 	if complete {
 		if _, err := s.DB.Exec(wctx, `UPDATE lab_resources SET ended_at = $1 WHERE ended_at IS NULL AND lab_id IN (
 			SELECT id FROM lab_instances WHERE state NOT IN ('pending_approval', 'provisioning', 'ready', 'destroying')
-				AND coalesce(destroyed_at, created_at) < $2)`, now, now.Add(-time.Hour)); err != nil {
+				AND coalesce(destroyed_at, created_at) < $2) AND lab_id <> ALL($3)`, now, now.Add(-time.Hour), listed); err != nil {
 			errs = append(errs, fmt.Errorf("ending the meters of ended labs: %w", err))
 		}
 	}

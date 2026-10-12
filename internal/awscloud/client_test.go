@@ -129,14 +129,15 @@ func TestTaggedUsesTheOpsRoleAndFiltersByLab(t *testing.T) {
 			{"ResourceARN":"arn:aws:s3:::crucible-lab-aaaaaaaaaaaa","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"},{"Key":"app","Value":"x"}]},
 			{"ResourceARN":"arn:aws:s3:::crucible-lab-bbbbbbbbbbbb","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"}]}]}`
 	})
-	got, err := cl.Tagged(context.Background(), "eu-west-1", "aaaaaaaaaaaa")
+	got, err := cl.Tagged(context.Background(), "eu-central-1", "aaaaaaaaaaaa") // not the node's home region (eu-west-1)
 	// lab b tagged its bucket with a's id: by name it is b's, so a's sweep skips it; a's untagged bucket is found by name
 	if err != nil || len(got) != 2 || got[0].LabID != "aaaaaaaaaaaa" || got[0].ARN != "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa" ||
 		got[1] != (Resource{ARN: "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa-untagged", LabID: "aaaaaaaaaaaa"}) {
 		t.Fatalf("tagged: %+v %v", got, err)
 	}
-	if last := calls()[len(calls())-1]; !strings.Contains(last.query, "prefix=crucible-lab-aaaaaaaaaaaa") || !strings.Contains(last.query, "bucket-region=eu-west-1") {
-		t.Fatalf("lab buckets are listed by name prefix in the region: %+v", last)
+	if last := calls()[len(calls())-1]; !strings.Contains(last.query, "prefix=crucible-lab-aaaaaaaaaaaa") || !strings.Contains(last.query, "bucket-region=eu-central-1") ||
+		!strings.Contains(last.auth, "/eu-central-1/s3/") {
+		t.Fatalf("lab buckets are listed by name prefix in the region, signed for it: %+v", last)
 	}
 	all := calls()
 	if all[0].form.Get("RoleSessionName") != "crucible-ops" || all[0].form.Get("RoleArn") != "arn:aws:iam::444455556666:role/crucible-lab-ops" {

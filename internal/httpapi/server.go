@@ -64,6 +64,7 @@ func NewRouter(d Deps) chi.Router {
 
 	if d.OIDC != nil {
 		r.Get("/auth/login", d.OIDC.Login)
+		r.Get("/auth/switch", d.OIDC.Switch)
 		r.Get("/auth/callback", d.OIDC.Callback)
 		r.Post("/auth/logout", d.OIDC.Logout)
 	}

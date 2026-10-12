@@ -183,7 +183,7 @@ a.button-link:hover { border-color: var(--accent); }
 .user-button { display: inline-flex; align-items: center; gap: 0.5rem; background: none; border: 1px solid transparent; border-radius: 999px;
   padding: 0.15rem 0.75rem 0.15rem 0.15rem; font: inherit; color: var(--muted); cursor: pointer; }
 .user-button:hover, .user-button[aria-expanded="true"] { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-.user-card { position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 20; width: min(21rem, 92vw); padding: 0 1.1rem 1rem; overflow: hidden;
+.user-card { position: absolute; left: 0; top: calc(100% + 0.5rem);  /* its button sits at the left of the nav: opening rightwards keeps the card on screen */ z-index: 20; width: min(21rem, 92vw); padding: 0 1.1rem 1rem; overflow: hidden;
   border: 1px solid transparent; border-radius: 14px; color: var(--text);
   background: linear-gradient(var(--surface), var(--surface)) padding-box,
     linear-gradient(165deg, var(--accent-2), var(--border) 35%, var(--border) 70%, var(--accent)) border-box;
@@ -232,7 +232,7 @@ a.button-link:hover { border-color: var(--accent); }
 .icon-picker button:hover:not(:disabled), .icon-picker button:focus-visible { border-color: var(--accent); transform: translateY(-2px); }
 .icon-picker button:hover:not(:disabled) > *, .icon-picker button:focus-visible > *, .icon-picker button[aria-pressed="true"] > * { filter: none; opacity: 1; }
 .icon-picker button[aria-pressed="true"] { border-color: var(--accent-2); box-shadow: var(--glow), inset 0 0 12px color-mix(in srgb, var(--accent) 35%, transparent); }
-.user-card-foot { margin-top: 1.1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+.user-card-foot { margin-top: 1.1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); gap: 0.5rem; }
 .admin-menu-button { background: none; border: 1px solid transparent; border-radius: 8px; padding: 0.2rem 0.6rem; font: inherit; color: var(--muted); cursor: pointer; }
 .admin-menu-button:hover, .admin-menu-button[aria-expanded="true"], .admin-menu-button.active { color: var(--text); border-color: var(--border); }
 .admin-menu-list { position: absolute; right: 0; top: calc(100% + 0.4rem); z-index: 20; display: flex; flex-direction: column; min-width: 12rem; padding: 0.4rem; gap: 0.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--glow); }

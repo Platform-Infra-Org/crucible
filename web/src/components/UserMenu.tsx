@@ -51,6 +51,9 @@ export function UserMenu() {
     await fetch('/auth/logout', { method: 'POST' })
     window.location.href = '/' // back to the forge's gate
   }
+  // Signing out of Crucible leaves the identity provider's own session alone, so signing in again returns the same
+  // person. /auth/switch ends that session too, then starts a fresh sign-in.
+  const changeUser = () => { window.location.href = '/auth/switch' }
 
   return (
     <div className="user-menu" ref={box} onKeyDown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); close() } }}>
@@ -106,6 +109,7 @@ export function UserMenu() {
           <div className="row user-card-foot">
             <Link to="/settings" onClick={() => setOpen(false)}>Settings</Link>
             <span className="spacer" />
+            <button type="button" className="ghost" onClick={changeUser}>Change user</button>
             <button type="button" className="ghost" onClick={logout}>Log out</button>
           </div>
         </div>

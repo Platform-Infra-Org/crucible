@@ -36,3 +36,15 @@ an anvil, a flame, a sword, a shield, tongs, a helm or an ingot. Choose one and 
 
 **Log out**, at the bottom of your user card, ends your Crucible session and takes you back to the gate. If your
 company sign-in is still active in this browser, **Enter the forge** may let you straight back in without a password.
+
+## Signing in as somebody else
+
+**Change user** in your user card ends your Crucible session *and* the one your identity provider keeps, then brings
+you back to its sign-in page so you can come in as a different person. **Log out** beside it ends only Crucible's
+session, so signing in again returns you — which is what you want on a shared machine, and not what you want when
+you are trying somebody else's view.
+
+Most providers ask you to confirm the sign-out on the way through, and an administrator has to allow
+`<your Crucible URL>/auth/login` as a post-logout address for the return trip to work. Where a provider offers no
+sign-out at all, Crucible falls back to asking you to authenticate again, which lets you confirm who you are but not
+change it.

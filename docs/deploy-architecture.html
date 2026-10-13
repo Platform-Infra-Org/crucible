@@ -156,7 +156,7 @@ body { margin: 0; }
           <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>Sealed with a random <code>CRUCIBLE_SECRET_KEY</code> that <code>crucible aws init</code> keeps in the persistent stack, so it survives teardown; <code>git_credentials</code> from SSM also serves <code>https://</code> repositories with no credential of their own</td></tr>
           <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
           <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
-          <tr><th scope="row">Started by</th><td><code>docker compose up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
+          <tr><th scope="row">Started by</th><td><code>crucible local up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
         </tbody>
       </table>
     </div>
@@ -238,7 +238,7 @@ body { margin: 0; }
       <span><i class="sw arrow"></i>Who calls whom</span>
     </div>
     <div class="cols">
-      <div><h3>Start it</h3><p><code>make build && make toolbox && ./scripts/seed-git.sh</code>, then <code>docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code>. On this machine port 8081 is taken, so prefix <code>KEYCLOAK_PORT=8082</code>.</p></div>
+      <div><h3>Start and stop it</h3><p><code>crucible local up</code> runs <code>make build</code>, <code>make toolbox</code> and <code>./scripts/seed-git.sh</code>, then <code>docker compose … up -d --build --wait</code>. Add <code>--keycloak-port 8082</code> when 8081 is taken. <code>crucible local down</code> stops it and keeps the data; <code>--wipe</code> deletes it.</p></div>
       <div><h3>Configuration</h3><p>Settings, teams and budgets live in Postgres. <code>CRUCIBLE_SEED_DIR</code> imports <code>examples/platform</code> once, into an empty database only; its trainings' repositories arrive connected. <code>CRUCIBLE_GIT_ALLOW_FILE=1</code> lets <code>file://</code> repositories through, and a development <code>CRUCIBLE_SECRET_KEY</code> lets you try tokens and deploy keys under <b>Administrator → Repositories</b>.</p></div>
       <div><h3>Labs</h3><p>The agent on your laptop runs laptop labs in Docker, and cluster labs on whatever cluster your kubeconfig points at. AWS labs are off here.</p></div>
     </div>

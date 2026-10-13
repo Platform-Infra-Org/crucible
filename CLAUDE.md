@@ -48,7 +48,8 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |
-| Fresh local stack without tests | `make build && make toolbox && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` (the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
+| Fresh local stack without tests | `go run ./cmd/crucible local up --keycloak-port 8082` (runs `make build`, `make toolbox`, `./scripts/seed-git.sh`, then `docker compose … up -d --build --wait`; the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
+| Stop it / see it | `crucible local down` (keeps the data; `--wipe` deletes the stack's volumes) · `crucible local status` |
 
 Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App at http://localhost:8080.
 
@@ -117,5 +118,5 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only
-  `/api/git/hook` (HMAC) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
+  `/api/git/hook` (a shared secret in the `X-Crucible-Secret` header) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
 - Write prose and UI copy from the user's side of the screen, plainly; Crucible's voice is the forge metaphor.

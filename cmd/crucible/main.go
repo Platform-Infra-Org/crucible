@@ -27,6 +27,13 @@ const usage = `usage:
   crucible aws deploy | snapshot | wake | status
   crucible aws sleep [--no-snapshot]
   crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
+  crucible local up [--keycloak-port PORT] [--no-build]
+  crucible local down [--wipe]
+  crucible local status
+
+local runs the local stack (Postgres, Keycloak, Crucible) with Docker Compose from the repo root: up builds, seeds
+the example training repos and starts it at http://localhost:8080; down stops it and keeps its data (--wipe deletes
+the database and Keycloak data). --keycloak-port defaults to $KEYCLOAK_PORT, else 8081.
 
 lint is offline: an aws lab whose resources Crucible can't price fails unless aws.prices declares their USD per
 hour (aws.usage states monthly usage, such as storage_gb, for usage-priced resources).
@@ -51,6 +58,8 @@ func main() {
 		os.Exit(preview(os.Args[2:]))
 	case "aws":
 		os.Exit(awsCmd(os.Args[2:]))
+	case "local":
+		os.Exit(localCmd(os.Args[2:]))
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)

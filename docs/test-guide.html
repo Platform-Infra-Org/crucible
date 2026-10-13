@@ -312,10 +312,10 @@ body.hide-done .item.done { display: none; }
 go version</code></pre></div>
               <p class="expect"><b>Expect</b><code>go1.26</code>. Every later shell that builds or tests needs this line first.</p></div></li>
           <li class="item" data-id="stack-up"><label><input type="checkbox" id="c-stack-up"><span class="t">Start the local stack</span></label>
-            <div class="body"><p>Builds the binaries, seeds the example training repos into <code>.local/git</code>, and starts Postgres, Keycloak and Crucible. The API imports <code>examples/platform</code> into the empty database.</p>
-              <div class="cmd"><pre><code>make build &amp;&amp; ./scripts/seed-git.sh &amp;&amp; \
-KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code></pre></div>
-              <p class="expect"><b>Expect</b>three healthy containers and the sign-in page at localhost:8080. <code>seed-git.sh</code> wipes <code>.local/git</code>, so rerunning it deletes any training repo you add there.</p></div></li>
+            <div class="body"><p>One command builds the binaries and the toolbox image, seeds the example training repos into <code>.local/git</code>, and starts Postgres, Keycloak and Crucible with Docker Compose. The API imports <code>examples/platform</code> into the empty database. Use another <code>--keycloak-port</code> if 8081 is taken.</p>
+              <div class="cmd"><pre><code>go run ./cmd/crucible local up --keycloak-port 8081
+go run ./cmd/crucible local status</code></pre></div>
+              <p class="expect"><b>Expect</b>each step printed as it runs, three healthy containers, and the sign-in page at localhost:8080. <code>seed-git.sh</code> wipes <code>.local/git</code>, so rerunning <code>local up</code> deletes any training repo you add there. <code>crucible local down</code> stops the stack and keeps its data; <code>--wipe</code> deletes it too, for a fresh start.</p></div></li>
           <li class="item" data-id="stack-gate"><label><input type="checkbox" id="c-stack-gate"><span class="t">The forge's gate</span></label>
             <div class="body"><p>Open <code>http://localhost:8080</code> in a private window, then choose <b>Enter the forge</b>.</p>
               <p class="expect"><b>Expect</b>the Crucible title in the middle of the screen with embers drifting behind it (none with reduced motion), and the button under it; the button goes on to the Keycloak sign-in. After <b>Log out</b> you land back on the gate.</p></div></li>

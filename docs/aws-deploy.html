@@ -590,11 +590,16 @@ aws cognito-idp admin-create-user \
           Then enroll people and give out roles on the same page.</p></li>
       <li><h3>The git webhook (optional)</h3>
         <p>Crucible fetches content every minute anyway (<code>syncInterval: 60s</code>). A push webhook makes it fetch at once. Point it at
-          <code>POST https://&lt;domain&gt;/api/git/hook</code> with the header <code>X-Crucible-Secret</code> set to:</p>
+          <code>POST https://&lt;domain&gt;/api/git/hook</code> with the hook secret:</p>
         <div class="cmd"><pre><code>aws ssm get-parameter --with-decryption --name /crucible/git_hook_secret --query Parameter.Value --output text</code></pre></div>
-        <p>Crucible reads only that header. A right secret gets <code>202</code>. A wrong or missing one gets <code>404</code>. It doesn't check
-          GitHub's or GitLab's own signature headers, so your host must be able to send a custom header. The secret changes on every
-          teardown → up: update the webhook then.</p></li>
+        <ul>
+          <li><b>GitHub</b>: content type <code>application/json</code>, the secret in the webhook's <b>Secret</b> field. GitHub signs each
+            delivery (<code>X-Hub-Signature-256</code>) and Crucible checks the signature. Bodies over 1 MiB are refused.</li>
+          <li><b>GitLab</b>: the secret in the webhook's <b>Secret token</b> field (sent as <code>X-Gitlab-Token</code>).</li>
+          <li><b>Any other host</b>: a custom header <code>X-Crucible-Secret</code> set to the secret.</li>
+        </ul>
+        <p>A right secret gets <code>202</code>. Anything else gets <code>404</code>. The secret changes on every teardown → up: update the
+          webhook then.</p></li>
       <li><h3>Email (optional)</h3>
         <p>Without SMTP, Crucible sends no email; Slack and Teams webhooks still work. To turn it on, add <code>CRUCIBLE_SMTP_ADDR</code>
           (host:port), <code>CRUCIBLE_SMTP_FROM</code>, <code>CRUCIBLE_SMTP_USERNAME</code> and <code>CRUCIBLE_SMTP_PASSWORD</code> to the

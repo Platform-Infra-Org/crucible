@@ -448,8 +448,9 @@ tr.total td { font-weight: 700; }
               git's credential store (<code>https://bot:TOKEN@git.example.com</code>), used for any <code>https://</code> repository that has no credential of its own,
               so Crucible may push to it too. <b>Test connection</b> shows which: <i>Can write</i> or <i>Read only</i>. Over SSH, the host key Crucible pins
               on first contact is kept in the database, so a restart or a rebuilt server still refuses a host whose key changed.</p>
-            <p>Then point each repository's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code>, with the header <code>X-Crucible-Secret</code> set to
-              the <code>git_hook_secret</code> parameter. A push makes Crucible fetch every training at once. The secret is regenerated on every teardown → up,
+            <p>Then point each repository's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code> with the <code>git_hook_secret</code> parameter:
+              in GitHub's <b>Secret</b> field (Crucible checks the <code>X-Hub-Signature-256</code> signature), GitLab's <b>Secret token</b> field,
+              or, on any other host, a custom header <code>X-Crucible-Secret</code>. A push makes Crucible fetch every training at once. The secret is regenerated on every teardown → up,
               so update the webhooks afterwards. Without a webhook, Crucible still fetches every minute.</p></li>
         </ol>
 

@@ -118,5 +118,6 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only
-  `/api/git/hook` (a shared secret in the `X-Crucible-Secret` header) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
+  `/api/git/hook` (the shared hook secret, checked in constant time: the `X-Crucible-Secret` header, GitLab's
+  `X-Gitlab-Token`, or GitHub's `X-Hub-Signature-256` HMAC of a body of at most 1 MiB; anything else is a 404) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
 - Write prose and UI copy from the user's side of the screen, plainly; Crucible's voice is the forge metaphor.

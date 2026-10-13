@@ -2,8 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"crucible/internal/agenthub"
@@ -116,26 +121,58 @@ func (c logCount) Handle(_ context.Context, r slog.Record) error {
 func (c logCount) WithAttrs([]slog.Attr) slog.Handler { return c }
 func (c logCount) WithGroup(string) slog.Handler      { return c }
 
+// The hook takes the secret three ways: Crucible's own header, GitLab's X-Gitlab-Token (the secret verbatim) and
+// GitHub's X-Hub-Signature-256 (an HMAC-SHA256 of the raw body). Everything else is a 404 that syncs nothing.
 func TestGitHookNeedsTheSecret(t *testing.T) {
 	syncs := make(logCount, 10)
 	noConfig := func(context.Context) (*config.Platform, error) { return nil, errors.New("no configuration") }
 	syncer := gitsync.New(t.TempDir(), noConfig, slog.New(syncs))
 	r := NewRouter(Deps{Sync: syncer, HookSecret: "s3cret", Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New()})
-	hook := func(secret string) int {
-		req := httptest.NewRequest("POST", "/api/git/hook", strings.NewReader(`{"ref":"refs/heads/main"}`))
+	const payload = `{"ref":"refs/heads/main"}`
+	sign := func(key, body string) string {
+		m := hmac.New(sha256.New, []byte(key))
+		m.Write([]byte(body))
+		return "sha256=" + hex.EncodeToString(m.Sum(nil))
+	}
+	hookWith := func(r http.Handler, body io.Reader, headers map[string]string) int {
+		req := httptest.NewRequest("POST", "/api/git/hook", body)
 		req.Header.Set("Content-Type", "application/json")
-		if secret != "" {
-			req.Header.Set("X-Crucible-Secret", secret)
+		for k, v := range headers {
+			req.Header.Set(k, v)
 		}
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		return w.Code
 	}
-	if c := hook(""); c != 404 {
-		t.Fatalf("no secret: %d", c)
+	hook := func(headers map[string]string) int { return hookWith(r, strings.NewReader(payload), headers) }
+	big := strings.Repeat("x", 1<<20+1)
+	for name, code := range map[string]int{
+		"missing header":                 hook(nil),
+		"wrong secret":                   hook(map[string]string{"X-Crucible-Secret": "wrong"}),
+		"wrong GitLab token":             hook(map[string]string{"X-Gitlab-Token": "wrong"}),
+		"GitLab token with a space":      hook(map[string]string{"X-Gitlab-Token": "s3cret "}),
+		"wrong signature key":            hook(map[string]string{"X-Hub-Signature-256": sign("wrong", payload)}),
+		"signature of another body":      hook(map[string]string{"X-Hub-Signature-256": sign("s3cret", `{"ref":"refs/heads/other"}`)}),
+		"sha1= prefix":                   hook(map[string]string{"X-Hub-Signature-256": "sha1=" + strings.TrimPrefix(sign("s3cret", payload), "sha256=")}),
+		"legacy sha1 header":             hook(map[string]string{"X-Hub-Signature": "sha1=" + strings.TrimPrefix(sign("s3cret", payload), "sha256=")}),
+		"signature not hex":              hook(map[string]string{"X-Hub-Signature-256": "sha256=zz"}),
+		"oversized body, right sig":      hookWith(r, strings.NewReader(big), map[string]string{"X-Hub-Signature-256": sign("s3cret", big)}),
+		"unreadable body":                hookWith(r, iotest.ErrReader(errors.New("boom")), map[string]string{"X-Hub-Signature-256": sign("s3cret", "")}),
+		"secret as GitHub signature key": hook(map[string]string{"X-Hub-Signature-256": "sha256=s3cret"}),
+	} {
+		if code != 404 {
+			t.Errorf("%s: %d, want 404", name, code)
+		}
 	}
-	if c := hook("wrong"); c != 404 {
-		t.Fatalf("wrong secret: %d", c)
+	// No secret configured: the hook is off, whatever the request carries.
+	off := NewRouter(Deps{Sync: syncer, Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New()})
+	for name, h := range map[string]map[string]string{
+		"no header": nil, "empty secret header": {"X-Crucible-Secret": ""}, "empty GitLab token": {"X-Gitlab-Token": ""},
+		"signature with an empty key": {"X-Hub-Signature-256": sign("", payload)},
+	} {
+		if c := hookWith(off, strings.NewReader(payload), h); c != 404 {
+			t.Errorf("hook without a configured secret, %s: %d", name, c)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,21 +182,19 @@ func TestGitHookNeedsTheSecret(t *testing.T) {
 		t.Fatal("a rejected hook triggered a sync")
 	case <-time.After(300 * time.Millisecond):
 	}
-	if c := hook("s3cret"); c != 202 {
-		t.Fatalf("right secret: %d", c)
-	}
-	select {
-	case <-syncs:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the hook did not trigger a sync")
-	}
-
-	// No secret configured: the hook is off, even for an empty header.
-	off := NewRouter(Deps{Sync: syncer, Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New()})
-	w := httptest.NewRecorder()
-	off.ServeHTTP(w, httptest.NewRequest("POST", "/api/git/hook", nil))
-	if w.Code != 404 {
-		t.Fatalf("hook without a configured secret: %d", w.Code)
+	for name, h := range map[string]map[string]string{
+		"Crucible header":  {"X-Crucible-Secret": "s3cret"},
+		"GitLab token":     {"X-Gitlab-Token": "s3cret"},
+		"GitHub signature": {"X-Hub-Signature-256": sign("s3cret", payload)},
+	} {
+		if c := hook(h); c != 202 {
+			t.Fatalf("%s: %d, want 202", name, c)
+		}
+		select {
+		case <-syncs:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the hook did not trigger a sync", name)
+		}
 	}
 }
 

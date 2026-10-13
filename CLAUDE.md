@@ -12,6 +12,9 @@ writes content edits back to git as a bot. Configuration and people live in Post
 - Operator guides: `docs/runbooks/aws.md`, `docs/runbooks/cognito.md`
 - AWS for newcomers: `docs/aws-guide.html` — every AWS component, an architecture diagram, deploying step by step, and
   how AWS labs use Terraform and IAM. Update it when `deploy/aws` or the AWS lab path changes.
+- AWS deployment walkthrough: `docs/aws-deploy.html` — every `crucible aws` step in order, from `init` to the first sign-in,
+  AWS labs, upgrades, teardown and troubleshooting, with how to check each one. Update it when `deploy/aws`,
+  `internal/awsops` or `docs/runbooks/aws.md` changes.
 - Terraform or Crossplane for AWS labs: `docs/terraform-vs-crossplane.html` — how each would run a lab, with diagrams,
   and the trade-offs here.
 - Deploy architecture: `docs/deploy-architecture.html` — diagrams of the local stack, `cluster-check`, production on AWS

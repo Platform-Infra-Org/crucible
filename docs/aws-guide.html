@@ -412,6 +412,7 @@ tr.total td { font-weight: 700; }
         <h2>Deploy it</h2>
         <p class="lede">Everything runs from the repo root on your computer. You need an AWS account, a domain name you control, and
           a terminal logged in to AWS (<code>aws configure</code> or SSO) with administrator rights in that account.</p>
+        <p class="prose">For every command in order, with what to expect, how to check each step and what to do when one fails, follow the <a href="aws-deploy.html">AWS deployment walkthrough</a>.</p>
         <ol class="steps">
           <li><h4>Install the tools</h4>
             <p>Terraform 1.10 or later, AWS CLI v2, Docker with buildx, Helm 3, Go 1.26. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>

@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploying Crucible on AWS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Same palette and components as deploy-architecture.html: steel (light), molten forge (dark). */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e; --line: #cbd3dc;
+  --accent: #2f5d8a; --heat: #96500f; --ok: #276b2b; --danger: #c62828;
+  --display: "Cinzel", "Trajan Pro", Georgia, serif;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+    --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+  --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+}
+
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); }
+.page { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid;
+  grid-template-columns: minmax(0, 1fr); gap: 56px; }
+@media (max-width: 640px) { .page { padding-inline: 16px; padding-block: 24px 48px; gap: 44px; } }
+
+h1, h2 { font-family: var(--display); font-weight: 700; text-wrap: balance; letter-spacing: 0.02em; margin: 0; }
+h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.15; }
+h2 { font-size: clamp(1.35rem, 2.6vw, 1.7rem); line-height: 1.25; }
+h3 { font: 600 1rem/1.4 var(--sans); margin: 0; }
+p { margin: 0; max-width: 72ch; }
+ul { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 72ch; }
+code { font: 500 0.86em var(--mono); background: var(--surface-2); padding: 0.08em 0.36em; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--heat); outline-offset: 2px; border-radius: 3px; }
+
+.eyebrow { font: 600 0.74rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--heat); }
+header { display: grid; gap: 14px; }
+header h1::after { content: ""; display: block; width: 56px; height: 3px; margin-top: 14px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--heat)); }
+.lede { font-size: 1.05rem; color: var(--muted); }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a { font: 500 0.85rem/1 var(--sans); color: var(--text); text-decoration: none; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.toc a:hover { border-color: var(--accent); }
+
+section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; scroll-margin-top: 16px; }
+section > .head { display: grid; gap: 8px; }
+.muted { color: var(--muted); }
+
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 720px; height: auto; }
+
+.key { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.84rem; color: var(--muted); }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 22px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line); background: var(--surface); display: inline-block; }
+.sw.hot { border: 2px solid var(--accent); }
+.sw.dash { border-style: dashed; }
+.sw.zone { background: var(--surface-2); }
+.sw.arrow { border: 0; height: 2px; border-radius: 0; background: var(--accent); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; }
+.cols > div { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.cols p { color: var(--muted); font-size: 0.94rem; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); }
+tbody th { font: 600 0.9rem/1.4 var(--sans); letter-spacing: 0; text-transform: none; color: var(--text); background: transparent; }
+tr:last-child > * { border-bottom: 0; }
+td.money { color: var(--heat); font-weight: 600; }
+td.req { font: 600 0.8rem/1.4 var(--mono); white-space: nowrap; }
+tr.group > th { background: var(--surface-2); font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--heat); }
+
+/* Numbered steps: the counter sits in the left gutter, the content stacks freely to its right. */
+ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+ol.steps > li { counter-increment: step; position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px;
+  padding: 16px 0 16px 56px; border-top: 1px solid var(--line); }
+ol.steps > li::before { content: counter(step); position: absolute; left: 0; top: 14px; width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center; font: 600 0.9rem/1 var(--mono); color: var(--accent); border: 2px solid var(--accent); }
+ol.steps p { color: var(--muted); font-size: 0.94rem; }
+ol.steps h3 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.lane { font: 500 0.7rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--surface-2); }
+.lane.aws { color: var(--heat); border-color: color-mix(in srgb, var(--heat) 45%, var(--line)); }
+.lane.k8s { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+/* Commands: copyable code blocks. */
+.cmd { position: relative; min-width: 0; }
+pre { margin: 0; padding: 14px 16px; padding-right: 76px; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 10px; font: 400 0.84rem/1.6 var(--mono); }
+pre code { background: none; padding: 0; font: inherit; overflow-wrap: normal; }
+pre .c { color: var(--muted); }
+.copy { position: absolute; top: 8px; right: 8px; font: 500 0.74rem/1 var(--sans); color: var(--text); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; cursor: pointer; }
+.copy:hover { border-color: var(--accent); }
+
+.note { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--surface);
+  padding: 12px 16px; display: grid; gap: 6px; }
+.note.warn { border-left-color: var(--heat); }
+.note.danger { border-left-color: var(--danger); }
+.note p { font-size: 0.94rem; }
+.note strong:first-child { display: block; }
+
+.out { font: 500 0.86em var(--mono); color: var(--ok); }
+
+.trouble { display: grid; gap: 14px; }
+.trouble article { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px 16px; display: grid; gap: 8px; min-width: 0; }
+.trouble dl { margin: 0; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 6px 12px; font-size: 0.94rem; }
+.trouble dt { font: 600 0.7rem/1.9 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.trouble dd { margin: 0; min-width: 0; display: grid; gap: 8px; }
+@media (max-width: 520px) { .trouble dl { grid-template-columns: minmax(0, 1fr); } .trouble dt { line-height: 1.2; } }
+
+footer { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 6px; }
+
+/* SVG diagram: every colour from the tokens above. */
+svg .zone { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+svg .zone.dash { stroke-dasharray: 8 6; stroke: var(--heat); }
+svg .group { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+svg .box.hot { stroke: var(--accent); stroke-width: 2.2; }
+svg .box.aws { stroke: var(--heat); stroke-width: 1.8; }
+svg .zl { font: 600 11.5px var(--mono); fill: var(--muted); letter-spacing: 0.08em; }
+svg .zl.aws { fill: var(--heat); }
+svg .bt { font: 600 15px var(--sans); fill: var(--text); }
+svg .bs { font: 400 12.5px var(--sans); fill: var(--muted); }
+svg .cd { font: 500 11.5px var(--mono); fill: var(--muted); }
+svg .ar { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+svg .ar.soft { stroke: var(--muted); stroke-dasharray: 5 4; }
+svg .al { font: 600 11.5px var(--sans); fill: var(--accent); paint-order: stroke; stroke: var(--surface-2); stroke-width: 5px; stroke-linejoin: round; }
+svg .ahp { fill: var(--accent); }
+svg .ahm { fill: var(--muted); }
+</style>
+</head>
+<body>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">Crucible · operator walkthrough</span>
+    <h1>Deploying Crucible on AWS</h1>
+    <p class="lede">Every step from an empty AWS account to your first training: the exact commands, what each one creates, what you
+      should see, how to check it worked, and what to do when it didn't. For what each AWS service is, read the
+      <a href="aws-guide.html">AWS guide</a>. For the full drawings, read the <a href="deploy-architecture.html">deploy architecture</a>.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#overview">What you'll end up with</a>
+      <a href="#before">Before you start</a>
+      <a href="#init">One-time setup</a>
+      <a href="#configure">Configure</a>
+      <a href="#up">Build the node</a>
+      <a href="#deploy">Ship the app</a>
+      <a href="#first">First sign-in</a>
+      <a href="#labs">AWS labs</a>
+      <a href="#everyday">Everyday</a>
+      <a href="#upgrade">Upgrading</a>
+      <a href="#teardown">Teardown and recovery</a>
+      <a href="#trouble">Troubleshooting</a>
+      <a href="#secrets">Secrets</a>
+    </nav>
+  </header>
+
+  <!-- ───────────── 1. overview ───────────── -->
+  <section id="overview" aria-labelledby="overview-h">
+    <div class="head"><span class="eyebrow">The result</span><h2 id="overview-h">What you'll end up with</h2>
+      <p>One EC2 server in your AWS account runs single-node Kubernetes (k3s). On it run Crucible, its Postgres database and
+        Traefik, which serves HTTPS with a Let's Encrypt certificate. People sign in through an Amazon Cognito user pool. Two
+        Terraform stacks build it: <b>persistent</b> (sign-in, buckets, the secret key; never destroyed) and <b>main</b> (the
+        server and everything around it). A second AWS account for AWS labs is optional.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1000 430" role="img" aria-labelledby="ov-t ov-d">
+        <title id="ov-t">What a deployment looks like</title>
+        <desc id="ov-d">Your computer runs crucible aws, which applies the persistent and main Terraform stacks in the main AWS account.
+          The persistent stack holds Cognito, the data and state buckets and the secret key. The main stack holds the scheduler,
+          SSM parameters, the Elastic IP and the EC2 node with k3s, Traefik, Crucible and Postgres. An optional lab account holds the
+          lab, ops and plan roles, the lab state bucket, the billing export and an AWS Budget; the node assumes those roles.</desc>
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahp" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahm" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <rect class="zone" x="10" y="10" width="210" height="410" rx="14"/>
+        <text class="zl" x="26" y="36">YOUR COMPUTER</text>
+        <rect class="box hot" x="26" y="50" width="178" height="118" rx="10"/>
+        <text class="bt" x="40" y="78">crucible aws</text>
+        <text class="cd" x="40" y="100">init · up · deploy</text>
+        <text class="bs" x="40" y="124">runs terraform, docker,</text>
+        <text class="bs" x="40" y="144">helm and the aws cli</text>
+        <rect class="box" x="26" y="184" width="178" height="110" rx="10"/>
+        <text class="bt" x="40" y="212">Local files</text>
+        <text class="cd" x="40" y="236">persistent state</text>
+        <text class="cd" x="40" y="256">labs state</text>
+        <text class="cd" x="40" y="276">crucible.tfvars</text>
+        <rect class="box" x="26" y="310" width="178" height="94" rx="10"/>
+        <text class="bt" x="40" y="338">Your DNS</text>
+        <text class="bs" x="40" y="362">A record to the</text>
+        <text class="bs" x="40" y="382">Elastic IP</text>
+
+        <rect class="zone" x="240" y="10" width="510" height="410" rx="14"/>
+        <text class="zl" x="258" y="36">MAIN AWS ACCOUNT</text>
+        <rect class="group" x="256" y="48" width="478" height="122" rx="12"/>
+        <text class="zl" x="270" y="68">persistent · aws init · kept</text>
+        <rect class="box" x="270" y="78" width="106" height="80" rx="10"/>
+        <text class="bt" x="282" y="104">Cognito</text>
+        <text class="bs" x="282" y="126">sign-in</text>
+        <rect class="box" x="386" y="78" width="106" height="80" rx="10"/>
+        <text class="bt" x="398" y="104">Data</text>
+        <text class="bs" x="398" y="126">releases,</text>
+        <text class="bs" x="398" y="144">backups</text>
+        <rect class="box" x="502" y="78" width="106" height="80" rx="10"/>
+        <text class="bt" x="514" y="104">State</text>
+        <text class="bs" x="514" y="126">main's</text>
+        <text class="bs" x="514" y="144">tfstate</text>
+        <rect class="box" x="618" y="78" width="106" height="80" rx="10"/>
+        <text class="bt" x="630" y="104">SSM</text>
+        <text class="cd" x="630" y="126">secret_key</text>
+
+        <rect class="group" x="256" y="184" width="478" height="226" rx="12"/>
+        <text class="zl" x="270" y="204">main · aws up</text>
+        <rect class="box" x="270" y="214" width="170" height="56" rx="10"/>
+        <text class="bt" x="284" y="238">Scheduler</text>
+        <text class="bs" x="284" y="258">wake and sleep</text>
+        <rect class="box" x="270" y="280" width="170" height="56" rx="10"/>
+        <text class="bt" x="284" y="304">SSM parameters</text>
+        <text class="bs" x="284" y="324">settings, secrets</text>
+        <rect class="box" x="270" y="346" width="170" height="56" rx="10"/>
+        <text class="bt" x="284" y="370">Elastic IP</text>
+        <text class="bs" x="284" y="390">+ A record if Route 53</text>
+
+        <rect class="box hot" x="456" y="214" width="264" height="188" rx="12"/>
+        <text class="bt" x="472" y="240">EC2 node · k3s</text>
+        <text class="bs" x="472" y="260">t3a.xlarge · Ubuntu 24.04</text>
+        <rect class="box" x="472" y="272" width="232" height="36" rx="8"/>
+        <text class="bs" x="486" y="295">Traefik · HTTPS, Let's Encrypt</text>
+        <rect class="box hot" x="472" y="314" width="232" height="36" rx="8"/>
+        <text class="bs" x="486" y="337">crucible · the API and the app</text>
+        <rect class="box" x="472" y="356" width="232" height="36" rx="8"/>
+        <text class="bs" x="486" y="379">Postgres · nightly dump to S3</text>
+
+        <rect class="zone dash" x="770" y="10" width="220" height="410" rx="14"/>
+        <text class="zl aws" x="786" y="36">LAB ACCOUNT · OPTIONAL</text>
+        <text class="cd" x="786" y="56">aws labs-init</text>
+        <rect class="box aws" x="786" y="70" width="188" height="76" rx="10"/>
+        <text class="bt" x="800" y="98">Lab, ops, plan roles</text>
+        <text class="bs" x="800" y="120">the node assumes them</text>
+        <rect class="box aws" x="786" y="158" width="188" height="64" rx="10"/>
+        <text class="bt" x="800" y="186">Lab state bucket</text>
+        <text class="cd" x="800" y="206">labs/&lt;id&gt;.tfstate</text>
+        <rect class="box aws" x="786" y="234" width="188" height="76" rx="10"/>
+        <text class="bt" x="800" y="262">Billing export</text>
+        <text class="bs" x="800" y="284">CUR 2.0, daily, free</text>
+        <rect class="box aws" x="786" y="322" width="188" height="80" rx="10"/>
+        <text class="bt" x="800" y="350">AWS Budget</text>
+        <text class="bs" x="800" y="372">alert-only email</text>
+
+        <path class="ar" d="M204,110 H252" marker-end="url(#ah)"/>
+        <path class="ar soft" d="M204,374 H266" marker-end="url(#ahm)"/>
+        <path class="ar" d="M474,158 V210" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="al" x="484" y="180">releases, backups</text>
+        <path class="ar" d="M720,250 H756 V108 H782" marker-end="url(#ah)"/>
+        <text class="al" transform="translate(750,330) rotate(-90)">sts:AssumeRole</text>
+      </svg>
+    </div>
+    <div class="key">
+      <span><i class="sw hot"></i>Crucible's own programs</span>
+      <span><i class="sw zone"></i>Machine or account</span>
+      <span><i class="sw dash"></i>Optional</span>
+      <span><i class="sw arrow"></i>Who calls whom</span>
+    </div>
+    <div class="cols">
+      <div><h3>What it costs</h3><p>The design's estimate for <code>eu-west-1</code>, on demand: the <code>t3a.xlarge</code> node about $40 a month when it
+        sleeps outside working hours (11 h × 22 days), about $119 if it runs 24/7. Add the 60 GiB disk (about $5.30), the Elastic IP
+        (about $3.70) and S3 (under $1). That makes <b>about $50 a month</b> on the schedule, <b>about $130</b> around the clock, plus
+        what labs spend. Asleep, it costs about $10 a month. Check current AWS prices; the <a href="aws-guide.html#components">AWS guide</a> has the table.</p></div>
+      <div><h3>The cost drivers</h3><p>The instance type and how many hours it runs. <code>t3a</code> instances also bill surplus CPU credits if they stay busy
+        above their baseline (40% for <code>t3a.xlarge</code>), about $0.05 per vCPU-hour; watch the <code>CPUSurplusCreditsCharged</code> metric.
+        Cognito, the scheduler, SSM and the lab account's billing export and Budget are free at this size.</p></div>
+      <div><h3>Not on the AWS node yet</h3><p>Cluster labs run on trainees' own clusters and need a toolbox image (<code>CRUCIBLE_TOOLBOX_IMAGE</code>,
+        Helm <code>toolboxImage</code>). Neither <code>crucible.tfvars</code> nor the node's deploy script sets it, and the runbook gives no AWS
+        procedure for it, so cluster labs stay off on this deployment. Laptop labs and AWS labs work.</p></div>
+    </div>
+  </section>
+
+  <!-- ───────────── 2. before ───────────── -->
+  <section id="before" aria-labelledby="before-h">
+    <div class="head"><span class="eyebrow">Prerequisites</span><h2 id="before-h">Before you start</h2></div>
+
+    <h3>Tools</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Tool</th><th scope="col">Version</th><th scope="col">Used for</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>All three stacks (<code>required_version = "&gt;= 1.10"</code>).</td></tr>
+        <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Uploading releases, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
+        <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>Only for <code>aws ssm start-session</code>, a shell on the node. The runbook doesn't list it, but the AWS CLI needs it for interactive sessions.</td></tr>
+        <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Building the <code>linux/amd64</code> image. On an Apple-silicon Mac this is a cross-build and is slower.</td></tr>
+        <tr><th scope="row">Helm</th><td>3</td><td>Packaging the chart (<code>helm package</code>).</td></tr>
+        <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old; if you have the repo's toolchain in <code>.local/tools</code>, put it first on your <code>PATH</code>. That folder is git-ignored, so a fresh clone doesn't have it.</td></tr>
+        <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository. <code>deploy</code> ships the commit you have checked out.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Run every command from the repository root. Install the command once, then type <code>crucible …</code>. If you'd rather not,
+      type <code>go run ./cmd/crucible</code> wherever this page says <code>crucible</code>.</p>
+    <div class="cmd"><pre><code><span class="c"># only if you use the repo's own toolchain</span>
+export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
+go install ./cmd/crucible      <span class="c"># puts crucible in $(go env GOPATH)/bin; make sure that is on your PATH</span>
+crucible aws status            <span class="c"># before init, this fails with "did you run `crucible aws init`/`up`?": that's fine</span></code></pre></div>
+
+    <div class="cols">
+      <div><h3>AWS permissions</h3><p>Use administrator rights in the account. The stacks create S3 buckets, a Cognito user pool, SSM parameters,
+        IAM roles and policies, an EC2 instance, a security group, an Elastic IP, EventBridge Scheduler schedules and, optionally, a
+        Route 53 record. Day to day you also run SSM commands and start and stop the instance. The runbook gives no minimal policy.</p></div>
+      <div><h3>A domain you control</h3><p>Pick the final hostname now, such as <code>crucible.example.com</code>. The Cognito sign-in callback is
+        built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
+        give Terraform a Route 53 hosted zone that holds the name.</p></div>
+      <div><h3>The region</h3><p><code>init</code> takes the region, and everything in the main account follows it: the node goes where the user pool is.
+        The account needs its <b>default VPC</b> in that region, because the node is placed in its first default subnet. Labs' regions
+        are set separately, in the lab account.</p></div>
+      <div><h3>AWS labs or not</h3><p>AWS labs create real resources, so they belong in a <b>second, standalone AWS account</b>. The runbook strongly
+        recommends one: the permission boundary limits labs to EC2 and S3, small instances and allowed regions, but isolation in a
+        shared account is best-effort. You can add labs later; Crucible works without them.</p></div>
+    </div>
+  </section>
+
+  <!-- ───────────── 3. init ───────────── -->
+  <section id="init" aria-labelledby="init-h">
+    <div class="head"><span class="eyebrow">deploy/aws/persistent · once per account</span><h2 id="init-h">One-time setup: <code>crucible aws init</code></h2>
+      <p>This creates everything that must outlive the server. Nothing here is ever destroyed by Crucible.</p></div>
+    <ol class="steps">
+      <li><h3>Run init <span class="lane aws">main account</span></h3>
+        <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
+        <p>Both flags are required. It runs <code>terraform init</code>, then <code>terraform apply</code> in <code>deploy/aws/persistent</code>.
+          Terraform shows the plan and asks <code>Enter a value:</code>. Read it, then type <code>yes</code>. In a fresh account the plan
+          adds 14 resources:</p>
+        <ul class="muted">
+          <li>the state bucket <code>crucible-&lt;account&gt;-tfstate</code> (versioned, private): it holds the main stack's state;</li>
+          <li>the data bucket <code>crucible-&lt;account&gt;-data</code> (versioned, encrypted, private): releases, nightly snapshots
+            (kept 30 days), <code>latest/</code> (kept for good) and trainees' uploads;</li>
+          <li>the Cognito user pool <code>crucible</code>, its login domain <code>crucible-&lt;account&gt;.auth.&lt;region&gt;.amazoncognito.com</code>,
+            the app client <code>crucible</code> (callback <code>https://&lt;domain&gt;/auth/callback</code>) and its login style. Invite-only,
+            email as username, deletion protection on;</li>
+          <li>the SecureString <code>/crucible/secret_key</code>, which is <code>CRUCIBLE_SECRET_KEY</code>: it seals the repository tokens and
+            deploy keys Crucible stores. Terraform never changes or deletes it once made.</li>
+        </ul>
+        <p>Every resource has <code>prevent_destroy</code> or deletion protection. To see each one's settings, read
+          <code>docs/runbooks/cognito.md</code> and the <a href="aws-guide.html#components">AWS guide</a>.</p></li>
+      <li><h3>Check it worked</h3>
+        <div class="cmd"><pre><code>terraform -chdir=deploy/aws/persistent output
+curl -s "$(terraform -chdir=deploy/aws/persistent output -raw oidc_issuer)/.well-known/openid-configuration" | jq .issuer
+aws ssm get-parameter --region eu-west-1 --name /crucible/secret_key --query Parameter.Name --output text</code></pre></div>
+        <p>The outputs list <code>cognito_login_url</code>, <code>cognito_user_pool_id</code>, <code>data_bucket</code>, <code>oidc_client_id</code>,
+          <code>oidc_issuer</code>, <code>region</code> and <code>state_bucket</code>. The curl prints the same issuer back. The last command prints
+          <span class="out">/crucible/secret_key</span> without showing the value.</p></li>
+      <li><h3>Back up the persistent state, now</h3>
+        <p><code>deploy/aws/persistent/terraform.tfstate</code> is local and git-ignored. It's the only record of what init created. Lose it and
+          you have to import 14 resources by hand (see <a href="#lost-state">lost persistent state</a>). It also holds the secret key and the
+          Cognito client secret in plain text, so keep the copy private. Copy it to the state bucket or to a password manager, and do it
+          again after every <code>init</code>.</p>
+        <div class="cmd"><pre><code>aws s3 cp deploy/aws/persistent/terraform.tfstate \
+  "s3://$(terraform -chdir=deploy/aws/persistent output -raw state_bucket)/persistent.tfstate"</code></pre></div>
+        <p>A copy in the same account doesn't help if you lose the account. Keep a second copy elsewhere if that matters to you.</p></li>
+    </ol>
+    <div class="note danger"><p><strong>Never lose or rotate the secret key.</strong>Every token and deploy key sealed with it becomes unreadable, and
+      each of those repositories has to be connected again. It survives <code>teardown</code> because it lives in the persistent stack.</p></div>
+  </section>
+
+  <!-- ───────────── 4. configure ───────────── -->
+  <section id="configure" aria-labelledby="configure-h">
+    <div class="head"><span class="eyebrow">deploy/aws/main/variables.tf</span><h2 id="configure-h">Configure the main stack</h2>
+      <p>Copy the example and fill it in. The copy is git-ignored, and it may hold a git token, so keep it private.</p></div>
+    <div class="cmd"><pre><code>cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars</code></pre></div>
+    <div class="cmd"><pre><code><span class="c"># deploy/aws/main/crucible.tfvars: a filled-in example</span>
+domain          = "crucible.example.com"        <span class="c"># exactly the --domain you gave init</span>
+acme_email      = "ops@example.com"
+bootstrap_admin = "you@example.com"
+git_credentials = "https://crucible-bot:TOKEN@git.example.com"
+git_bot_email   = "crucible-bot@example.com"     <span class="c"># an address your git host accepts</span>
+schedule_timezone = "Europe/Bucharest"
+<span class="c"># route53_zone_id  = "Z0123456789"</span>
+<span class="c"># instance_type    = "t3a.large"</span>
+<span class="c"># schedule_enabled = false</span></code></pre></div>
+    <p>Sign-in needs nothing here: <code>up</code> passes the Cognito issuer, client id and pool id from the persistent stack, and Terraform
+      stores the client secret in SSM itself.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Variable</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">What it means, and when to change it</th></tr></thead>
+      <tbody>
+        <tr class="group"><th scope="colgroup" colspan="4">You set these</th></tr>
+        <tr><th scope="row"><code>domain</code></th><td>none</td><td class="req">yes</td><td>The public hostname. It must equal init's <code>--domain</code>, or sign-in fails with <code>redirect_mismatch</code>. To change it later: <code>crucible aws init --domain &lt;new&gt;</code> first, then a new DNS record, then <code>up</code>.</td></tr>
+        <tr><th scope="row"><code>acme_email</code></th><td>none</td><td class="req">yes</td><td>The Let's Encrypt account email. It goes into the first-boot script only, so a change reaches only a new node.</td></tr>
+        <tr><th scope="row"><code>bootstrap_admin</code></th><td><code>""</code></td><td class="req">in practice</td><td>The first admin's email, added once to the empty admins table on first start. A plain address only. It grants nothing alone: invite the same email in Cognito. After the first start it's ignored (the <code>admin.bootstrap</code> audit row marks it done). Without it nobody can configure Crucible.</td></tr>
+        <tr><th scope="row"><code>git_credentials</code></th><td><code>""</code></td><td class="req">no</td><td>Lines for git's credential store, such as <code>https://bot:TOKEN@git.example.com</code>. Crucible uses them for any <code>https://</code> repository connected with no credential of its own. To let people edit content in Crucible, the token needs push access: edits go to <code>crucible/edit/&lt;id&gt;</code> branches, and the bot merges approved ones, so branch protection must let it. Empty is stored as <code>none</code>. You can also give each repository its own token or deploy key in the app instead.</td></tr>
+        <tr><th scope="row"><code>git_bot_email</code></th><td><code>crucible-bot@example.com</code></td><td class="req">change it</td><td>The author email of the commits Crucible pushes. Hosts that require verified commit emails reject the default.</td></tr>
+        <tr><th scope="row"><code>git_bot_name</code></th><td><code>Crucible Bot</code></td><td class="req">no</td><td>The author name of those commits.</td></tr>
+        <tr><th scope="row"><code>route53_zone_id</code></th><td><code>""</code></td><td class="req">no</td><td>A Route 53 hosted zone that holds <code>domain</code>. When set, Terraform creates the A record (TTL 300) and keeps it on the Elastic IP, even after a rebuild. Empty: you create the record yourself.</td></tr>
+        <tr><th scope="row"><code>instance_type</code></th><td><code>t3a.xlarge</code></td><td class="req">no</td><td>The node's size (4 vCPU, 16 GiB). AWS lab workspaces run on it. The example suggests <code>t3a.large</code> as cheaper. It must be x86_64: the image is Ubuntu amd64 and sysbox is amd64-only.</td></tr>
+        <tr><th scope="row"><code>disk_gb</code></th><td><code>60</code></td><td class="req">no</td><td>The encrypted gp3 root disk: k3s, Postgres data, images. The runbook doesn't cover resizing it on a running node.</td></tr>
+        <tr><th scope="row"><code>schedule_enabled</code></th><td><code>true</code></td><td class="req">no</td><td>Stops the node at night and starts it in the morning. <code>false</code> runs it 24/7.</td></tr>
+        <tr><th scope="row"><code>schedule_timezone</code></th><td><code>Europe/Bucharest</code></td><td class="req">change it</td><td>The IANA zone for the wake and sleep schedule and the backup time. It also sets the node's clock at first boot, which only a new node picks up.</td></tr>
+        <tr><th scope="row"><code>wake_cron</code></th><td><code>cron(30 7 ? * MON-FRI *)</code></td><td class="req">no</td><td>When the node starts, in EventBridge cron format.</td></tr>
+        <tr><th scope="row"><code>sleep_cron</code></th><td><code>cron(30 19 ? * MON-FRI *)</code></td><td class="req">no</td><td>When the node stops.</td></tr>
+        <tr><th scope="row"><code>backup_cron</code></th><td><code>15 19 * * *</code></td><td class="req">no</td><td>The nightly <code>pg_dump</code> to S3, in Kubernetes cron format and <code>schedule_timezone</code>. Keep it before <code>sleep_cron</code>.</td></tr>
+        <tr><th scope="row"><code>name</code></th><td><code>crucible</code></td><td class="req">leave it</td><td>The prefix for SSM paths, roles and the security group. <code>init</code> always uses <code>crucible</code>, and the lab roles trust <code>crucible-node</code>. With another name you must copy <code>/crucible/secret_key</code> to <code>/&lt;name&gt;/secret_key</code> and run <code>labs-init</code> again after <code>up</code>.</td></tr>
+        <tr><th scope="row"><code>k3s_version</code></th><td><code>v1.34.1+k3s1</code></td><td class="req">no</td><td>First boot only. Sysbox needs k3s 1.32 or later.</td></tr>
+        <tr><th scope="row"><code>sysbox_version</code>, <code>sysbox_sha256_amd64</code></th><td><code>0.7.1</code>, pinned digest</td><td class="req">no</td><td>Sysbox CE for AWS lab workspaces. Change both together. First boot only.</td></tr>
+        <tr class="group"><th scope="colgroup" colspan="4">Set by <code>crucible aws up</code>; leave them out of the file</th></tr>
+        <tr><th scope="row"><code>region</code>, <code>data_bucket</code>, <code>oidc_issuer</code>, <code>oidc_client_id</code>, <code>cognito_user_pool_id</code></th><td>none</td><td class="req">auto</td><td>From the persistent stack's outputs. <code>up</code> passes them after your file, so they win.</td></tr>
+        <tr><th scope="row"><code>lab_role_arn</code>, <code>lab_ops_role_arn</code>, <code>lab_state_bucket</code>, <code>lab_state_region</code>, <code>lab_regions</code>, <code>lab_plan_role_arn</code>, <code>lab_export_bucket</code>, <code>lab_export_prefix</code> (<code>cur</code>), <code>lab_export_name</code></th><td><code>""</code></td><td class="req">auto</td><td>From the labs stack's outputs, when <code>up</code> can read them. Empty <code>lab_role_arn</code> means AWS labs are off. The stack refuses a lab role without the plan role and the billing export.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><p><strong>Changing settings later.</strong>Edit <code>crucible.tfvars</code> and run <code>crucible aws up</code>. Node settings are stored in the SSM
+      parameter <code>/crucible/env</code>, and the node re-reads it on every deploy, which <code>up</code> runs. The schedule is EventBridge, so the
+      apply changes it directly. <code>acme_email</code>, <code>k3s_version</code>, the sysbox pins and the node's own clock are in the first-boot
+      script. Terraform ignores changes to it, so they reach a node only when it's rebuilt.</p></div>
+  </section>
+
+  <!-- ───────────── 5. up ───────────── -->
+  <section id="up" aria-labelledby="up-h">
+    <div class="head"><span class="eyebrow">deploy/aws/main · internal/awsops</span><h2 id="up-h">Build the node: <code>crucible aws up</code></h2>
+      <p>One command builds the server, waits for it, and ships the release you have checked out. <code>--var-file</code> defaults to
+        <code>deploy/aws/main/crucible.tfvars</code>.</p></div>
+    <div class="cmd"><pre><code>crucible aws up</code></pre></div>
+    <ol class="steps">
+      <li><h3>Reads the persistent stack <span class="lane">your computer</span></h3>
+        <p>It needs <code>deploy/aws/persistent/terraform.tfstate</code>. Without it, it stops with
+          <code>the persistent stack has no state_bucket output: run `crucible aws init` first</code>.</p></li>
+      <li><h3>Initialises the main stack's backend</h3>
+        <p><code>terraform init -reconfigure</code>, with state in the state bucket under <code>main.tfstate</code> and S3 locking.</p></li>
+      <li><h3>Snapshots a running node first</h3>
+        <p>Only when a node already exists. A running node is backed up before the apply, in case it gets replaced. A stopped node
+          relies on its last snapshot. Any other state stops <code>up</code>. On the first run there's nothing to back up.</p></li>
+      <li><h3>Wires AWS labs, if their stack is here</h3>
+        <p>If it can read <code>deploy/aws/labs</code>'s outputs, it turns AWS labs on. If it can't, and labs are off, it leaves them off
+          without an error. If labs are already on and it can't read the outputs, it stops (see <a href="#labs">AWS labs</a>).</p></li>
+      <li><h3>Applies <span class="lane aws">main account</span></h3>
+        <p>Terraform shows the plan and asks for <code>yes</code>. It creates:</p>
+        <ul class="muted">
+          <li>a security group <code>crucible-web</code>: 80 and 443 in from anywhere, no SSH (the shell goes through SSM);</li>
+          <li>the node role and instance profile <code>crucible-node</code>: SSM access, reads the data bucket and <code>/crucible/*</code>,
+            writes only <code>snapshots/</code>, <code>latest/</code> and <code>uploads/</code>, and, with labs on, may assume the lab account's roles;</li>
+          <li>SSM parameters: <code>/crucible/env</code> and <code>/crucible/helm-values</code> (settings), and five SecureStrings
+            (see <a href="#secrets">Secrets</a>);</li>
+          <li>the EC2 node <code>crucible</code>: the current Ubuntu 24.04 amd64 image, IMDSv2 only, an encrypted gp3 disk;</li>
+          <li>an Elastic IP, and the Route 53 A record if you gave a zone;</li>
+          <li>with the schedule on, the role <code>crucible-scheduler</code> and the schedules <code>crucible-wake</code> and <code>crucible-sleep</code>.</li>
+        </ul></li>
+      <li><h3>Tells you where to point DNS</h3>
+        <p>Right after the apply it prints:</p>
+        <div class="cmd"><pre><code>Point an A record crucible.example.com → 203.0.113.10 now (skip if route53_zone_id is set).</code></pre></div>
+        <p>Create that record at your DNS provider <b>while <code>up</code> carries on</b>: the build and the node's first boot give you a few
+          minutes. With <code>route53_zone_id</code> set, Terraform already did it. Check it with <code>dig +short crucible.example.com</code>.</p></li>
+      <li><h3>Ships the release <span class="lane">your computer</span> <span class="lane k8s">node</span></h3>
+        <p>It runs the same steps as <a href="#deploy"><code>crucible aws deploy</code></a>: build, upload, then run the node's deploy script
+          through SSM. That waits for the node's first boot to finish.</p></li>
+      <li><h3>Waits for HTTPS</h3>
+        <p>It polls <code>https://&lt;domain&gt;/healthz</code> until it answers 200. Success ends with
+          <span class="out">the forge is lit: https://crucible.example.com</span> and <span class="out">&lt;sha&gt; is live at https://crucible.example.com</span>.</p></li>
+    </ol>
+
+    <h3>What the node does on first boot</h3>
+    <p>Cloud-init runs <code>deploy/aws/main/bootstrap.sh.tftpl</code>. Everything it prints goes to <code>/var/log/crucible-bootstrap.log</code>.</p>
+    <ol class="steps">
+      <li><h3>Prepares the machine</h3><p>Sets the time zone to <code>schedule_timezone</code>, installs <code>unzip</code> and <code>curl</code>, then AWS CLI v2.</p></li>
+      <li><h3>Configures Traefik</h3><p>Writes a k3s manifest so Traefik, which comes with k3s, gets a Let's Encrypt certificate by HTTP-01 on port 80 and
+        redirects HTTP to HTTPS.</p></li>
+      <li><h3>Installs sysbox</h3><p>Downloads the pinned Sysbox CE package, checks its sha256, installs it, registers the <code>sysbox-runc</code>
+        runtime with k3s's containerd and adds the <code>sysbox-runc</code> RuntimeClass. If this fails it prints
+        <code>WARNING: sysbox install failed; AWS labs stay unavailable</code> and carries on: Crucible still comes up.</p></li>
+      <li><h3>Installs k3s and Helm</h3><p>k3s at <code>k3s_version</code>, then Helm 3.18.4.</p></li>
+      <li><h3>Reads its settings and writes its scripts</h3><p>Fetches <code>/crucible/env</code> from SSM, then writes <code>/opt/crucible/deploy.sh</code>
+        (imports a release and installs the chart) and <code>/opt/crucible/snapshot.sh</code> (runs the backup now).</p></li>
+      <li><h3>Tries a first deploy</h3><p>Runs <code>deploy.sh</code> once. On a brand-new install no release is published yet, so it prints
+        <code>no release published yet</code>, and that's expected. On a rebuilt node it deploys the last release, and the chart's
+        <code>restore</code> step loads the newest snapshot into the empty database.</p></li>
+      <li><h3>Marks itself ready</h3><p>Touches <code>/opt/crucible/.ready</code>. If any step before this failed, it touches
+        <code>/opt/crucible/.failed</code> instead, and <code>deploy</code> reports <code>node bootstrap failed</code>.</p></li>
+    </ol>
+
+    <h3>How long it takes, and how <code>up</code> waits</h3>
+    <p>The runbook gives no typical duration. Most of the time goes on the local image build and the node's first boot. These are the
+      limits in <code>internal/awsops</code>:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Waiting for</th><th scope="col">Gives up after</th><th scope="col">Then</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">The node to register with SSM</th><td>40 tries, 15 s apart (10 min)</td><td><code>node not reachable over SSM</code></td></tr>
+        <tr><th scope="row">First boot to finish</th><td>20 min</td><td><code>timed out waiting for node bootstrap</code></td></tr>
+        <tr><th scope="row">The Helm install</th><td>10 min (<code>helm --wait</code>)</td><td>The SSM command fails with Helm's error</td></tr>
+        <tr><th scope="row">The whole command on the node</th><td>45 min</td><td><code>node command timed out</code></td></tr>
+        <tr><th scope="row"><code>/healthz</code> over HTTPS</th><td>120 tries, 5 s apart (10 min)</td><td><code>the node is up but … isn't answering yet</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="note warn"><p><strong>"isn't answering yet" is usually not a failure.</strong><code>up</code> ends with
+      <code>error: the node is up but https://crucible.example.com/healthz isn't answering yet — if DNS or the certificate isn't ready, wait and run `crucible aws status`</code>.
+      The release is already installed: Helm's wait succeeded. DNS hasn't reached you yet, or Let's Encrypt is still issuing the
+      certificate, which can take about a minute after DNS is right. Wait, then check:</p>
+      <div class="cmd"><pre><code>crucible aws status</code></pre></div>
+      <p>It prints <code>instance &lt;id&gt;: running</code>, the URL, and <span class="out">healthz: ok</span> once HTTPS works. Until then it shows
+        <code>healthz: not answering (…)</code> with the reason. If it stays that way, read <a href="#t-cert">no certificate</a>.</p></div>
+  </section>
+
+  <!-- ───────────── 6. deploy ───────────── -->
+  <section id="deploy" aria-labelledby="deploy-h">
+    <div class="head"><span class="eyebrow">internal/awsops Deploy · deploy.sh</span><h2 id="deploy-h">Ship the app: <code>crucible aws deploy</code></h2>
+      <p>Ships the commit you have checked out. <code>up</code> already ran it once. Run it yourself for every later release. The node must
+        be running: if it's asleep, it stops at once with <code>node is stopped; run `crucible aws wake`</code>.</p></div>
+    <div class="cmd"><pre><code>crucible aws deploy</code></pre></div>
+    <ol class="steps">
+      <li><h3>Names the release <span class="lane">your computer</span></h3><p>The release is the 12-character commit id. With uncommitted changes it
+        becomes <code>&lt;sha&gt;-dirty-&lt;unix time&gt;</code>, so commit first if you want a clean name.</p></li>
+      <li><h3>Builds</h3><p><code>docker buildx build --platform linux/amd64 -t crucible:&lt;sha&gt; --load .</code>, then <code>docker save</code> and gzip it,
+        then <code>helm package deploy/helm/crucible</code>. Everything goes to <code>.local/release/</code>.</p></li>
+      <li><h3>Uploads <span class="lane aws">data bucket</span></h3><p><code>releases/&lt;sha&gt;/crucible-image.tar.gz</code>, <code>releases/&lt;sha&gt;/chart.tgz</code>, then
+        <code>current-release</code>, which names the sha. It prints <span class="out">release &lt;sha&gt; published; rolling out…</span>. There's no container registry.</p></li>
+      <li><h3>Rolls out <span class="lane k8s">node, via SSM</span></h3><p><code>aws ssm send-command</code> waits for <code>.ready</code>, then runs
+        <code>/opt/crucible/deploy.sh</code>. That re-reads <code>/crucible/env</code>, downloads the release, imports the image into k3s,
+        rebuilds the <code>crucible-secrets</code> Secret from SSM, and runs <code>helm upgrade --install</code> with <code>/crucible/helm-values</code>.</p></li>
+      <li><h3>Checks health</h3><p>Polls <code>/healthz</code> as <code>up</code> does, and prints <span class="out">&lt;sha&gt; is live at &lt;url&gt;</span>.</p></li>
+    </ol>
+    <div class="note warn"><p><strong>Watch the output for one warning.</strong>
+      <code>WARNING: no /crucible/secret_key: tokens and deploy keys stay refused until you re-run 'crucible aws init', then 'crucible aws deploy'</code>
+      means this install predates the secret key. See <a href="#upgrade">Upgrading</a>.</p></div>
+
+    <h3>Check the deploy</h3>
+    <div class="cmd"><pre><code>crucible aws status
+curl -fsS -o /dev/null -w '%{http_code}\n' https://crucible.example.com/healthz      <span class="c"># 200</span>
+aws s3 cp "s3://$(terraform -chdir=deploy/aws/persistent output -raw data_bucket)/current-release" -   <span class="c"># the sha you shipped</span></code></pre></div>
+    <p>Then look inside the node. Open a shell over SSM (no SSH port is open):</p>
+    <div class="cmd"><pre><code>aws ssm start-session --region eu-west-1 --target "$(terraform -chdir=deploy/aws/main output -raw instance_id)"</code></pre></div>
+    <div class="cmd"><pre><code>sudo k3s kubectl -n crucible get pods                         <span class="c"># crucible and postgres Running</span>
+sudo k3s kubectl -n crucible get deploy crucible -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+sudo k3s kubectl -n crucible logs deploy/crucible -c api      <span class="c"># the app</span>
+sudo k3s kubectl -n crucible logs deploy/crucible -c restore  <span class="c"># "database already initialised", "restored …" or "fresh install"</span>
+systemctl is-active sysbox                                    <span class="c"># active</span>
+sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
+    <p>The image line ends in <code>crucible:&lt;sha&gt;</code>. Then open <code>https://crucible.example.com</code> in a browser: you should land on the Cognito
+      sign-in page.</p>
+  </section>
+
+  <!-- ───────────── 7. first steps ───────────── -->
+  <section id="first" aria-labelledby="first-h">
+    <div class="head"><span class="eyebrow">docs/runbooks/cognito.md · in-app Docs</span><h2 id="first-h">First sign-in and setup inside Crucible</h2>
+      <p>Configuration lives in Crucible's database, not in git or Terraform. You set it up in the app as the first admin. The in-app
+        Docs (<code>https://&lt;domain&gt;/docs</code>) cover each page in full.</p></div>
+    <ol class="steps">
+      <li><h3>Invite the bootstrap admin in Cognito</h3>
+        <p>You can do this any time after <code>init</code>. Use the same email as <code>bootstrap_admin</code>. Add <code>--region</code> if your AWS
+          CLI's default region is a different one.</p>
+        <div class="cmd"><pre><code>POOL=$(terraform -chdir=deploy/aws/persistent output -raw cognito_user_pool_id)
+
+aws cognito-idp admin-create-user \
+  --user-pool-id "$POOL" \
+  --username you@example.com \
+  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true Name=name,Value="Your Name" \
+  --desired-delivery-mediums EMAIL</code></pre></div>
+        <p>You get "You've been invited to Crucible" with a temporary password, valid for 7 days. Cognito's own sender allows about 50
+          emails a day. Everyone else is invited the same way. <code>cognito.md</code> covers resending, resets, removal and MFA.</p></li>
+      <li><h3>Sign in</h3>
+        <p>Open <code>https://&lt;domain&gt;</code>, sign in with the email and the temporary password, and choose your own (12 characters or
+          more, with upper case, lower case and a number). You come back to Crucible as an admin: <b>Administrator</b> shows in the top bar.</p></li>
+      <li><h3>Forge settings</h3>
+        <p><b>Administrator → Forge settings</b>. Set the three <b>cost tiers</b> (all three or none). Without them, labs that cost money
+          can't be requested: Crucible fails closed. Add a <b>second admin</b>: the page asks while there's only one. Add any <b>lab
+          schedules</b> trainings will use. Every save is audited.</p></li>
+      <li><h3>Teams</h3>
+        <p><b>Teams → + Start a team</b>: an id, a name and the first leader's email, then <b>Create team</b>. Add people under
+          <b>Add someone</b>. Each person needs a Cognito account too, with the same email.</p></li>
+      <li><h3>Repositories</h3>
+        <p><b>Administrator → Repositories</b>. Connect each git repository once, then <b>Test connection</b>.</p>
+        <ul class="muted">
+          <li><b>HTTPS with an access token</b>: for a private repository, or any whose content people will edit in Crucible. GitHub: a
+            fine-grained token for that one repository with <i>Contents: Read and write</i>. GitLab: a project access token with
+            <code>write_repository</code>.</li>
+          <li><b>SSH with a deploy key Crucible makes</b>: for <code>ssh://</code> or <code>git@host:path</code>. Crucible shows the public key.
+            Add it at your host <b>with write access</b>. Crucible pins the host's key on first contact and keeps it in Postgres.</li>
+          <li><b>No credential of its own</b>: a public repository, or an <code>https://</code> one that <code>git_credentials</code> reaches.</li>
+        </ul>
+        <p>The result reads <b>Reachable</b> with <b>Can write</b> or <b>Read only</b>. The test asks the host to start a push and stops before
+          sending anything. <b>Read only</b> means edits made in Crucible can't be submitted. If the page says it can't keep a credential, the
+          secret key is missing: see <a href="#upgrade">Upgrading</a>.</p></li>
+      <li><h3>Register trainings</h3>
+        <p><b>Administrator → Trainings</b> (or <b>Manage trainings</b>) → <b>+ New training</b>. Pick the connected repository, the branch,
+          tag or commit to follow (usually <code>main</code>), the folder holding <code>training.yaml</code>, and, as an admin, the owning team.
+          Then enroll people and give out roles on the same page.</p></li>
+      <li><h3>The git webhook (optional)</h3>
+        <p>Crucible fetches content every minute anyway (<code>syncInterval: 60s</code>). A push webhook makes it fetch at once. Point it at
+          <code>POST https://&lt;domain&gt;/api/git/hook</code> with the header <code>X-Crucible-Secret</code> set to:</p>
+        <div class="cmd"><pre><code>aws ssm get-parameter --with-decryption --name /crucible/git_hook_secret --query Parameter.Value --output text</code></pre></div>
+        <p>Crucible reads only that header. A right secret gets <code>202</code>. A wrong or missing one gets <code>404</code>. It doesn't check
+          GitHub's or GitLab's own signature headers, so your host must be able to send a custom header. The secret changes on every
+          teardown → up: update the webhook then.</p></li>
+      <li><h3>Email (optional)</h3>
+        <p>Without SMTP, Crucible sends no email; Slack and Teams webhooks still work. To turn it on, add <code>CRUCIBLE_SMTP_ADDR</code>
+          (host:port), <code>CRUCIBLE_SMTP_FROM</code>, <code>CRUCIBLE_SMTP_USERNAME</code> and <code>CRUCIBLE_SMTP_PASSWORD</code> to the
+          <code>crucible-secrets</code> Secret on the node, then restart the API:</p>
+        <div class="cmd"><pre><code>sudo k3s kubectl -n crucible edit secret crucible-secrets      <span class="c"># values under data: are base64</span>
+sudo k3s kubectl -n crucible rollout restart deploy/crucible</code></pre></div>
+        <p>A rebuilt node (<code>teardown</code> → <code>up</code>) starts without these keys, so add them again. The runbook doesn't say whether
+          they survive a normal deploy, which re-applies the Secret. Check after your next deploy.</p></li>
+    </ol>
+  </section>
+
+  <!-- ───────────── 8. labs ───────────── -->
+  <section id="labs" aria-labelledby="labs-h">
+    <div class="head"><span class="eyebrow">deploy/aws/labs · optional</span><h2 id="labs-h">Optional: AWS labs</h2>
+      <p>Do this after Crucible itself works. AWS labs run Terraform in the lab account with one-hour credentials scoped to one lab. Crucible
+        prices them itself from the public AWS Price List, meters them from each lab's Terraform state, then replaces that with the free
+        billing export. How it all works: <a href="aws-guide.html#labs">AWS guide</a>.</p></div>
+    <ol class="steps">
+      <li><h3>Run labs-init <span class="lane aws">lab account credentials</span></h3>
+        <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1 \
+  --crucible-account 111122223333 \
+  --budget-usd 200 --budget-email ops@example.com</code></pre></div>
+        <ul class="muted">
+          <li><code>--region</code> (required): the lab state bucket's region, and the only lab region unless the stack's
+            <code>allowed_regions</code> says otherwise. <code>labs-init</code> has no flag for <code>allowed_regions</code>, and the runbook doesn't
+            say how to set it. If set, it must include <code>--region</code>.</li>
+          <li><code>--crucible-account</code>: the account id that runs Crucible, when it isn't this one. It becomes the stack's
+            <code>crucible_account_id</code>. The lab roles then trust that account's node role.</li>
+          <li><code>--budget-usd</code> and <code>--budget-email</code> (repeat, at most 10): the alert-only AWS Budget
+            <code>crucible-labs-monthly</code>, which emails at 80% and 100% of the month's actual spend. With no email, no budget is made.
+            Without <code>--budget-usd</code> the first run uses $100. A negative amount is refused. A re-run keeps each value you leave out.</li>
+        </ul>
+        <p>It creates the lab, ops and plan roles under a permission boundary, the lab state bucket <code>crucible-&lt;account&gt;-labstate</code>,
+          the export bucket <code>crucible-&lt;account&gt;-labexports</code> and the CUR 2.0 export <code>crucible-labs</code> (Data Exports live in
+          us-east-1). It also turns on account-wide S3 Block Public Access. The lab roles trust the node role by exact name. labs-init reads
+          it from main's <code>node_role_name</code> output when it can. With lab-account credentials it usually can't, so it prints a note and
+          trusts <code>crucible-node</code>, which is right unless you changed <code>name</code>.</p></li>
+      <li><h3>Back up the labs state</h3>
+        <p><code>deploy/aws/labs/terraform.tfstate</code> is local too. Back it up as you did the persistent state. Every later <code>up</code> must
+          run where this file is.</p></li>
+      <li><h3>Activate the cost-allocation tag <span class="lane aws">Billing console</span></h3>
+        <p>The one step by hand, and free. <b>Billing → Cost allocation tags</b>, then activate <code>crucible:lab-id</code>. Do it in the
+          management (payer) account if the lab account is in an organization, otherwise in the lab account. The tag shows up there only
+          after a tagged resource has existed, which can take up to 24 hours, so come back after your first lab. Activation isn't
+          retroactive unless you ask for a backfill. Until it's active, billed spend stays empty and the Ledger shows metered spend.</p></li>
+      <li><h3>Wire it in <span class="lane aws">Crucible account credentials</span></h3>
+        <div class="cmd"><pre><code>crucible aws up</code></pre></div>
+        <p>Run it on the machine that holds the labs state. <code>up</code> reads its outputs (the roles, state bucket, regions, plan role and
+          export) and turns AWS labs on. Check the node afterwards: <code>systemctl is-active sysbox</code> must print <code>active</code>.</p></li>
+      <li><h3>Check the first billing export, a day later</h3>
+        <p>The first export arrives within about 24 hours. With lab-account admin credentials:</p>
+        <div class="cmd"><pre><code>aws bcm-data-exports list-exports --region us-east-1                <span class="c"># lists crucible-labs</span>
+aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span class="c"># Manifest.json and .csv.gz files under crucible-labs/</span></code></pre></div>
+        <p>Then <code>terraform -chdir=deploy/aws/labs plan</code> with the same <code>-var</code>s labs-init passed must show no changes.</p></li>
+    </ol>
+
+    <div class="cols">
+      <div><h3>Prices</h3><p>Crucible downloads the public AWS Price List for the allowed regions every week, and at start when its prices are more
+        than 6 days old. The node needs outbound HTTPS to <code>pricing.us-east-1.amazonaws.com</code>. Admins see <b>Price data from
+        &lt;date&gt;</b> on the Ledger. If prices are missing or older than 30 days, that line turns red ("Out of date: AWS labs can't be
+        estimated or requested until it refreshes"), with the last error. Estimates fail closed; Crucible never quotes $0.</p></div>
+      <div><h3>Check an estimate works</h3><p>Open an AWS lab's page as one of its training's editors or admins. It shows a non-zero estimate, and
+        <b>How this estimate was worked out</b> lists each priced resource. A failure shows "The estimate failed …" to editors, and only
+        "the lab can't be requested right now" to participants. On the node: <code>sudo k3s kubectl -n crucible-estimates get pods</code>
+        (<code>tf-plan-*</code>) and <code>sudo k3s kubectl -n crucible logs deploy/crucible -c api | grep 'lab quote failed'</code>.</p></div>
+      <div><h3>Prove it on a sandbox</h3><p>Nothing automated touches real AWS. The runbook's "Verify on a real sandbox" lists every check by hand:
+        the lab identity, calls that must be refused, the sweep, the reaper, credential refresh, CloudTrail, tags and costs.
+        <code>docs/test-guide.html</code> has them as a checklist.</p></div>
+    </div>
+    <div class="note warn"><p><strong>Once labs are on, keep running <code>up</code> where the labs state is.</strong>If <code>up</code> can't read the labs outputs, it
+      stops rather than turning labs off, because running labs would lose credential refresh, destroy and the sweep. <code>--no-labs</code>
+      turns them off on purpose: end every AWS lab first. <code>teardown</code> never touches the labs stack.</p></div>
+  </section>
+
+  <!-- ───────────── 9. everyday ───────────── -->
+  <section id="everyday" aria-labelledby="everyday-h">
+    <div class="head"><span class="eyebrow">Day to day</span><h2 id="everyday-h">Everyday operations</h2></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">You want to</th><th scope="col">Run</th><th scope="col">What happens</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Ship the current commit</th><td><code>crucible aws deploy</code></td><td>Build, upload, roll out, check health. The node must be awake.</td></tr>
+        <tr><th scope="row">Take a snapshot now</th><td><code>crucible aws snapshot</code></td><td>Runs the backup job on the node and waits for it, up to 15 minutes.</td></tr>
+        <tr><th scope="row">Stop paying for compute tonight</th><td><code>crucible aws sleep</code></td><td>Snapshot, then stop and wait until stopped. The disk, the IP and S3 still cost money. <code>--no-snapshot</code> skips the snapshot.</td></tr>
+        <tr><th scope="row">Start before the schedule</th><td><code>crucible aws wake</code></td><td>Start, wait until running, then wait for <code>/healthz</code>.</td></tr>
+        <tr><th scope="row">Is it up?</th><td><code>crucible aws status</code></td><td>Instance state, URL and <code>healthz</code>.</td></tr>
+        <tr><th scope="row">A shell on the node</th><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>As <code>ssm-user</code>; use <code>sudo k3s kubectl</code>. The id is <code>terraform -chdir=deploy/aws/main output -raw instance_id</code>.</td></tr>
+        <tr><th scope="row">Change a setting</th><td>edit <code>crucible.tfvars</code>, then <code>crucible aws up</code></td><td>Snapshot, apply, redeploy.</td></tr>
+        <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
+      </tbody>
+    </table></div>
+    <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The
+      nightly backup runs at <b>19:15</b>: a <code>pg_dump</code> to <code>snapshots/</code> in the data bucket (kept 30 days) and a copy to
+      <code>latest/crucible-latest.dump</code>, which never expires. Trainees' uploads live under <code>uploads/</code>, with no expiry.</p>
+  </section>
+
+  <!-- ───────────── 10. upgrade ───────────── -->
+  <section id="upgrade" aria-labelledby="upgrade-h">
+    <div class="head"><span class="eyebrow">Existing installs</span><h2 id="upgrade-h">Upgrading an existing install</h2>
+      <p>For example, after pulling a version that adds the secret key and free FinOps. The runbook gives each piece separately. This is
+        the order its rules imply: <code>init</code> before <code>deploy</code>, and <code>labs-init</code> before <code>up</code>.</p></div>
+    <ol class="steps">
+      <li><h3>Check out the new version</h3><p>Pull and check out the commit you want to ship, with a clean working tree. Make sure
+        <code>deploy/aws/persistent/terraform.tfstate</code> is here (copy it back from your backup on another machine).</p></li>
+      <li><h3>Re-run init with the same region and domain <span class="lane aws">main account</span></h3>
+        <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
+        <p>It re-applies the persistent stack where its state lives and adds only the secret key: the plan should add
+          <code>random_password.secret_key</code> and <code>aws_ssm_parameter.secret_key</code>, and change nothing else. If it wants more, stop
+          and compare. If your <code>crucible.tfvars</code> sets another <code>name</code>, copy the new parameter to <code>/&lt;name&gt;/secret_key</code>.
+          Then back up the persistent state again.</p></li>
+      <li><h3>If you use AWS labs: re-run labs-init <span class="lane aws">lab account</span></h3>
+        <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1 --crucible-account 111122223333 \
+  --budget-usd 200 --budget-email ops@example.com</code></pre></div>
+        <p>Do this <b>before</b> <code>up</code>: main now refuses AWS labs without the plan role and the export, and says so. Pass both budget
+          flags on this first re-run, because an older stack has no budget outputs to read back. Leave out <code>--crucible-account</code> if you
+          never used it. Remove <code>infracost_api_key</code> from <code>crucible.tfvars</code>; it's no longer a variable. Back up the labs state.
+          Then activate the cost-allocation tag (see <a href="#labs">AWS labs</a>).</p></li>
+      <li><h3>Ship it <span class="lane aws">main account</span></h3>
+        <div class="cmd"><pre><code>crucible aws up        <span class="c"># if you re-ran labs-init or changed crucible.tfvars; it ends by deploying</span>
+crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
+        <p>Run <code>up</code> where the labs state is. The deploy output must not show <code>WARNING: no /crucible/secret_key</code>.</p></li>
+      <li><h3>Restart the API, if the release was already running</h3>
+        <p>A deploy of the release already running doesn't restart the API, so it won't see the new key. On the node:</p>
+        <div class="cmd"><pre><code>sudo k3s kubectl -n crucible rollout restart deploy/crucible</code></pre></div>
+        <p>A new commit rolls the pod anyway. The restart is then harmless, apart from a few seconds offline.</p></li>
+      <li><h3>Check</h3><p><code>crucible aws status</code> shows <code>healthz: ok</code>. <b>Administrator → Repositories</b> no longer says it can't keep a
+        credential.</p></li>
+    </ol>
+    <div class="note warn"><p><strong>Old nodes need a rebuild.</strong>Terraform never applies first-boot script changes to a running node. A node built
+      before sysbox (M4) has none, and one built before M6 has an older <code>deploy.sh</code>. Rebuild either with
+      <code>crucible aws teardown --yes</code>, then <code>crucible aws up</code>. The data comes back from the latest snapshot.</p></div>
+  </section>
+
+  <!-- ───────────── 11. teardown ───────────── -->
+  <section id="teardown" aria-labelledby="teardown-h">
+    <div class="head"><span class="eyebrow">Disaster recovery</span><h2 id="teardown-h">Teardown, restore and disaster recovery</h2></div>
+    <ol class="steps">
+      <li><h3>Tear down</h3>
+        <div class="cmd"><pre><code>crucible aws teardown --yes</code></pre></div>
+        <p>Takes a snapshot, then <code>terraform destroy</code> on the main stack without asking again. The buckets, snapshots, uploads,
+          Cognito users, the secret key and the labs stack all survive. Without <code>--yes</code> it refuses. It reads
+          <code>crucible.tfvars</code> (or <code>--var-file</code>) like <code>up</code>.</p></li>
+      <li><h3>Rebuild</h3>
+        <div class="cmd"><pre><code>crucible aws up</code></pre></div>
+        <p>A new node boots, and the chart's <code>restore</code> step loads the newest snapshot into the empty database before Crucible starts.
+          If the dated snapshots have expired, it falls back to <code>latest/crucible-latest.dump</code>. Content comes back from git.</p></li>
+      <li><h3>Re-point DNS</h3><p>The Elastic IP changes after a teardown. Update the A record to the IP <code>up</code> prints. With <code>route53_zone_id</code> it's automatic.</p></li>
+      <li><h3>Update the webhook</h3><p>The git webhook secret is regenerated. Read it again and update each repository's webhook.</p></li>
+    </ol>
+    <div class="cols">
+      <div><h3>What survives</h3><p>The secret key, so restored repository tokens and deploy keys still open. Pinned SSH host keys, because they're in
+        the database. Cognito users. Uploads. The labs stack.</p></div>
+      <div><h3>What changes</h3><p>The Elastic IP, the webhook secret, the database password and the quiz secret. They're all in the main stack. A new
+        quiz secret reshuffles quizzes in progress. SMTP keys you added by hand are gone. Anything written after the teardown's snapshot is
+        lost, so the snapshot must succeed (it refuses to go on otherwise).</p></div>
+      <div><h3>Second machine or fresh clone</h3><p>Copy the persistent state back first (and the labs state, if you use labs), then run
+        <code>crucible aws up</code>. It's idempotent, and it sets up the S3 backend that <code>deploy</code> and the others need.</p></div>
+    </div>
+
+    <h3 id="lost-state">Lost persistent state</h3>
+    <p>First, restore your backup:</p>
+    <div class="cmd"><pre><code>aws s3 cp s3://crucible-&lt;account&gt;-tfstate/persistent.tfstate deploy/aws/persistent/terraform.tfstate</code></pre></div>
+    <p>With no backup at all, run <code>terraform -chdir=deploy/aws/persistent init</code>, then <code>terraform import</code> each of the 14 resources,
+      using the real ids from the console: <code>aws_s3_bucket.state</code>, <code>aws_s3_bucket_versioning.state</code>,
+      <code>aws_s3_bucket_public_access_block.state</code>, <code>aws_s3_bucket.data</code>, <code>aws_s3_bucket_versioning.data</code>,
+      <code>aws_s3_bucket_server_side_encryption_configuration.data</code>, <code>aws_s3_bucket_public_access_block.data</code>,
+      <code>aws_s3_bucket_lifecycle_configuration.data</code>, <code>aws_cognito_user_pool.users</code>, <code>aws_cognito_user_pool_domain.login</code>,
+      <code>aws_cognito_user_pool_client.crucible</code>, <code>aws_cognito_managed_login_branding.crucible</code>,
+      <code>aws_ssm_parameter.secret_key</code> (id <code>/crucible/secret_key</code>) and <code>random_password.secret_key</code> (id: the parameter's
+      current value, read with <code>aws ssm get-parameter --with-decryption</code>).</p>
+    <div class="note danger"><p><strong>Import the secret key before any plan, and never apply against an empty state.</strong>Without the import, Terraform
+      makes a new key and every stored repository credential stops opening. An apply against empty state tries to create duplicates. After
+      the imports, run <code>terraform plan</code> with <code>-var region=…</code> and <code>-var domain=…</code> and import anything it still wants to create.</p></div>
+  </section>
+
+  <!-- ───────────── 12. troubleshooting ───────────── -->
+  <section id="trouble" aria-labelledby="trouble-h">
+    <div class="head"><span class="eyebrow">When it doesn't work</span><h2 id="trouble-h">Troubleshooting</h2>
+      <p>Every command below runs on the node, in an SSM session, unless it starts with <code>crucible</code>.</p></div>
+    <div class="trouble">
+      <article id="t-cert"><h3>No certificate, or HTTPS never answers</h3><dl>
+        <dt>Symptom</dt><dd><p><code>status</code> stays at <code>healthz: not answering</code>; the browser shows a certificate warning or nothing.</p></dd>
+        <dt>Cause</dt><dd><p>DNS doesn't point at the Elastic IP yet, or port 80 isn't reachable, so Let's Encrypt's HTTP-01 challenge fails.</p></dd>
+        <dt>Fix</dt><dd><p>Check <code>dig +short &lt;domain&gt;</code> against the IP <code>up</code> printed, and that port 80 is open. Then read Traefik's log:</p>
+          <div class="cmd"><pre><code>sudo k3s kubectl -n kube-system logs deploy/traefik</code></pre></div>
+          <p>If the Traefik chart that came with your k3s rejects <code>ports.web.redirections</code>, use <code>ports.web.redirectTo: {port: websecure}</code> in
+            <code>/var/lib/rancher/k3s/server/manifests/traefik-config.yaml</code>.</p></dd>
+      </dl></article>
+
+      <article><h3>Bootstrap failed</h3><dl>
+        <dt>Symptom</dt><dd><p><code>deploy</code> or <code>up</code> stops with <code>node bootstrap failed - see /var/log/crucible-bootstrap.log</code>.</p></dd>
+        <dt>Cause</dt><dd><p>A first-boot step failed, and <code>/opt/crucible/.failed</code> exists.</p></dd>
+        <dt>Fix</dt><dd><div class="cmd"><pre><code>sudo tail -f /var/log/crucible-bootstrap.log
+<span class="c"># after fixing the cause:</span>
+sudo rm /opt/crucible/.failed</code></pre></div><p>Then run <code>crucible aws deploy</code> again.</p></dd>
+      </dl></article>
+
+      <article><h3>Sysbox failing</h3><dl>
+        <dt>Symptom</dt><dd><p>AWS labs fail to start. The boot log shows <code>WARNING: sysbox install failed</code>, or a lab pod reports
+          <code>no runtime for "sysbox-runc"</code>.</p></dd>
+        <dt>Cause</dt><dd><p>The sysbox install failed (the rest of the node came up without it), or containerd didn't load the sysbox template.</p></dd>
+        <dt>Fix</dt><dd><div class="cmd"><pre><code>systemctl is-active sysbox
+sudo journalctl -u sysbox -u sysbox-mgr --no-pager | tail -50
+sudo grep -A3 sysbox-runc /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+sudo systemctl restart k3s      <span class="c"># if the sysbox-runc block is missing</span></code></pre></div>
+          <p>Also look at <code>/var/log/cloud-init-output.log</code>. A node built before sysbox existed needs a rebuild.</p></dd>
+      </dl></article>
+
+      <article><h3>An AWS lab stuck in "provisioning"</h3><dl>
+        <dt>Symptom</dt><dd><p>The lab sits in provisioning, then fails with <code>terraform apply failed: …</code> or "could not be started".</p></dd>
+        <dt>Cause</dt><dd><p>The lab's Terraform failed, often a permission the boundary refuses, or the workspace pod can't start.</p></dd>
+        <dt>Fix</dt><dd><div class="cmd"><pre><code>sudo k3s kubectl -n lab-&lt;id&gt; get pod tf-apply -o jsonpath='{.status.containerStatuses[0].state.terminated.message}'
+sudo k3s kubectl -n lab-&lt;id&gt; describe pod lab</code></pre></div>
+          <p>The trainee sees the same log tail. A runtime error on the <code>lab</code> pod points back to sysbox. An <code>UnauthorizedOperation</code> can be
+            decoded with <code>aws sts decode-authorization-message</code> (admin credentials); the runbook explains the common cases.</p></dd>
+      </dl></article>
+
+      <article><h3>Estimates unavailable</h3><dl>
+        <dt>Symptom</dt><dd><p>A lab can't be requested: "AWS price data is out of date; an admin needs to refresh it", "Crucible can't price: &lt;types&gt;", or editors
+          see "The estimate failed …".</p></dd>
+        <dt>Cause</dt><dd><p>Price data missing or over 30 days old (usually no outbound HTTPS to <code>pricing.us-east-1.amazonaws.com</code>), or the plan failed. The
+          plan role can only <code>ec2:Describe*</code>, <code>s3:GetBucket*</code> and <code>s3:ListAllMyBuckets</code>, so a data source needing more fails. Or a
+          resource Crucible can't price (io2, an unknown size, an instance type not offered in that region).</p></dd>
+        <dt>Fix</dt><dd><p>Look at the Ledger's price line and its last error, and use <b>Refresh now</b>. The job queue retries failed refreshes with backoff.
+          For plan errors:</p>
+          <div class="cmd"><pre><code>sudo k3s kubectl -n crucible logs deploy/crucible -c api | grep 'lab quote failed'
+sudo k3s kubectl -n crucible-estimates get pods</code></pre></div>
+          <p>A failed plan is retried after 5 minutes. The lab's authors fix the module or declare prices under <code>aws.prices</code>.</p></dd>
+      </dl></article>
+
+      <article><h3>Missing secret key warning</h3><dl>
+        <dt>Symptom</dt><dd><p><code>deploy</code> prints <code>WARNING: no /crucible/secret_key …</code>. Repositories says it can't keep a credential, and refuses tokens and deploy keys.</p></dd>
+        <dt>Cause</dt><dd><p>The install predates the key, or <code>crucible.tfvars</code> sets a <code>name</code> other than <code>crucible</code>.</p></dd>
+        <dt>Fix</dt><dd><p>Follow <a href="#upgrade">Upgrading</a>: <code>init</code> with the same region and domain, <code>deploy</code>, the rollout restart, then a new
+          state backup. With another <code>name</code>, copy the parameter to <code>/&lt;name&gt;/secret_key</code>.</p></dd>
+      </dl></article>
+
+      <article><h3>Snapshot refusals</h3><dl>
+        <dt>Symptom</dt><dd><p><code>up</code>, <code>sleep</code> or <code>teardown</code> stops with <code>snapshot failed, not applying</code> (or <code>not stopping</code>,
+          <code>not tearing down</code>), <code>node is &lt;state&gt;; wait until the node is stable</code>, or <code>cannot determine node state</code>.</p></dd>
+        <dt>Cause</dt><dd><p>These commands back up first and refuse to go on if the backup fails, or while the node is starting or stopping.</p></dd>
+        <dt>Fix</dt><dd><p>Wait until the node is running or stopped, and retry. Read the backup job's log with
+          <code>sudo k3s kubectl -n crucible get jobs</code>. If the node is broken and can't snapshot, add <code>--no-snapshot</code>:
+          everything since the last backup is lost if the disk goes.</p></dd>
+      </dl></article>
+
+      <article><h3>The node is asleep</h3><dl>
+        <dt>Symptom</dt><dd><p><code>deploy</code>, <code>snapshot</code> or the end of <code>up</code> says <code>node is stopped; run `crucible aws wake`</code>.</p></dd>
+        <dt>Cause</dt><dd><p>The schedule stopped it, or you ran <code>sleep</code>.</p></dd>
+        <dt>Fix</dt><dd><p><code>crucible aws wake</code>, then run the command again.</p></dd>
+      </dl></article>
+
+      <article><h3><code>up</code> won't read the labs stack</h3><dl>
+        <dt>Symptom</dt><dd><p><code>aws labs are on (…) but the labs stack outputs cannot be read</code>.</p></dd>
+        <dt>Cause</dt><dd><p>You ran <code>up</code> on a machine without <code>deploy/aws/labs/terraform.tfstate</code>.</p></dd>
+        <dt>Fix</dt><dd><p>Run it where that file is, or restore it from your backup. Use <code>--no-labs</code> only to turn AWS labs off on purpose.</p></dd>
+      </dl></article>
+
+      <article><h3>Sign-in errors</h3><dl>
+        <dt>Symptom</dt><dd><p>Cognito says <code>redirect_mismatch</code>, or Crucible shows "invalid id token" or rejects an unverified email.</p></dd>
+        <dt>Cause</dt><dd><p>The domain differs from init's <code>--domain</code>; the issuer is from another region; the user's <code>email_verified</code> is false.</p></dd>
+        <dt>Fix</dt><dd><p>Re-run <code>crucible aws init</code> with the exact hostname, or re-run <code>up</code>. For the email, see <code>cognito.md</code> §9.</p></dd>
+      </dl></article>
+    </div>
+    <p>App logs: <code>sudo k3s kubectl -n crucible logs deploy/crucible -c api</code> and <code>-c restore</code>.</p>
+  </section>
+
+  <!-- ───────────── 13. secrets ───────────── -->
+  <section id="secrets" aria-labelledby="secrets-h">
+    <div class="head"><span class="eyebrow">Where secrets live</span><h2 id="secrets-h">Secrets and where they live</h2>
+      <p>Nothing secret is baked into the image or the node's disk. The node reads SSM with its role on every deploy.</p></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Secret</th><th scope="col">Where</th><th scope="col">Made by</th><th scope="col">After teardown → up</th></tr></thead>
+      <tbody>
+        <tr><th scope="row"><code>/crucible/secret_key</code></th><td>SSM SecureString, persistent stack</td><td><code>init</code>: random, 48 characters</td><td>Kept. Never rotate it.</td></tr>
+        <tr><th scope="row"><code>/crucible/oidc_client_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform reads it from the Cognito app client</td><td>Recreated with the same value.</td></tr>
+        <tr><th scope="row"><code>/crucible/git_credentials</code></th><td>SSM SecureString, main stack</td><td>Your <code>git_credentials</code>, or <code>none</code></td><td>Recreated from your tfvars.</td></tr>
+        <tr><th scope="row"><code>/crucible/git_hook_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td class="money">Regenerated: update your webhooks.</td></tr>
+        <tr><th scope="row"><code>/crucible/db_password</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td>Regenerated, for the new, restored database.</td></tr>
+        <tr><th scope="row"><code>/crucible/quiz_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 48 characters</td><td class="money">Regenerated: quizzes in progress get a new question order.</td></tr>
+        <tr><th scope="row"><code>/crucible/env</code>, <code>/crucible/helm-values</code></th><td>SSM String, main stack</td><td>Terraform, from your tfvars and the labs outputs</td><td>Recreated. Not secret.</td></tr>
+        <tr><th scope="row"><code>crucible-secrets</code></th><td>Kubernetes Secret, namespace <code>crucible</code></td><td><code>deploy.sh</code>, from the SSM values above, on every deploy: <code>CRUCIBLE_SECRET_KEY</code>, <code>OIDC_CLIENT_SECRET</code>, <code>CRUCIBLE_GIT_HOOK_SECRET</code>, <code>CRUCIBLE_QUIZ_SECRET</code>, <code>POSTGRES_PASSWORD</code>, <code>git-credentials</code>; plus SMTP keys you add by hand</td><td>Rebuilt on the new node; SMTP keys must be added again.</td></tr>
+        <tr><th scope="row">Persistent state</th><td><code>deploy/aws/persistent/terraform.tfstate</code>, local</td><td><code>init</code></td><td>Untouched. Holds the secret key and Cognito client secret in plain text: back it up, privately.</td></tr>
+        <tr><th scope="row">Labs state</th><td><code>deploy/aws/labs/terraform.tfstate</code>, local</td><td><code>labs-init</code></td><td>Untouched. Back it up.</td></tr>
+        <tr><th scope="row">Main state</th><td><code>s3://crucible-&lt;account&gt;-tfstate/main.tfstate</code></td><td><code>up</code></td><td>Emptied by the destroy, refilled by <code>up</code>. Holds the main stack's secrets.</td></tr>
+        <tr><th scope="row"><code>crucible.tfvars</code></th><td><code>deploy/aws/main/</code>, local, git-ignored</td><td>You</td><td>Untouched. May hold your git token.</td></tr>
+      </tbody>
+    </table></div>
+    <p>To rotate the quiz secret on purpose: <code>terraform -chdir=deploy/aws/main taint random_password.quiz</code>, then <code>crucible aws up</code>, then
+      <code>sudo k3s kubectl -n crucible rollout restart deploy/crucible</code> on the node. The secret key is never rotated by Terraform. Replacing it is a
+      deliberate <code>aws ssm put-parameter --overwrite</code>, a deploy, the same restart, and reconnecting every repository that had a credential.</p>
+  </section>
+
+  <footer>
+    <span>Checked against <code>docs/runbooks/aws.md</code>, <code>docs/runbooks/cognito.md</code>, <code>deploy/aws/{persistent,main,labs}</code>,
+      <code>internal/awsops</code>, <code>cmd/crucible</code> and <code>deploy/helm/crucible</code> on branch <code>feat/free-finops-terraform-mode</code>.
+      Where this page and the runbook disagree, the runbook wins.</span>
+    <span>Concepts: <a href="aws-guide.html">AWS guide</a>. Drawings: <a href="deploy-architecture.html">deploy architecture</a>.</span>
+  </footer>
+</main>
+
+<script>
+document.querySelectorAll('.cmd').forEach(function (box) {
+  var code = box.querySelector('code');
+  var b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'copy';
+  b.textContent = 'Copy';
+  b.setAttribute('aria-label', 'Copy command');
+  b.addEventListener('click', function () {
+    var done = function (msg) { b.textContent = msg; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    var select = function () {
+      var r = document.createRange();
+      r.selectNodeContents(code);
+      var s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+      done('Selected');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code.innerText).then(function () { done('Copied'); }, select);
+    } else {
+      select();
+    }
+  });
+  box.appendChild(b);
+});
+</script>
+</body>
+</html>

@@ -199,7 +199,7 @@ body.hide-done .item.done { display: none; }
             </ul></div>
           <div class="cap"><span class="who">Admins</span><h3>Run the forge</h3>
             <ul>
-              <li>Forge settings, teams and their tags, training roles for people and groups, Manage trainings, all audited</li>
+              <li>Forge settings, teams and their tags, connected repositories, training roles for people and groups, Manage trainings, all audited</li>
               <li>Move this forge: export to one file, import into a fresh instance</li>
               <li>Sign-in through Keycloak or Cognito; one admin to start</li>
               <li>AWS deployment on one k3s node that sleeps outside working hours</li>
@@ -235,7 +235,7 @@ body.hide-done .item.done { display: none; }
               estimate was worked out</b> shows it resource by resource. A lab above its own <code>max_hourly_usd</code>, in a region this Crucible
               doesn't allow, with a resource Crucible can't price, or while the price data is missing or over 30 days old can't be requested.</p></li>
           <li><h3>A person approves</h3>
-            <p>AWS labs never start on their own. The estimate picks the tier: program approver, team leader, then admin. A request that would pass a
+            <p>AWS labs never start on their own. The estimate picks the tier: the training's admins, the owning team's leaders, then a Crucible admin. A request that would pass a
               team or program budget cap needs an admin, as an audited override. Unanswered requests move up a tier after the escalation hours,
               counted only inside the program's schedule.</p></li>
           <li><h3>Credentials for one lab</h3>
@@ -319,6 +319,9 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
           <li class="item" data-id="stack-gate"><label><input type="checkbox" id="c-stack-gate"><span class="t">The forge's gate</span></label>
             <div class="body"><p>Open <code>http://localhost:8080</code> in a private window, then choose <b>Enter the forge</b>.</p>
               <p class="expect"><b>Expect</b>the Crucible title in the middle of the screen with embers drifting behind it (none with reduced motion), and the button under it; the button goes on to the Keycloak sign-in. After <b>Log out</b> you land back on the gate.</p></div></li>
+          <li class="item" data-id="stack-switch"><label><input type="checkbox" id="c-stack-switch"><span class="t">Change user</span></label>
+            <div class="body"><ol class="how"><li>Sign in as <code>trainee</code>. Open your user card (your name, top right) and choose <b>Log out</b>, then <b>Enter the forge</b>.</li><li>Open the user card again and choose <b>Change user</b>. Confirm the sign-out if Keycloak asks, then sign in as <code>senior</code>.</li></ol>
+              <p class="expect"><b>Expect</b>after <b>Log out</b>, Keycloak lets <code>trainee</code> straight back in without a password: only Crucible's session ended. <b>Change user</b> ends Keycloak's session too and lands on its sign-in page with an empty user name, and you come back as <code>senior</code>. The local realm allows <code>http://localhost:8080/*</code> as a post-logout address; another provider must allow <code>&lt;your Crucible URL&gt;/auth/login</code>.</p></div></li>
           <li class="item" data-id="stack-roles"><label><input type="checkbox" id="c-stack-roles"><span class="t">Sign in as each role</span></label>
             <div class="body"><p>Use a private window per person. Compare the top bar.</p>
               <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
@@ -336,10 +339,10 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
         <p class="where">As admin · Administrator → Forge settings</p>
         <ul class="items">
           <li class="item" data-id="cfg-tiers"><label><input type="checkbox" id="c-cfg-tiers"><span class="t">Cost tiers</span></label>
-            <div class="body"><ol class="how"><li>Set auto-approve 0, program approver 5, admin above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
+            <div class="body"><ol class="how"><li>Set auto-approve 0, training admins up to 5, admin approval above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
               <p class="expect"><b>Expect</b>the out-of-order save is refused with the reason; with tiers cleared, a banner warns that labs costing money can't be approved.</p></div></li>
           <li class="item" data-id="cfg-schedule"><label><input type="checkbox" id="c-cfg-schedule"><span class="t">Lab schedules</span></label>
-            <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a program that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
+            <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a training that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
               <p class="expect"><b>Expect</b>outside the window the lab page says when the next one opens; the delete is refused while in use.</p></div></li>
           <li class="item" data-id="cfg-admins"><label><input type="checkbox" id="c-cfg-admins"><span class="t">Admins and the lockout guard</span></label>
             <div class="body"><p>With one admin, note the warning. Add <code>senior@crucible.local</code>, then remove them again.</p>
@@ -379,7 +382,9 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
 
       <section class="phase" id="p-author" data-title="Create a new training">
         <div class="phase-head"><h2>4 · Create a new training</h2><span class="count"></span></div>
-        <p class="lede">A training is its own git repo. Locally, Crucible reads repos from <code>.local/git</code>, which the API container mounts at <code>/git</code>.</p>
+        <p class="lede">A training lives in a git repository that an admin connects once, under <b>Administrator → Repositories</b>; trainings are then
+          registered from it. Locally, Crucible reads repos from <code>.local/git</code>, which the API container mounts at <code>/git</code>, and the seeded ones
+          arrive already connected.</p>
         <ul class="items">
           <li class="item" data-id="auth-write"><label><input type="checkbox" id="c-auth-write"><span class="t">Write the repo</span></label>
             <div class="body"><p>Start from the one-module example and give it its own id.</p>
@@ -388,7 +393,7 @@ cd ~/trainings/forge-501 &amp;&amp; git init -q -b main
 # training.yaml: id: forge-501, a title, maintainers: [senior@crucible.local]
 # add modules/01-spark/quiz.yaml and list "- quiz: quiz.yaml" in module.yaml
 git add -A &amp;&amp; git commit -qm "Forge 501"</code></pre></div>
-              <p class="expect"><b>Expect</b>the layout from Docs → <i>How a training repo is laid out</i>; every key is in <i>Building blocks: every key</i>.</p></div></li>
+              <p class="expect"><b>Expect</b>the layout from Docs → <i>How a training repo is laid out</i>; every key is in <i>Building blocks: every key</i>. The <code>id</code> and <code>title</code> you write here are what Crucible registers the training as: the form never asks for them.</p></div></li>
           <li class="item" data-id="auth-lint"><label><input type="checkbox" id="c-auth-lint"><span class="t">Lint it</span></label>
             <div class="body"><div class="cmd"><pre><code>./bin/crucible lint ~/trainings/forge-501</code></pre></div>
               <p>Then break it on purpose: point the module at a reading that doesn't exist.</p>
@@ -402,15 +407,41 @@ git add -A &amp;&amp; git commit -qm "Forge 501"</code></pre></div>
 git -C .local/git/forge-501.git config core.sharedRepository world
 chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>a bare repo the API container can read and push edits into.</p></div></li>
+          <li class="item" data-id="auth-connect"><label><input type="checkbox" id="c-auth-connect"><span class="t">Connect its repository</span></label>
+            <div class="body"><p>Admin: <b>Administrator → Repositories</b> → <b>Connect a repository</b>. Repository URL <code>file:///git/forge-501.git</code>, <b>How Crucible signs in</b>: <i>Nothing — the repository is public</i> → <b>Connect repository</b>. Then <b>Test connection</b> on its row.</p>
+              <p class="expect"><b>Expect</b>the row leads with the URL and says <i>No credential</i>, and <i>Not checked yet</i> until the test, then <i>Reachable</i>. The seeded <code>forge-…</code> repositories are already listed, each with the trainings it feeds. Local paths are accepted only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
           <li class="item" data-id="auth-register"><label><input type="checkbox" id="c-auth-register"><span class="t">Register it</span></label>
-            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch, tag or commit <code>main</code>, folder empty (the repository root).</p>
-              <p class="expect"><b>Expect</b>it appears in the list, marked <i>content not loaded yet</i> until the next sync (about 10 seconds locally), then with its title. Local paths work here only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
+            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. <b>Team that owns it</b> The Forge, <b>Repository</b> <code>file:///git/forge-501.git</code>, <b>Branch, tag or commit</b> <code>main</code>, <b>Folder</b> empty (the repository root) → <b>Register training</b>.</p>
+              <p class="expect"><b>Expect</b>no id or title to type: Crucible reads them from <code>training.yaml</code>, says <i>&lt;its title&gt; is registered for forge</i> and opens it, shown as <i>content not loaded yet</i> until the next sync (about 10 seconds locally). Under <b>Roles</b>, <b>Admins</b> already holds <code>forge_leaders</code>: a Crucible admin who registers names the owning team's leaders.</p></div></li>
+          <li class="item" data-id="auth-starter"><label><input type="checkbox" id="c-auth-starter"><span class="t">An empty repository gets a starter</span></label>
+            <div class="body"><p>Make two empty repositories (the second is for the senior, two steps on):</p>
+              <div class="cmd"><pre><code>for r in forge-blank forge-spare; do
+  git init -q --bare -b main .local/git/$r.git
+  git -C .local/git/$r.git config core.sharedRepository world
+  chmod -R a+rwX .local/git/$r.git
+done</code></pre></div>
+              <p>Connect <code>file:///git/forge-blank.git</code> and <code>file:///git/forge-spare.git</code> as above, and register <code>forge-blank</code> with <b>Folder</b> empty. Then register the seeded <code>file:///git/forge-101.git</code> with <b>Folder</b> <code>modules</code>.</p>
+              <p class="expect"><b>Expect</b>the empty one is registered as <code>forge-blank</code> (<i>Forge Blank</i>), "with a training to start from written into the repository": a <code>training.yaml</code> and a first module with a reading, committed by the bot, ready for <b>Edit content</b>. The second is refused: a repository with content but no <code>training.yaml</code> where you pointed is an error, and nothing is written into it.</p></div></li>
           <li class="item" data-id="auth-refuse"><label><input type="checkbox" id="c-auth-refuse"><span class="t">Unsafe repository URLs are refused</span></label>
-            <div class="body"><p>Try registering repo <code>--upload-pack=touch</code> and one with a space in it.</p>
-              <p class="expect"><b>Expect</b>both refused with the reason; nothing is saved.</p></div></li>
+            <div class="body"><p>On <b>Administrator → Repositories</b>, try connecting <code>--upload-pack=touch</code>, then a URL with a space in it, then <code>https://bot:secret@example.com/x.git</code> with <i>An access token</i>.</p>
+              <p class="expect"><b>Expect</b>each refused with the reason (a URL can't start with <code>-</code>, can't hold whitespace, and a token is given on its own, not in the URL); nothing is saved. Without <code>CRUCIBLE_GIT_ALLOW_FILE</code>, a local path is refused too.</p></div></li>
+          <li class="item" data-id="repo-https"><label><input type="checkbox" id="c-repo-https"><span class="t">Connect a private repository over HTTPS</span></label>
+            <div class="body"><p>Needs a private repository of your own on GitHub or GitLab holding a training (push <code>~/trainings/forge-501</code> there, with another <code>id</code>), and a token for just that repository: GitHub fine-grained, <i>Contents: Read and write</i>; GitLab, a project access token with <code>write_repository</code>.</p>
+              <ol class="how"><li><b>Connect a repository</b>: its <code>https://</code> URL, <i>An access token</i>, the token (user name optional) → <b>Connect repository</b>; <b>Test connection</b>.</li><li>Register a training from it, open <b>Edit content</b>, change a reading and submit it.</li><li>Choose <b>Replace credential</b>, leave the token box empty and save.</li><li>Open Forge Status → <b>Recent privileged actions</b>.</li></ol>
+              <p class="expect"><b>Expect</b><i>Token</i> and <i>Reachable</i>; the token is never shown again (the box says <i>Set — type a new one to replace it</i>), and saving with it empty keeps it; the audit entry says a credential was set, never what it is. Submitting pushes a <code>crucible/edit/…</code> branch to your repository before anyone reviews it, so a read-only token fails at the submit, not at the merge.</p></div></li>
+          <li class="item" data-id="repo-ssh"><label><input type="checkbox" id="c-repo-ssh"><span class="t">Connect a repository over SSH with a deploy key</span></label>
+            <div class="body"><p>Needs a repository on GitHub or GitLab where you can add a deploy key.</p>
+              <ol class="how"><li><b>Connect a repository</b>: its <code>git@host:org/repo.git</code> URL (or its <code>https://</code> one), <i>A deploy key Crucible makes</i> → <b>Connect repository</b>.</li><li><b>Copy the key</b> and add it at the host <b>with write access</b> (GitHub: Settings → Deploy keys, tick <i>Allow write access</i>; GitLab: Settings → Repository → Deploy keys, <i>Grant write permissions</i>); <b>Test connection</b>.</li><li><b>Replace credential</b>, keep <i>A deploy key Crucible makes</i>, save; <b>Test connection</b> again before adding the new key.</li></ol>
+              <p class="expect"><b>Expect</b>an <code>https://</code> URL is stored in its <code>git@</code> form; the row says <i>Deploy key</i> and shows only the public key, which can be copied again at any time; <i>Cannot be read</i>, with the reason, until the key is added, then <i>Reachable</i>. Replacing makes a fresh pair, so the old key stops working until you add the new one.</p></div></li>
+          <li class="item" data-id="repo-nokey"><label><input type="checkbox" id="c-repo-nokey"><span class="t">Without <code>CRUCIBLE_SECRET_KEY</code>, no token is kept</span></label>
+            <div class="body"><p>The compose stack sets a development <code>CRUCIBLE_SECRET_KEY</code>; <code>crucible preview</code> sets none, and makes you its admin. Run a preview of <code>~/trainings/forge-501</code> (see <i>Preview it as a trainee</i>), then open <b>Administrator → Repositories</b> → <b>Connect a repository</b> and type an <code>https://</code> URL.</p>
+              <p class="expect"><b>Expect</b>a warning: <i>This instance has no CRUCIBLE_SECRET_KEY, so it cannot keep a credential. Public repositories work; a private one needs that key set first.</i> <i>An access token</i> and <i>A deploy key Crucible makes</i> can't be chosen, and the server refuses a token sent anyway rather than store it in the clear. A public repository still connects.</p></div></li>
           <li class="item" data-id="auth-start"><label><input type="checkbox" id="c-auth-start"><span class="t">Give its roles to people and groups</span></label>
-            <div class="body"><ol class="how"><li>Under <b>Roles</b>, add <code>forge_trainees</code> and a brand-new email to <b>Participants</b>.</li><li>Add <code>forge_seniors</code> to <b>Editors</b> and <code>leader@crucible.local</code> to <b>Admins</b>.</li><li>Try a group of a team that doesn't exist, such as <code>ghost_seniors</code>.</li><li>As the senior (not an admin), register another training: it belongs to The Forge.</li></ol>
-              <p class="expect"><b>Expect</b>groups show with a flag and say who they are; the count of people updates; the unknown group is refused; the trainee can't open Manage trainings' <b>+ New training</b>.</p></div></li>
+            <div class="body"><ol class="how"><li>Under <b>Roles</b>, add <code>forge_trainees</code> and a brand-new email to <b>Participants</b>.</li><li>Add <code>forge_seniors</code> to <b>Editors</b>.</li><li>Try a group of a team that doesn't exist, such as <code>ghost_seniors</code>.</li><li>Try removing <code>forge_leaders</code>, the only admin.</li><li>As the senior (not an admin), register <code>file:///git/forge-spare.git</code>.</li></ol>
+              <p class="expect"><b>Expect</b>groups show with a flag and say who they are; the count of people updates; the unknown group is refused; removing the last admin is refused. The senior's training belongs to The Forge and its <b>Admins</b> are <code>forge_seniors</code> and <code>forge_leaders</code> (the registrant's rank and the ranks above). The trainee can't open Manage trainings' <b>+ New training</b>.</p></div></li>
+          <li class="item" data-id="auth-manage"><label><input type="checkbox" id="c-auth-manage"><span class="t">Managing comes from being named an admin</span></label>
+            <div class="body"><ol class="how"><li>As the senior, on <code>forge-spare</code>: add <code>leader@crucible.local</code> to <b>Admins</b> and remove <code>forge_leaders</code>. Open it as the leader.</li><li>As the senior again, remove <code>leader@crucible.local</code>. Reload as the leader.</li></ol>
+              <p class="expect"><b>Expect</b>while named, the leader changes roles, lab settings and the content version; once removed, the leader sees the training read-only, even though The Forge owns it: being on the owning team grants nothing by itself. Crucible admins manage every training and are listed on none.</p></div></li>
           <li class="item" data-id="auth-take"><label><input type="checkbox" id="c-auth-take"><span class="t">The trainee takes it</span></label>
             <div class="body"><p>As trainee: Hearth → the new card; read, take the quiz.</p>
               <p class="expect"><b>Expect</b>with <code>progression: linear</code>, later modules stay locked until earlier ones are forged; the Trainings card offers <b>Open</b>.</p></div></li>
@@ -421,8 +452,8 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><ol class="how"><li>In a clone of the repo, move everything into <code>courses/forge-501/</code>, commit, tag it <code>v1</code> and push the commit and the tag.</li><li><b>Source</b> → <b>Change source</b>: repository URL empty, <b>Branch, tag or commit</b> <code>v1</code>, <b>Folder</b> <code>courses/forge-501</code>.</li><li>Push another commit to <code>main</code>.</li></ol>
               <p class="expect"><b>Expect</b>the training loads from the folder and stays on <code>v1</code> after the new commit; Forge Status shows <code>v1</code> and the folder; <b>Edit content</b> is gone (a tag changes only in git). Back on <code>main</code> with the same folder, edits return and their diffs show paths inside the folder.</p></div></li>
           <li class="item" data-id="auth-delete"><label><input type="checkbox" id="c-auth-delete"><span class="t">Delete the training</span></label>
-            <div class="body"><p><b>Source</b> → <b>Delete training</b>, then register it again and start it for the team.</p>
-              <p class="expect"><b>Expect</b>it names the teams it stops for; the repo is untouched; progress comes back after re-registering.</p></div></li>
+            <div class="body"><p>First try <b>Disconnect</b> on its repository under <b>Administrator → Repositories</b>. Then <b>Source</b> → <b>Delete training</b>, and register it again from the same repository.</p>
+              <p class="expect"><b>Expect</b>the disconnect is refused while a training reads from the repository; the delete asks first; the repo is untouched; progress comes back after re-registering.</p></div></li>
         </ul>
       </section>
 
@@ -436,11 +467,11 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>Edit a reading, insert a block from <b>Blocks</b>, then put a mistake in <code>quiz.yaml</code>.</p>
               <p class="expect"><b>Expect</b>autosave; the mistake appears under Problems with its file and line, and clears when fixed.</p></div></li>
           <li class="item" data-id="ed-review"><label><input type="checkbox" id="c-ed-review"><span class="t">Review and merge</span></label>
-            <div class="body"><p>Submit. As senior (a maintainer), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
-              <p class="expect"><b>Expect</b>the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
+            <div class="body"><p>Submit. As senior (an editor of the training), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
+              <p class="expect"><b>Expect</b>submitting pushes the edit to a <code>crucible/edit/…</code> branch of the repository; the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
           <li class="item" data-id="ed-enrolled"><label><input type="checkbox" id="c-ed-enrolled"><span class="t">Who may edit</span></label>
             <div class="body"><p>Make the leader a participant of the training too; check the trainee's view.</p>
-              <p class="expect"><b>Expect</b>the leader still edits (they are an editor through <code>forge_leaders</code>); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
+              <p class="expect"><b>Expect</b>the leader still edits (<code>forge_leaders</code> are the training's admins, and admins edit); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
           <li class="item" data-id="ed-rebase"><label><input type="checkbox" id="c-ed-rebase"><span class="t">Newer content while you edit</span></label>
             <div class="body"><p>With a draft open, push a change to the same file in git.</p>
               <p class="expect"><b>Expect</b>the draft offers to rebase, shows the conflict and ends on the new base.</p></div></li>
@@ -601,7 +632,7 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
         <ul class="items">
           <li class="item" data-id="mo-route"><label><input type="checkbox" id="c-mo-route"><span class="t">Routing by tier</span></label>
             <div class="body"><p>As trainee request <i>Paid Heat</i>; move the tiers up and down between requests.</p>
-              <p class="expect"><b>Expect</b>the request waits for the program approver, the leader or an admin, as the estimate falls; nobody approves their own; someone higher can decide a cheaper request.</p></div></li>
+              <p class="expect"><b>Expect</b>the request waits for the training's admins, the team's leaders or an admin, as the estimate falls; nobody approves their own; someone higher can decide a cheaper request.</p></div></li>
           <li class="item" data-id="mo-escalate"><label><input type="checkbox" id="c-mo-escalate"><span class="t">Escalation</span></label>
             <div class="body"><p>Set <b>Hours before a waiting request escalates</b> very low and leave a request unanswered inside the schedule window.</p>
               <p class="expect"><b>Expect</b>it moves up a tier and the next people hear about it; if even admins don't answer, it expires.</p></div></li>
@@ -628,7 +659,7 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
               <p class="expect"><b>Expect</b>refused: this instance already has teams or trainings. Nothing changes.</p></div></li>
           <li class="item" data-id="mv-import"><label><input type="checkbox" id="c-mv-import"><span class="t">Import into a fresh forge</span></label>
             <div class="body"><p>On an instance with an empty database and no seed, sign in as its first admin and import the file.</p>
-              <p class="expect"><b>Expect</b>everything arrives in one step; you stay an admin; each person gets their progress back at their first sign-in, matched by email.</p></div></li>
+              <p class="expect"><b>Expect</b>everything arrives in one step; you stay an admin; each person gets their progress back at their first sign-in, matched by email. Connected repositories arrive without their credentials (they were sealed with the old instance's <code>CRUCIBLE_SECRET_KEY</code>): each shows <i>No credential</i> until it is reconnected.</p></div></li>
         </ul>
       </section>
 

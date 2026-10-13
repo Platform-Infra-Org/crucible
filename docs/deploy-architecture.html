@@ -152,7 +152,8 @@ body { margin: 0; }
           <tr><th scope="row">Where the app runs</th><td>A Compose container on your laptop</td><td>The same container, joined to kind's network</td><td>A pod in k3s on one EC2 node</td></tr>
           <tr><th scope="row">Sign-in</th><td>Keycloak (users <code>trainee</code>, <code>senior</code>, <code>leader</code>, <code>admin</code>)</td><td>Keycloak</td><td>Amazon Cognito user pool</td></tr>
           <tr><th scope="row">Database</th><td>Postgres 18 container</td><td>Postgres 18, wiped each run</td><td>Postgres StatefulSet, 10 GiB, nightly dump to S3</td></tr>
-          <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code></td><td>Seeded git repos</td><td>Your git host; push webhook and bot merges</td></tr>
+          <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code>, connected as <code>file://</code> repositories with no credential</td><td>Seeded git repos, the same way</td><td>Repositories on your git host, each connected once: HTTPS with a token, or SSH with a deploy key Crucible makes; push webhook and bot merges</td></tr>
+          <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>No <code>CRUCIBLE_SECRET_KEY</code> is set, so only repositories without a credential connect; <code>git_credentials</code> from SSM can still serve <code>https://</code> ones</td></tr>
           <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
           <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
           <tr><th scope="row">Started by</th><td><code>docker compose up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
@@ -167,7 +168,7 @@ body { margin: 0; }
     <div class="figure">
       <svg viewBox="0 0 1000 470" role="img" aria-labelledby="d1t d1d">
         <title id="d1t">Local stack</title>
-        <desc id="d1d">A laptop running Docker Compose with crucible-api, Keycloak, Postgres and mounted git repos, plus the crucible-agent that runs labs in Docker or on your own cluster.</desc>
+        <desc id="d1d">A laptop running Docker Compose with crucible-api, Keycloak, Postgres and mounted git repos, connected as file:// repositories, plus the crucible-agent that runs labs in Docker or on your own cluster.</desc>
         <rect class="zone" x="10" y="10" width="980" height="450" rx="14"/>
         <text class="zl" x="30" y="38">YOUR LAPTOP · DOCKER DESKTOP</text>
 
@@ -197,7 +198,7 @@ body { margin: 0; }
 
         <rect class="box" x="280" y="352" width="430" height="70" rx="10"/>
         <text class="bt" x="298" y="380">Training repos at /git</text>
-        <text class="cd" x="298" y="403">.local/git, seeded by scripts/seed-git.sh</text>
+        <text class="cd" x="298" y="403">.local/git by seed-git.sh; connected as file://</text>
 
         <rect class="box hot" x="760" y="96" width="210" height="108" rx="10"/>
         <text class="bt" x="778" y="124">crucible-agent</text>
@@ -238,7 +239,7 @@ body { margin: 0; }
     </div>
     <div class="cols">
       <div><h3>Start it</h3><p><code>make build && make toolbox && ./scripts/seed-git.sh</code>, then <code>docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code>. On this machine port 8081 is taken, so prefix <code>KEYCLOAK_PORT=8082</code>.</p></div>
-      <div><h3>Configuration</h3><p>Settings, teams and budgets live in Postgres. <code>CRUCIBLE_SEED_DIR</code> imports <code>examples/platform</code> once, into an empty database only.</p></div>
+      <div><h3>Configuration</h3><p>Settings, teams and budgets live in Postgres. <code>CRUCIBLE_SEED_DIR</code> imports <code>examples/platform</code> once, into an empty database only; its trainings' repositories arrive connected. <code>CRUCIBLE_GIT_ALLOW_FILE=1</code> lets <code>file://</code> repositories through, and a development <code>CRUCIBLE_SECRET_KEY</code> lets you try tokens and deploy keys under <b>Administrator → Repositories</b>.</p></div>
       <div><h3>Labs</h3><p>The agent on your laptop runs laptop labs in Docker, and cluster labs on whatever cluster your kubeconfig points at. AWS labs are off here.</p></div>
     </div>
   </section>
@@ -321,7 +322,7 @@ body { margin: 0; }
     <div class="figure">
       <svg viewBox="0 0 1200 760" role="img" aria-labelledby="d3t d3d">
         <title id="d3t">Production on AWS</title>
-        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all reaching the node over HTTPS. The main account holds the persistent stack (Cognito, data bucket, state bucket) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
+        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all connected to the node over HTTPS (the git host over SSH too, for repositories connected with a deploy key). The main account holds the persistent stack (Cognito, data bucket, state bucket) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
 
         <text class="zl" x="20" y="38">OUTSIDE AWS</text>
         <rect class="box" x="20" y="64" width="190" height="96" rx="10"/>
@@ -334,8 +335,8 @@ body { margin: 0; }
         <text class="bs" x="36" y="258">laptop and cluster labs</text>
         <rect class="box" x="20" y="312" width="190" height="96" rx="10"/>
         <text class="bt" x="36" y="340">Git host</text>
-        <text class="bs" x="36" y="364">training repos; webhook</text>
-        <text class="cd" x="36" y="386">/api/git/hook</text>
+        <text class="bs" x="36" y="364">repos over HTTPS or SSH</text>
+        <text class="cd" x="36" y="386">webhook /api/git/hook</text>
         <rect class="box" x="20" y="434" width="190" height="96" rx="10"/>
         <text class="bt" x="36" y="462">AWS Price List</text>
         <text class="bs" x="36" y="486">free public files,</text>
@@ -457,6 +458,7 @@ body { margin: 0; }
     <div class="cols">
       <div><h3>persistent</h3><p><code>crucible aws init</code> creates the Cognito user pool, the data bucket (release tarballs, nightly snapshots, the always-kept latest snapshot, trainees' uploads) and the Terraform state bucket. Nothing here is ever destroyed.</p></div>
       <div><h3>main</h3><p><code>crucible aws up</code> builds one EC2 node with an Elastic IP and installs k3s, Helm and sysbox on first boot. The scheduler stops it at night to save money; <code>teardown</code> then <code>up</code> rebuilds it and restores the newest snapshot.</p></div>
+      <div><h3>Secrets</h3><p>SSM holds the sign-in client secret, the database password, the quiz and webhook secrets and the optional <code>git_credentials</code>; each deploy copies them into the <code>crucible-secrets</code> Secret. <code>CRUCIBLE_SECRET_KEY</code>, which seals connected repositories' tokens and deploy keys, is not among them: the chart reads it from that Secret only if someone adds it there.</p></div>
       <div><h3>labs</h3><p><code>crucible aws labs-init</code> sets up the lab account: three roles, a permission boundary, the lab state bucket, a free billing export and an alert-only AWS Budget. The one manual step is activating the <code>crucible:lab-id</code> cost-allocation tag.</p></div>
     </div>
   </section>

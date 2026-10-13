@@ -132,3 +132,12 @@ variable "bootstrap_admin" {
     error_message = "bootstrap_admin must be empty or a plain email address (letters, digits and . _ % + - only)."
   }
 }
+variable "toolbox_image" {
+  type        = string
+  default     = ""
+  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = cluster labs off."
+  validation {
+    condition     = var.toolbox_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.toolbox_image))
+    error_message = "toolbox_image must be empty or an image pinned by digest, e.g. ghcr.io/you/crucible-toolbox@sha256:<64 hex>: laptops pull it, so never a tag."
+  }
+}

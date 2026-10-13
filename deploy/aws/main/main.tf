@@ -98,6 +98,7 @@ resource "aws_ssm_parameter" "helm_values" {
   name = "/${var.name}/helm-values"
   type = "String"
   value = yamlencode({
+    toolboxImage = var.toolbox_image # empty: cluster labs stay off
     awsLabs = {
       enabled     = var.lab_role_arn != ""
       labRoleArn  = var.lab_role_arn

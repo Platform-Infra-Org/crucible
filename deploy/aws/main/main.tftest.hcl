@@ -244,3 +244,39 @@ run "secret_key_reaches_the_api_when_init_made_it" {
     error_message = "the node role must be able to read /<name>/secret_key"
   }
 }
+
+run "cluster_labs_off_without_a_toolbox_image" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == ""
+    error_message = "no toolbox image by default: cluster labs stay off"
+  }
+}
+
+run "toolbox_image_reaches_helm" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == "ghcr.io/example/crucible-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    error_message = "toolbox_image must reach the helm values deploy.sh passes (toolboxImage)"
+  }
+}
+
+run "toolbox_image_must_be_pinned_by_digest" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox:latest"
+  }
+  expect_failures = [var.toolbox_image]
+}
+
+run "toolbox_image_rejects_a_short_digest" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox@sha256:0123"
+  }
+  expect_failures = [var.toolbox_image]
+}

@@ -423,7 +423,7 @@ tr.total td { font-weight: 700; }
             <p>This file is the only record of what <code>init</code> created. Copy it to a safe place, and again after every <code>init</code>.</p>
             <div class="cmd"><pre><code>aws s3 cp deploy/aws/persistent/terraform.tfstate s3://&lt;state_bucket&gt;/persistent.tfstate</code></pre></div></li>
           <li><h4>Fill in your settings</h4>
-            <p>Copy the example and edit it. <code>domain</code> must match the one you gave <code>init</code>. Set <code>bootstrap_admin</code> to your email: that person becomes the first admin.</p>
+            <p>Copy the example and edit it. <code>domain</code> must match the one you gave <code>init</code>. Set <code>bootstrap_admin</code> to your email: that person becomes the first admin. For cluster labs, set <code>toolbox_image</code> to the toolbox image's digest (<code>&lt;registry&gt;/crucible-toolbox@sha256:…</code>; a tag is refused); left empty, cluster labs stay off.</p>
             <div class="cmd"><pre><code>cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars</code></pre></div></li>
           <li><h4>Build the server</h4>
             <p><code>up</code> runs Terraform on the main stack, waits for the server to come up, then deploys the current release. Right after the apply it prints <code>Point an A record &lt;domain&gt; → &lt;ip&gt;</code>: create that DNS record while it waits (skip this if you gave a Route 53 zone).</p>

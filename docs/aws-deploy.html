@@ -283,9 +283,10 @@ svg .ahm { fill: var(--muted); }
       <div><h3>The cost drivers</h3><p>The instance type and how many hours it runs. <code>t3a</code> instances also bill surplus CPU credits if they stay busy
         above their baseline (40% for <code>t3a.xlarge</code>), about $0.05 per vCPU-hour; watch the <code>CPUSurplusCreditsCharged</code> metric.
         Cognito, the scheduler, SSM and the lab account's billing export and Budget are free at this size.</p></div>
-      <div><h3>Not on the AWS node yet</h3><p>Cluster labs run on trainees' own clusters and need a toolbox image (<code>CRUCIBLE_TOOLBOX_IMAGE</code>,
-        Helm <code>toolboxImage</code>). Neither <code>crucible.tfvars</code> nor the node's deploy script sets it, and the runbook gives no AWS
-        procedure for it, so cluster labs stay off on this deployment. Laptop labs and AWS labs work.</p></div>
+      <div><h3>Cluster labs are opt-in</h3><p>Cluster labs run on trainees' own clusters and need a toolbox image. Build it for arm64 and amd64,
+        push it, and set <code>toolbox_image</code> in <code>crucible.tfvars</code> to its digest
+        (<code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>; a tag is refused). Left empty, cluster labs stay off. Laptop labs
+        and AWS labs work either way. The runbook's toolbox section has the build commands.</p></div>
     </div>
   </section>
 
@@ -398,6 +399,7 @@ schedule_timezone = "Europe/Bucharest"
         <tr><th scope="row"><code>git_credentials</code></th><td><code>""</code></td><td class="req">no</td><td>Lines for git's credential store, such as <code>https://bot:TOKEN@git.example.com</code>. Crucible uses them for any <code>https://</code> repository connected with no credential of its own. To let people edit content in Crucible, the token needs push access: edits go to <code>crucible/edit/&lt;id&gt;</code> branches, and the bot merges approved ones, so branch protection must let it. Empty is stored as <code>none</code>. You can also give each repository its own token or deploy key in the app instead.</td></tr>
         <tr><th scope="row"><code>git_bot_email</code></th><td><code>crucible-bot@example.com</code></td><td class="req">change it</td><td>The author email of the commits Crucible pushes. Hosts that require verified commit emails reject the default.</td></tr>
         <tr><th scope="row"><code>git_bot_name</code></th><td><code>Crucible Bot</code></td><td class="req">no</td><td>The author name of those commits.</td></tr>
+        <tr><th scope="row"><code>toolbox_image</code></th><td><code>""</code></td><td class="req">for cluster labs</td><td>The cluster-lab toolbox image trainees' laptops pull, pinned by digest: <code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>. Terraform refuses a tag. It reaches the node's Helm values (<code>toolboxImage</code>), so a change needs only <code>up</code>. Empty: cluster labs stay off.</td></tr>
         <tr><th scope="row"><code>route53_zone_id</code></th><td><code>""</code></td><td class="req">no</td><td>A Route 53 hosted zone that holds <code>domain</code>. When set, Terraform creates the A record (TTL 300) and keeps it on the Elastic IP, even after a rebuild. Empty: you create the record yourself.</td></tr>
         <tr><th scope="row"><code>instance_type</code></th><td><code>t3a.xlarge</code></td><td class="req">no</td><td>The node's size (4 vCPU, 16 GiB). AWS lab workspaces run on it. The example suggests <code>t3a.large</code> as cheaper. It must be x86_64: the image is Ubuntu amd64 and sysbox is amd64-only.</td></tr>
         <tr><th scope="row"><code>disk_gb</code></th><td><code>60</code></td><td class="req">no</td><td>The encrypted gp3 root disk: k3s, Postgres data, images. The runbook doesn't cover resizing it on a running node.</td></tr>

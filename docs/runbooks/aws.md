@@ -79,6 +79,14 @@ docker buildx imagetools inspect <registry>/crucible-toolbox:<version>   # the m
 # CRUCIBLE_TOOLBOX_IMAGE=<registry>/crucible-toolbox@sha256:<digest>
 ```
 
+On AWS, set it in `crucible.tfvars` and run `crucible aws up`; the node's Helm values carry it as `toolboxImage`:
+
+```hcl
+toolbox_image = "<registry>/crucible-toolbox@sha256:<digest>"
+```
+
+Terraform refuses a tag (`:latest`, `:1.2`): the value must be `<image>@sha256:<64 hex>`. Left empty (the default), cluster labs stay off; laptop and AWS labs work either way.
+
 Run one Crucible deployment per Kubernetes cluster: the orphan sweep deletes `lab-*` namespaces that are not active in its own database. Turning the lab cluster off leaves existing lab namespaces in place (their rows are marked destroyed with "cleanup skipped"); delete them by hand with `kubectl delete ns -l crucible.io/lab`.
 
 A node built before M4 has no sysbox, because `user_data` changes never replace the node. Rebuild it with `crucible aws teardown` and then `crucible aws up` (data is restored from the latest snapshot).

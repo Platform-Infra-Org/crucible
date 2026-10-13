@@ -44,7 +44,8 @@ revoke it by deleting it at the host. Choosing **Replace credential** and saving
 old key stops working — add the new one.
 
 The first time Crucible reaches a host it records that host's fingerprint and refuses it if it ever changes
-afterwards.
+afterwards. The fingerprint is kept in Crucible's database, so a restart or a rebuilt server still holds it. Only a
+host met for the first time in the last minute or so before a restart is met afresh, as if for the first time.
 
 Crucible stores the token encrypted and never shows it again — not on this page, not through its API, not in the
 audit log, which records only that a credential was set. To change it, choose **Replace credential** and type a new

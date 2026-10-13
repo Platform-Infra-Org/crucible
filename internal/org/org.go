@@ -164,7 +164,7 @@ func (s *Store) trainings(ctx context.Context, p *config.Platform) error {
 	}
 	// The credential goes back into the URL here, in memory, for git to use. It is not stored this way.
 	for _, x := range found {
-		url, err := s.fetchURL(x.repo, x.url, x.auth, x.username, x.secret)
+		url, err := s.fetchURL(ctx, x.repo, x.url, x.auth, x.username, x.secret)
 		if err != nil {
 			// One unreadable credential must not hide every other training: this one is reported as unavailable.
 			slog.Warn("repository credential cannot be read; its trainings will not load", "training", x.id, "repo", redactRepo(x.url), "err", err)

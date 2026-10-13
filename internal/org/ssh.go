@@ -1,15 +1,18 @@
 package org
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/ssh"
 
 	"crucible/internal/apperr"
@@ -100,7 +103,8 @@ func IsSSH(raw string) bool {
 }
 
 // sshDir holds the generated keys, the ssh config that points at them and the hosts Crucible has met. It lives under
-// CRUCIBLE_DATA_DIR, so a restart keeps the host keys it pinned on first connection.
+// CRUCIBLE_DATA_DIR, which a restart may wipe (an emptyDir in the Helm chart): the keys are rewritten from Postgres on
+// every use, and the pinned hosts are restored from it by Store.syncKnownHosts.
 type sshDir string
 
 func (d sshDir) path(parts ...string) string {
@@ -126,8 +130,8 @@ func (d sshDir) write(id int64, key, raw string) (string, error) {
 	if t.port != "" {
 		port = "  Port " + t.port + "\n"
 	}
-	// accept-new pins a host's key the first time and refuses it if it ever changes; known_hosts is kept with the
-	// data, so that pinning survives a restart.
+	// accept-new pins a host's key the first time and refuses it if it ever changes. known_hosts is restored from
+	// Postgres before ssh runs (Store.syncKnownHosts), so that pinning survives a restart.
 	entry := fmt.Sprintf("Host %s\n  HostName %s\n  User %s\n%s  IdentityFile %s\n  IdentitiesOnly yes\n"+
 		"  StrictHostKeyChecking accept-new\n  UserKnownHostsFile %s\n  BatchMode yes\n",
 		alias, t.host, t.user, port, keyFile, d.path("known_hosts"))
@@ -167,6 +171,36 @@ func (d sshDir) forget(id int64) error {
 		}
 	}
 	return d.rebuildConfig()
+}
+
+// syncKnownHosts makes Postgres the source of truth for the host keys ssh pinned. Run before ssh is used: a missing
+// known_hosts (a wiped data directory) is restored from the stored copy, so a host is never trusted afresh, and a file
+// that differs from it (ssh pinned a new host last time) is saved.
+//
+// ponytail: a pin accept-new makes during a git run is saved only at the next use, typically the next sync a minute
+// later; a restart inside that window loses only that brand-new pin, which accept-new then makes again. Saving right
+// after each git run would close it, at the cost of a hook in every caller.
+func (s *Store) syncKnownHosts(ctx context.Context) error {
+	file := s.SSHDir.path("known_hosts")
+	var stored string
+	if err := s.DB.QueryRow(ctx, `SELECT body FROM ssh_known_hosts`).Scan(&stored); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	local, err := os.ReadFile(file)
+	switch {
+	case os.IsNotExist(err):
+		if stored == "" {
+			return nil
+		}
+		return os.WriteFile(file, []byte(stored), 0o600)
+	case err != nil:
+		return err
+	case string(local) == stored:
+		return nil
+	}
+	_, err = s.DB.Exec(ctx, `INSERT INTO ssh_known_hosts (id, body) VALUES (true, $1)
+		ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body`, string(local))
+	return err
 }
 
 func writeIfChanged(path string, body []byte, mode os.FileMode) error {

@@ -212,7 +212,7 @@ func (s *Store) RecordCheck(ctx context.Context, id int64, canWrite *bool, failu
 // fetchURL is the URL git is given for a repository: the stored URL with the credential put back in, in memory only.
 // The credential is never stored in the URL, never returned by a route and never logged — gitsync.redact strips
 // userinfo from git's own output, so a failure cannot carry it either.
-func (s *Store) fetchURL(id int64, raw, auth, username, sealed string) (string, error) {
+func (s *Store) fetchURL(ctx context.Context, id int64, raw, auth, username, sealed string) (string, error) {
 	box := s.Secrets
 	if auth == "none" || sealed == "" || box == nil {
 		return raw, nil
@@ -224,6 +224,9 @@ func (s *Store) fetchURL(id int64, raw, auth, username, sealed string) (string, 
 	if auth == "ssh" {
 		if s.SSHDir == "" {
 			return "", apperr.Wrap(apperr.Unavailable, "this instance has nowhere to keep SSH keys")
+		}
+		if err := s.syncKnownHosts(ctx); err != nil {
+			return "", fmt.Errorf("cannot restore the pinned SSH host keys: %w", err)
 		}
 		return s.SSHDir.write(id, token, raw)
 	}
@@ -248,7 +251,7 @@ func (s *Store) Check(ctx context.Context, id int64) {
 		return
 	}
 	failure := ""
-	url, err := s.fetchURL(id, raw, auth, username, sealed)
+	url, err := s.fetchURL(ctx, id, raw, auth, username, sealed)
 	if err != nil {
 		failure = err.Error()
 	} else if err := gitsync.CheckRemote(ctx, url); err != nil {

@@ -18,7 +18,8 @@ import (
 // one pool → another) links each person back to their history at their first login (auth.Store.UpsertUser).
 //
 // Left out, on purpose: the credential of each connected repository (it is sealed with this instance's
-// CRUCIBLE_SECRET_KEY, which the new one does not have, so each repository is reconnected there), sessions and agent
+// CRUCIBLE_SECRET_KEY, which the new one does not have, so each repository is reconnected there), the SSH host keys
+// pinned for them (the new instance pins its own on first contact), sessions and agent
 // tokens (everyone signs in and pairs again), labs and everything hanging
 // off them (events, check and setup runs, terminal transcripts), spend, alerts, reaper findings, the kill switch, the
 // audit log and content edits. Uploaded files stay in blob storage: submissions keep their keys, so they open again

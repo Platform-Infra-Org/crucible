@@ -153,7 +153,7 @@ body { margin: 0; }
           <tr><th scope="row">Sign-in</th><td>Keycloak (users <code>trainee</code>, <code>senior</code>, <code>leader</code>, <code>admin</code>)</td><td>Keycloak</td><td>Amazon Cognito user pool</td></tr>
           <tr><th scope="row">Database</th><td>Postgres 18 container</td><td>Postgres 18, wiped each run</td><td>Postgres StatefulSet, 10 GiB, nightly dump to S3</td></tr>
           <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code>, connected as <code>file://</code> repositories with no credential</td><td>Seeded git repos, the same way</td><td>Repositories on your git host, each connected once: HTTPS with a token, or SSH with a deploy key Crucible makes; push webhook and bot merges</td></tr>
-          <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>No <code>CRUCIBLE_SECRET_KEY</code> is set, so only repositories without a credential connect; <code>git_credentials</code> from SSM can still serve <code>https://</code> ones</td></tr>
+          <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>Sealed with a random <code>CRUCIBLE_SECRET_KEY</code> that <code>crucible aws init</code> keeps in the persistent stack, so it survives teardown; <code>git_credentials</code> from SSM also serves <code>https://</code> repositories with no credential of their own</td></tr>
           <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
           <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
           <tr><th scope="row">Started by</th><td><code>docker compose up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
@@ -318,11 +318,11 @@ body { margin: 0; }
 
   <section id="prod" aria-labelledby="prod-h">
     <div class="head"><span class="eyebrow">deploy/aws/persistent · deploy/aws/main · deploy/aws/labs</span><h2 id="prod-h">Production on AWS</h2>
-      <p>Three Terraform stacks. <strong>persistent</strong> holds what must survive a rebuild: sign-in, the data bucket and Terraform state. <strong>main</strong> is the node and everything around it; it can be torn down and rebuilt from the latest snapshot. <strong>labs</strong> lives in a separate, standalone AWS account, where trainees' AWS labs create real resources inside hard limits.</p></div>
+      <p>Three Terraform stacks. <strong>persistent</strong> holds what must survive a rebuild: sign-in, the data bucket, Terraform state and the key that seals repository credentials. <strong>main</strong> is the node and everything around it; it can be torn down and rebuilt from the latest snapshot. <strong>labs</strong> lives in a separate, standalone AWS account, where trainees' AWS labs create real resources inside hard limits.</p></div>
     <div class="figure">
       <svg viewBox="0 0 1200 760" role="img" aria-labelledby="d3t d3d">
         <title id="d3t">Production on AWS</title>
-        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all connected to the node over HTTPS (the git host over SSH too, for repositories connected with a deploy key). The main account holds the persistent stack (Cognito, data bucket, state bucket) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
+        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all connected to the node over HTTPS (the git host over SSH too, for repositories connected with a deploy key). The main account holds the persistent stack (Cognito, data bucket, state bucket, the secret-key parameter in SSM) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
 
         <text class="zl" x="20" y="38">OUTSIDE AWS</text>
         <rect class="box" x="20" y="64" width="190" height="96" rx="10"/>
@@ -349,7 +349,7 @@ body { margin: 0; }
         <text class="zl" x="268" y="40">MAIN AWS ACCOUNT</text>
 
         <rect class="group" x="266" y="54" width="530" height="150" rx="12"/>
-        <text class="zl" x="282" y="76">persistent · never destroyed</text>
+        <text class="zl" x="282" y="76">persistent · never destroyed · + SSM secret_key</text>
         <rect class="box" x="282" y="88" width="156" height="102" rx="10"/>
         <text class="bt" x="298" y="116">Cognito</text>
         <text class="bs" x="298" y="140">user pool,</text>
@@ -456,9 +456,9 @@ body { margin: 0; }
       </svg>
     </div>
     <div class="cols">
-      <div><h3>persistent</h3><p><code>crucible aws init</code> creates the Cognito user pool, the data bucket (release tarballs, nightly snapshots, the always-kept latest snapshot, trainees' uploads) and the Terraform state bucket. Nothing here is ever destroyed.</p></div>
+      <div><h3>persistent</h3><p><code>crucible aws init</code> creates the Cognito user pool, the data bucket (release tarballs, nightly snapshots, the always-kept latest snapshot, trainees' uploads) and the Terraform state bucket, and keeps <code>CRUCIBLE_SECRET_KEY</code> as the SSM parameter <code>/crucible/secret_key</code>. Nothing here is ever destroyed, so a rebuilt node can still open the repository credentials in the restored database.</p></div>
       <div><h3>main</h3><p><code>crucible aws up</code> builds one EC2 node with an Elastic IP and installs k3s, Helm and sysbox on first boot. The scheduler stops it at night to save money; <code>teardown</code> then <code>up</code> rebuilds it and restores the newest snapshot.</p></div>
-      <div><h3>Secrets</h3><p>SSM holds the sign-in client secret, the database password, the quiz and webhook secrets and the optional <code>git_credentials</code>; each deploy copies them into the <code>crucible-secrets</code> Secret. <code>CRUCIBLE_SECRET_KEY</code>, which seals connected repositories' tokens and deploy keys, is not among them: the chart reads it from that Secret only if someone adds it there.</p></div>
+      <div><h3>Secrets</h3><p>SSM holds the sign-in client secret, the database password, the quiz and webhook secrets and the optional <code>git_credentials</code>; each deploy copies them into the <code>crucible-secrets</code> Secret, with <code>CRUCIBLE_SECRET_KEY</code> (it seals connected repositories' tokens and deploy keys) from the persistent stack. A node set up before that key existed deploys without it and warns, until <code>init</code> is re-run. The SSH host keys Crucible pins live in Postgres, so a pod restart keeps them.</p></div>
       <div><h3>labs</h3><p><code>crucible aws labs-init</code> sets up the lab account: three roles, a permission boundary, the lab state bucket, a free billing export and an alert-only AWS Budget. The one manual step is activating the <code>crucible:lab-id</code> cost-allocation tag.</p></div>
     </div>
   </section>

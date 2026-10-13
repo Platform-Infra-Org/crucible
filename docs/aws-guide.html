@@ -353,6 +353,7 @@ tr.total td { font-weight: 700; }
             <tr><td>User pool</td><td>Cognito</td><td>Everyone's sign-in account. Email is the identity Crucible trusts.</td></tr>
             <tr><td>Login domain and branding</td><td>Cognito managed login</td><td>The hosted sign-in page people see.</td></tr>
             <tr><td>App client</td><td>Cognito</td><td>Lets Crucible use the pool to sign people in (OpenID Connect).</td></tr>
+            <tr><td>Secret key</td><td>SSM Parameter Store (SecureString)</td><td><code>/crucible/secret_key</code>, a random 48-character <code>CRUCIBLE_SECRET_KEY</code> that seals the tokens and deploy keys of connected repositories. It lives here so a teardown → up restores a database whose credentials the new server can still open. Terraform never changes it once made.</td></tr>
           </tbody>
         </table></div>
         <p class="prose">Its own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. Back it up somewhere safe.</p>
@@ -368,7 +369,7 @@ tr.total td { font-weight: 700; }
             <tr><td>Network</td><td>Default VPC and subnet</td><td>Already exists in every account. No NAT gateway or load balancer, which keeps it cheap.</td></tr>
             <tr><td>Server identity</td><td>IAM role <code>crucible-node</code> + instance profile</td><td>May read and write only its own parts of the data bucket, read its own settings in Parameter Store, use Session Manager, and (when labs are on) assume the lab, ops and plan roles.</td></tr>
             <tr><td>Metadata settings</td><td>EC2 IMDSv2, hop limit 2</td><td>The server's credentials need a token; the backup pod can still reach them.</td></tr>
-            <tr><td>Settings and secrets</td><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), Helm values, and encrypted parameters for the database password, quiz secret, git webhook secret and sign-in client secret (all made by Terraform), plus the optional <code>git_credentials</code> from your settings. Each deploy copies them into the Kubernetes Secret <code>crucible-secrets</code>. <code>CRUCIBLE_SECRET_KEY</code>, which seals the credentials of connected repositories, is not among them (see <i>Connect your training repos</i> under <a href="#deploy">Deploy it</a>).</td></tr>
+            <tr><td>Settings and secrets</td><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), Helm values, and encrypted parameters for the database password, quiz secret, git webhook secret and sign-in client secret (all made by Terraform), plus the optional <code>git_credentials</code> from your settings. Each deploy copies them into the Kubernetes Secret <code>crucible-secrets</code>, together with <code>CRUCIBLE_SECRET_KEY</code> from the persistent stack's <code>/crucible/secret_key</code>.</td></tr>
             <tr><td>Wake and sleep</td><td>EventBridge Scheduler + its IAM role</td><td>Starts the server at 07:30 and stops it at 19:30, Monday to Friday, in your time zone.</td></tr>
             <tr><td>DNS record</td><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if your domain is in Route 53.</td></tr>
           </tbody>
@@ -415,7 +416,7 @@ tr.total td { font-weight: 700; }
           <li><h4>Install the tools</h4>
             <p>Terraform 1.10 or later, AWS CLI v2, Docker with buildx, Helm 3, Go 1.26. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
           <li><h4>Create the persistent stack</h4>
-            <p>Makes the state and data buckets and the Cognito sign-in. Nothing it creates is ever deleted by Crucible.</p>
+            <p>Makes the state and data buckets, the Cognito sign-in and the secret key that seals repository credentials. Nothing it creates is ever deleted by Crucible.</p>
             <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div></li>
           <li><h4>Back up its state</h4>
             <p>This file is the only record of what <code>init</code> created. Copy it to a safe place, and again after every <code>init</code>.</p>
@@ -437,11 +438,15 @@ tr.total td { font-weight: 700; }
               needs <b>write</b> access if anyone will edit content in Crucible: submitting an edit pushes a <code>crucible/edit/…</code> branch, and an approved
               one is merged into the tracked branch, so branch protection must let it push. Set <code>git_bot_email</code> (and optionally
               <code>git_bot_name</code>) in your settings to an author your git host accepts: Crucible commits merges and starter trainings under that name.</p>
-            <p>Crucible seals tokens and keys with <code>CRUCIBLE_SECRET_KEY</code>, and <code>crucible aws up</code> does not set it: the chart reads it from
-              <code>crucible-secrets</code> if it is there, and nothing puts it there. Without it, only repositories connected with <i>Nothing</i> work; the page
-              says so and refuses a token or a deploy key. Such a repository still reaches git through <code>git_credentials</code>, if you set it: lines for
-              git's credential store (<code>https://bot:TOKEN@git.example.com</code>), used for any <code>https://</code> repository that has no credential of its own.
-              <code>docs/runbooks/aws.md</code> does not yet say how to add the key.</p>
+            <p>Crucible seals tokens and keys with <code>CRUCIBLE_SECRET_KEY</code>. <code>init</code> made it as <code>/crucible/secret_key</code>, and every
+              deploy copies it into <code>crucible-secrets</code>. A server set up before that has none: the deploy prints a warning, and the Repositories page
+              says it cannot keep a credential. Re-run <code>crucible aws init</code> with the same region and domain, then <code>crucible aws deploy</code>
+              (the runbook has the restart that follows). Never change or lose the key: every stored token and deploy key becomes unreadable, and those
+              repositories have to be reconnected.</p>
+            <p>A repository connected with <i>No credential of its own</i> still reaches git through <code>git_credentials</code>, if you set it: lines for
+              git's credential store (<code>https://bot:TOKEN@git.example.com</code>), used for any <code>https://</code> repository that has no credential of its own,
+              so Crucible may push to it too. <b>Test connection</b> shows which: <i>Can write</i> or <i>Read only</i>. Over SSH, the host key Crucible pins
+              on first contact is kept in the database, so a restart or a rebuilt server still refuses a host whose key changed.</p>
             <p>Then point each repository's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code>, with the header <code>X-Crucible-Secret</code> set to
               the <code>git_hook_secret</code> parameter. A push makes Crucible fetch every training at once. The secret is regenerated on every teardown → up,
               so update the webhooks afterwards. Without a webhook, Crucible still fetches every minute.</p></li>
@@ -478,7 +483,7 @@ tr.total td { font-weight: 700; }
             <tr><td>See if it is up</td><td><code>crucible aws status</code></td><td>Server state and <code>healthz</code>.</td></tr>
             <tr><td>Get a shell on the server</td><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>Session Manager: no SSH key, no open port.</td></tr>
             <tr><td>Change settings</td><td>edit <code>crucible.tfvars</code>, then <code>crucible aws up</code></td><td>Snapshots first, applies, redeploys.</td></tr>
-            <tr><td>Remove the server</td><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito and the labs stack stay.</td></tr>
+            <tr><td>Remove the server</td><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito, the secret key and the labs stack stay.</td></tr>
             <tr><td>Bring it back</td><td><code>crucible aws up</code></td><td>A new server restores the newest snapshot. The Elastic IP changes: update DNS.</td></tr>
           </tbody>
         </table></div>

@@ -120,7 +120,18 @@ aws ssm get-parameter --region "$REGION" --name "/$NAME/helm-values" --query Par
 gunzip -c "$work/image.tar.gz" | k3s ctr images import -
 param() { aws ssm get-parameter --with-decryption --name "/$NAME/$1" --query Parameter.Value --output text; }
 kubectl create namespace crucible --dry-run=client -o yaml | kubectl apply -f -
+# CRUCIBLE_SECRET_KEY (seals repository credentials) comes from the persistent stack, so it outlives teardown. An
+# install made before `crucible aws init` created it has none: deploy without it, as before, and say so.
+secret_key=()
+if key=$(param secret_key 2>"$work/err"); then
+  secret_key=(--from-literal=CRUCIBLE_SECRET_KEY="$key")
+elif grep -q ParameterNotFound "$work/err"; then
+  echo "WARNING: no /$NAME/secret_key: tokens and deploy keys stay refused until you re-run 'crucible aws init', then 'crucible aws deploy'" >&2
+else
+  cat "$work/err" >&2; exit 1
+fi
 kubectl -n crucible create secret generic crucible-secrets \
+  "$${secret_key[@]}" \
   --from-literal=OIDC_CLIENT_SECRET="$(param oidc_client_secret)" \
   --from-literal=CRUCIBLE_GIT_HOOK_SECRET="$(param git_hook_secret)" \
   --from-literal=CRUCIBLE_QUIZ_SECRET="$(param quiz_secret)" \

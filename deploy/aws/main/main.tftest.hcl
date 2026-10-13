@@ -227,3 +227,20 @@ run "aws_labs_need_the_plan_role_and_export" {
   }
   expect_failures = [var.lab_role_arn]
 }
+
+run "secret_key_reaches_the_api_when_init_made_it" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "param secret_key") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SECRET_KEY=")
+    error_message = "deploy.sh must put /<name>/secret_key into crucible-secrets as CRUCIBLE_SECRET_KEY"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "ParameterNotFound") && strcontains(aws_instance.node.user_data, "re-run 'crucible aws init'")
+    error_message = "an install from before secret_key existed must deploy without it and say how to add it"
+  }
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "ssm:GetParameter")]), "arn:aws:ssm:eu-west-1:*:parameter/crucible/*")
+    error_message = "the node role must be able to read /<name>/secret_key"
+  }
+}

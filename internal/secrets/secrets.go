@@ -1,9 +1,11 @@
 // Package secrets encrypts the credentials people hand Crucible at run time — a repository's token or key — so that
 // a database dump, a backup or a read replica holds only ciphertext. The key never lives in the database: it comes
-// from CRUCIBLE_SECRET_KEY, which is a Kubernetes Secret in the Helm chart, an SSM parameter on AWS, and an
-// environment variable locally, beside CRUCIBLE_QUIZ_SECRET and the rest.
+// from CRUCIBLE_SECRET_KEY. The Helm chart reads it from the crucible-secrets Secret, where whoever runs the chart
+// puts it (unset, credentials are refused). On AWS, `crucible aws init` generates it into the persistent stack as the
+// SSM parameter /<name>/secret_key, so it survives teardown, and deploy copies it into that Secret. The local compose
+// stack sets a fixed development key.
 //
-// Lose the key and no credential can be read back: the repositories that used them go unreachable and are
+// Lose or change the key and no credential can be read back: the repositories that used them go unreachable and are
 // reconnected. Nothing else in the instance depends on it.
 package secrets
 

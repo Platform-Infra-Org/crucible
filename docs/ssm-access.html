@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reaching the App over SSM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (max 1080px) of sections; each section is prose, then a full-width diagram, then a key.
+   Palette: Crucible's own themes — steel (Anvil) in light, molten forge in dark. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --text: #1c232b; --muted: #55616e; --line: #cbd3dc;
+  --accent: #2f5d8a; --heat: #96500f; --ok: #276b2b; --danger: #c62828;
+  --display: "Cinzel", "Trajan Pro", Georgia, serif;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+    --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14110f; --surface: #1f1a17; --surface-2: #2a231f; --text: #f3e9df; --muted: #b5a596; --line: #3a302a;
+  --accent: #ff7a1a; --heat: #ffc24b; --ok: #7bd88f; --danger: #ff5a4d; color-scheme: dark;
+}
+
+body { background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); }
+.page { max-width: 1080px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 56px; }
+@media (max-width: 640px) { .page { padding-inline: 16px; padding-block: 24px 48px; gap: 44px; } }
+
+h1, h2 { font-family: var(--display); font-weight: 700; text-wrap: balance; letter-spacing: 0.02em; margin: 0; }
+h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.15; }
+h2 { font-size: clamp(1.35rem, 2.6vw, 1.7rem); line-height: 1.25; }
+h3 { font: 600 1rem/1.4 var(--sans); margin: 0; }
+p { margin: 0; max-width: 68ch; }
+code { font: 500 0.86em var(--mono); background: var(--surface-2); padding: 0.08em 0.36em; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: 3px solid var(--heat); outline-offset: 2px; border-radius: 3px; }
+
+.eyebrow { font: 600 0.74rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--heat); }
+header { display: grid; gap: 14px; }
+header h1::after { content: ""; display: block; width: 56px; height: 3px; margin-top: 14px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--heat)); }
+.lede { font-size: 1.05rem; color: var(--muted); }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a { font: 500 0.85rem/1 var(--sans); color: var(--text); text-decoration: none; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+nav.toc a:hover { border-color: var(--accent); }
+
+section { display: grid; gap: 18px; scroll-margin-top: 16px; }
+section > .head { display: grid; gap: 8px; }
+
+.figure { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.figure.small svg { min-width: 640px; }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; }
+.cols > div { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.cols p { color: var(--muted); font-size: 0.94rem; }
+
+.key { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 0.84rem; color: var(--muted); }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 22px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line); background: var(--surface); display: inline-block; }
+.sw.hot { border: 2px solid var(--accent); }
+.sw.dash { border-style: dashed; }
+.sw.zone { background: var(--surface-2); }
+.sw.arrow { border: 0; height: 2px; border-radius: 0; background: var(--accent); }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); }
+tbody th { font: 600 0.9rem/1.4 var(--sans); letter-spacing: 0; text-transform: none; color: var(--text); background: transparent; }
+tr:last-child > * { border-bottom: 0; }
+td.money { color: var(--heat); font-weight: 600; }
+
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: step; }
+ol.steps li { counter-increment: step; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 4px 14px; padding-block: 14px;
+  border-top: 1px solid var(--line); }
+ol.steps li::before { content: counter(step); grid-row: span 3; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  font: 600 0.9rem/1 var(--mono); color: var(--accent); border: 2px solid var(--accent); }
+ol.steps h3 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+ol.steps p { color: var(--muted); font-size: 0.94rem; }
+.lane { font: 500 0.7rem/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--surface-2); }
+.lane.aws { color: var(--heat); border-color: color-mix(in srgb, var(--heat) 45%, var(--line)); }
+.lane.k8s { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+footer { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 18px; display: grid; gap: 6px; }
+
+/* SVG diagrams: every colour from the tokens above. */
+svg .zone { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+svg .group { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+svg .box.hot { stroke: var(--accent); stroke-width: 2.2; }
+svg .box.dash { stroke-dasharray: 6 4; }
+svg .box.aws { stroke: var(--heat); stroke-width: 1.8; }
+svg .zl { font: 600 11.5px var(--mono); fill: var(--muted); letter-spacing: 0.08em; }
+svg .zl.aws { fill: var(--heat); }
+svg .bt { font: 600 15px var(--sans); fill: var(--text); }
+svg .bs { font: 400 12.5px var(--sans); fill: var(--muted); }
+svg .cd { font: 500 11.5px var(--mono); fill: var(--muted); }
+svg .ar { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+svg .ar.soft { stroke: var(--muted); stroke-dasharray: 5 4; }
+svg .al { font: 600 11.5px var(--sans); fill: var(--accent); paint-order: stroke; stroke: var(--surface-2); stroke-width: 5px; stroke-linejoin: round; }
+svg .al.on1 { stroke: var(--surface); }
+svg .ahp { fill: var(--accent); }
+svg .ahm { fill: var(--muted); }
+body { margin: 0; }
+
+/* Commands and notes, as in aws-deploy.html. */
+pre { margin: 0; padding: 14px 16px; overflow-x: auto; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 10px; font: 400 0.84rem/1.6 var(--mono); }
+pre code { background: none; padding: 0; font: inherit; overflow-wrap: normal; }
+pre .c { color: var(--muted); }
+.note { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--surface);
+  padding: 12px 16px; display: grid; gap: 6px; }
+.note.warn { border-left-color: var(--heat); }
+.note.danger { border-left-color: var(--danger); }
+.note p { font-size: 0.94rem; }
+.note strong:first-child { display: block; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahp" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahm" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+</svg>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">Crucible · reaching the app</span>
+    <h1>Reaching the app over SSM</h1>
+    <p class="lede">The app runs on a k3s node inside a VPC that accepts nothing from the internet, so there is no URL to hand
+      anybody. This page explains why, and how a colleague with our AWS access opens a tunnel to it in three commands — what
+      AWS Systems Manager Session Manager is for. It is a stopgap for a handful of people, not the app's access story.</p>
+    <nav class="toc" aria-label="Sections">
+      <a href="#why">Why there is no URL</a>
+      <a href="#how">How the tunnel works</a>
+      <a href="#who">Who can use it</a>
+      <a href="#setup">One-time setup</a>
+      <a href="#connect">Connecting</a>
+      <a href="#caveats">Caveats</a>
+      <a href="#next">When it outgrows this</a>
+    </nav>
+  </header>
+
+  <section id="why" aria-labelledby="why-h">
+    <div class="head"><span class="eyebrow">The problem</span><h2 id="why-h">Why there is no URL</h2></div>
+    <p>Every spoke subnet in this VPC routes outbound through a Gateway Load Balancer endpoint, then a Network Firewall, then a
+      dedicated NAT subnet, then an internet gateway named <code>egress-igw</code>. That is the design, and it is one-way: no
+      subnet here has an inbound path from the internet — not for this instance, not for a load balancer, not for anything you
+      could place in the existing subnets. A public IP on the instance was tried and was unreachable, for exactly this reason.</p>
+    <div class="figure small">
+      <svg viewBox="0 0 760 240" role="img" aria-label="Traffic leaves the VPC through a firewall and NAT to the internet gateway; nothing comes back in.">
+        <rect class="zone" x="16" y="30" width="470" height="190" rx="12"/>
+        <text class="zl" x="32" y="52">VPC · EGRESS ONLY</text>
+        <rect class="box hot" x="40" y="86" width="150" height="62" rx="9"/>
+        <text class="bt" x="60" y="112">EC2 · k3s node</text>
+        <text class="bs" x="60" y="132">the app</text>
+        <rect class="box" x="214" y="86" width="110" height="62" rx="9"/>
+        <text class="bt" x="232" y="112">Firewall</text>
+        <text class="bs" x="232" y="132">GWLB endpoint</text>
+        <rect class="box" x="348" y="86" width="112" height="62" rx="9"/>
+        <text class="bt" x="366" y="112">NAT</text>
+        <text class="bs" x="366" y="132">egress subnet</text>
+        <rect class="box aws" x="548" y="86" width="180" height="62" rx="9"/>
+        <text class="bt" x="568" y="112">egress-igw</text>
+        <text class="bs" x="568" y="132">the internet</text>
+        <path class="ar" d="M190,117 H210" marker-end="url(#ah)"/>
+        <path class="ar" d="M324,117 H344" marker-end="url(#ah)"/>
+        <path class="ar" d="M460,117 H544" marker-end="url(#ah)"/>
+        <text class="al" x="470" y="104">out</text>
+        <path class="ar soft" d="M640,168 H120" stroke="var(--danger)" stroke-dasharray="6 5"/>
+        <text class="al" x="300" y="190" fill="var(--danger)" stroke="var(--bg)">no inbound path — nothing to point a URL at</text>
+      </svg>
+    </div>
+    <p>So the question is not “which port do we open”. Nothing can be opened from this side. What is left is a path that needs
+      only <em>outbound</em> connections at both ends, which is what Session Manager gives us.</p>
+  </section>
+
+  <section id="how" aria-labelledby="how-h">
+    <div class="head"><span class="eyebrow">The mechanism</span><h2 id="how-h">How the tunnel works</h2></div>
+    <p>Neither side ever accepts an inbound connection. Both dial out to the same AWS service, which bridges the two calls once
+      it has checked who each one is.</p>
+    <div class="figure small">
+      <svg viewBox="0 0 760 266" role="img" aria-label="The laptop and the instance each open an outbound connection to AWS Systems Manager, which bridges them.">
+        <rect class="box hot" x="24" y="96" width="176" height="80" rx="10"/>
+        <text class="bt" x="44" y="126">Your laptop</text>
+        <text class="bs" x="44" y="146">session-manager-plugin</text>
+        <text class="cd" x="44" y="165">localhost:18080</text>
+        <rect class="box aws" x="292" y="84" width="176" height="104" rx="10"/>
+        <text class="zl aws" x="310" y="110">AWS · SSM</text>
+        <text class="bt" x="310" y="136">Session Manager</text>
+        <text class="bs" x="310" y="156">bridges two calls,</text>
+        <text class="bs" x="310" y="174">once both are proven</text>
+        <rect class="box hot" x="560" y="96" width="176" height="80" rx="10"/>
+        <text class="bt" x="580" y="126">EC2 · k3s node</text>
+        <text class="bs" x="580" y="146">SSM Agent, since boot</text>
+        <text class="cd" x="580" y="165">:80 on the host</text>
+        <path class="ar" d="M200,136 H288" marker-end="url(#ah)"/>
+        <text class="al" x="186" y="66">outbound · your SSO identity</text>
+        <path class="ar" d="M560,136 H472" marker-end="url(#ah)"/>
+        <text class="al" x="470" y="66">outbound · the instance's IAM role</text>
+        <path class="ar soft" d="M112,176 V224 H648 V176" marker-start="url(#ahm)" marker-end="url(#ahm)"/>
+        <text class="al" x="286" y="250">bytes flow through the bridge</text>
+      </svg>
+    </div>
+    <ol class="steps">
+      <li>
+        <h3>The instance dials out <span class="lane aws">at boot</span></h3>
+        <p>Its SSM Agent registered itself the moment it booted, using the IAM role attached to the instance, and holds that
+          outbound connection open.</p>
+      </li>
+      <li>
+        <h3>You dial out <span class="lane">on your laptop</span></h3>
+        <p><code>aws ssm start-session</code> opens your own outbound connection to the same service, carrying your SSO identity.</p>
+      </li>
+      <li>
+        <h3>AWS bridges the two</h3>
+        <p>Both connections already exist, both were opened outbound, and neither side accepted anything inbound. That is why this
+          works where a load balancer cannot.</p>
+      </li>
+      <li>
+        <h3>The plugin opens a local port</h3>
+        <p>For port forwarding, <code>session-manager-plugin</code> — a separate binary from the AWS CLI — opens a plain port on
+          your laptop and shuttles bytes between it and the tunnel.</p>
+      </li>
+    </ol>
+    <div class="note">
+      <strong>Why this is not a hole in the firewall</strong>
+      <p>Both ends prove who they are before AWS joins them: the instance by its IAM role, you by your SSO login. Someone without
+        valid, permitted credentials is never bridged — there is nothing exposed for them to knock on.</p>
+    </div>
+  </section>
+
+  <section id="who" aria-labelledby="who-h">
+    <div class="head"><span class="eyebrow">Scope</span><h2 id="who-h">Who can use it</h2></div>
+    <p>Colleagues who already hold the same AWS SSO access we do — the <code>Workload-Admin-PS</code> role in our Identity Center.
+      Josh, for instance. Anyone without that role cannot use this path at all, and no amount of scripting changes that.</p>
+    <div class="note warn">
+      <strong>Not an "internal users" solution</strong>
+      <p>If people without AWS access need to reach the app, this plan does not stretch to cover them. That is a different and
+        bigger problem — a real ingress path from the networking team, or a VPN — and it is out of scope here.</p>
+    </div>
+  </section>
+
+  <section id="setup" aria-labelledby="setup-h">
+    <div class="head"><span class="eyebrow">Once per person</span><h2 id="setup-h">One-time setup</h2></div>
+    <ol class="steps">
+      <li>
+        <h3>Install the AWS CLI v2</h3>
+        <p>Version 2 specifically; the v1 packages in most distributions will not do.</p>
+      </li>
+      <li>
+        <h3>Install <code>session-manager-plugin</code></h3>
+        <p>It is not bundled with the CLI and has its own installer per operating system. This is the step people miss, and the
+          error when it is missing does not say so plainly.</p>
+      </li>
+      <li>
+        <h3>Point the CLI at our Identity Center</h3>
+        <p><code>aws configure sso</code>, then pick the <code>Workload-Admin-PS</code> role.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="connect" aria-labelledby="connect-h">
+    <div class="head"><span class="eyebrow">Every session</span><h2 id="connect-h">Connecting</h2></div>
+    <p>Three calls, worth wrapping in a script so nobody has to remember them. Fill in the instance id, and the port the app's
+      Service is actually bound to on the host.</p>
+    <div class="cmd">
+<pre><code>#!/bin/bash
+PROFILE="workload-admin-ps"
+INSTANCE_ID="&lt;instance-id&gt;"
+LOCAL_PORT=18080
+REMOTE_PORT=80   <span class="c"># whatever port the app's Service is bound to</span>
+
+aws sso login --profile "$PROFILE"
+
+aws ssm start-session \
+  --profile "$PROFILE" \
+  --target "$INSTANCE_ID" \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters "{\"portNumber\":[\"$REMOTE_PORT\"],\"localPortNumber\":[\"$LOCAL_PORT\"]}" &amp;
+
+sleep 3   <span class="c"># crude wait for the tunnel; replace with a real readiness check</span>
+open "http://localhost:$LOCAL_PORT" 2&gt;/dev/null \
+  || xdg-open "http://localhost:$LOCAL_PORT" 2&gt;/dev/null \
+  || start "http://localhost:$LOCAL_PORT"</code></pre>
+    </div>
+    <p><code>aws sso login</code> opens the browser once for approval, the tunnel comes up in the background, and the last line
+      opens the app at <code>http://localhost:18080</code>. On Windows the same three calls in a <code>.ps1</code> or
+      <code>.bat</code> wrapper, ending in <code>start http://localhost:18080</code>.</p>
+  </section>
+
+  <section id="caveats" aria-labelledby="caveats-h">
+    <div class="head"><span class="eyebrow">Read before demoing</span><h2 id="caveats-h">Caveats — real, not hypothetical</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">What</th><th scope="col">Why it bites</th></tr></thead>
+        <tbody>
+          <tr>
+            <th scope="row">The tunnel reaches the host, not a pod</th>
+            <td>It lands on a port on the EC2 instance itself. The app's Service has to be bound on the instance's host network
+              on <code>REMOTE_PORT</code> — k3s's Traefik/ServiceLB does this for a <code>LoadBalancer</code> Service. Otherwise
+              the tunnel connects to nothing.</td>
+          </tr>
+          <tr>
+            <th scope="row">It expires, twice over</th>
+            <td>The SSO login lasts hours (org policy decides), and the SSM session itself times out after about 20 minutes idle.
+              Re-running the script is routine, not a one-off.</td>
+          </tr>
+          <tr>
+            <th scope="row">One tunnel per person</th>
+            <td>Each person runs their own session on their own local port. Nobody collides, but there is also nothing to route
+              people to collectively — it is not a reverse proxy.</td>
+          </tr>
+          <tr>
+            <th scope="row"><code>ssm:StartSession</code> is assumed, not verified</th>
+            <td>Likely covered by how broad <code>Workload-Admin-PS</code> is, but confirm it on this instance once — rather than
+              finding out mid-demo.</td>
+          </tr>
+          <tr>
+            <th scope="row">It does not scale</th>
+            <td>It reaches exactly the people who already have our AWS access, and nobody else.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="next" aria-labelledby="next-h">
+    <div class="head"><span class="eyebrow">The real fix</span><h2 id="next-h">When it outgrows this</h2></div>
+    <p>The actual answer is a genuine ingress path: a load balancer in a subnet that is reachable from outside, which does not
+      exist anywhere in this VPC today and would have to be provisioned by the networking team. Worth raising with them the
+      moment this stopgap starts being used as more than a stopgap.</p>
+  </section>
+
+  <footer>
+    <p>Supersedes <code>docs/ssm-access-plan.md</code>. The VPC's egress-only routing was confirmed by testing, including an
+      unreachable public IP on the instance.</p>
+  </footer>
+</main>
+
+</body>
+</html>

@@ -20,6 +20,8 @@ writes content edits back to git as a bot. Configuration and people live in Post
 - Deploy architecture: `docs/deploy-architecture.html` — diagrams of the local stack, `cluster-check`, production on AWS
   (the three stacks, the k3s node, RBAC and admission), an AWS lab's life and shipping a release. Update it when
   `deploy/` changes.
+- Reaching the app over SSM: `docs/ssm-access.html` — why the VPC has no inbound path, how a Session Manager port-forward
+  tunnel reaches the k3s node, the one-time setup and the connect script, and what it does not solve.
 - Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
   from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 

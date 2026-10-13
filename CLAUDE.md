@@ -12,15 +12,22 @@ writes content edits back to git as a bot. Configuration and people live in Post
 - Operator guides: `docs/runbooks/aws.md`, `docs/runbooks/cognito.md`
 - AWS for newcomers: `docs/aws-guide.html` — every AWS component, an architecture diagram, deploying step by step, and
   how AWS labs use Terraform and IAM. Update it when `deploy/aws` or the AWS lab path changes.
+- AWS deployment walkthrough: `docs/aws-deploy.html` — every `crucible aws` step in order, from `init` to the first sign-in,
+  AWS labs, upgrades, teardown and troubleshooting, with how to check each one. Update it when `deploy/aws`,
+  `internal/awsops` or `docs/runbooks/aws.md` changes.
 - Terraform or Crossplane for AWS labs: `docs/terraform-vs-crossplane.html` — how each would run a lab, with diagrams,
   and the trade-offs here.
+- Deploy architecture: `docs/deploy-architecture.html` — diagrams of the local stack, `cluster-check`, production on AWS
+  (the three stacks, the k3s node, RBAC and admission), an AWS lab's life and shipping a release. Update it when
+  `deploy/` changes.
 - Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
   from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 
 ## Toolchain
 
-The system Go (1.20) and Terraform are too old. The repo brings its own Go 1.26 and Terraform in `.local/tools`.
-Prefix every shell that builds or tests:
+The system Go (1.20) and Terraform are too old. The repo brings its own Go 1.26 and Terraform in `.local/tools`
+(git-ignored): `make tools` installs the pinned Go, Terraform and kind there, checksum-verified, and does nothing when
+they are already there (`scripts/tools.sh --dry-run` prints what it would fetch). Prefix every shell that builds or tests:
 
 ```bash
 export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
@@ -42,17 +49,19 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |
-| Fresh local stack without tests | `make build && ./scripts/seed-git.sh && KEYCLOAK_PORT=8082 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait` (the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
+| Fresh local stack without tests | `go run ./cmd/crucible local up --keycloak-port 8082` (runs `make build`, `make toolbox`, `./scripts/seed-git.sh`, then `docker compose … up -d --build --wait`; the api imports `examples/platform` into an empty database via `CRUCIBLE_SEED_DIR`) |
+| Stop it / see it | `crucible local down` (keeps the data; `--wipe` deletes the stack's volumes) · `crucible local status` |
 
 Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App at http://localhost:8080.
 
 ## Layout
 
 - `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
-- `internal/` — one package per domain: `labs` (runners: local/cluster/aws, approvals, budgets, sweep, reaper,
-  ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
+- `internal/` — one package per domain: `labs` (runners: local/cluster/aws — `runtime: terraform` + `cloud: aws`,
+  alias `runtime: aws`, keyed "aws" inside — terraform estimates, metering from lab state, approvals, budgets, sweep,
+  reaper, ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,
   write-back, content edit branches), `configapi`, `org` (Postgres-owned config and org data), `journey`, `rbac`, `auth`, `notify`, `jobs` (River), `httpapi`
-  (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `infracost`
+  (routing, Origin guard, CSP), `content` (loader + lint, incl. hardened terraform lint), `awscloud`, `pricing`
 - `internal/db/migrations` — goose, numbered; take the next free number and always write a Down
 - `web/` — React 19 + Vite SPA; theme tokens in `web/src/theme/tokens.css`, styles in `web/src/theme/app.css`
 - `.claude/skills/crucible-ui/` — the UI design skill (tokens, components, motion, accessibility, how to check a page)
@@ -104,9 +113,12 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   timeouts, `--end-of-options`); file:// remotes need `CRUCIBLE_GIT_ALLOW_FILE=1` (dev/compose only).
 - Lab content runs at its exact content SHA (`trainingOf`/`Version`), never a newer version.
 - Money: approvals use tiers by estimate; budgets fail closed; cluster labs run on the trainee's own cluster through
-  their agent and are free; aws labs need infracost (or `CRUCIBLE_INFRACOST=off` in dryrun only).
+  their agent and are free; aws labs are priced by Crucible from the free AWS Price List (a fresh price refresh is
+  required; stale prices fail closed). Dry run (`CRUCIBLE_AWS_LABS=dryrun`) prices aws labs from
+  `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds fixture list prices so metering works; fixture prices never price a real lab.
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only
-  `/api/git/hook` (HMAC) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
+  `/api/git/hook` (the shared hook secret, checked in constant time: the `X-Crucible-Secret` header, GitLab's
+  `X-Gitlab-Token`, or GitHub's `X-Hub-Signature-256` HMAC of a body of at most 1 MiB; anything else is a 404) is exempt. The SPA ships a strict CSP: no inline scripts, no external hosts.
 - Write prose and UI copy from the user's side of the screen, plainly; Crucible's voice is the forge metaphor.

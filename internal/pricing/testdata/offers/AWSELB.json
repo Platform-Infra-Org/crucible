@@ -1,0 +1,125 @@
+{
+ "formatVersion": "v1.0",
+ "products": {
+  "L1": {
+   "sku": "L1",
+   "productFamily": "Load Balancer-Application",
+   "attributes": {
+    "usagetype": "EU-LoadBalancerUsage",
+    "locationType": "AWS Region"
+   }
+  },
+  "L2": {
+   "sku": "L2",
+   "productFamily": "Load Balancer-Application",
+   "attributes": {
+    "usagetype": "EU-LCUUsage",
+    "locationType": "AWS Region"
+   }
+  },
+  "L3": {
+   "sku": "L3",
+   "productFamily": "Load Balancer-Network",
+   "attributes": {
+    "usagetype": "EU-LoadBalancerUsage",
+    "locationType": "AWS Region"
+   }
+  }
+ },
+ "terms": {
+  "OnDemand": {
+   "L1": {
+    "L1.T": {
+     "priceDimensions": {
+      "L1.d": {
+       "rateCode": "L1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0252"
+       }
+      }
+     }
+    }
+   },
+   "L2": {
+    "L2.T": {
+     "priceDimensions": {
+      "L2.d": {
+       "rateCode": "L2.d",
+       "unit": "LCU-Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.008"
+       }
+      }
+     }
+    }
+   },
+   "L3": {
+    "L3.T": {
+     "priceDimensions": {
+      "L3.d": {
+       "rateCode": "L3.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0252"
+       }
+      }
+     }
+    }
+   }
+  },
+  "Reserved": {
+   "L1": {
+    "L1.T": {
+     "priceDimensions": {
+      "L1.d": {
+       "rateCode": "L1.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0252"
+       }
+      }
+     }
+    }
+   },
+   "L2": {
+    "L2.T": {
+     "priceDimensions": {
+      "L2.d": {
+       "rateCode": "L2.d",
+       "unit": "LCU-Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.008"
+       }
+      }
+     }
+    }
+   },
+   "L3": {
+    "L3.T": {
+     "priceDimensions": {
+      "L3.d": {
+       "rateCode": "L3.d",
+       "unit": "Hrs",
+       "beginRange": "0",
+       "endRange": "Inf",
+       "pricePerUnit": {
+        "USD": "0.0252"
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

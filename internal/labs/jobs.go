@@ -41,7 +41,7 @@ func (w *BudgetWorker) Work(ctx context.Context, _ *river.Job[BudgetArgs]) error
 	return w.S.CheckBudgets(ctx)
 }
 
-// ReapArgs is the AWS reaper (hourly); CostArgs is Cost Explorer ingestion (every 6 h). Both also run at start (the AWS node
+// ReapArgs is the AWS reaper (hourly); CostArgs is billing-export ingestion (every 6 h). Both also run at start (the AWS node
 // sleeps at night, so "nightly" means "whenever it is up") and do nothing without aws labs.
 type ReapArgs struct{}
 
@@ -68,4 +68,20 @@ func (w *CostWorker) Timeout(*river.Job[CostArgs]) time.Duration { return 10 * t
 
 func (w *CostWorker) Work(ctx context.Context, _ *river.Job[CostArgs]) error {
 	return w.S.IngestCosts(ctx)
+}
+
+// PriceArgs is the weekly refresh of list prices from the free public AWS Price List.
+type PriceArgs struct{}
+
+func (PriceArgs) Kind() string { return "price_refresh" }
+
+type PriceWorker struct {
+	river.WorkerDefaults[PriceArgs]
+	S *Service
+}
+
+func (w *PriceWorker) Timeout(*river.Job[PriceArgs]) time.Duration { return 2 * time.Hour }
+
+func (w *PriceWorker) Work(ctx context.Context, _ *river.Job[PriceArgs]) error {
+	return w.S.RefreshPrices(ctx)
 }

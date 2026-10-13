@@ -52,10 +52,21 @@ func BundleWith(labDir string, extra map[string][]byte) ([]byte, error) {
 // ModuleBundle is an aws lab's terraform/ directory plus Crucible's provider file and this lab's variables, all at
 // the root module (/w after unpacking, where tfScript's -var-file points).
 func ModuleBundle(lab *content.Lab, inst *Instance) ([]byte, error) {
+	return moduleTgz(lab, content.LabTF, content.LabTFVars(inst.ID, inst.Team, inst.Training, lab.AWS.Region))
+}
+
+// planTF is LabTF without its backend: an estimate's `terraform init -backend=false` then leaves nothing
+// unconfigured, and the plan reads and writes no state.
+var planTF = strings.Replace(content.LabTF, "  backend \"s3\" {}\n", "", 1)
+
+// planBundle is the module an estimate plans: no backend, and placeholder lab, team and training names.
+func planBundle(lab *content.Lab) ([]byte, error) {
+	return moduleTgz(lab, planTF, content.LabTFVars("estimate", "estimate", "estimate", lab.AWS.Region))
+}
+
+func moduleTgz(lab *content.Lab, tf string, vars []byte) ([]byte, error) {
 	return tarGz(filepath.Join(lab.Dir, "terraform"), func(string) bool { return false }, map[string][]byte{
-		content.LabTFFile:     []byte(content.LabTF),
-		content.LabTFVarsFile: content.LabTFVars(inst.ID, inst.Team, inst.Training, lab.AWS.Region),
-	}, maxModuleBundle)
+		content.LabTFFile: []byte(tf), content.LabTFVarsFile: vars}, maxModuleBundle)
 }
 
 // tarGz packs dir (minus top-level names skip reports, minus symlinks) and then the extra files, gzipped, up to

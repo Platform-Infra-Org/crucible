@@ -31,6 +31,7 @@ import (
 	"crucible/internal/content"
 	"crucible/internal/learn"
 	"crucible/internal/notify"
+	"crucible/internal/pricing"
 	"crucible/internal/rbac"
 	"crucible/internal/ready"
 	"crucible/internal/scoring"
@@ -54,6 +55,8 @@ type Service struct {
 	Blobs      blob.Store       // transcripts (Task 6)
 	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
+	Prices     *pricing.Store   // list prices for aws estimates; nil when unset
+	PriceFetch *pricing.Fetcher // downloads them from the public AWS Price List weekly; nil when unset
 
 	Jobs *river.Client[pgx.Tx] // queue for "Refresh now" on the Ledger; nil in tests that don't need it
 
@@ -68,6 +71,9 @@ type Service struct {
 
 	setupMu    sync.Mutex
 	setupLocks map[string]*sync.Mutex // per lab: one setup decision at a time; dropped on destroy
+
+	meterMu   sync.Mutex
+	meteredAt map[string]time.Time // per aws lab: its last Meter in this process (one API replica); dropped by EndMeter
 }
 
 // setupLock serialises setup runs for one lab so concurrent opens/resets cannot run a scenario twice.
@@ -158,16 +164,17 @@ type HintResult struct {
 }
 
 type ModuleLab struct {
-	Title          string           `json:"title"`
-	Runtime        string           `json:"runtime"`
-	RuntimeReady   bool             `json:"runtime_ready"`
-	RuntimeMessage string           `json:"runtime_message,omitempty"`
-	EstimateUSD    float64          `json:"estimate_usd"`
-	NeedsApproval  bool             `json:"needs_approval"`
-	Blocked        string           `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
-	Lab            *View            `json:"lab"`
-	ClusterWide    bool             `json:"cluster_wide,omitempty"`
-	Contexts       []ap.KubeContext `json:"contexts,omitempty"`
+	Title          string             `json:"title"`
+	Runtime        string             `json:"runtime"`
+	RuntimeReady   bool               `json:"runtime_ready"`
+	RuntimeMessage string             `json:"runtime_message,omitempty"`
+	EstimateUSD    float64            `json:"estimate_usd"`
+	Estimate       *pricing.Breakdown `json:"estimate_breakdown,omitempty"` // aws labs: the priced plan, line by line
+	NeedsApproval  bool               `json:"needs_approval"`
+	Blocked        string             `json:"blocked,omitempty"` // why a request can't be made now (schedule, kill switch)
+	Lab            *View              `json:"lab"`
+	ClusterWide    bool               `json:"cluster_wide,omitempty"`
+	Contexts       []ap.KubeContext   `json:"contexts,omitempty"`
 }
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
@@ -518,12 +525,19 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 		case errors.Is(err, apperr.Conflict):
 			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Conflict.Error())
+		case errors.Is(err, apperr.Invalid): // overCeiling from TerraformEstimator
+			out.Blocked = strings.TrimSuffix(err.Error(), ": "+apperr.Invalid.Error())
 		default:
 			s.Log.Error("lab quote failed", "team", team, "training", training, "module", module, "err", err)
-			out.Blocked = "the lab can't be requested right now"
+			out.Blocked = s.whyNoQuote(st.Platform, u, training, err)
 		}
 	} else {
 		out.EstimateUSD, out.NeedsApproval, out.Blocked = q.EstimateUSD, q.Tier != rbac.TierAuto, q.Blocked
+		if te, ok := s.Estimators[m.Lab.Runtime].(*TerraformEstimator); ok && m.Lab.Runtime == "aws" {
+			if b, err := te.Breakdown(ctx, m.Lab); err == nil { // the run quote just used: cached
+				out.Estimate = &b
+			}
+		}
 	}
 	inst, err := s.active(ctx, u.ID, team, training, module)
 	if err != nil {
@@ -535,6 +549,22 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 		}
 	}
 	return out, nil
+}
+
+// whyNoQuote says in plain words why an estimate failed. Price data and unpriced types are told to everyone; what the
+// lab's own content caused (a failed plan's output) only to those who may edit the training; anything else is generic.
+func (s *Service) whyNoQuote(p *config.Platform, u *auth.User, training string, err error) string {
+	var unpriced *pricing.Unpriced
+	var fault *labFault
+	switch {
+	case errors.Is(err, pricing.ErrStale):
+		return "AWS price data is out of date; an admin needs to refresh it."
+	case errors.As(err, &unpriced):
+		return "Crucible can't price: " + strings.Join(unpriced.Types, ", ") + "; the lab must declare a price for them."
+	case errors.As(err, &fault) && (rbac.Checker{P: p}).MayEdit(u.Email, training):
+		return "The estimate failed (shown to the training's editors only): " + cleanText(fault.msg)
+	}
+	return "the lab can't be requested right now"
 }
 
 // quote is what a request for this lab would cost and who would decide it. The lobby preview and the real request
@@ -557,13 +587,13 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		return nil, apperr.Wrap(apperr.Unavailable, "cost tiers are not configured; an admin must set them before paid labs can be requested")
 	}
 	hourly, err := est.HourlyUSD(ctx, lab)
-	if errors.Is(err, apperr.Unavailable) {
-		return nil, err // "estimate pending, try again shortly" reaches the trainee as is
+	if errors.Is(err, apperr.Unavailable) || errors.Is(err, apperr.Invalid) {
+		return nil, err // "estimate pending, try again shortly" and overCeiling reach the trainee as is
 	} else if err != nil {
 		return nil, fmt.Errorf("estimating lab cost: %w", err)
 	}
 	q := &quote{Timing: ResolveTiming(lab, p.Teams[team].Programs[training].LabDefaults), HourlyUSD: hourly}
-	q.EstimateUSD = math.Round(hourly*q.Timing.TTL.Hours()*100) / 100
+	q.EstimateUSD = roundEstimate(hourly * q.Timing.TTL.Hours())
 	q.Tier = rbac.Tier(lab.Runtime, q.EstimateUSD, *p.Settings.CostTiers)
 	if q.Tier != rbac.TierAuto {
 		again, err := s.recentlyApproved(ctx, u.ID, team, training, module)
@@ -576,7 +606,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Tier = rbac.Checker{P: p}.Route(q.Tier, team, training, u.Email)
 		}
 	}
-	if q.EstimateUSD > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
+	if hourly > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
 		over, err := s.overCap(ctx, p, team, training, q.EstimateUSD)
 		if err != nil {
 			return nil, err
@@ -602,13 +632,20 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	if lab.Runtime == "aws" && lab.AWS != nil && q.Blocked == "" {
 		switch {
 		case hourly > lab.AWS.MaxHourlyUSD:
-			q.Blocked = fmt.Sprintf("This lab is priced at $%.4f/h, above its $%g/h limit; its maintainers need to make it cheaper.",
-				hourly, lab.AWS.MaxHourlyUSD)
+			q.Blocked = overCeiling(hourly, lab.AWS.MaxHourlyUSD)
 		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
 			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)
 		}
 	}
 	return q, nil
+}
+
+// roundEstimate rounds up to the cent: a paid lab never rounds to free.
+func roundEstimate(usd float64) float64 { return math.Max(0, math.Ceil(usd*100-1e-9)/100) } // Max: never -0
+
+// overCeiling tells the trainee an aws lab costs more than its author allowed (the quote and TerraformEstimator).
+func overCeiling(hourly, limit float64) string {
+	return fmt.Sprintf("This lab is priced at $%.4f/h, above its $%g/h limit; its maintainers need to make it cheaper.", hourly, limit)
 }
 
 // escalateAt is when a request waiting since now moves up a tier: escalation hours counted inside the schedule.
@@ -800,7 +837,7 @@ func (s *Service) provision(ctx context.Context, inst *Instance, lab *content.La
 	s.event(ctx, inst.ID, "progress", "preparing workspace") // the loader shows these (spec §8.3)
 	if lp, ok := r.(labProvisioner); ok {
 		s.event(ctx, inst.ID, "progress", "starting services")
-		err = lp.ProvisionLab(ctx, inst, lab) // aws: builds its own workspace bundle and terraform module
+		err = s.provisionLab(ctx, lp, inst, lab) // aws: builds its own workspace bundle and terraform module, then meters it
 	} else if err == nil {
 		var bundle []byte
 		if bundle, err = Bundle(lab.Dir, lab.Runtime); err == nil {
@@ -1422,17 +1459,29 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 }
 
 // destroyRuntime tears a lab's environment down. For aws labs, terraform destroy is followed by a tag sweep (spec
-// §8.2) with its own few minutes: terraform may have used up ctx.
+// §8.2) with its own few minutes: terraform may have used up ctx. Every path that ends a lab (End, expiry, idle, the
+// kill switch, a failed or hung provisioning, the stuck-destroy retry) comes through here; a successful destroy ends
+// the lab's meter. A failed one, or one where terraform destroy could not run, leaves it running until the reaper has
+// cleaned up.
 func (s *Service) destroyRuntime(ctx context.Context, inst *Instance) error {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
 		return err
 	}
 	err = r.Destroy(ctx, inst)
+	tfDestroyed := err == nil
+	if errors.Is(err, errTerraformSkipped) {
+		err = nil // as before: the lab ends; the tag sweep and the reaper delete what terraform left
+	}
 	if inst.Runtime == "aws" {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		s.sweepLab(sctx, inst.ID)
+		if tfDestroyed {
+			if merr := s.EndMeter(sctx, inst.ID, s.Now()); merr != nil {
+				s.Log.Error("ending the lab's meter failed; the reaper ends it", "lab", inst.ID, "err", merr)
+			}
+		}
 	}
 	return err
 }
@@ -1517,6 +1566,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.reconcileCluster(ctx)
 	s.refreshAWS(ctx)
+	if ar, ok := s.Runners["aws"].(*AWSRunner); ok && ar.DryRun == nil && ar.Cluster != nil {
+		if err := ar.reapPlans(ctx, now); err != nil {
+			s.Log.Warn("deleting leftover estimate plans failed", "err", err)
+		}
+	}
 }
 
 // alertStuck tells the admins, once per lab, that a destroy never finished (spec §8.1). The conditional UPDATE

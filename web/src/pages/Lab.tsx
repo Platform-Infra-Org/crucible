@@ -3,8 +3,8 @@ import { Link, useParams } from 'react-router'
 import { motion } from 'motion/react'
 import { api, upload } from '../api'
 import { useFetch } from '../useFetch'
-import type { CheckResult, HintResult, LabView, ModuleLab, TaskDetail } from '../types'
-import { usd } from '../lib/money'
+import type { CheckResult, EstimateBreakdown, HintResult, LabView, ModuleLab, TaskDetail } from '../types'
+import { usd, usdRate } from '../lib/money'
 import { tierLabel } from './Approvals'
 import { clockOffset } from '../lib/timer'
 import { askNotifications, notificationsUndecided, toast } from '../lib/alerts'
@@ -35,6 +35,31 @@ const endMessages: Record<string, string> = {
 function endMessage(lab: LabView): string {
   if (lab.end_reason === 'idle') return `Your lab was closed after ${Math.round(lab.idle_timeout_s / 60)} minutes of inactivity.`
   return endMessages[lab.end_reason ?? ''] ?? 'This lab has ended.'
+}
+
+// An aws lab's estimate, resource by resource: what the plan creates and what each costs an hour at AWS list prices.
+function EstimateLines({ b }: { b: EstimateBreakdown }) {
+  return (
+    <details className="lab-settings cost-breakdown">
+      <summary>How this estimate was worked out</summary>
+      <p className="muted">
+        What the lab's Terraform plan creates, priced per hour from AWS list prices or the lab's own declared price. The
+        estimate is the total per hour times the lab's full time.
+      </p>
+      <div className="table-wrap"><table className="grid">
+        <thead><tr><th>Resource</th><th>Type</th><th>Per hour</th><th>Usage per hour</th><th>Note</th></tr></thead>
+        <tbody>
+          {b.lines.map((l) => (
+            <tr key={l.address}>
+              <td><code>{l.address}</code></td><td>{l.type}</td><td>{usdRate(l.hourly_usd)}</td>
+              <td>{l.usage_hourly_usd > 0 ? usdRate(l.usage_hourly_usd) : '—'}</td><td>{l.note ?? ''}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot><tr><th scope="row">Total per hour</th><td /><td>{usdRate(b.hourly_usd)}</td><td colSpan={2} /></tr></tfoot>
+      </table></div>
+    </details>
+  )
 }
 
 function firstOpen(lab: LabView): string {
@@ -156,6 +181,7 @@ export function LabPage() {
           {info.needs_approval ? `Request approval (${usd(info.estimate_usd)})` : cooled ? 'Ignite again' : 'Ignite the forge'}
         </button>
       )}
+      {info.estimate_breakdown && <EstimateLines b={info.estimate_breakdown} />}
     </section>
   )
 }

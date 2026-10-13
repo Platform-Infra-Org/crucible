@@ -86,8 +86,9 @@ func (s *Service) finding(ctx context.Context, source, labID, arn, action, detai
 	return inserted
 }
 
-// refreshAWS keeps the credentials of running aws labs fresh (spec §14). Every sweep calls it; Refresh only
-// calls STS when less than 15 minutes are left.
+// refreshAWS keeps the credentials of running aws labs fresh (spec §14) and meters them again every meterEvery (what
+// the trainee applied from the workspace counts too). Every sweep calls it; Refresh only calls STS when less than 15
+// minutes are left. A failed meter is logged and the lab's spend keeps its last rows.
 func (s *Service) refreshAWS(ctx context.Context) {
 	r, _ := s.runner("aws")
 	ar, ok := r.(*AWSRunner)
@@ -107,6 +108,17 @@ func (s *Service) refreshAWS(ctx context.Context) {
 	for _, inst := range labs {
 		if err := ar.Refresh(ctx, inst); err != nil {
 			s.Log.Warn("refreshing aws lab credentials failed", "lab", inst.ID, "err", err)
+		}
+		if !s.meterDue(inst.ID) {
+			continue
+		}
+		s.meterStamp(inst.ID) // before loading the content: a lab whose content fails waits its turn too
+		lab, _, err := s.labContent(ctx, inst)
+		if err == nil {
+			err = s.Meter(ctx, inst, lab)
+		}
+		if err != nil {
+			s.Log.Warn("metering a running aws lab failed; its spend keeps the last reading", "lab", inst.ID, "err", err)
 		}
 	}
 }

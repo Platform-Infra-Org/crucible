@@ -55,7 +55,7 @@ var Fields = map[string]Field{
 	"Question.rubric":         {Description: "text and upload: what the scorer looks for. Never shown to trainees."},
 
 	"Lab.id":           {Required: true, Description: "The lab's id."},
-	"Lab.runtime":      {Required: true, Enum: []string{"local", "cluster", "aws"}, Description: "local: Docker on the trainee's laptop. cluster: Helm charts installed on a Kubernetes cluster the trainee picks, through their laptop agent. aws: a shared AWS account, after cost approval."},
+	"Lab.runtime":      {Required: true, Enum: []string{"local", "cluster", "terraform", "aws"}, Description: "local: Docker on the trainee's laptop. cluster: Helm charts installed on a Kubernetes cluster the trainee picks, through their laptop agent. terraform: a Terraform module applied to a cloud (set cloud), after cost approval. aws: the same as terraform with cloud: aws."},
 	"Lab.ttl":          {Description: "How long the lab may run, e.g. 1h; unset uses the program's default."},
 	"Lab.idle_timeout": {Description: "Stop the lab after this long without terminal activity."},
 	"Lab.idle_warning": {Default: "5m", Description: "Warn the trainee this long before the idle stop (default 5m); shorter than idle_timeout."},
@@ -65,7 +65,8 @@ var Fields = map[string]Field{
 	"Lab.terminals":    {Required: true, Description: "The terminals the trainee gets, each attached to a service."},
 	"Lab.setup":        {Description: "A script run once when the lab starts."},
 	"Lab.tasks":        {Required: true, Description: "The lab's tasks."},
-	"Lab.aws":          {Description: "runtime: aws only: the region and the hourly cost ceiling."},
+	"Lab.cloud":        {Enum: []string{"aws"}, Description: "runtime: terraform only: the cloud the lab runs on. Only aws today."},
+	"Lab.aws":          {Description: "runtime: terraform (cloud: aws) or runtime: aws only: the region, the hourly cost ceiling, and prices and usage for what Crucible can't price itself."},
 	"Lab.cluster":      {Description: "runtime: cluster only: the Helm charts installed, in order, into the lab's namespace."},
 
 	"ClusterLab.charts":       {Required: true, Description: "The charts to install, in order. Each becomes a Helm release in the lab's namespace."},
@@ -78,6 +79,8 @@ var Fields = map[string]Field{
 
 	"AWSConfig.region":         {Required: true, Description: "AWS region for the lab's resources, e.g. eu-west-1."},
 	"AWSConfig.max_hourly_usd": {Required: true, Min: num(0), Description: "The most the lab's resources may cost per hour, in US dollars; above 0."},
+	"AWSConfig.prices":         {Description: "Resource type → USD per hour, for resource types Crucible can't price from AWS list prices. A type that is neither priced nor declared here is refused."},
+	"AWSConfig.usage":          {Description: "Resource address → usage attribute → monthly amount (e.g. aws_s3_bucket.data: {storage_gb: 10}), for usage-priced resources. Amounts are 0 or more."},
 
 	"Terminal.name":    {Required: true, Description: "The terminal tab's label; unique within the lab."},
 	"Terminal.service": {Description: "The compose service (workspace for aws labs) the terminal opens in. Cluster labs: leave it out; terminals open in the toolbox."},

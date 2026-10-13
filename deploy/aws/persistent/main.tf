@@ -2,7 +2,8 @@
 terraform {
   required_version = ">= 1.10"
   required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 6.0" }
+    aws    = { source = "hashicorp/aws", version = "~> 6.0" }
+    random = { source = "hashicorp/random", version = "~> 3.6" }
   }
 }
 
@@ -95,6 +96,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     status = "Enabled"
     filter { prefix = "latest/" }
     noncurrent_version_expiration { noncurrent_days = 7 }
+  }
+}
+
+# CRUCIBLE_SECRET_KEY seals connected repositories' tokens and deploy keys in Postgres (internal/secrets). It lives
+# here, not in main, so teardown → up restores a database whose credentials the new node can still open. The node
+# reads it as /<name>/secret_key like its other secrets (main's node policy allows /<name>/*). Changing it makes
+# every stored credential unreadable, so Terraform never changes or deletes it once made.
+resource "random_password" "secret_key" {
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "secret_key" {
+  name  = "/${var.name}/secret_key"
+  type  = "SecureString"
+  value = random_password.secret_key.result
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [value]
   }
 }
 

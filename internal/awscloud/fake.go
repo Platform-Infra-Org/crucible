@@ -14,15 +14,17 @@ import (
 // resources. It backs unit tests and CRUCIBLE_AWS_LABS=dryrun (see SimulateApply).
 type Fake struct {
 	Now            func() time.Time
-	Err            error // when set, every call fails with it (throttling, Cost Explorer down…)
+	Err            error // when set, every call fails with it (throttling, an API down…)
 	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
+	costsErr       error // when set, only Costs fails (a broken billing export)
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
 	assumed   []Session
 	costs     []DailyCost
 	events    []TrailEvent
-	notYet    map[string]int // ARN → deletes still refused with ErrNotYet
+	notYet    map[string]int    // ARN → deletes still refused with ErrNotYet
+	states    map[string][]byte // lab id → its Terraform state
 }
 
 type fakeRes struct {
@@ -91,6 +93,16 @@ func (f *Fake) AssumeLab(_ context.Context, s Session) (Credentials, error) {
 		SessionToken: token(s.LabID), Expires: f.now().Add(time.Hour)}, nil
 }
 
+func (f *Fake) AssumePlan(context.Context) (Credentials, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return Credentials{}, f.Err
+	}
+	return Credentials{AccessKeyID: "ASIAFAKEPLAN", SecretAccessKey: "fake-plan-secret", SessionToken: "fake-plan-token",
+		Expires: f.now().Add(15 * time.Minute)}, nil
+}
+
 func (f *Fake) Tagged(_ context.Context, region, labID string) ([]Resource, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -139,9 +151,15 @@ func (f *Fake) Delete(_ context.Context, region string, c Credentials, arn strin
 	return true, nil
 }
 
+// FailCosts makes Costs fail with err (nil restores it): an unreadable or malformed billing export.
+func (f *Fake) FailCosts(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.costsErr = err }
+
 func (f *Fake) Costs(_ context.Context, from, to time.Time) ([]DailyCost, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.costsErr != nil {
+		return nil, f.costsErr
+	}
 	if f.Err != nil {
 		return nil, f.Err
 	}
@@ -172,17 +190,49 @@ func (f *Fake) LabWrites(_ context.Context, _ string, since time.Time) ([]TrailE
 	return out, nil
 }
 
+// SetState stores labID's Terraform state, as a terraform run would.
+func (f *Fake) SetState(labID string, state []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.states == nil {
+		f.states = map[string][]byte{}
+	}
+	f.states[labID] = state
+}
+
+// ReadState returns the state SetState or SimulateApply stored under labs/<id>.tfstate; NoSuchKey otherwise.
+func (f *Fake) ReadState(_ context.Context, _, _, key string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	id, ok := strings.CutPrefix(key, "labs/")
+	id, ok2 := strings.CutSuffix(id, ".tfstate")
+	if b, found := f.states[id]; ok && ok2 && found {
+		return b, nil
+	}
+	return nil, fmt.Errorf("NoSuchKey: %s", key)
+}
+
 // SimulateApply stands in for `terraform apply` in dry-run mode. It adds the lab's bucket (managed by terraform)
-// and a volume "made by hand in the workspace", which only the destroy-time tag sweep removes. It also books $0.11
-// of cost today, so the Ledger has an actual to show.
+// and a volume "made by hand in the workspace", which only the destroy-time tag sweep removes. Its state holds the
+// bucket and a t3.nano instance with an 8 GiB gp3 root, so metering has something to price. It also books $0.11 of
+// cost today, so the Ledger has an actual to show.
 func (f *Fake) SimulateApply(region string, s Session) {
 	f.Add(region, Resource{ARN: "arn:aws:s3:::crucible-lab-" + s.LabID, LabID: s.LabID})
 	f.Add(region, Resource{ARN: fmt.Sprintf("arn:aws:ec2:%s:000000000000:volume/vol-%s", region, s.LabID), LabID: s.LabID})
+	f.SetState(s.LabID, fmt.Appendf(nil, `{"version":4,"resources":[
+{"mode":"managed","type":"aws_s3_bucket","name":"lab","instances":[{"attributes":{"bucket":"crucible-lab-%s"}}]},
+{"mode":"managed","type":"aws_instance","name":"web","instances":[{"attributes":{"instance_type":"t3.nano",
+"associate_public_ip_address":false,"root_block_device":[{"volume_size":8,"volume_type":"gp3"}]}}]}]}`, s.LabID))
 	f.AddCost(DailyCost{Day: f.now().UTC().Truncate(24 * time.Hour), LabID: s.LabID, USD: 0.11})
 }
 
-// SimulateDestroy stands in for `terraform destroy`: it removes only what terraform manages (the bucket).
+// SimulateDestroy stands in for `terraform destroy`: it removes only what terraform manages (the bucket) and leaves
+// an empty state.
 func (f *Fake) SimulateDestroy(labID string) {
+	f.SetState(labID, []byte(`{"version":4,"resources":[]}`))
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.resources, "arn:aws:s3:::crucible-lab-"+labID)

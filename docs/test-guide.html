@@ -199,7 +199,7 @@ body.hide-done .item.done { display: none; }
             </ul></div>
           <div class="cap"><span class="who">Admins</span><h3>Run the forge</h3>
             <ul>
-              <li>Forge settings, teams and their tags, training roles for people and groups, Manage trainings, all audited</li>
+              <li>Forge settings, teams and their tags, connected repositories, training roles for people and groups, Manage trainings, all audited</li>
               <li>Move this forge: export to one file, import into a fresh instance</li>
               <li>Sign-in through Keycloak or Cognito; one admin to start</li>
               <li>AWS deployment on one k3s node that sleeps outside working hours</li>
@@ -218,8 +218,8 @@ body.hide-done .item.done { display: none; }
             <p>The trainee runs <code>crucible-agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
           <div class="rt cluster"><h3>Cluster labs</h3><span class="tag">runtime: cluster</span>
             <p>The trainee's agent installs the lab's Helm charts into their own namespace on a cluster they pick from their kubeconfig (kind on the laptop, or a remote one). Terminals and scripts run in a toolbox container. Free, and results are self-reported.</p></div>
-          <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: aws</span>
-            <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced with infracost, and always approved by a person. Explained in full below.</p></div>
+          <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: terraform · cloud: aws</span>
+            <p>Real resources in a shared AWS lab account, built by Terraform with credentials scoped to one lab, priced by Crucible from AWS list prices, and always approved by a person. Explained in full below.</p></div>
         </div>
       </section>
 
@@ -230,10 +230,12 @@ body.hide-done .item.done { display: none; }
           price, a person's approval and a way to clean up everything it made. Here is one lab's life.</p>
         <ol class="pour">
           <li><h3>The trainee asks</h3>
-            <p>The lab page shows an estimate: infracost prices the lab's Terraform per hour, times the lab's time limit. A lab above its own
-              <code>max_hourly_usd</code>, or in a region this Crucible doesn't allow, can't be requested.</p></li>
+            <p>The lab page shows an estimate. Crucible runs a read-only <code>terraform plan</code> of the lab once per content version, prices
+              each resource from the AWS list prices it downloads weekly, and multiplies the hourly total by the lab's time limit; <b>How this
+              estimate was worked out</b> shows it resource by resource. A lab above its own <code>max_hourly_usd</code>, in a region this Crucible
+              doesn't allow, with a resource Crucible can't price, or while the price data is missing or over 30 days old can't be requested.</p></li>
           <li><h3>A person approves</h3>
-            <p>AWS labs never start on their own. The estimate picks the tier: program approver, team leader, then admin. A request that would pass a
+            <p>AWS labs never start on their own. The estimate picks the tier: the training's admins, the owning team's leaders, then a Crucible admin. A request that would pass a
               team or program budget cap needs an admin, as an audited override. Unanswered requests move up a tier after the escalation hours,
               counted only inside the program's schedule.</p></li>
           <li><h3>Credentials for one lab</h3>
@@ -243,7 +245,8 @@ body.hide-done .item.done { display: none; }
           <li><h3>Terraform builds it</h3>
             <p>In the lab's namespace on Crucible's cluster, a <code>tf-apply</code> pod runs <code>terraform apply</code>. Crucible adds its own
               <code>crucible.tf</code> to the module: an S3 state backend keyed by the lab id, and the AWS provider with default tags
-              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.</p></li>
+              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.
+              After the lab's apply, and every 15 minutes while it runs, Crucible reads the lab's state and meters what it built at list prices.</p></li>
           <li><h3>The trainee works</h3>
             <p>A workspace pod with the AWS CLI, Terraform and kubectl backs the terminals. Checks and setup scripts run there with the lab's
               credentials, out of the trainee's sight. The pods can't reach the node's metadata service, so they can never borrow the node's role.</p></li>
@@ -255,8 +258,10 @@ body.hide-done .item.done { display: none; }
             <p>Anything tagged with a lab that ended over an hour ago is deleted. Resources tagged with a lab Crucible doesn't know, and untagged
               creates seen in CloudTrail, are reported to admins instead.</p></li>
           <li><h3>The real bill arrives</h3>
-            <p>Every six hours Crucible reads Cost Explorer, grouped by the <code>crucible:*</code> cost-allocation tags. The Ledger shows a running lab's
-              estimate, switches to the AWS bill once it settles (24–48 hours), and tracks estimate against actual.</p></li>
+            <p>AWS writes the account's bill into a free billing export (CUR 2.0) every day; every six hours Crucible reads it and adds it up by the
+              <code>crucible:lab-id</code> cost-allocation tag. The Ledger shows a lab's estimate, its metered cost while it runs, and its billed cost,
+              which replaces the metered one once it settles (48 hours after the lab ends). No Cost Explorer. A free AWS Budget emails admins as a
+              backstop.</p></li>
         </ol>
 
         <h3 style="font-size:1.15rem;margin:1.5rem 0 0.75rem">The guardrails</h3>
@@ -272,8 +277,8 @@ body.hide-done .item.done { display: none; }
           <thead><tr><th>Mode</th><th>Set by</th><th>What happens</th><th>Where you test it</th></tr></thead>
           <tbody>
             <tr><td>Off</td><td><code>CRUCIBLE_AWS_LABS</code> unset</td><td>AWS labs can't be requested.</td><td>The plain local stack</td></tr>
-            <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code>, <code>CRUCIBLE_INFRACOST=off</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Prices come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
-            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, an infracost key, the labs stack</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
+            <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Estimates come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>; fixture list prices meter the fake apply. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
+            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, the labs stack (plan role, billing export)</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -302,18 +307,22 @@ body.hide-done .item.done { display: none; }
         <div class="phase-head"><h2>1 · Bring up the forge</h2><span class="count"></span></div>
         <ul class="items">
           <li class="item" data-id="stack-path"><label><input type="checkbox" id="c-stack-path"><span class="t">Use the repo's own toolchain</span></label>
-            <div class="body"><p>The system Go and Terraform are too old; the repo carries Go 1.26 and Terraform in <code>.local/tools</code>.</p>
-              <div class="cmd"><pre><code>export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
+            <div class="body"><p>The system Go and Terraform are too old; the repo uses its own Go 1.26 and Terraform in <code>.local/tools</code>. That folder is git-ignored: <code>make tools</code> installs the pinned versions (and kind) there, checksum-verified, and does nothing when they're already there.</p>
+              <div class="cmd"><pre><code>make tools
+export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
 go version</code></pre></div>
               <p class="expect"><b>Expect</b><code>go1.26</code>. Every later shell that builds or tests needs this line first.</p></div></li>
           <li class="item" data-id="stack-up"><label><input type="checkbox" id="c-stack-up"><span class="t">Start the local stack</span></label>
-            <div class="body"><p>Builds the binaries, seeds the example training repos into <code>.local/git</code>, and starts Postgres, Keycloak and Crucible. The API imports <code>examples/platform</code> into the empty database.</p>
-              <div class="cmd"><pre><code>make build &amp;&amp; ./scripts/seed-git.sh &amp;&amp; \
-KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --build --wait</code></pre></div>
-              <p class="expect"><b>Expect</b>three healthy containers and the sign-in page at localhost:8080. <code>seed-git.sh</code> wipes <code>.local/git</code>, so rerunning it deletes any training repo you add there.</p></div></li>
+            <div class="body"><p>One command builds the binaries and the toolbox image, seeds the example training repos into <code>.local/git</code>, and starts Postgres, Keycloak and Crucible with Docker Compose. The API imports <code>examples/platform</code> into the empty database. Use another <code>--keycloak-port</code> if 8081 is taken.</p>
+              <div class="cmd"><pre><code>go run ./cmd/crucible local up --keycloak-port 8081
+go run ./cmd/crucible local status</code></pre></div>
+              <p class="expect"><b>Expect</b>each step printed as it runs, three healthy containers, and the sign-in page at localhost:8080. <code>seed-git.sh</code> wipes <code>.local/git</code>, so rerunning <code>local up</code> deletes any training repo you add there. <code>crucible local down</code> stops the stack and keeps its data; <code>--wipe</code> deletes it too, for a fresh start.</p></div></li>
           <li class="item" data-id="stack-gate"><label><input type="checkbox" id="c-stack-gate"><span class="t">The forge's gate</span></label>
             <div class="body"><p>Open <code>http://localhost:8080</code> in a private window, then choose <b>Enter the forge</b>.</p>
               <p class="expect"><b>Expect</b>the Crucible title in the middle of the screen with embers drifting behind it (none with reduced motion), and the button under it; the button goes on to the Keycloak sign-in. After <b>Log out</b> you land back on the gate.</p></div></li>
+          <li class="item" data-id="stack-switch"><label><input type="checkbox" id="c-stack-switch"><span class="t">Change user</span></label>
+            <div class="body"><ol class="how"><li>Sign in as <code>trainee</code>. Open your user card (your name, top right) and choose <b>Log out</b>, then <b>Enter the forge</b>.</li><li>Open the user card again and choose <b>Change user</b>. Confirm the sign-out if Keycloak asks, then sign in as <code>senior</code>.</li></ol>
+              <p class="expect"><b>Expect</b>after <b>Log out</b>, Keycloak lets <code>trainee</code> straight back in without a password: only Crucible's session ended. <b>Change user</b> ends Keycloak's session too and lands on its sign-in page with an empty user name, and you come back as <code>senior</code>. The local realm allows <code>http://localhost:8080/*</code> as a post-logout address; another provider must allow <code>&lt;your Crucible URL&gt;/auth/login</code>.</p></div></li>
           <li class="item" data-id="stack-roles"><label><input type="checkbox" id="c-stack-roles"><span class="t">Sign in as each role</span></label>
             <div class="body"><p>Use a private window per person. Compare the top bar.</p>
               <p class="expect"><b>Expect</b>Scorers see <b>Anvil</b>; leaders see <b>Ledger</b> and <b>Approvals</b>; admins get the <b>Administrator</b> menu. Everyone sees Hearth, Trainings, Labs, Docs and Settings.</p></div></li>
@@ -331,10 +340,10 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
         <p class="where">As admin · Administrator → Forge settings</p>
         <ul class="items">
           <li class="item" data-id="cfg-tiers"><label><input type="checkbox" id="c-cfg-tiers"><span class="t">Cost tiers</span></label>
-            <div class="body"><ol class="how"><li>Set auto-approve 0, program approver 5, admin above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
+            <div class="body"><ol class="how"><li>Set auto-approve 0, training admins up to 5, admin approval above 25, and save.</li><li>Try them out of order (50, 5, 20).</li><li>Clear all three.</li></ol>
               <p class="expect"><b>Expect</b>the out-of-order save is refused with the reason; with tiers cleared, a banner warns that labs costing money can't be approved.</p></div></li>
           <li class="item" data-id="cfg-schedule"><label><input type="checkbox" id="c-cfg-schedule"><span class="t">Lab schedules</span></label>
-            <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a program that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
+            <div class="body"><ol class="how"><li>Add <code>office</code>, time zone <code>Europe/Bucharest</code>, window <code>mon,tue,wed,thu,fri 08:00-19:00</code>.</li><li>On Manage trainings, give a training that schedule in <b>Lab settings</b>.</li><li>Try deleting the schedule while a program uses it.</li></ol>
               <p class="expect"><b>Expect</b>outside the window the lab page says when the next one opens; the delete is refused while in use.</p></div></li>
           <li class="item" data-id="cfg-admins"><label><input type="checkbox" id="c-cfg-admins"><span class="t">Admins and the lockout guard</span></label>
             <div class="body"><p>With one admin, note the warning. Add <code>senior@crucible.local</code>, then remove them again.</p>
@@ -374,7 +383,9 @@ KEYCLOAK_PORT=8081 docker compose -f deploy/compose/docker-compose.yml up -d --b
 
       <section class="phase" id="p-author" data-title="Create a new training">
         <div class="phase-head"><h2>4 · Create a new training</h2><span class="count"></span></div>
-        <p class="lede">A training is its own git repo. Locally, Crucible reads repos from <code>.local/git</code>, which the API container mounts at <code>/git</code>.</p>
+        <p class="lede">A training lives in a git repository that an admin connects once, under <b>Administrator → Repositories</b>; trainings are then
+          registered from it. Locally, Crucible reads repos from <code>.local/git</code>, which the API container mounts at <code>/git</code>, and the seeded ones
+          arrive already connected.</p>
         <ul class="items">
           <li class="item" data-id="auth-write"><label><input type="checkbox" id="c-auth-write"><span class="t">Write the repo</span></label>
             <div class="body"><p>Start from the one-module example and give it its own id.</p>
@@ -383,7 +394,7 @@ cd ~/trainings/forge-501 &amp;&amp; git init -q -b main
 # training.yaml: id: forge-501, a title, maintainers: [senior@crucible.local]
 # add modules/01-spark/quiz.yaml and list "- quiz: quiz.yaml" in module.yaml
 git add -A &amp;&amp; git commit -qm "Forge 501"</code></pre></div>
-              <p class="expect"><b>Expect</b>the layout from Docs → <i>How a training repo is laid out</i>; every key is in <i>Building blocks: every key</i>.</p></div></li>
+              <p class="expect"><b>Expect</b>the layout from Docs → <i>How a training repo is laid out</i>; every key is in <i>Building blocks: every key</i>. The <code>id</code> and <code>title</code> you write here are what Crucible registers the training as: the form never asks for them.</p></div></li>
           <li class="item" data-id="auth-lint"><label><input type="checkbox" id="c-auth-lint"><span class="t">Lint it</span></label>
             <div class="body"><div class="cmd"><pre><code>./bin/crucible lint ~/trainings/forge-501</code></pre></div>
               <p>Then break it on purpose: point the module at a reading that doesn't exist.</p>
@@ -397,15 +408,55 @@ git add -A &amp;&amp; git commit -qm "Forge 501"</code></pre></div>
 git -C .local/git/forge-501.git config core.sharedRepository world
 chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
               <p class="expect"><b>Expect</b>a bare repo the API container can read and push edits into.</p></div></li>
+          <li class="item" data-id="auth-connect"><label><input type="checkbox" id="c-auth-connect"><span class="t">Connect its repository</span></label>
+            <div class="body"><p>Admin: <b>Administrator → Repositories</b> → <b>Connect a repository</b>. Repository URL <code>file:///git/forge-501.git</code>, <b>How Crucible signs in</b>: <i>No credential of its own</i> (the form says Crucible adds none, and that an <code>https://</code> repository may still be reached with the instance's own git credentials) → <b>Connect repository</b>. Then <b>Test connection</b> on its row.</p>
+              <p class="expect"><b>Expect</b>the row leads with the URL and says <i>No credential</i>, and <i>Not checked yet</i> until the test, then <i>Reachable</i> and <i>Can write</i>: this bare repository takes pushes, and the test only starts one without sending anything. The seeded <code>forge-…</code> repositories are already listed, each with the trainings it feeds. Local paths are accepted only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
           <li class="item" data-id="auth-register"><label><input type="checkbox" id="c-auth-register"><span class="t">Register it</span></label>
-            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. Id <code>forge-501</code>, repository <code>file:///git/forge-501.git</code>, branch, tag or commit <code>main</code>, folder empty (the repository root).</p>
-              <p class="expect"><b>Expect</b>it appears in the list, marked <i>content not loaded yet</i> until the next sync (about 10 seconds locally), then with its title. Local paths work here only because the compose file sets <code>CRUCIBLE_GIT_ALLOW_FILE=1</code>.</p></div></li>
+            <div class="body"><p>Admin: Trainings → Manage trainings → <b>+ New training</b>. <b>Team that owns it</b> The Forge, <b>Repository</b> <code>file:///git/forge-501.git</code>, <b>Branch, tag or commit</b> <code>main</code>, <b>Folder</b> empty (the repository root) → <b>Register training</b>.</p>
+              <p class="expect"><b>Expect</b>no id or title to type: Crucible reads them from <code>training.yaml</code>, says <i>&lt;its title&gt; is registered for forge</i> and opens it, shown as <i>content not loaded yet</i> until the next sync (about 10 seconds locally). Under <b>Roles</b>, <b>Admins</b> already holds <code>forge_leaders</code>: a Crucible admin who registers names the owning team's leaders.</p></div></li>
+          <li class="item" data-id="auth-starter"><label><input type="checkbox" id="c-auth-starter"><span class="t">An empty repository gets a starter</span></label>
+            <div class="body"><p>Make two empty repositories (the second is for the senior, two steps on):</p>
+              <div class="cmd"><pre><code>for r in forge-blank forge-spare; do
+  git init -q --bare -b main .local/git/$r.git
+  git -C .local/git/$r.git config core.sharedRepository world
+  chmod -R a+rwX .local/git/$r.git
+done</code></pre></div>
+              <p>Connect <code>file:///git/forge-blank.git</code> and <code>file:///git/forge-spare.git</code> as above, and register <code>forge-blank</code> with <b>Folder</b> empty. Then register the seeded <code>file:///git/forge-101.git</code> with <b>Folder</b> <code>modules</code>.</p>
+              <p class="expect"><b>Expect</b>the empty one is registered as <code>forge-blank</code> (<i>Forge Blank</i>), "with a training to start from written into the repository": a <code>training.yaml</code> and a first module with a reading, committed by the bot, ready for <b>Edit content</b>. The second is refused: a repository with content but no <code>training.yaml</code> where you pointed is an error, and nothing is written into it.</p></div></li>
           <li class="item" data-id="auth-refuse"><label><input type="checkbox" id="c-auth-refuse"><span class="t">Unsafe repository URLs are refused</span></label>
-            <div class="body"><p>Try registering repo <code>--upload-pack=touch</code> and one with a space in it.</p>
-              <p class="expect"><b>Expect</b>both refused with the reason; nothing is saved.</p></div></li>
+            <div class="body"><p>On <b>Administrator → Repositories</b>, try connecting <code>--upload-pack=touch</code>, then a URL with a space in it, then <code>https://bot:secret@example.com/x.git</code> with <i>An access token</i>.</p>
+              <p class="expect"><b>Expect</b>each refused with the reason (a URL can't start with <code>-</code>, can't hold whitespace, and a token is given on its own, not in the URL); nothing is saved. Without <code>CRUCIBLE_GIT_ALLOW_FILE</code>, a local path is refused too.</p></div></li>
+          <li class="item" data-id="repo-https"><label><input type="checkbox" id="c-repo-https"><span class="t">Connect a private repository over HTTPS</span></label>
+            <div class="body"><p>Needs a private repository of your own on GitHub or GitLab holding a training (push <code>~/trainings/forge-501</code> there, with another <code>id</code>), and a token for just that repository: GitHub fine-grained, <i>Contents: Read and write</i>; GitLab, a project access token with <code>write_repository</code>.</p>
+              <ol class="how"><li><b>Connect a repository</b>: its <code>https://</code> URL, <i>An access token</i>, the token (user name optional) → <b>Connect repository</b>; <b>Test connection</b>.</li><li>Register a training from it, open <b>Edit content</b>, change a reading and submit it.</li><li>Choose <b>Replace credential</b>, leave the token box empty and save.</li><li>Open Forge Status → <b>Recent privileged actions</b>.</li></ol>
+              <p class="expect"><b>Expect</b><i>Token</i> and <i>Reachable</i>; the token is never shown again (the box says <i>Set — type a new one to replace it</i>), and saving with it empty keeps it; the audit entry says a credential was set, never what it is. Submitting pushes a <code>crucible/edit/…</code> branch to your repository before anyone reviews it, so a read-only token fails at the submit, not at the merge.</p></div></li>
+          <li class="item" data-id="repo-ssh"><label><input type="checkbox" id="c-repo-ssh"><span class="t">Connect a repository over SSH with a deploy key</span></label>
+            <div class="body"><p>Needs a repository on GitHub or GitLab where you can add a deploy key.</p>
+              <ol class="how"><li><b>Connect a repository</b>: its <code>git@host:org/repo.git</code> URL (or its <code>https://</code> one), <i>A deploy key Crucible makes</i> → <b>Connect repository</b>.</li><li><b>Copy the key</b> and add it at the host <b>with write access</b> (GitHub: Settings → Deploy keys, tick <i>Allow write access</i>; GitLab: Settings → Repository → Deploy keys, <i>Grant write permissions</i>); <b>Test connection</b>.</li><li><b>Replace credential</b>, keep <i>A deploy key Crucible makes</i>, save; <b>Test connection</b> again before adding the new key.</li></ol>
+              <p class="expect"><b>Expect</b>an <code>https://</code> URL is stored in its <code>git@</code> form; the row says <i>Deploy key</i> and shows only the public key, which can be copied again at any time; <i>Cannot be read</i>, with the reason, until the key is added, then <i>Reachable</i>. Replacing makes a fresh pair, so the old key stops working until you add the new one.</p></div></li>
+          <li class="item" data-id="repo-hostkey"><label><input type="checkbox" id="c-repo-hostkey"><span class="t">Pinned host keys survive a restart</span></label>
+            <div class="body"><p>Needs the SSH repository from the step before, <i>Reachable</i>. Choose <b>Test connection</b> once more: that saves the host key ssh pinned to the database. Then lose the API's copy and restart it, as a pod restart does on k3s (there, <code>sudo k3s kubectl -n crucible rollout restart deploy/crucible</code>):</p>
+              <div class="cmd"><pre><code>DC="docker compose -f deploy/compose/docker-compose.yml"
+$DC exec postgres psql -U crucible -c 'SELECT body FROM ssh_known_hosts'
+$DC exec api rm -f /data/ssh/known_hosts
+$DC restart api</code></pre></div>
+              <p><b>Test connection</b>, then pretend the host changed its key, and test again:</p>
+              <div class="cmd"><pre><code>ssh-keygen -q -t ed25519 -N '' -f /tmp/fake-host
+$DC exec postgres psql -U crucible -c "UPDATE ssh_known_hosts SET body = 'github.com $(cut -d' ' -f1,2 /tmp/fake-host.pub)'"
+$DC exec api rm -f /data/ssh/known_hosts</code></pre></div>
+              <p class="expect"><b>Expect</b>the query shows your host's key line; after the restart, <i>Reachable</i> again and <code>/data/ssh/known_hosts</code> holds that same line. With the fake key (use your host's name in place of <code>github.com</code>), <i>Cannot be read</i> with <i>Host key verification failed</i>: the stored key wins over whatever the host shows. To undo, <code>DELETE FROM ssh_known_hosts</code>, remove the file again and test: the host is pinned afresh.</p></div></li>
+          <li class="item" data-id="repo-canwrite"><label><input type="checkbox" id="c-repo-canwrite"><span class="t">Test connection says whether Crucible can write</span></label>
+            <div class="body"><ol class="how"><li>Connect <code>https://github.com/git/git.git</code> with <i>No credential of its own</i>; <b>Test connection</b>.</li><li>Look at the private repository from <i>Connect a private repository over HTTPS</i>; then replace its token with a read-only one (<i>Contents: Read-only</i>) and test again.</li><li>Disconnect <code>git/git</code>.</li></ol>
+              <p class="expect"><b>Expect</b><code>git/git</code> is <i>Reachable</i> and <i>Read only</i>, with <i>Crucible can read this repository but not push to it, so edits made here cannot be submitted.</i> (Were the instance's own git credentials allowed to push there, it would say <i>Can write</i>: no credential of Crucible's own is not a promise of read-only.) The read-and-write token says <i>Can write</i>; the read-only one <i>Read only</i>. Nothing is pushed by a test: the repository's branches are unchanged.</p></div></li>
+          <li class="item" data-id="repo-nokey"><label><input type="checkbox" id="c-repo-nokey"><span class="t">Without <code>CRUCIBLE_SECRET_KEY</code>, no token is kept</span></label>
+            <div class="body"><p>The compose stack sets a development <code>CRUCIBLE_SECRET_KEY</code>; <code>crucible preview</code> sets none, and makes you its admin. Run a preview of <code>~/trainings/forge-501</code> (see <i>Preview it as a trainee</i>), then open <b>Administrator → Repositories</b> → <b>Connect a repository</b> and type an <code>https://</code> URL.</p>
+              <p class="expect"><b>Expect</b>a warning: <i>This instance has no CRUCIBLE_SECRET_KEY, so it cannot keep a credential. Public repositories work; a private one needs that key set first.</i> <i>An access token</i> and <i>A deploy key Crucible makes</i> can't be chosen, and the server refuses a token sent anyway rather than store it in the clear. A public repository still connects.</p></div></li>
           <li class="item" data-id="auth-start"><label><input type="checkbox" id="c-auth-start"><span class="t">Give its roles to people and groups</span></label>
-            <div class="body"><ol class="how"><li>Under <b>Roles</b>, add <code>forge_trainees</code> and a brand-new email to <b>Participants</b>.</li><li>Add <code>forge_seniors</code> to <b>Editors</b> and <code>leader@crucible.local</code> to <b>Admins</b>.</li><li>Try a group of a team that doesn't exist, such as <code>ghost_seniors</code>.</li><li>As the senior (not an admin), register another training: it belongs to The Forge.</li></ol>
-              <p class="expect"><b>Expect</b>groups show with a flag and say who they are; the count of people updates; the unknown group is refused; the trainee can't open Manage trainings' <b>+ New training</b>.</p></div></li>
+            <div class="body"><ol class="how"><li>Under <b>Roles</b>, add <code>forge_trainees</code> and a brand-new email to <b>Participants</b>.</li><li>Add <code>forge_seniors</code> to <b>Editors</b>.</li><li>Try a group of a team that doesn't exist, such as <code>ghost_seniors</code>.</li><li>Try removing <code>forge_leaders</code>, the only admin.</li><li>As the senior (not an admin), register <code>file:///git/forge-spare.git</code>.</li></ol>
+              <p class="expect"><b>Expect</b>groups show with a flag and say who they are; the count of people updates; the unknown group is refused; removing the last admin is refused. The senior's training belongs to The Forge and its <b>Admins</b> are <code>forge_seniors</code> and <code>forge_leaders</code> (the registrant's rank and the ranks above). The trainee can't open Manage trainings' <b>+ New training</b>.</p></div></li>
+          <li class="item" data-id="auth-manage"><label><input type="checkbox" id="c-auth-manage"><span class="t">Managing comes from being named an admin</span></label>
+            <div class="body"><ol class="how"><li>As the senior, on <code>forge-spare</code>: add <code>leader@crucible.local</code> to <b>Admins</b> and remove <code>forge_leaders</code>. Open it as the leader.</li><li>As the senior again, remove <code>leader@crucible.local</code>. Reload as the leader.</li></ol>
+              <p class="expect"><b>Expect</b>while named, the leader changes roles, lab settings and the content version; once removed, the leader sees the training read-only, even though The Forge owns it: being on the owning team grants nothing by itself. Crucible admins manage every training and are listed on none.</p></div></li>
           <li class="item" data-id="auth-take"><label><input type="checkbox" id="c-auth-take"><span class="t">The trainee takes it</span></label>
             <div class="body"><p>As trainee: Hearth → the new card; read, take the quiz.</p>
               <p class="expect"><b>Expect</b>with <code>progression: linear</code>, later modules stay locked until earlier ones are forged; the Trainings card offers <b>Open</b>.</p></div></li>
@@ -416,8 +467,8 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><ol class="how"><li>In a clone of the repo, move everything into <code>courses/forge-501/</code>, commit, tag it <code>v1</code> and push the commit and the tag.</li><li><b>Source</b> → <b>Change source</b>: repository URL empty, <b>Branch, tag or commit</b> <code>v1</code>, <b>Folder</b> <code>courses/forge-501</code>.</li><li>Push another commit to <code>main</code>.</li></ol>
               <p class="expect"><b>Expect</b>the training loads from the folder and stays on <code>v1</code> after the new commit; Forge Status shows <code>v1</code> and the folder; <b>Edit content</b> is gone (a tag changes only in git). Back on <code>main</code> with the same folder, edits return and their diffs show paths inside the folder.</p></div></li>
           <li class="item" data-id="auth-delete"><label><input type="checkbox" id="c-auth-delete"><span class="t">Delete the training</span></label>
-            <div class="body"><p><b>Source</b> → <b>Delete training</b>, then register it again and start it for the team.</p>
-              <p class="expect"><b>Expect</b>it names the teams it stops for; the repo is untouched; progress comes back after re-registering.</p></div></li>
+            <div class="body"><p>First try <b>Disconnect</b> on its repository under <b>Administrator → Repositories</b>. Then <b>Source</b> → <b>Delete training</b>, and register it again from the same repository.</p>
+              <p class="expect"><b>Expect</b>the disconnect is refused while a training reads from the repository; the delete asks first; the repo is untouched; progress comes back after re-registering.</p></div></li>
         </ul>
       </section>
 
@@ -431,11 +482,11 @@ chmod -R a+rwX .local/git/forge-501.git</code></pre></div>
             <div class="body"><p>Edit a reading, insert a block from <b>Blocks</b>, then put a mistake in <code>quiz.yaml</code>.</p>
               <p class="expect"><b>Expect</b>autosave; the mistake appears under Problems with its file and line, and clears when fixed.</p></div></li>
           <li class="item" data-id="ed-review"><label><input type="checkbox" id="c-ed-review"><span class="t">Review and merge</span></label>
-            <div class="body"><p>Submit. As senior (a maintainer), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
-              <p class="expect"><b>Expect</b>the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
+            <div class="body"><p>Submit. As senior (an editor of the training), open it from the training's Content edits panel → <b>Approve and merge</b>.</p>
+              <p class="expect"><b>Expect</b>submitting pushes the edit to a <code>crucible/edit/…</code> branch of the repository; the author can't approve their own; the reviewer sees the diff, renames and deletes; the bot merges; the trainee reads the change after the next sync.</p></div></li>
           <li class="item" data-id="ed-enrolled"><label><input type="checkbox" id="c-ed-enrolled"><span class="t">Who may edit</span></label>
             <div class="body"><p>Make the leader a participant of the training too; check the trainee's view.</p>
-              <p class="expect"><b>Expect</b>the leader still edits (they are an editor through <code>forge_leaders</code>); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
+              <p class="expect"><b>Expect</b>the leader still edits (<code>forge_leaders</code> are the training's admins, and admins edit); the plain trainee has no <b>Edit content</b> and can't read the raw files.</p></div></li>
           <li class="item" data-id="ed-rebase"><label><input type="checkbox" id="c-ed-rebase"><span class="t">Newer content while you edit</span></label>
             <div class="body"><p>With a draft open, push a change to the same file in git.</p>
               <p class="expect"><b>Expect</b>the draft offers to rebase, shows the conflict and ends on the new base.</p></div></li>
@@ -541,7 +592,7 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
               <p class="expect"><b>Expect</b><code>tf-apply</code> completed, its log ending <i>dry run … nothing was applied or destroyed</i>, and the workspace pod running. The terminal opens, but AWS commands in it have no real account behind them.</p></div></li>
           <li class="item" data-id="dr-sweep"><label><input type="checkbox" id="c-dr-sweep"><span class="t">End it and watch the sweep</span></label>
             <div class="body"><p><b>End lab</b>. As admin open the <b>Ledger</b> and choose <b>Refresh now</b>.</p>
-              <p class="expect"><b>Expect</b>the lab is cooled; the fake account's stray volume shows under reaper findings as <i>end-of-lab sweep / deleted</i>; the lab gets a small AWS bill to compare with its estimate.</p></div></li>
+              <p class="expect"><b>Expect</b>the lab is cooled; the fake account's stray volume shows under reaper findings as <i>end-of-lab sweep / deleted</i>; the lab's row has a small <b>Metered</b> figure (the fake state's <code>t3.nano</code> and root volume, under a cent an hour) and a <b>Billed</b> figure of <i>$0.11 (so far)</i> to compare with its estimate; under the title, <i>Price data from</i> today.</p></div></li>
           <li class="item" data-id="dr-guards"><label><input type="checkbox" id="c-dr-guards"><span class="t">Money guardrails on a priced lab</span></label>
             <div class="body"><ol class="how"><li>Set the program's monthly budget below the estimate and request again.</li><li>Close the program's schedule window and request again.</li><li>Pause all labs and request again.</li></ol>
               <p class="expect"><b>Expect</b>over a cap only an admin can approve, as an audited override; outside the window the page says when it opens; while paused nothing starts.</p></div></li>
@@ -553,18 +604,21 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
         <div class="note warn"><strong>This creates real resources and costs real money.</strong>Use a dedicated sandbox account and a deployed Crucible
           (<code>crucible aws init</code>, then <code>crucible aws up</code>). The full commands and every must-fail case are in <code>docs/runbooks/aws.md</code>.</div>
         <ul class="items">
+          <li class="item" data-id="aw-secretkey"><label><input type="checkbox" id="c-aw-secretkey"><span class="t">The secret key is made once and outlives teardown <span class="pill cost">AWS</span></span></label>
+            <div class="body"><ol class="how"><li>After <code>crucible aws init</code>: <code>aws ssm get-parameter --name /crucible/secret_key --query Parameter.Type --output text</code>.</li><li>After <code>crucible aws up</code>, on the server: <code>sudo k3s kubectl -n crucible get secret crucible-secrets -o jsonpath='{.data.CRUCIBLE_SECRET_KEY}' | wc -c</code>. Open <b>Administrator → Repositories</b> and connect a private repository with a token.</li><li><code>crucible aws teardown --yes</code>, then <code>crucible aws up</code>, and <b>Test connection</b> on that repository.</li></ol>
+              <p class="expect"><b>Expect</b><code>SecureString</code>; a non-zero length; no <i>This instance has no CRUCIBLE_SECRET_KEY</i> warning, and the token is accepted. After teardown → up the repository is still <i>Token</i> and <i>Reachable</i>: the key came back with the restored database. On a server set up before the key existed, <code>crucible aws deploy</code> prints <i>WARNING: no /crucible/secret_key</i> until <code>init</code> is re-run.</p></div></li>
           <li class="item" data-id="aw-init"><label><input type="checkbox" id="c-aw-init"><span class="t">Create the labs stack <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>With lab-account credentials:</p>
-              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1</code></pre></div>
-              <p class="expect"><b>Expect</b>the lab role, permission boundary and state bucket, and account-wide S3 Block Public Access. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
-          <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on cost data and pricing <span class="pill cost">AWS</span></span></label>
-            <div class="body"><ol class="how"><li>In the payer account, activate cost-allocation tags <code>crucible:lab-id</code>, <code>crucible:team</code>, <code>crucible:training</code> (after the first lab; up to 24 hours).</li><li>Open Cost Explorer once in the lab account.</li><li><code>infracost auth login</code>; put the key in <code>crucible.tfvars</code> as <code>infracost_api_key</code>.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li></ol>
-              <p class="expect"><b>Expect</b>AWS labs switch on; without the key, requests say no estimate is available.</p></div></li>
+              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1 --budget-usd 50 --budget-email you@example.com</code></pre></div>
+              <p class="expect"><b>Expect</b>the lab, ops and plan roles, permission boundary, state bucket, the export bucket and CUR 2.0 export, the AWS Budget (alerts at 80% and 100%), and account-wide S3 Block Public Access. <code>--budget-usd -5</code> is refused before anything runs. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
+          <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on billed costs and wire it in <span class="pill cost">AWS</span></span></label>
+            <div class="body"><ol class="how"><li>Billing → Cost allocation tags (in the payer account if the lab account is in an organization): activate <code>crucible:lab-id</code> (it shows up after a tagged resource has existed; up to 24 hours). Free.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li><li>A day later, check the export as the runbook says: <code>aws s3 ls s3://&lt;export_bucket&gt;/cur/ --recursive</code>, and <code>terraform plan</code> of the labs stack shows no changes.</li></ol>
+              <p class="expect"><b>Expect</b>AWS labs switch on; the Ledger says <i>Price data from</i> today; the export bucket holds a manifest and <code>.csv.gz</code> files.</p></div></li>
           <li class="item" data-id="aw-run"><label><input type="checkbox" id="c-aw-run"><span class="t">Run Cloud Heat for real <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Request and approve it, then in the workspace terminal:</p>
               <div class="cmd"><pre><code>aws sts get-caller-identity
 echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.txt</code></pre></div>
-              <p class="expect"><b>Expect</b><code>assumed-role/crucible-lab/crucible-lab-&lt;id&gt;</code>; both tasks pass with <b>Check</b>; on the node, <code>tf-apply</code> completed and <code>lab</code> running.</p></div></li>
+              <p class="expect"><b>Expect</b>before you request, <b>How this estimate was worked out</b> lists the bucket with its stated 1 GB of storage as usage per hour, and a total under the lab's $0.05/h; <code>assumed-role/crucible-lab/crucible-lab-&lt;id&gt;</code>; both tasks pass with <b>Check</b>; on the node, <code>tf-apply</code> completed and <code>lab</code> running; the Ledger shows a <b>Metered</b> figure for the lab.</p></div></li>
           <li class="item" data-id="aw-boundary"><label><input type="checkbox" id="c-aw-boundary"><span class="t">The boundary holds <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Positive controls first: a dry-run <code>t3.micro</code> launch with the lab's tags and own security group returns <i>DryRunOperation</i>. Then each must fail:</p>
               <ul class="how"><li>a volume with no lab tag, another lab's id, or the tag key in other letter case</li><li>an instance in the default security group, a <code>t3.large</code>, dedicated tenancy, an io2 or oversized volume</li><li>removing lab tags, a bucket not named <code>crucible-lab-&lt;id&gt;…</code>, a region outside the allowed list</li><li>reading another lab's Terraform state, <code>aws iam list-roles</code>, reaching the metadata service</li></ul>
@@ -583,10 +637,10 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
               <p class="expect"><b>Expect</b>no CloudTrail finding (every successful create was tagged); the user name is the session name <code>crucible-lab-&lt;id&gt;</code>.</p></div></li>
           <li class="item" data-id="aw-ec2"><label><input type="checkbox" id="c-aw-ec2"><span class="t">An EC2 lab end to end <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>In your sandbox content repo, add the runbook's <code>terraform/ec2.tf</code> (a <code>t3.nano</code>, its own security group, a data volume) next to Cloud Heat's <code>main.tf</code>.</p>
-              <p class="expect"><b>Expect</b>a non-zero infracost estimate; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
+              <p class="expect"><b>Expect</b>a non-zero estimate whose breakdown lists the instance (with its root volume and public IPv4), the data volume, and the attachment, the security group and rules as <i>free</i>; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
           <li class="item" data-id="aw-bill"><label><input type="checkbox" id="c-aw-bill"><span class="t">The bill arrives <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>24–48 hours later: Ledger → <b>Refresh now</b>.</p>
-              <p class="expect"><b>Expect</b>the lab's row shows its AWS bill without <i>(so far)</i>, and <i>Estimate vs actual</i> counts it.</p></div></li>
+              <p class="expect"><b>Expect</b>the lab's <b>Billed</b> figure without <i>(so far)</i>, close to its <b>Metered</b> one, and <i>Estimate vs billed</i> counts it.</p></div></li>
         </ul>
       </section>
 
@@ -596,7 +650,7 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
         <ul class="items">
           <li class="item" data-id="mo-route"><label><input type="checkbox" id="c-mo-route"><span class="t">Routing by tier</span></label>
             <div class="body"><p>As trainee request <i>Paid Heat</i>; move the tiers up and down between requests.</p>
-              <p class="expect"><b>Expect</b>the request waits for the program approver, the leader or an admin, as the estimate falls; nobody approves their own; someone higher can decide a cheaper request.</p></div></li>
+              <p class="expect"><b>Expect</b>the request waits for the training's admins, the team's leaders or an admin, as the estimate falls; nobody approves their own; someone higher can decide a cheaper request.</p></div></li>
           <li class="item" data-id="mo-escalate"><label><input type="checkbox" id="c-mo-escalate"><span class="t">Escalation</span></label>
             <div class="body"><p>Set <b>Hours before a waiting request escalates</b> very low and leave a request unanswered inside the schedule window.</p>
               <p class="expect"><b>Expect</b>it moves up a tier and the next people hear about it; if even admins don't answer, it expires.</p></div></li>
@@ -623,7 +677,7 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
               <p class="expect"><b>Expect</b>refused: this instance already has teams or trainings. Nothing changes.</p></div></li>
           <li class="item" data-id="mv-import"><label><input type="checkbox" id="c-mv-import"><span class="t">Import into a fresh forge</span></label>
             <div class="body"><p>On an instance with an empty database and no seed, sign in as its first admin and import the file.</p>
-              <p class="expect"><b>Expect</b>everything arrives in one step; you stay an admin; each person gets their progress back at their first sign-in, matched by email.</p></div></li>
+              <p class="expect"><b>Expect</b>everything arrives in one step; you stay an admin; each person gets their progress back at their first sign-in, matched by email. Connected repositories arrive without their credentials (they were sealed with the old instance's <code>CRUCIBLE_SECRET_KEY</code>): each shows <i>No credential</i> until it is reconnected.</p></div></li>
         </ul>
       </section>
 

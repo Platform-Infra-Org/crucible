@@ -168,7 +168,7 @@ tr.total td { font-weight: 700; }
           to ship new versions, and to run AWS labs in a separate, fenced-off account.</p>
         <figure>
           <div class="diagram" role="img" aria-labelledby="arch-cap">
-            <svg viewBox="0 0 1160 810" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <svg viewBox="0 0 1160 820" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <defs>
                 <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
                 <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head-hot" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -222,7 +222,7 @@ tr.total td { font-weight: 700; }
               <rect class="box" x="620" y="392" width="130" height="54" rx="9"/>
               <text x="632" y="414">Backup job</text><text x="632" y="432" class="t-sm">nightly pg_dump</text>
               <rect class="box" x="310" y="392" width="295" height="54" rx="9"/>
-              <text x="322" y="414">Lab namespaces</text><text x="322" y="432" class="t-sm">one per AWS lab, Docker inside sysbox</text>
+              <text x="322" y="414">Estimates namespace</text><text x="322" y="432" class="t-sm">plan pods: a read-only terraform plan per lab version</text>
               <rect class="box-iron" x="310" y="456" width="440" height="84" rx="9"/>
               <text x="322" y="478" class="t-iron">AWS lab namespace (one per AWS lab)</text>
               <text x="322" y="498" class="t-sm">tf-apply pod: runs terraform apply / destroy</text>
@@ -245,21 +245,25 @@ tr.total td { font-weight: 700; }
               <text x="888" y="42" class="t-acct t-iron">LAB ACCOUNT · a sandbox</text>
               <rect class="box-iron" x="888" y="60" width="240" height="78" rx="10"/>
               <text x="900" y="84">IAM role "crucible-lab"</text><text x="900" y="102" class="t-sm">assumed by Crucible per lab, 1 hour</text><text x="900" y="119" class="t-sm">+ permission boundary (ceiling)</text>
-              <rect class="box" x="888" y="155" width="240" height="62" rx="10"/>
-              <text x="900" y="179">IAM role "crucible-lab-ops"</text><text x="900" y="198" class="t-sm">read-only: tags, costs, audit</text>
-              <rect class="box" x="888" y="235" width="240" height="62" rx="10"/>
-              <text x="900" y="259">S3 lab state bucket</text><text x="900" y="278" class="t-sm">one Terraform state per lab</text>
-              <rect class="box-iron" x="888" y="318" width="240" height="120" rx="10"/>
-              <text x="900" y="342">Lab resources</text><text x="900" y="361" class="t-sm">EC2 instances, EBS volumes,</text><text x="900" y="378" class="t-sm">security groups, S3 buckets</text>
-              <text x="900" y="400" class="t-sm">every one tagged</text><text x="900" y="418" class="t-iron">crucible:lab-id=&lt;id&gt;</text>
-              <rect class="box" x="888" y="460" width="240" height="56" rx="10"/>
-              <text x="900" y="484">Cost Explorer</text><text x="900" y="502" class="t-sm">the real bill, per lab tag</text>
-              <rect class="box" x="888" y="530" width="240" height="56" rx="10"/>
-              <text x="900" y="554">CloudTrail</text><text x="900" y="572" class="t-sm">who created what (audit log)</text>
-              <rect class="box" x="888" y="600" width="240" height="56" rx="10"/>
-              <text x="900" y="624">Resource Groups Tagging API</text><text x="900" y="642" class="t-sm">find everything with a tag</text>
-              <text x="888" y="700" class="t-sm">It can be the same account as Crucible's,</text>
-              <text x="888" y="717" class="t-sm">but a separate one is much safer.</text>
+              <rect class="box" x="888" y="150" width="240" height="52" rx="10"/>
+              <text x="900" y="172">IAM role "crucible-lab-ops"</text><text x="900" y="190" class="t-sm">read-only: tags, state, bill, audit</text>
+              <rect class="box" x="888" y="212" width="240" height="52" rx="10"/>
+              <text x="900" y="234">IAM role "crucible-lab-plan"</text><text x="900" y="252" class="t-sm">read-only, 15 min, for estimates</text>
+              <rect class="box" x="888" y="274" width="240" height="52" rx="10"/>
+              <text x="900" y="296">S3 lab state bucket</text><text x="900" y="314" class="t-sm">one Terraform state per lab</text>
+              <rect class="box-iron" x="888" y="336" width="240" height="106" rx="10"/>
+              <text x="900" y="358">Lab resources</text><text x="900" y="376" class="t-sm">EC2 instances, EBS volumes,</text><text x="900" y="393" class="t-sm">security groups, S3 buckets</text>
+              <text x="900" y="413" class="t-sm">every one tagged</text><text x="900" y="431" class="t-iron">crucible:lab-id=&lt;id&gt;</text>
+              <rect class="box" x="888" y="452" width="240" height="62" rx="10"/>
+              <text x="900" y="474">Billing export (CUR 2.0)</text><text x="900" y="492" class="t-sm">the real bill per lab tag, daily,</text><text x="900" y="508" class="t-sm">into an S3 bucket · free</text>
+              <rect class="box" x="888" y="524" width="240" height="52" rx="10"/>
+              <text x="900" y="546">AWS Budget</text><text x="900" y="564" class="t-sm">emails at 80% and 100% · free</text>
+              <rect class="box" x="888" y="586" width="240" height="52" rx="10"/>
+              <text x="900" y="608">CloudTrail</text><text x="900" y="626" class="t-sm">who created what (audit log)</text>
+              <rect class="box" x="888" y="648" width="240" height="52" rx="10"/>
+              <text x="900" y="670">Resource Groups Tagging API</text><text x="900" y="688" class="t-sm">find everything with a tag</text>
+              <text x="888" y="735" class="t-sm">It can be the same account as Crucible's,</text>
+              <text x="888" y="752" class="t-sm">but a separate one is much safer.</text>
 
               <!-- arrows: people in -->
               <path class="ar-hot" d="M190 76 C 235 76, 240 235, 278 235" marker-end="url(#mh)"/>
@@ -282,17 +286,25 @@ tr.total td { font-weight: 700; }
               <!-- backup → data bucket, around the lab box -->
               <path class="ar" d="M750 419 L 826 419 L 826 680 L 335 680 L 335 688" marker-end="url(#m)"/>
               <rect class="label-bg" x="560" y="672" width="92" height="16"/><text x="562" y="684" class="t-sm">nightly snapshot</text>
-              <!-- the node assumes the lab and ops roles (blue: lab traffic) -->
+              <!-- the node assumes the lab, ops and plan roles (blue: lab traffic) -->
               <path class="ar-iron" d="M780 300 C 840 300, 840 99, 886 99" marker-end="url(#mi)"/>
-              <path class="ar" d="M780 318 C 850 318, 850 186, 886 186" marker-end="url(#m)"/>
+              <path class="ar" d="M780 318 C 850 318, 850 176, 886 176" marker-end="url(#m)"/>
+              <path class="ar" d="M780 336 C 855 336, 855 238, 886 238" marker-end="url(#m)"/>
               <!-- lab pods → lab state and lab resources -->
-              <path class="ar-iron" d="M750 470 C 845 470, 845 266, 886 266" marker-end="url(#mi)"/>
-              <path class="ar-iron" d="M750 500 C 850 500, 850 378, 886 378" marker-end="url(#mi)"/>
+              <path class="ar-iron" d="M750 470 C 845 470, 845 300, 886 300" marker-end="url(#mi)"/>
+              <path class="ar-iron" d="M750 500 C 850 500, 850 389, 886 389" marker-end="url(#mi)"/>
+              <!-- Crucible, as the ops role, reads the billing export (and lab state) -->
+              <path class="ar" d="M1128 190 C 1150 190, 1150 483, 1130 483" marker-end="url(#m)"/>
+              <text x="1157" y="400" class="t-sm" transform="rotate(-90 1157 400)">ops role reads the bill</text>
+              <!-- the AWS Budget emails the admins, whatever Crucible is doing -->
+              <path class="ar" d="M886 560 L 852 560 L 852 803 L 10 803 L 10 95 L 18 95" marker-end="url(#m)"/>
+              <rect class="label-bg" x="440" y="795" width="150" height="16"/><text x="442" y="807" class="t-sm">Budget emails admins</text>
             </svg>
           </div>
           <figcaption id="arch-cap">Crucible's account holds the server and everything it needs; the lab account holds the roles labs
             use and the resources labs create. Orange arrows are people's traffic, blue arrows are AWS lab traffic, grey arrows
-            are operations.</figcaption>
+            are operations: among them, Crucible reading the billing export as the ops role, and the AWS Budget emailing the
+            admins at 80% and 100% of the month's spend, even when Crucible is down.</figcaption>
         </figure>
       </section>
 
@@ -317,7 +329,9 @@ tr.total td { font-weight: 700; }
           <div class="term"><h4>Cognito</h4><p>A managed sign-in service: user accounts, passwords, email verification, a hosted login page. Free up to 10,000 monthly users.</p><p class="use"><b>Crucible:</b> people sign in through it; Crucible trusts its verified emails.</p></div>
           <div class="term"><h4>EventBridge Scheduler</h4><p>Runs AWS actions on a timetable, like a cron job in the cloud.</p><p class="use"><b>Crucible:</b> starts the server in the morning and stops it at night on weekdays.</p></div>
           <div class="term"><h4>Route 53</h4><p>AWS's DNS service: turns a name into an IP address.</p><p class="use"><b>Crucible:</b> optional; you can point your domain at the Elastic IP with any DNS provider.</p></div>
-          <div class="term"><h4>Cost Explorer and cost-allocation tags</h4><p>Cost Explorer shows what you spent. Once a tag is activated as a cost-allocation tag, spend can be grouped by it.</p><p class="use"><b>Crucible:</b> reads each lab's real bill by its <code>crucible:lab-id</code> tag.</p></div>
+          <div class="term"><h4>Data Exports (CUR 2.0) and cost-allocation tags</h4><p>A billing export writes the account's detailed bill as files into an S3 bucket every day, for free. Once a tag is activated as a cost-allocation tag, each line of the bill carries it.</p><p class="use"><b>Crucible:</b> reads each lab's real bill from the export by its <code>crucible:lab-id</code> tag. It never uses Cost Explorer, which charges per call.</p></div>
+          <div class="term"><h4>AWS Price List</h4><p>Public files with every AWS list price, free to download, no account needed.</p><p class="use"><b>Crucible:</b> downloads them weekly and prices each lab's Terraform plan itself.</p></div>
+          <div class="term"><h4>AWS Budgets</h4><p>A monthly amount that emails you when actual spend crosses a threshold. Alert-only budgets are free.</p><p class="use"><b>Crucible:</b> one on the lab account, a backstop that works even if Crucible doesn't.</p></div>
           <div class="term"><h4>CloudTrail</h4><p>The audit log of API calls: who created, changed or deleted what, and when. 90 days of history are free.</p><p class="use"><b>Crucible:</b> checks no lab created anything without its tag.</p></div>
           <div class="term"><h4>Terraform and state</h4><p>Terraform creates infrastructure from text files. It remembers what it made in a <i>state</i> file, so it can change or destroy exactly that later.</p><p class="use"><b>Crucible:</b> builds its own infrastructure, and runs every AWS lab, with Terraform.</p></div>
           <div class="term"><h4>k3s, Helm, Traefik</h4><p>k3s is a small Kubernetes that runs on one server; Helm installs apps into it; Traefik is the web front door that also fetches HTTPS certificates from Let's Encrypt.</p><p class="use"><b>Crucible:</b> runs as a Helm release on k3s, behind Traefik.</p></div>
@@ -339,6 +353,7 @@ tr.total td { font-weight: 700; }
             <tr><td>User pool</td><td>Cognito</td><td>Everyone's sign-in account. Email is the identity Crucible trusts.</td></tr>
             <tr><td>Login domain and branding</td><td>Cognito managed login</td><td>The hosted sign-in page people see.</td></tr>
             <tr><td>App client</td><td>Cognito</td><td>Lets Crucible use the pool to sign people in (OpenID Connect).</td></tr>
+            <tr><td>Secret key</td><td>SSM Parameter Store (SecureString)</td><td><code>/crucible/secret_key</code>, a random 48-character <code>CRUCIBLE_SECRET_KEY</code> that seals the tokens and deploy keys of connected repositories. It lives here so a teardown → up restores a database whose credentials the new server can still open. Terraform never changes it once made.</td></tr>
           </tbody>
         </table></div>
         <p class="prose">Its own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. Back it up somewhere safe.</p>
@@ -352,9 +367,9 @@ tr.total td { font-weight: 700; }
             <tr><td>Public address</td><td>Elastic IP</td><td>A fixed IP your domain points at.</td></tr>
             <tr><td>Firewall</td><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, redirect) and 443 (HTTPS). No SSH port at all.</td></tr>
             <tr><td>Network</td><td>Default VPC and subnet</td><td>Already exists in every account. No NAT gateway or load balancer, which keeps it cheap.</td></tr>
-            <tr><td>Server identity</td><td>IAM role <code>crucible-node</code> + instance profile</td><td>May read and write only its own parts of the data bucket, read its own settings in Parameter Store, use Session Manager, and (when labs are on) assume the two lab roles.</td></tr>
+            <tr><td>Server identity</td><td>IAM role <code>crucible-node</code> + instance profile</td><td>May read and write only its own parts of the data bucket, read its own settings in Parameter Store, use Session Manager, and (when labs are on) assume the lab, ops and plan roles.</td></tr>
             <tr><td>Metadata settings</td><td>EC2 IMDSv2, hop limit 2</td><td>The server's credentials need a token; the backup pod can still reach them.</td></tr>
-            <tr><td>Settings and secrets</td><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), Helm values, and an encrypted secret holding the database password, quiz secret, git webhook secret and sign-in client secret, all generated by Terraform.</td></tr>
+            <tr><td>Settings and secrets</td><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), Helm values, and encrypted parameters for the database password, quiz secret, git webhook secret and sign-in client secret (all made by Terraform), plus the optional <code>git_credentials</code> from your settings. Each deploy copies them into the Kubernetes Secret <code>crucible-secrets</code>, together with <code>CRUCIBLE_SECRET_KEY</code> from the persistent stack's <code>/crucible/secret_key</code>.</td></tr>
             <tr><td>Wake and sleep</td><td>EventBridge Scheduler + its IAM role</td><td>Starts the server at 07:30 and stops it at 19:30, Monday to Friday, in your time zone.</td></tr>
             <tr><td>DNS record</td><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if your domain is in Route 53.</td></tr>
           </tbody>
@@ -366,7 +381,10 @@ tr.total td { font-weight: 700; }
           <tbody>
             <tr><td>Lab role</td><td>IAM role <code>crucible-lab</code></td><td>The identity every AWS lab acts as. Sessions last at most an hour. Only Crucible's server may assume it, and only with a lab id tag.</td></tr>
             <tr><td>Permission boundary</td><td>IAM managed policy</td><td>The lab role's ceiling: EC2 and S3 only, small instance types, small volumes, allowed regions.</td></tr>
-            <tr><td>Ops role</td><td>IAM role <code>crucible-lab-ops</code></td><td>Read-only, for the reaper and the Ledger: list tagged resources and buckets, read Cost Explorer, look up CloudTrail.</td></tr>
+            <tr><td>Ops role</td><td>IAM role <code>crucible-lab-ops</code></td><td>Read-only, for the reaper and the Ledger: list tagged resources and buckets, look up CloudTrail, read lab state files (metering) and the billing export bucket. No Cost Explorer.</td></tr>
+            <tr><td>Plan role</td><td>IAM role <code>crucible-lab-plan</code> (inside the permission boundary)</td><td>Read-only, for estimates: <code>ec2:Describe*</code>, <code>s3:GetBucket*</code> and <code>s3:ListAllMyBuckets</code>, so a <code>terraform plan</code> can read data sources. Sessions last 15 minutes and have no state backend.</td></tr>
+            <tr><td>Billing export</td><td>S3 bucket <code>crucible-&lt;account&gt;-labexports</code> + Data Exports (CUR 2.0) <code>crucible-labs</code></td><td>The account's bill, daily, as gzip CSV under <code>cur/</code>, with resource tags. Free. The export itself lives in us-east-1.</td></tr>
+            <tr><td>Budget</td><td>AWS Budgets <code>crucible-labs-monthly</code></td><td>Alert-only: emails at 80% and 100% of the month's actual spend. Free. Only when labs-init gets <code>--budget-email</code>.</td></tr>
             <tr><td>Lab state bucket</td><td>S3 (versioned, encrypted, private, HTTPS only)</td><td>One Terraform state file per lab, <code>labs/&lt;id&gt;.tfstate</code>.</td></tr>
             <tr><td>Block Public Access</td><td>S3, account-wide</td><td>No bucket in the lab account can ever be made public.</td></tr>
           </tbody>
@@ -382,6 +400,7 @@ tr.total td { font-weight: 700; }
             <tr><td>Elastic IP</td><td>public IPv4 is billed by the hour</td><td class="num">~$3.70</td><td class="num">~$3.70</td></tr>
             <tr><td>S3</td><td>snapshots, releases, uploads</td><td class="num">&lt; $1</td><td class="num">&lt; $1</td></tr>
             <tr><td>Cognito, Scheduler, SSM</td><td>free tiers at this size</td><td class="num">~$0</td><td class="num">~$0</td></tr>
+            <tr><td>Lab account extras</td><td>billing export (only its files in S3), alert-only AWS Budget, Price List downloads; no Cost Explorer</td><td class="num">~$0</td><td class="num">~$0</td></tr>
             <tr class="total"><td>Total</td><td>plus whatever labs spend</td><td class="num">~$50/month</td><td class="num">~$130/month</td></tr>
           </tbody>
         </table></div>
@@ -393,17 +412,18 @@ tr.total td { font-weight: 700; }
         <h2>Deploy it</h2>
         <p class="lede">Everything runs from the repo root on your computer. You need an AWS account, a domain name you control, and
           a terminal logged in to AWS (<code>aws configure</code> or SSO) with administrator rights in that account.</p>
+        <p class="prose">For every command in order, with what to expect, how to check each step and what to do when one fails, follow the <a href="aws-deploy.html">AWS deployment walkthrough</a>.</p>
         <ol class="steps">
           <li><h4>Install the tools</h4>
-            <p>Terraform 1.10 or later, AWS CLI v2, Docker with buildx, Helm 3, Go 1.26. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
+            <p>Terraform 1.10 or later, AWS CLI v2 with its Session Manager plugin (for <code>aws ssm start-session</code>), Docker with buildx, Helm 3, Go 1.26. In a fresh clone, <code>make tools</code> installs the repo's pinned Go and Terraform into <code>.local/tools</code>. The region needs its default VPC: <code>aws ec2 describe-vpcs --filters Name=is-default,Values=true</code> shows it, and <code>aws ec2 create-default-vpc</code> makes one. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
           <li><h4>Create the persistent stack</h4>
-            <p>Makes the state and data buckets and the Cognito sign-in. Nothing it creates is ever deleted by Crucible.</p>
+            <p>Makes the state and data buckets, the Cognito sign-in and the secret key that seals repository credentials. Nothing it creates is ever deleted by Crucible.</p>
             <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div></li>
           <li><h4>Back up its state</h4>
             <p>This file is the only record of what <code>init</code> created. Copy it to a safe place, and again after every <code>init</code>.</p>
             <div class="cmd"><pre><code>aws s3 cp deploy/aws/persistent/terraform.tfstate s3://&lt;state_bucket&gt;/persistent.tfstate</code></pre></div></li>
           <li><h4>Fill in your settings</h4>
-            <p>Copy the example and edit it. <code>domain</code> must match the one you gave <code>init</code>. Set <code>bootstrap_admin</code> to your email: that person becomes the first admin.</p>
+            <p>Copy the example and edit it. <code>domain</code> must match the one you gave <code>init</code>. Set <code>bootstrap_admin</code> to your email: that person becomes the first admin. For cluster labs, set <code>toolbox_image</code> to the toolbox image's digest (<code>&lt;registry&gt;/crucible-toolbox@sha256:…</code>; a tag is refused); left empty, cluster labs stay off. For email, set <code>smtp_addr</code> (<code>host:port</code>), <code>smtp_from</code>, <code>smtp_username</code> and <code>smtp_password</code>; the password is kept as a SecureString, and every deploy copies them into the server, so they survive a rebuild.</p>
             <div class="cmd"><pre><code>cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars</code></pre></div></li>
           <li><h4>Build the server</h4>
             <p><code>up</code> runs Terraform on the main stack, waits for the server to come up, then deploys the current release. Right after the apply it prints <code>Point an A record &lt;domain&gt; → &lt;ip&gt;</code>: create that DNS record while it waits (skip this if you gave a Route 53 zone).</p>
@@ -412,9 +432,26 @@ tr.total td { font-weight: 700; }
             <p>The first visit can take about a minute while Let's Encrypt issues the certificate. If <code>up</code> ends with "isn't answering yet", DNS is still settling: wait and check.</p>
             <div class="cmd"><pre><code>crucible aws status</code></pre></div></li>
           <li><h4>Invite yourself and sign in</h4>
-            <p>Invite your <code>bootstrap_admin</code> email in Cognito (see <code>docs/runbooks/cognito.md</code>), sign in, and set up Crucible under <b>Administrator → Forge settings</b>: cost tiers, schedules, more admins. Then create teams and register trainings.</p></li>
-          <li><h4>Give the bot access to your training repos</h4>
-            <p>Set <code>git_credentials</code> (read, and push for content edits) and <code>git_bot_email</code> in your settings, and point your git host's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code> with the secret from Parameter Store.</p></li>
+            <p>Invite your <code>bootstrap_admin</code> email in Cognito (see <code>docs/runbooks/cognito.md</code>), sign in, and set up Crucible under <b>Administrator → Forge settings</b>: cost tiers, schedules, more admins. Then create teams, and connect repositories (next step) to register trainings from.</p></li>
+          <li><h4>Connect your training repos</h4>
+            <p>Under <b>Administrator → Repositories</b>, connect each repository once: over HTTPS, with an access token if it is private, or over SSH, with a
+              deploy key Crucible makes and shows you to add at your git host. Trainings are then registered from a connected repository. The token or key
+              needs <b>write</b> access if anyone will edit content in Crucible: submitting an edit pushes a <code>crucible/edit/…</code> branch, and an approved
+              one is merged into the tracked branch, so branch protection must let it push. Set <code>git_bot_email</code> (and optionally
+              <code>git_bot_name</code>) in your settings to an author your git host accepts: Crucible commits merges and starter trainings under that name.</p>
+            <p>Crucible seals tokens and keys with <code>CRUCIBLE_SECRET_KEY</code>. <code>init</code> made it as <code>/crucible/secret_key</code>, and every
+              deploy copies it into <code>crucible-secrets</code>. A server set up before that has none: the deploy prints a warning, and the Repositories page
+              says it cannot keep a credential. Re-run <code>crucible aws init</code> with the same region and domain, then <code>crucible aws deploy</code>
+              (the runbook has the restart that follows). Never change or lose the key: every stored token and deploy key becomes unreadable, and those
+              repositories have to be reconnected.</p>
+            <p>A repository connected with <i>No credential of its own</i> still reaches git through <code>git_credentials</code>, if you set it: lines for
+              git's credential store (<code>https://bot:TOKEN@git.example.com</code>), used for any <code>https://</code> repository that has no credential of its own,
+              so Crucible may push to it too. <b>Test connection</b> shows which: <i>Can write</i> or <i>Read only</i>. Over SSH, the host key Crucible pins
+              on first contact is kept in the database, so a restart or a rebuilt server still refuses a host whose key changed.</p>
+            <p>Then point each repository's push webhook at <code>https://&lt;domain&gt;/api/git/hook</code> with the <code>git_hook_secret</code> parameter:
+              in GitHub's <b>Secret</b> field (Crucible checks the <code>X-Hub-Signature-256</code> signature), GitLab's <b>Secret token</b> field,
+              or, on any other host, a custom header <code>X-Crucible-Secret</code>. A push makes Crucible fetch every training at once. The secret is regenerated on every teardown → up,
+              so update the webhooks afterwards. Without a webhook, Crucible still fetches every minute.</p></li>
         </ol>
 
         <h3>What happens when the server boots</h3>
@@ -448,7 +485,7 @@ tr.total td { font-weight: 700; }
             <tr><td>See if it is up</td><td><code>crucible aws status</code></td><td>Server state and <code>healthz</code>.</td></tr>
             <tr><td>Get a shell on the server</td><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>Session Manager: no SSH key, no open port.</td></tr>
             <tr><td>Change settings</td><td>edit <code>crucible.tfvars</code>, then <code>crucible aws up</code></td><td>Snapshots first, applies, redeploys.</td></tr>
-            <tr><td>Remove the server</td><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito and the labs stack stay.</td></tr>
+            <tr><td>Remove the server</td><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito, the secret key and the labs stack stay.</td></tr>
             <tr><td>Bring it back</td><td><code>crucible aws up</code></td><td>A new server restores the newest snapshot. The Elastic IP changes: update DNS.</td></tr>
           </tbody>
         </table></div>
@@ -464,7 +501,8 @@ tr.total td { font-weight: 700; }
         <div class="two">
           <div class="card"><h4>lab.yaml (Forge 401, "Cloud Heat")</h4>
             <div class="cmd"><pre><code>id: cloud-heat
-runtime: aws
+runtime: terraform
+cloud: aws
 ttl: 1h
 idle_timeout: 30m
 terminals:
@@ -476,7 +514,9 @@ tasks:
     points: 2
 aws:
   region: eu-west-1
-  max_hourly_usd: 0.05</code></pre></div></div>
+  max_hourly_usd: 0.05
+  usage:
+    aws_s3_bucket.forge: { storage_gb: 1 }</code></pre></div></div>
           <div class="card"><h4>terraform/main.tf</h4>
             <div class="cmd"><pre><code># Crucible adds the provider (region,
 # crucible:* default tags) and the state
@@ -490,15 +530,16 @@ resource "aws_s3_bucket" "forge" {
 
         <h3>One lab, from request to bill</h3>
         <ol class="steps">
-          <li><h4>The trainee asks</h4><p>Crucible prices the module with infracost (an hourly price from the Terraform) × the lab's time limit, and refuses a lab above its own <code>max_hourly_usd</code> or in a region you haven't allowed.</p></li>
-          <li><h4>A person approves</h4><p>AWS labs are never approved automatically. The price decides who: program approver, team leader, or admin. A request that would pass a budget cap needs an admin.</p></li>
+          <li><h4>Crucible prices it</h4><p>Once per content version, a plan pod runs a read-only <code>terraform plan</code> with a 15-minute session of the plan role. Crucible prices each resource the plan creates from the AWS list prices it downloads weekly, plus the usage the lab states. The estimate is that hourly price × the lab's time limit. Crucible refuses a lab above its own <code>max_hourly_usd</code>, in a region you haven't allowed, with a resource it can't price, or when its price data is missing or over 30 days old. The lab page shows the breakdown, resource by resource.</p></li>
+          <li><h4>The trainee asks</h4><p>The request shows the estimate.</p></li>
+          <li><h4>A person approves</h4><p>AWS labs are never approved automatically. The price decides who: the training's admins, the leaders of the team that owns it, or a Crucible admin. A request that would pass a budget cap needs an admin.</p></li>
           <li><h4>Crucible gets credentials for this lab</h4><p>The server's role calls STS <code>AssumeRole</code> on <code>crucible-lab</code>, with the session tag <code>crucible:lab-id=&lt;id&gt;</code>. AWS returns credentials valid for one hour. Crucible writes them into the lab's Kubernetes namespace and renews them every hour while the lab runs.</p></li>
-          <li><h4>Terraform builds the lab</h4><p>A <code>tf-apply</code> pod unpacks the module, runs <code>terraform init</code> (state in the lab state bucket) and <code>terraform apply</code>. Every resource gets the lab's tags; IAM rejects any that would not.</p></li>
+          <li><h4>Terraform builds the lab</h4><p>A <code>tf-apply</code> pod unpacks the module, runs <code>terraform init</code> (state in the lab state bucket) and <code>terraform apply</code>. Every resource gets the lab's tags; IAM rejects any that would not. Then Crucible reads the lab's state with the ops role and meters what it built: each resource at its list price, for as long as it exists.</p></li>
           <li><h4>The trainee works</h4><p>A workspace pod with the AWS CLI, Terraform and kubectl backs the browser terminals. Check scripts and setup scripts run there too, with the same lab credentials. The pods are blocked from the server's metadata service.</p></li>
           <li><h4>It ends and is destroyed</h4><p>At the time limit, after idling, when the schedule closes, at a budget cap, on <b>End lab</b>, or with the kill switch: a pod runs <code>terraform destroy</code>.</p></li>
           <li><h4>The sweep catches leftovers</h4><p>Anything else carrying the lab's tag (say, a volume the trainee made by hand) is found with the Tagging API and deleted with the lab's credentials, including instances with termination protection and untagged buckets named <code>crucible-lab-&lt;id&gt;…</code>.</p></li>
           <li><h4>The reaper checks every hour</h4><p>Using the read-only ops role, it deletes leftovers of labs that ended over an hour ago, and reports to admins anything tagged with a lab it doesn't know, or created untagged (seen in CloudTrail).</p></li>
-          <li><h4>The real bill arrives</h4><p>Every six hours Crucible reads Cost Explorer grouped by <code>crucible:lab-id</code>. The Ledger shows the estimate first, then the real cost once AWS settles it, usually after 24–48 hours.</p></li>
+          <li><h4>The real bill arrives</h4><p>AWS writes the account's bill into the export bucket every day. Every six hours Crucible reads it with the ops role and adds it up per <code>crucible:lab-id</code>. The Ledger shows the estimate, then the metered cost while the lab runs, then the billed cost, which replaces the metered one 48 hours after the lab ends. The AWS Budget emails you if the month's spend passes its amount, whatever Crucible does.</p></li>
         </ol>
       </section>
 
@@ -585,21 +626,18 @@ resource "aws_s3_bucket" "forge" {
       <!-- ───────────────── lab setup ───────────────── -->
       <section id="lab-setup">
         <h2>Turn AWS labs on</h2>
-        <p class="lede">Do this after Crucible itself is deployed. Labs stay off until all four steps are done.</p>
+        <p class="lede">Do this after Crucible itself is deployed. Labs stay off until steps 1 and 3 are done; billed costs need step 2 too. Nothing here costs anything beyond the labs themselves.</p>
         <ol class="steps">
           <li><h4>Create the labs stack in the lab account</h4>
-            <p>With credentials for the lab account. Add <code>--crucible-account &lt;id&gt;</code> when it is not Crucible's own account. Back up <code>deploy/aws/labs/terraform.tfstate</code> afterwards.</p>
-            <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1</code></pre></div></li>
-          <li><h4>Turn on cost data</h4>
-            <p>In the payer (management) account: Billing → Cost allocation tags → activate <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. They appear after the first lab has run, and take up to 24 hours. Open Cost Explorer once in the lab account. It charges $0.01 per API call; Crucible makes 4–8 a day.</p></li>
-          <li><h4>Add an infracost key</h4>
-            <p>Free. Put it in <code>crucible.tfvars</code> as <code>infracost_api_key</code>. Without it, AWS labs can't be priced, so they can't be requested.</p>
-            <div class="cmd"><pre><code>infracost auth login</code></pre></div></li>
+            <p>With credentials for the lab account. Add <code>--crucible-account &lt;id&gt;</code> when it is not Crucible's own account. It creates the lab, ops and plan roles, the state bucket, the billing export and its bucket, and (with <code>--budget-email</code>) the AWS Budget: $100 a month unless you pass <code>--budget-usd</code>. Running it again without the budget flags keeps the current budget. Labs use <code>--region</code> alone unless you pass <code>--allowed-regions eu-west-1,eu-central-1</code> (it must include <code>--region</code>); a re-run without it keeps the list. Back up <code>deploy/aws/labs/terraform.tfstate</code> afterwards.</p>
+            <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1 --budget-usd 200 --budget-email ops@example.com</code></pre></div></li>
+          <li><h4>Activate the lab tag for billing</h4>
+            <p>The one step by hand, and free. Billing → Cost allocation tags (in the payer account if the lab account is in an organization) → activate <code>crucible:lab-id</code>. It appears only after a tagged resource has existed, which can take up to 24 hours. The first export file also arrives within about 24 hours; until both are there, the Ledger shows metered costs only.</p></li>
           <li><h4>Wire it in</h4>
-            <p>Run on the computer that holds the labs state. <code>up</code> reads the labs stack's outputs (role names, state bucket, allowed regions) and switches AWS labs on.</p>
+            <p>Run on the computer that holds the labs state. <code>up</code> reads the labs stack's outputs (roles, state bucket, export, allowed regions) and switches AWS labs on. Upgrading from a version that used infracost? Run labs-init again first: <code>up</code> refuses AWS labs without the plan role and the export.</p>
             <div class="cmd"><pre><code>crucible aws up</code></pre></div></li>
         </ol>
-        <div class="note warn"><p><strong>Then test it by hand.</strong>Nothing in the automated suites touches real AWS. <code>docs/runbooks/aws.md</code> lists every check: the lab identity, both tasks passing, a list of calls that must be refused, the sweep, the reaper, credential renewal after an hour, CloudTrail, tags on root volumes and the real bill. <code>docs/test-guide.html</code> has the same steps as a checklist.</p></div>
+        <div class="note warn"><p><strong>Then test it by hand.</strong>Nothing in the automated suites touches real AWS. <code>docs/runbooks/aws.md</code> lists every check: the lab identity, both tasks passing, a list of calls that must be refused, the sweep, the reaper, credential renewal after an hour, CloudTrail, tags on root volumes, the export arriving, and the metered and billed costs. <code>docs/test-guide.html</code> has the same steps as a checklist.</p></div>
       </section>
 
       <!-- ───────────────── limits ───────────────── -->

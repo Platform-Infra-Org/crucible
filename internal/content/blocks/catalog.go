@@ -278,7 +278,7 @@ var Catalog = []Block{
 		Fields:  []Field{moduleTarget, doc("Lab.id", "id", "id", true), doc("AWSConfig.region", "region", "string", true), doc("AWSConfig.max_hourly_usd", "max_hourly_usd", "number", true)},
 		Sample:  map[string]string{"module": "02-plain", "id": "plain-aws", "region": "eu-west-1", "max_hourly_usd": "0.05"},
 		Insert: Insert{GitOnly: true, Open: "modules/{{.module}}/lab/lab.yaml", Files: map[string]string{
-			"modules/{{.module}}/lab/lab.yaml": "id: {{q .id}}\nruntime: aws\nttl: 1h\nidle_timeout: 30m\nterminals:\n  - {name: workspace, service: workspace}\ntasks:\n" +
+			"modules/{{.module}}/lab/lab.yaml": "id: {{q .id}}\nruntime: terraform\ncloud: aws\nttl: 1h\nidle_timeout: 30m\nterminals:\n  - {name: workspace, service: workspace}\ntasks:\n" +
 				"  - id: t1-bucket\n    instructions: tasks/01-bucket.md\n    check: {script: checks/01-bucket.sh, run_in: workspace, timeout: 60s}\naws:\n  region: {{q .region}}\n  max_hourly_usd: {{.max_hourly_usd}}\n",
 			"modules/{{.module}}/lab/terraform/main.tf":   "# The lab's own bucket. Crucible adds the provider and the state backend.\nresource \"aws_s3_bucket\" \"forge\" {\n  bucket        = \"crucible-lab-${var.crucible_lab_id}\"\n  force_destroy = true\n}\n",
 			"modules/{{.module}}/lab/tasks/01-bucket.md":  "# Fill the bucket\n\nPut a file named forged.txt in your lab's bucket.\n",

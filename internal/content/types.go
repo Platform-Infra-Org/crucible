@@ -66,7 +66,8 @@ type Question struct {
 
 type Lab struct {
 	ID          string         `yaml:"id"`
-	Runtime     string         `yaml:"runtime"` // local | cluster | aws
+	Runtime     string         `yaml:"runtime"` // local | cluster | terraform | aws (aws = terraform on aws: write runtime: terraform with cloud: aws, or runtime: aws); Load turns terraform into its cloud
+	Cloud       string         `yaml:"cloud"`   // runtime terraform: the cloud it runs on (aws)
 	TTL         yamlx.Duration `yaml:"ttl"`     // 0 = use the program default
 	IdleTimeout yamlx.Duration `yaml:"idle_timeout"`
 	IdleWarning yamlx.Duration `yaml:"idle_warning"`
@@ -82,8 +83,10 @@ type Lab struct {
 }
 
 type AWSConfig struct {
-	Region       string  `yaml:"region"`
-	MaxHourlyUSD float64 `yaml:"max_hourly_usd"`
+	Region       string                        `yaml:"region"`
+	MaxHourlyUSD float64                       `yaml:"max_hourly_usd"`
+	Prices       map[string]float64            `yaml:"prices"` // resource type → USD per hour, for types Crucible can't price
+	Usage        map[string]map[string]float64 `yaml:"usage"`  // resource address → usage attribute → monthly amount
 }
 
 type Terminal struct {

@@ -57,8 +57,11 @@ need 'CRUCIBLE_BLOB_REGION, value: "eu-west-1"'
 # AWS labs (M6): off by default; when on, Crucible may write the credentials secret but never read any secret.
 if grep -q 'CRUCIBLE_AWS_LABS' <<<"$out"; then echo "aws labs must be opt-in"; exit 1; fi
 aws="$base --set awsLabs.enabled=true --set awsLabs.labRoleArn=arn:aws:iam::1:role/l --set awsLabs.opsRoleArn=arn:aws:iam::1:role/o --set awsLabs.stateBucket=sb"
+aws="$aws --set awsLabs.planRoleArn=arn:aws:iam::1:role/p --set awsLabs.exportBucket=eb --set awsLabs.exportName=crucible-labs"
 awsout=$(helm template t "$chart" $aws)
-for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_ARN' 'name: CRUCIBLE_AWS_STATE_BUCKET' 'key: INFRACOST_API_KEY, optional: true' 'name: AWS_REGION'; do
+for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_ARN' 'name: CRUCIBLE_AWS_STATE_BUCKET' 'name: AWS_REGION' \
+  'name: CRUCIBLE_AWS_PLAN_ROLE_ARN, value: "arn:aws:iam::1:role/p"' 'name: CRUCIBLE_AWS_EXPORT_BUCKET, value: "eb"' \
+  'name: CRUCIBLE_AWS_EXPORT_PREFIX, value: "cur"' 'name: CRUCIBLE_AWS_EXPORT_NAME, value: "crucible-labs"'; do
   grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
 done
 # fixwave I1: the runner pod holds the lab credentials, so its images are pinned by digest, never a re-pushable tag.
@@ -67,16 +70,47 @@ for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
 done
 if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
 if grep -q CRUCIBLE_GIT_ALLOW_FILE <<<"$out$boot$awsout"; then echo "file git transport must never be rendered"; exit 1; fi
-if grep -q 'CRUCIBLE_INFRACOST' <<<"$awsout"; then echo "real aws labs must not turn infracost off"; exit 1; fi
-dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
-for want in 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' 'name: CRUCIBLE_INFRACOST, value: "off"'; do
-  grep -q -- "$want" <<<"$dry" || { echo "missing in dry run: $want"; exit 1; }
+for k in planRoleArn exportBucket exportName; do   # real labs: no estimate without the plan role, no billed spend without the export
+  if helm template t "$chart" $(sed "s/--set awsLabs.$k=[^ ]*//" <<<"$aws") >/dev/null 2>&1; then echo "aws labs need awsLabs.$k"; exit 1; fi
 done
+dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
+grep -q -- 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' <<<"$dry" || { echo "missing in dry run: CRUCIBLE_AWS_LABS=dryrun"; exit 1; }
 awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)
-grep -A1 '^    resources: \[secrets\]' <<<"$awsrbac" | grep -q 'verbs: \[create, update\]' || { echo "secrets: create and update only"; exit 1; }
-if grep -A1 'resources: \[secrets\]' <<<"$awsrbac" | grep -qE '\b(get|list|watch)\b'; then echo "crucible must never read secrets"; exit 1; fi
+docof() { sed -n "/^kind: $1\$/,/^---\$/p" <<<"$awsrbac"; }
+cr=$(docof ClusterRole)
+grep -A1 '^    resources: \[secrets\]' <<<"$cr" | grep -q 'verbs: \[create, update\]' || { echo "secrets: create and update only"; exit 1; }
+if grep -A1 'secrets' <<<"$cr" | grep -qE '\b(get|list|watch)\b'; then echo "crucible must never read secrets cluster-wide"; exit 1; fi
+if grep -q 'pods/log' <<<"$cr"; then echo "pods/log only in crucible-estimates, never cluster-wide"; exit 1; fi
+if grep -qE '"\*"|- \*$|\[\*\]|rolebindings|clusterroles|escalate|impersonate' <<<"$awsrbac"; then echo "aws labs: no wildcards, no RBAC management"; exit 1; fi
 grep -q 'operations: \[CREATE, UPDATE\], resources: \[secrets\]' <<<"$awsrbac" || { echo "the admission policy must confine secret writes to lab namespaces"; exit 1; }
-grep -q 'operations: \[DELETE\], resources: \[pods\]' <<<"$awsrbac" || { echo "the admission policy must confine pod deletes to lab namespaces"; exit 1; }
+grep -q 'operations: \[DELETE\], resources: \[pods, secrets, configmaps\]' <<<"$awsrbac" || { echo "the admission policy must confine deletes to lab namespaces and crucible-estimates"; exit 1; }
+# Estimates (internal/labs aws.go Plan): plan pods run in crucible-estimates, which Helm creates labelled like the Go
+# code's estimatesObjects (crucible.io/lab=estimates, Pod Security baseline); a namespaced Role grants what a plan
+# run needs there and nowhere else, and the admission policy allows exactly that namespace besides lab-*.
+ns=$(docof Namespace)
+for want in 'name: crucible-estimates' 'crucible.io/lab: estimates' 'pod-security.kubernetes.io/enforce: baseline'; do
+  grep -q -- "$want" <<<"$ns" || { echo "estimates namespace: missing $want"; exit 1; }
+done
+role=$(docof Role)
+for want in 'namespace: crucible-estimates' 'resources: \[pods/log\]' 'resources: \[networkpolicies\]'; do
+  grep -q -- "$want" <<<"$role" || { echo "estimates Role: missing $want"; exit 1; }
+done
+# least privilege: what aws.go Plan and reapPlans call. Pods are created, polled (get), listed and deleted; a run's
+# credentials secret and module config map are only created, listed and deleted, never read back (no get or watch).
+grep -A1 'resources: \[pods\]$' <<<"$role" | grep -q 'verbs: \[create, get, list, delete\]' || { echo "estimates Role: pods create, get, list, delete"; exit 1; }
+grep -A1 'resources: \[secrets, configmaps\]$' <<<"$role" | grep -q 'verbs: \[create, list, delete\]' || { echo "estimates Role: secrets and config maps create, list, delete only"; exit 1; }
+if grep -E 'secrets|configmaps' -A1 <<<"$role" | grep -qE '\b(get|watch)\b'; then echo "estimates Role: never get or watch secrets or config maps"; exit 1; fi
+grep -A2 'resources: \[pods/log\]' <<<"$role" | grep -q 'verbs: \[get\]' || { echo "estimates Role: pods/log get only"; exit 1; }
+grep -A2 'resources: \[networkpolicies\]' <<<"$role" | grep -q 'verbs: \[create\]' || { echo "estimates Role: networkpolicies create only"; exit 1; }
+rb=$(docof RoleBinding)
+for want in 'namespace: crucible-estimates' 'kind: Role, name: crucible-estimates' 'kind: ServiceAccount, name: crucible, namespace: default'; do
+  grep -q -- "$want" <<<"$rb" || { echo "estimates RoleBinding: missing $want"; exit 1; }
+done
+vap=$(docof ValidatingAdmissionPolicy)
+grep -q "object.metadata.name == 'crucible-estimates'" <<<"$vap" || { echo "admission: crucible-api may create crucible-estimates"; exit 1; }
+grep -q "namespaceObject.metadata.name.startsWith('lab-') || namespaceObject.metadata.name == 'crucible-estimates'" <<<"$vap" ||
+  { echo "admission: writes only in lab-* and crucible-estimates"; exit 1; }
+if grep -qE "crucible-estimates|kind: Role$|kind: Namespace$" <<<"$rbac"; then echo "estimates RBAC only with aws labs"; exit 1; fi
 if helm template t "$chart" $aws --set clusterLabs.enabled=false >/dev/null 2>&1; then echo "aws labs need cluster labs"; exit 1; fi
 if helm template t "$chart" $base --set awsLabs.enabled=true >/dev/null 2>&1; then echo "aws labs need the lab account's role ARNs"; exit 1; fi
 echo "helm chart OK"

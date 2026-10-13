@@ -102,6 +102,16 @@ func (c Checker) oversees(actor, subject string) bool {
 	return r == "leader" || r == "senior"
 }
 
+// MayEdit: Crucible admins and the training's editors and admins, participating or not (spec 2026-10-11): they read
+// its raw files, answer keys and errors included.
+func (c Checker) MayEdit(email, training string) bool {
+	if c.IsAdmin(email) {
+		return true
+	}
+	_, pr := c.P.Owner(training)
+	return pr != nil && slices.Contains(pr.Editors, strings.ToLower(email))
+}
+
 // CanCreateTraining: admins, and every leader, senior and junior (their team owns what they register).
 func (c Checker) CanCreateTraining(email string) bool {
 	if c.IsAdmin(email) {

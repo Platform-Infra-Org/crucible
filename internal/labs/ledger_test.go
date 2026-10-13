@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"crucible/internal/awscloud"
 	"crucible/internal/jobs"
+	"crucible/internal/pricing"
 )
 
 func TestLedgerScopes(t *testing.T) {
@@ -46,7 +48,7 @@ func TestLedgerNumbersAndStaleness(t *testing.T) {
 	now := f.clk.Now()
 	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // est $2, will settle at $0.40
 	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
-	f.spent(t, "aaaaaaaaaaa2", "forge-101", 1) // est $1, Cost Explorer never reported it
+	f.spent(t, "aaaaaaaaaaa2", "forge-101", 1) // est $1, the billing export never reported it
 	run := &Instance{ID: "aaaaaaaaaaa3", UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "02-first-lab", SHA: "abc",
 		Runtime: "local", State: Ready, CreatedAt: now, LastActivityAt: now, TTL: 2 * time.Hour, IdleTimeout: 30 * time.Minute,
 		Tier: "approver", HourlyUSD: 1, EstimateUSD: 2}
@@ -80,7 +82,7 @@ func TestLedgerNumbersAndStaleness(t *testing.T) {
 	}
 	today := l.Daily[len(l.Daily)-1]
 	if today.Day != now.Format(time.DateOnly) || !closeTo(today.ActualUSD, 0.4) || len(l.Daily) != now.Day() {
-		t.Fatalf("one entry per day this month, actuals on Cost Explorer's day: %+v", l.Daily)
+		t.Fatalf("one entry per day this month, actuals on the billed day: %+v", l.Daily)
 	}
 	if _, err := f.s.DB.Exec(ctx, `UPDATE aws_ops SET ingest_ok_at = $1`, now.Add(-40*time.Hour)); err != nil {
 		t.Fatal(err)
@@ -138,7 +140,7 @@ func TestLedgerShowsFailedAWSLabsWithActualsAndDestroyingOnes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("bbbbbbbbbbb1", Failed)     // apply failed after 50 minutes; Cost Explorer reported it
+	add("bbbbbbbbbbb1", Failed)     // apply failed after 50 minutes; the billing export reported it
 	add("bbbbbbbbbbb2", Failed)     // failed, nothing reported: nothing to show
 	add("bbbbbbbbbbb3", Destroying) // failed apply, terraform destroy running
 	if _, err := f.s.DB.Exec(ctx, `INSERT INTO cost_actuals (lab_id, day, usd, updated_at) VALUES ('bbbbbbbbbbb1', $1::timestamptz::date, 0.3, $1::timestamptz)`, now); err != nil {
@@ -179,5 +181,57 @@ func TestLedgerLeavesOutClusterLabs(t *testing.T) {
 	l, err := f.s.Ledger(ctx, f.admin)
 	if err != nil || len(l.Running) != 0 || len(l.Labs) != 0 {
 		t.Fatalf("running %+v labs %+v %v", l.Running, l.Labs, err)
+	}
+}
+
+// The Ledger shows each lab's metered spend (its Terraform state priced at list price) beside the estimate and the
+// bill, and how old the price data is: stale to everyone, why only to admins.
+func TestLedgerShowsMeteredAndPriceAge(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{}
+	f.s.Prices = &pricing.Store{DB: f.s.DB, Now: f.clk.Now}
+	now := f.clk.Now()
+	f.spent(t, "ddddddddddd1", "forge-101", 2) // ran from 2 h ago to 1 h ago
+	f.spent(t, "ddddddddddd2", "forge-101", 1) // never metered
+	if _, err := f.s.DB.Exec(ctx, `INSERT INTO lab_resources VALUES ('ddddddddddd1', 'aws_instance.web', 'aws_instance', 0.5, 0.25, $1, $2)`,
+		now.Add(-2*time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	refreshed := now.Add(-3 * 24 * time.Hour)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, source = 'aws', error = '', error_at = NULL`, refreshed); err != nil {
+		t.Fatal(err)
+	}
+	l, err := f.s.Ledger(ctx, f.leader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metered := map[string]*float64{}
+	for _, x := range l.Labs {
+		metered[x.ID] = x.MeteredUSD
+	}
+	if m := metered["ddddddddddd1"]; m == nil || !closeTo(*m, 0.75) || metered["ddddddddddd2"] != nil {
+		t.Fatalf("metered: one hour of $0.50 + $0.25 usage; nothing when never metered: %+v", l.Labs)
+	}
+	if l.PricesAsOf == nil || !l.PricesAsOf.Equal(refreshed) || l.PricesStale || l.PricesError != "" {
+		t.Fatalf("fresh prices from three days ago: %+v", l)
+	}
+
+	if _, err := f.s.DB.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, error = 'pricing.us-east-1.amazonaws.com: 503', error_at = $2`,
+		now.Add(-31*24*time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := f.s.Ledger(ctx, f.leader); err != nil || !l.PricesStale || l.PricesError != "" || l.PricesAsOf == nil {
+		t.Fatalf("31 days old: stale to everyone, but the error is for admins: %+v", l)
+	}
+	if a, err := f.s.Ledger(ctx, f.admin); err != nil || !a.PricesStale || !strings.Contains(a.PricesError, "503") {
+		t.Fatalf("admins see why the refresh failed: %+v", a)
+	}
+
+	if _, err := f.s.DB.Exec(ctx, `UPDATE price_refresh SET ok_at = $1, error = '', error_at = NULL, source = 'fixture'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := f.s.Ledger(ctx, f.admin); err != nil || !a.PricesStale || a.PricesAsOf != nil || a.PricesError == "" {
+		t.Fatalf("a dry run's fixture prices never pass for real ones: stale, no date, and admins are told why: %+v", a)
 	}
 }

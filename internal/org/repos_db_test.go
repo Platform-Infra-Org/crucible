@@ -2,10 +2,20 @@ package org
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"golang.org/x/crypto/ssh"
+
 	"crucible/internal/db/dbtest"
+	"crucible/internal/gitsync"
 	"crucible/internal/secrets"
 )
 
@@ -52,7 +62,7 @@ func TestConnectOverSSHKeepsThePrivateHalfSealed(t *testing.T) {
 	}
 
 	// git is given an alias, so another repository on the same host can use a different key.
-	url, err := s.fetchURL(id, "git@github.com:org/trainings.git", "ssh", "", sealed)
+	url, err := s.fetchURL(ctx, id, "git@github.com:org/trainings.git", "ssh", "", sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,4 +129,138 @@ func itoa(n int64) string {
 		b = append([]byte{byte('0' + n%10)}, b...)
 	}
 	return string(b)
+}
+
+// fakeSSHHost answers SSH on a local port with whichever host key it holds at the time, so a test can stand in for a
+// host whose key changes. It authenticates anyone and opens no channel: reaching the key exchange is all that matters.
+type fakeSSHHost struct {
+	addr string
+	key  atomic.Pointer[ssh.Signer]
+}
+
+func newFakeSSHHost(t *testing.T) *fakeSSHHost {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	h := &fakeSSHHost{addr: l.Addr().String()}
+	h.rotate(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			cfg := &ssh.ServerConfig{NoClientAuth: true}
+			cfg.AddHostKey(*h.key.Load())
+			go func() {
+				defer c.Close()
+				_, chans, reqs, err := ssh.NewServerConn(c, cfg)
+				if err != nil {
+					return
+				}
+				go ssh.DiscardRequests(reqs)
+				for ch := range chans {
+					_ = ch.Reject(ssh.Prohibited, "no git here")
+				}
+			}()
+		}
+	}()
+	return h
+}
+
+func (h *fakeSSHHost) rotate(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.key.Store(&signer)
+}
+
+// The host key ssh pins on first contact is kept in Postgres, not only in the data directory a restart may wipe: a
+// wiped directory gets it back before ssh runs, so a host that changed its key meanwhile is still refused rather than
+// trusted afresh.
+func TestPinnedHostKeySurvivesAWipedDataDir(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh client")
+	}
+	ctx := context.Background()
+	s := repoStore(t)
+	dir := string(s.SSHDir)
+	cfg, err := s.UseSSHDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_SSH_COMMAND", "ssh -F "+cfg)
+	host := newFakeSSHHost(t)
+	id, err := s.ConnectRepo(ctx, "admin@x", 0, RepoBody{URL: "ssh://git@" + host.addr + "/org/trainings.git", Auth: "ssh"}, s.Secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastError := func() string {
+		var e string
+		if err := s.DB.QueryRow(ctx, `SELECT last_error FROM repositories WHERE id = $1`, id).Scan(&e); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+
+	s.Check(ctx, id) // first contact: ssh pins the host's key
+	pinned, err := os.ReadFile(filepath.Join(dir, "known_hosts"))
+	if err != nil || !strings.Contains(string(pinned), "ssh-ed25519") {
+		t.Fatalf("ssh pinned nothing on first contact (%v): %s", err, lastError())
+	}
+	s.Check(ctx, id) // the next use saves the pin
+
+	// A restart on an emptyDir: the data directory is gone. Meanwhile the host presents a different key.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UseSSHDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	host.rotate(t)
+	s.Check(ctx, id)
+	if e := lastError(); !strings.Contains(e, "Host key verification failed") {
+		t.Fatalf("a changed host key after a restart was not refused; last error: %q", e)
+	}
+	restored, err := os.ReadFile(filepath.Join(dir, "known_hosts"))
+	if err != nil || string(restored) != string(pinned) {
+		t.Fatalf("known_hosts was not restored as pinned (%v):\n got %q\nwant %q", err, restored, pinned)
+	}
+}
+
+// Test connection says whether Crucible can write as well as read, so an admin sees what the instance's own git
+// credentials allow even on a repository connected with none.
+func TestCheckRecordsWhetherItCanWrite(t *testing.T) {
+	gitsync.AllowFileTransport = true
+	t.Cleanup(func() { gitsync.AllowFileTransport = false })
+	ctx := context.Background()
+	s := repoStore(t)
+	remote := filepath.Join(t.TempDir(), "r.git")
+	if out, err := exec.Command("git", "init", "-q", "--bare", remote).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	var id int64
+	if err := s.DB.QueryRow(ctx, `INSERT INTO repositories (url) VALUES ($1), ($2) RETURNING id`, remote, remote+"-missing").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	s.Check(ctx, id)
+	s.Check(ctx, id+1)
+	repos, err := s.Repos(ctx)
+	if err != nil || len(repos) != 2 {
+		t.Fatalf("repos: %v %d", err, len(repos))
+	}
+	if r := repos[0]; r.Status != "ok" || r.CanWrite == nil || !*r.CanWrite {
+		t.Fatalf("a writable repository: status %q, can_write %v, error %q", r.Status, r.CanWrite, r.LastError)
+	}
+	if r := repos[1]; r.Status != "failed" || r.CanWrite != nil {
+		t.Fatalf("an unreachable repository must say nothing about writing: status %q, can_write %v", r.Status, r.CanWrite)
+	}
 }

@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -64,8 +66,13 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	}
 	out := map[string]string{}
 	for k, v := range parsed {
-		if v.Value != nil {
-			out[k] = fmt.Sprint(v.Value)
+		switch x := v.Value.(type) {
+		case nil:
+		case string:
+			out[k] = x
+		default: // numbers and lists as JSON, which is also HCL: they can be passed back as -var
+			b, _ := json.Marshal(x)
+			out[k] = string(b)
 		}
 	}
 	need, first := map[string]string{"persistent": "state_bucket", "main": "instance_id", "labs": "lab_role_arn"}[stack], map[string]string{"persistent": "init", "main": "up", "labs": "labs-init"}[stack]
@@ -136,9 +143,16 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 	return o.Deploy(ctx)
 }
 
-// LabsInit creates the shared lab account stack (roles, permission boundary, state bucket). Run it with credentials
-// for the lab account; pass the Crucible account when that is a different one.
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error {
+// LabsInit creates the shared lab account stack (roles, permission boundary, state bucket, billing export). Run it
+// with credentials for the lab account; pass the Crucible account when that is a different one. budgetUSD (> 0) and
+// budgetEmails set the account's AWS Budget alert; each one left unset keeps the stack's current value (its outputs),
+// so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
+// allowedRegions (the regions labs may use) must include region; left empty it keeps the stack's current list, and a
+// new stack allows region alone.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string) error {
+	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
+		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
+	}
 	d := o.dir("labs")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -146,6 +160,30 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error
 	args := []string{"-chdir=" + d, "apply", "-var", "region=" + region}
 	if crucibleAccount != "" {
 		args = append(args, "-var", "crucible_account_id="+crucibleAccount)
+	}
+	cur, _ := o.outputs(ctx, "labs") // nil on a new stack
+	if budgetUSD > 0 {
+		args = append(args, "-var", "budget_monthly_usd="+strconv.FormatFloat(budgetUSD, 'f', -1, 64))
+	} else if v := cur["budget_monthly_usd"]; v != "" {
+		args = append(args, "-var", "budget_monthly_usd="+v)
+	}
+	if len(budgetEmails) > 0 {
+		b, _ := json.Marshal(budgetEmails) // a JSON list is an HCL list
+		args = append(args, "-var", "budget_emails="+string(b))
+	} else if v := cur["budget_emails"]; v != "" && v != "[]" {
+		args = append(args, "-var", "budget_emails="+v)
+	}
+	if len(allowedRegions) == 0 { // keep the stack's list; a single region is always its --region, the default
+		if v := cur["regions"]; strings.Contains(v, ",") {
+			allowedRegions = strings.Split(v, ",")
+			if !slices.Contains(allowedRegions, region) {
+				return fmt.Errorf("the lab stack allows %s, which lacks --region %s: pass --allowed-regions with the list you want", v, region)
+			}
+		}
+	}
+	if len(allowedRegions) > 0 {
+		b, _ := json.Marshal(allowedRegions) // a JSON list is an HCL list
+		args = append(args, "-var", "allowed_regions="+string(b))
 	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {
@@ -160,7 +198,9 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string) error
 // labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.
 func labVars(l map[string]string) []string {
 	return []string{"-var", "lab_role_arn=" + l["lab_role_arn"], "-var", "lab_ops_role_arn=" + l["ops_role_arn"],
-		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"]}
+		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"],
+		"-var", "lab_plan_role_arn=" + l["plan_role_arn"], "-var", "lab_export_bucket=" + l["export_bucket"],
+		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").

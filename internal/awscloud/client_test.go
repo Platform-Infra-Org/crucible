@@ -1,13 +1,17 @@
 package awscloud
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -18,8 +22,8 @@ import (
 )
 
 type call struct {
-	target, method, path, query, body string
-	form                              url.Values
+	target, method, path, query, body, auth string
+	form                                    url.Values
 }
 
 const assumeXML = `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials>
@@ -38,7 +42,8 @@ func fakeAWS(t *testing.T, reply func(c call) (code int, contentType, body strin
 	var calls []call
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
-		c := call{target: r.Header.Get("X-Amz-Target"), method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, body: string(b)}
+		c := call{target: r.Header.Get("X-Amz-Target"), method: r.Method, path: r.URL.Path, query: r.URL.RawQuery, body: string(b),
+			auth: r.Header.Get("Authorization")}
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
 			c.form, _ = url.ParseQuery(string(b))
 		}
@@ -60,7 +65,8 @@ func fakeAWS(t *testing.T, reply func(c call) (code int, contentType, body strin
 	node := aws.Config{Region: "eu-west-1", RetryMaxAttempts: 1,
 		Credentials: credentials.NewStaticCredentialsProvider("AKIDNODE", "secret", "")}
 	cl := newClient(node, Config{LabRoleARN: "arn:aws:iam::444455556666:role/crucible-lab",
-		OpsRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-ops", Endpoint: srv.URL})
+		OpsRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-ops", PlanRoleARN: "arn:aws:iam::444455556666:role/crucible-lab-plan",
+		Endpoint: srv.URL})
 	return cl, func() []call { mu.Lock(); defer mu.Unlock(); return append([]call(nil), calls...) }
 }
 
@@ -84,6 +90,31 @@ func TestAssumeLabTagsTheSession(t *testing.T) {
 	}
 }
 
+// Estimates run `terraform plan` with the read-only plan role: an untagged 15-minute session, never the lab or ops role.
+func TestAssumePlanUsesThePlanRole(t *testing.T) {
+	cl, calls := fakeAWS(t, func(call) (int, string, string) { return 500, "text/plain", "" })
+	c, err := cl.AssumePlan(context.Background())
+	if err != nil || c.AccessKeyID != "ASIAcrucible-plan" || c.SessionToken != "token-crucible-plan" {
+		t.Fatalf("credentials: %+v %v", c, err)
+	}
+	all := calls()
+	if len(all) != 1 {
+		t.Fatalf("one STS call: %+v", all)
+	}
+	f := all[0].form
+	want := map[string]string{"RoleArn": "arn:aws:iam::444455556666:role/crucible-lab-plan", "RoleSessionName": "crucible-plan",
+		"DurationSeconds": "900", "Tags.member.1.Key": ""}
+	for k, v := range want {
+		if f.Get(k) != v {
+			t.Fatalf("%s = %q, want %q (form %v)", k, f.Get(k), v, f)
+		}
+	}
+	cl.cfg.PlanRoleARN = ""
+	if _, err := cl.AssumePlan(context.Background()); err == nil || len(calls()) != 1 {
+		t.Fatal("without a plan role there is no estimate, and no STS call")
+	}
+}
+
 func TestTaggedUsesTheOpsRoleAndFiltersByLab(t *testing.T) {
 	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
 		if c.method == "GET" && c.path == "/" { // S3 ListBuckets
@@ -98,14 +129,15 @@ func TestTaggedUsesTheOpsRoleAndFiltersByLab(t *testing.T) {
 			{"ResourceARN":"arn:aws:s3:::crucible-lab-aaaaaaaaaaaa","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"},{"Key":"app","Value":"x"}]},
 			{"ResourceARN":"arn:aws:s3:::crucible-lab-bbbbbbbbbbbb","Tags":[{"Key":"crucible:lab-id","Value":"aaaaaaaaaaaa"}]}]}`
 	})
-	got, err := cl.Tagged(context.Background(), "eu-west-1", "aaaaaaaaaaaa")
+	got, err := cl.Tagged(context.Background(), "eu-central-1", "aaaaaaaaaaaa") // not the node's home region (eu-west-1)
 	// lab b tagged its bucket with a's id: by name it is b's, so a's sweep skips it; a's untagged bucket is found by name
 	if err != nil || len(got) != 2 || got[0].LabID != "aaaaaaaaaaaa" || got[0].ARN != "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa" ||
 		got[1] != (Resource{ARN: "arn:aws:s3:::crucible-lab-aaaaaaaaaaaa-untagged", LabID: "aaaaaaaaaaaa"}) {
 		t.Fatalf("tagged: %+v %v", got, err)
 	}
-	if last := calls()[len(calls())-1]; !strings.Contains(last.query, "prefix=crucible-lab-aaaaaaaaaaaa") || !strings.Contains(last.query, "bucket-region=eu-west-1") {
-		t.Fatalf("lab buckets are listed by name prefix in the region: %+v", last)
+	if last := calls()[len(calls())-1]; !strings.Contains(last.query, "prefix=crucible-lab-aaaaaaaaaaaa") || !strings.Contains(last.query, "bucket-region=eu-central-1") ||
+		!strings.Contains(last.auth, "/eu-central-1/s3/") {
+		t.Fatalf("lab buckets are listed by name prefix in the region, signed for it: %+v", last)
 	}
 	all := calls()
 	if all[0].form.Get("RoleSessionName") != "crucible-ops" || all[0].form.Get("RoleArn") != "arn:aws:iam::444455556666:role/crucible-lab-ops" {
@@ -168,22 +200,173 @@ func TestDeleteKnowsItsTypes(t *testing.T) {
 	}
 }
 
-func TestCostsGroupsByLabAndSkipsUntaggedSpend(t *testing.T) {
-	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
-		return 200, "application/x-amz-json-1.1", `{"ResultsByTime":[{"TimePeriod":{"Start":"2026-10-04","End":"2026-10-05"},"Groups":[
-			{"Keys":["crucible:lab-id$aaaaaaaaaaaa"],"Metrics":{"UnblendedCost":{"Amount":"0.4213","Unit":"USD"}}},
-			{"Keys":["crucible:lab-id$"],"Metrics":{"UnblendedCost":{"Amount":"12.5","Unit":"USD"}}}],"Estimated":true}]}`
+// exportClient is a Client whose export bucket is an httptest S3 (GetObject only) holding files (key -> body).
+// Each month with data files gets a manifest listing all of them, unless files holds that month's manifest itself.
+func exportClient(t *testing.T, files map[string][]byte) *Client {
+	t.Helper()
+	all := map[string][]byte{}
+	months := map[string][]string{}
+	for k, v := range files {
+		all[k] = v
+		if m, ok := strings.CutPrefix(k, exportBase); ok {
+			mo, _, _ := strings.Cut(m, "/")
+			months[mo] = append(months[mo], "s3://bills/"+k)
+		}
+	}
+	for mo, keys := range months {
+		mk := exportMeta + mo + "/crucible-labs-Manifest.json"
+		if _, ok := all[mk]; !ok {
+			j, _ := json.Marshal(map[string]any{"dataFiles": keys})
+			all[mk] = j
+		}
+	}
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		if v, ok := all[strings.TrimPrefix(c.path, "/bills/")]; ok {
+			return 200, "application/gzip", string(v)
+		}
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
 	})
-	from := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	got, err := cl.Costs(context.Background(), from, from.AddDate(0, 0, 5))
-	if err != nil || len(got) != 1 || got[0].LabID != "aaaaaaaaaaaa" || got[0].USD != 0.4213 || !got[0].Day.Equal(from.AddDate(0, 0, 3)) {
+	cl.cfg.ExportBucket, cl.cfg.ExportPrefix, cl.cfg.ExportName = "bills", "exports", "crucible-labs"
+	return cl
+}
+
+func gzBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	_, _ = w.Write([]byte(s))
+	_ = w.Close()
+	return buf.Bytes()
+}
+
+func gzFile(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile("testdata/cur/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gzBytes(t, string(b))
+}
+
+func day(s string) time.Time { d, _ := time.Parse(time.DateOnly, s); return d }
+
+const (
+	exportBase = "exports/crucible-labs/data/BILLING_PERIOD="
+	exportMeta = "exports/crucible-labs/metadata/BILLING_PERIOD="
+)
+
+func TestCostsReadTheExport(t *testing.T) {
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz": gzFile(t, "part-0.csv"),
+		exportBase + "2026-10/part-1.csv.gz": gzFile(t, "part-1.csv"),
+	})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 2 {
 		t.Fatalf("costs: %+v %v", got, err)
 	}
-	last := calls()[len(calls())-1]
-	for _, want := range []string{`"Granularity":"DAILY"`, `"Key":"crucible:lab-id"`, `"Type":"TAG"`, `"Start":"2026-10-01"`, `"End":"2026-10-06"`, `"UnblendedCost"`} {
-		if last.target != "AWSInsightsIndexService.GetCostAndUsage" || !strings.Contains(last.body, want) {
-			t.Fatalf("missing %s in %s %s", want, last.target, last.body)
+	want := []DailyCost{{Day: day("2026-10-11"), LabID: "0123456789ab", USD: 0.18}, {Day: day("2026-10-12"), LabID: "0123456789ab", USD: 0.02}}
+	for i, w := range want {
+		if !got[i].Day.Equal(w.Day) || got[i].LabID != w.LabID || math.Abs(got[i].USD-w.USD) > 1e-9 {
+			t.Fatalf("row %d: got %+v want %+v (both tag spellings counted, untagged and credits skipped)", i, got[i], w)
 		}
+	}
+	// a day outside the window is not returned
+	got, err = c.Costs(context.Background(), day("2026-10-12"), day("2026-10-13"))
+	if err != nil || len(got) != 1 || !got[0].Day.Equal(day("2026-10-12")) {
+		t.Fatalf("window: %+v %v", got, err)
+	}
+}
+
+func TestCostsMalformedCostFailsTheWholeRead(t *testing.T) {
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz": gzFile(t, "part-0.csv"),
+		exportBase + "2026-10/bad.csv.gz":    gzFile(t, "bad.csv"),
+	})
+	if got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatalf("a half-read bill must never settle a lab: %+v", got)
+	}
+}
+
+func TestCostsReadOnlyTheManifestsFiles(t *testing.T) {
+	good := gzFile(t, "part-0.csv")
+	manifest := func(keys ...string) []byte {
+		j, _ := json.Marshal(map[string]any{"dataFiles": keys})
+		return j
+	}
+	// a stale leftover part not in the manifest is not counted
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-10/part-0.csv.gz":               good,
+		exportBase + "2026-10/old-run.csv.gz":              good,
+		exportMeta + "2026-10/crucible-labs-Manifest.json": manifest("s3://bills/" + exportBase + "2026-10/part-0.csv.gz"),
+	})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 2 || math.Abs(got[0].USD-0.15) > 1e-9 {
+		t.Fatalf("only the manifest's file counts: %+v %v", got, err)
+	}
+	// a listed file that is missing fails the whole read
+	c = exportClient(t, map[string][]byte{
+		exportMeta + "2026-10/crucible-labs-Manifest.json": manifest("s3://bills/" + exportBase + "2026-10/gone.csv.gz"),
+	})
+	if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatal("a missing data file is an error")
+	}
+	// a file in another bucket, or a broken manifest, is an error
+	for _, m := range [][]byte{manifest("s3://elsewhere/x.csv.gz"), []byte("{")} {
+		c = exportClient(t, map[string][]byte{exportMeta + "2026-10/crucible-labs-Manifest.json": m})
+		if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Fatalf("bad manifest %s", m)
+		}
+	}
+}
+
+func TestCostsRejectBadRows(t *testing.T) {
+	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
+	tag := `"{""user_crucible:lab-id"":""0123456789ab""}"`
+	for name, body := range map[string]string{
+		"NaN":        "2026-10-05T00:00:00Z,NaN," + tag + ",Usage\n",
+		"+Inf":       "2026-10-05T00:00:00Z,+Inf," + tag + ",Usage\n",
+		"-Inf":       "2026-10-05T00:00:00Z,-Inf," + tag + ",Usage\n",
+		"bad tags":   "2026-10-05T00:00:00Z,0.1,{not-json,Usage\n",
+		"bad date":   "yesterday,0.1," + tag + ",Usage\n",
+		"short date": "2026,0.1," + tag + ",Usage\n",
+		"short row":  "2026-10-05T00:00:00Z,0.1\n",
+	} {
+		c := exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, head+body)})
+		if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Errorf("%s: the read must fail", name)
+		}
+	}
+}
+
+func TestExportIngestEdges(t *testing.T) {
+	ctx := context.Background()
+	csvHead := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
+	row := func(day, cost, lab string) string {
+		return day + "T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""` + lab + `""}",Usage` + "\n"
+	}
+	// (a) no files yet: no error, no costs
+	if got, err := exportClient(t, nil).Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 0 {
+		t.Fatalf("an export that hasn't run yet is not an error: %v %v", got, err)
+	}
+	// (b) not gzip / missing columns: an error
+	for _, body := range [][]byte{[]byte("not gzip"), gzBytes(t, "a,b\n1,2\n")} {
+		c := exportClient(t, map[string][]byte{exportBase + "2026-10/part-0.csv.gz": body})
+		if _, err := c.Costs(ctx, day("2026-10-01"), day("2026-10-13")); err == nil {
+			t.Fatal("a broken export file is an error")
+		}
+	}
+	// (c) a window across a month boundary reads both months
+	c := exportClient(t, map[string][]byte{
+		exportBase + "2026-09/part-0.csv.gz": gzBytes(t, csvHead+row("2026-09-30", "0.30", "0123456789ab")),
+		exportBase + "2026-10/part-0.csv.gz": gzBytes(t, csvHead+row("2026-10-01", "0.10", "0123456789ab")),
+	})
+	if got, err := c.Costs(ctx, day("2026-09-28"), day("2026-10-02")); err != nil || len(got) != 2 {
+		t.Fatalf("both months: %+v %v", got, err)
+	}
+	// (d) a net-negative day passes through; IngestCosts clamps it to 0
+	c = exportClient(t, map[string][]byte{exportBase + "2026-10/part-0.csv.gz": gzBytes(t, csvHead+row("2026-10-05", "-0.40", "0123456789ab"))})
+	if got, err := c.Costs(ctx, day("2026-10-01"), day("2026-10-13")); err != nil || len(got) != 1 || got[0].USD != -0.40 {
+		t.Fatalf("a negative usage line passes through to the clamp: %+v %v", got, err)
 	}
 }
 
@@ -297,5 +480,69 @@ func TestDeleteBucketAbortsUploadsAndSurfacesObjectErrors(t *testing.T) {
 	}
 	if !aborted || bucketDeleted {
 		t.Fatalf("uploads aborted (%v), bucket not deleted after a failed object (%v)", aborted, bucketDeleted)
+	}
+}
+
+func TestReadStateUsesTheOpsRoleInTheStateRegion(t *testing.T) {
+	big := strings.Repeat("x", 32<<20+1)
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		switch c.path {
+		case "/state/labs/aaaaaaaaaaaa.tfstate":
+			return 200, "application/json", `{"version":4,"resources":[]}`
+		case "/state/labs/bbbbbbbbbbbb.tfstate":
+			return 200, "application/json", big
+		}
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
+	})
+	got, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/aaaaaaaaaaaa.tfstate")
+	if err != nil || string(got) != `{"version":4,"resources":[]}` {
+		t.Fatalf("state: %q %v", got, err)
+	}
+	all := calls()
+	if all[0].form.Get("RoleSessionName") != "crucible-ops" {
+		t.Fatalf("state is read as the ops role: %+v", all[0])
+	}
+	if last := all[len(all)-1]; !strings.Contains(last.auth, "/eu-central-1/s3/") || !strings.Contains(last.auth, "ASIAcrucible-ops") {
+		t.Fatalf("signed by the ops session for the state bucket's region: %q", last.auth)
+	}
+	if _, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/bbbbbbbbbbbb.tfstate"); err == nil {
+		t.Fatal("a state over 32 MiB is refused")
+	}
+	if _, err := cl.ReadState(context.Background(), "eu-central-1", "state", "labs/cccccccccccc.tfstate"); err == nil {
+		t.Fatal("no state is an error, not an empty lab")
+	}
+}
+
+func TestCostsUseTheExportRegion(t *testing.T) {
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		return 404, "application/xml", `<Error><Code>NoSuchKey</Code></Error>`
+	})
+	cl.cfg.ExportBucket, cl.cfg.ExportPrefix, cl.cfg.ExportName, cl.cfg.ExportRegion = "bills", "exports", "crucible-labs", "eu-central-1"
+	if _, err := cl.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err != nil {
+		t.Fatal(err)
+	}
+	all := calls()
+	if last := all[len(all)-1]; !strings.Contains(last.auth, "/eu-central-1/s3/") || !strings.Contains(last.auth, "ASIAcrucible-ops") {
+		t.Fatalf("the export bucket is read in its own region (not the node's eu-west-1) as the ops role: %q", last.auth)
+	}
+}
+
+func TestCreditsDontReduceBilledSpend(t *testing.T) {
+	head := "line_item_usage_start_date,line_item_unblended_cost,resource_tags,line_item_line_item_type\n"
+	row := func(cost, typ string) string {
+		return "2026-10-05T00:00:00Z," + cost + `,"{""user_crucible:lab-id"":""0123456789ab""}",` + typ + "\n"
+	}
+	body := head + row("1.00", "Usage") + row("0.10", "Tax")
+	for _, typ := range []string{"Credit", "Refund", "SavingsPlanNegation", "BundledDiscount", "EdpDiscount", "PrivateRateDiscount"} {
+		body += row("-0.40", typ)
+	}
+	c := exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, body)})
+	got, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13"))
+	if err != nil || len(got) != 1 || math.Abs(got[0].USD-1.10) > 1e-9 {
+		t.Fatalf("billed spend is gross of credits, refunds and discounts: %+v %v", got, err)
+	}
+	c = exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n")})
+	if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
+		t.Fatal("without the line item type a credit can't be told apart: the read must fail")
 	}
 }

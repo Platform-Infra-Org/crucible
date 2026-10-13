@@ -151,6 +151,13 @@ function TrainingDetail({ t, data, people, onChange }: { t: ManagedTraining; dat
   )
 }
 
+// giveWarning confirms a move. Roles belong to the training, so its admins are untouched: whoever is named (groups of
+// the old team included) keeps managing it, and the new team's people manage it only once they are named.
+export function giveWarning(title: string, from: string, to: string) {
+  return `Give ${title} to ${to}? Its roles, version, schedule and budget move with it. Its admins stay as they are, ` +
+    `including any of ${from}'s groups named there. Nobody on ${to} manages it until named as an admin.`
+}
+
 // Owner (admins): give the training to another team. Its run (roles, version, schedule, budget) moves with it.
 function Owner({ t, data, onChange }: { t: ManagedTraining; data: TrainingsAdmin; onChange: () => void }) {
   const others = data.teams.filter((x) => x.id !== t.team)
@@ -159,7 +166,7 @@ function Owner({ t, data, onChange }: { t: ManagedTraining; data: TrainingsAdmin
   if (others.length === 0) return null
   const pick = others.some((x) => x.id === picked) ? picked : others[0].id
   const give = () => {
-    if (t.team && !window.confirm(`Give ${t.title} to ${pick}? Its roles, version, schedule and budget move with it; ${t.team}'s leaders, seniors and juniors stop managing it.`)) return
+    if (t.team && !window.confirm(giveWarning(t.title, t.team, pick))) return
     void act.run(() => api(`/api/admin/trainings/${encodeURIComponent(t.id)}/owner`, { method: 'PUT', json: { team: pick } }), `${t.title} now belongs to ${pick}.`)
   }
   return (
@@ -280,7 +287,7 @@ function Run({ p, people, schedules, onChange }: { p: ProgramConfig; people?: Pe
       {act.banner}
       {manage
         ? <p className="muted">Give a role to anyone, or to a group: <code>all</code>, <code>all_seniors</code>, <code>{p.team}</code>, <code>{p.team}_trainees</code>… Groups follow the teams as they change.</p>
-        : <p className="muted">Read-only: {p.team}&apos;s leaders, seniors and juniors and the training&apos;s admins make changes here.</p>}
+        : <p className="muted">Read-only: only the training&apos;s admins and Crucible&apos;s administrators make changes here.</p>}
       {ROLES.map((r) => (
         <RoleRow key={r.key} id={`${p.training}-${r.key}`} label={r.label} one={r.one} what={r.what} refs={p.roles[r.key]} resolved={p.resolved[r.key]}
           people={people} busy={act.busy}

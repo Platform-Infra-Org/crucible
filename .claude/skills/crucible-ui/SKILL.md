@@ -65,7 +65,8 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - A grid column that holds a terminal, an editor or anything that sizes itself is `minmax(0, 1fr)`, never a bare `1fr`
   (which can't shrink below its content and spills off the page). Something with `hidden` leaves the grid, so change
   the column template with it (the lab's Hide tasks).
-- Breakpoints in use: 900px, 760px, 640px. Nothing may scroll horizontally at phone width; wide tables go in `.table-wrap`.
+- Breakpoints in use: 900px, 760px, 640px. Nothing may scroll horizontally at phone width; wide tables go in `.table-wrap`;
+  a `p.warn` (a lab's blocked reason, which may quote a terraform error to editors) wraps anywhere.
 
 ## Components and patterns
 
@@ -86,6 +87,7 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 | Live status list | Several named things and their state (a lab's Helm releases): `section.panel` with an `h5`, one `li` each with the name in `strong` and a `.badge` in words (*Ready*, *Starting*, *Failing*), then what is wrong in `code`, never colour alone. The badge class comes from `releaseBadge` (`.complete`, `.in_progress`, `.failing` in `--danger`); the words from `releaseWords`. Elsewhere (a Journey row) the same thing is one line: `ul.cluster-labs`, *Lab running in Module on `context`* · name + badge per release. |
 | Facts | `dl.facts` for label/value pairs; `.badge` for status and small tags (`.complete`, `.in_progress`, `.warn`, `.failing`, edit statuses). |
 | Tables | `table.grid` (quiet uppercase headers, rows light up on hover), `td.actions` right-aligned. When the same table repeats once per group (the team's people By tag), give it `table-layout: fixed` with a width per column: left to itself each table sizes to its own rows and a column lands somewhere else in each one. Pair it with a `min-width` so narrow screens scroll the `.table-wrap` instead of breaking emails mid-word. |
+| Cost breakdown table | How a price was reached, line by line (an aws lab's estimate on its lobby): `details.lab-settings.cost-breakdown` with a summary from the user's side (*How this estimate was worked out*), one muted sentence on where the prices come from, then `.table-wrap` > `table.grid` — the thing in `code` (wraps anywhere), its type, per-hour prices via `usdRate` (four decimals under a dollar), `—` for nothing, the server's note as plain words — and a `tfoot` total row. On phones the Type column is hidden, because the address always contains the type. Left-aligned and capped at 44rem even in the centred lobby; numbers use tabular figures. Spend columns say *Estimate*, *Metered*, *Billed* (never "actual"). A freshness line for the data behind the numbers (*Price data from <date>.*) is a `p[role=status]`, `.muted` when fresh, `.error` plus the words *Out of date: …* when stale; the failure detail only reaches admins. |
 | Progress | `MoltenBar` (flowing metal; respects calm), `meter` for budgets (molten → `--accent-2` past `low` → `--danger` at `high`). |
 | Empty state | `<p className="muted empty">No labs yet.</p>`: a dashed hearth with the ⚒ mark. Say what will appear and, if possible, how to get it. |
 | Disclosure | `details.lab-settings` with a `summary` in the accent colour (secondary settings, roster editing). |

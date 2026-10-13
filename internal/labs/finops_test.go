@@ -263,8 +263,8 @@ func (f *fx) endedAgo(t *testing.T, id string, d time.Duration) {
 func TestSpendUsesSettledActualsOnly(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
-	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // ended 3 days ago, Cost Explorer says $0.40
-	f.spent(t, "aaaaaaaaaaa2", "forge-101", 2) // ended an hour ago, Cost Explorer says $5 so far (not settled)
+	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // ended 3 days ago, billed $0.40
+	f.spent(t, "aaaaaaaaaaa2", "forge-101", 2) // ended an hour ago, billed $5 so far (not settled)
 	f.spent(t, "aaaaaaaaaaa3", "forge-101", 2) // ended 3 days ago, never reported (tags not activated?)
 	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
 	f.endedAgo(t, "aaaaaaaaaaa3", 72*time.Hour)
@@ -331,7 +331,7 @@ func (f *fx) squeeze(t *testing.T, usd float64) *View {
 func TestSettleRuleNeedsPositiveFreshActuals(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
-	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // Cost Explorer says $0 so far
+	f.spent(t, "aaaaaaaaaaa1", "forge-101", 2) // billed $0 so far
 	f.spent(t, "aaaaaaaaaaa2", "forge-101", 2) // $0.40, but the row was last read 1 day after the lab ended
 	f.endedAgo(t, "aaaaaaaaaaa1", 72*time.Hour)
 	f.endedAgo(t, "aaaaaaaaaaa2", 72*time.Hour)
@@ -445,5 +445,15 @@ func TestTTLBeatsALaterBudget(t *testing.T) {
 	v := f.squeeze(t, 100) // plenty of headroom, TTL is 1 h
 	if got := f.waitState(t, f.u, v.ID, Ready); got.LimitReason != "ttl" {
 		t.Fatalf("ttl first: %+v", got)
+	}
+}
+
+func TestAPaidLabNeverRoundsToFree(t *testing.T) {
+	f := setup(t, true)
+	f.spent(t, "bbbbbbbbbbb1", "forge-101", 250) // the team is at its $250 cap
+	f.rates["first-heat"] = 0.001                // ttl 1h: $0.001
+	v := f.request(t, f.u)
+	if v.EstimateUSD != 0.01 || !v.OverCap || v.Tier != rbac.TierAdmin {
+		t.Fatalf("$0.001 rounds up to a cent and still meets the cap: %+v", v)
 	}
 }

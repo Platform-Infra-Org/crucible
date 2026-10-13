@@ -20,11 +20,11 @@ import (
 	"crucible/internal/smith"
 )
 
-// Spend is month-to-date lab spend for a team or one program: estimates, with Cost Explorer actuals swapped in for
+// Spend is month-to-date lab spend for a team or one program: estimates, with billed actuals swapped in for
 // labs whose actual cost has settled (spec §9.3).
 type Spend struct {
-	SpentUSD     float64 `json:"spent_usd"`     // per lab: settled actual, else hourly estimate × time run this month
-	CommittedUSD float64 `json:"committed_usd"` // spent + the rest of every lab still starting or running, to its end
+	SpentUSD     float64 `json:"spent_usd"`     // per lab: settled actual, else metered (aws), else hourly estimate × time run
+	CommittedUSD float64 `json:"committed_usd"` // spent + the rest of every lab still starting or running, to its end (a ready lab: its spend so far + hourly estimate × time left)
 	ActualUSD    float64 `json:"actual_usd"`    // the part of spent that comes from settled actuals
 	BudgetUSD    float64 `json:"budget_usd"`    // 0 = no budget
 	CapUSD       float64 `json:"cap_usd"`       // 0 = no hard cap
@@ -35,17 +35,22 @@ func monthStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
-// labCostSQL selects lab_instances (alias l) with three more columns: actual (Cost Explorer total, NULL when never
+// labCostSQL selects lab_instances (alias l) with four more columns: metered (the list-price spend of what the lab's
+// Terraform state held, NULL when never metered), actual (billed total, NULL when never
 // reported), settled (use the actual instead of the estimate: a positive total, and both the last successful
-// ingestion and the newest actuals row came 48 h or more after the lab ended, so Cost Explorer has caught up; a $0 or
-// stale row keeps the estimate) and est_spent (hourly estimate × time run). $1 is now.
-// Conservative on purpose: a lab Cost Explorer never reported keeps its estimate (tags not activated != free).
-const labCostSQL = `SELECT l.*, a.usd AS actual,
+// ingestion and the newest actuals row came 48 h or more after the lab ended, so the billing export has caught up; a $0 or
+// stale row keeps the estimate) and est_spent (metered when it was metered; else hourly estimate × time run). $1 is now.
+// Conservative on purpose: a lab the export never reported keeps its estimate (tags not activated != free).
+const labCostSQL = `SELECT l.*, m.usd AS metered, a.usd AS actual,
 	coalesce(a.usd > 0 AND a.updated_at >= l.destroyed_at + interval '48 hours'
 		AND (SELECT ingest_ok_at FROM aws_ops) >= l.destroyed_at + interval '48 hours', false) AS settled,
-	CASE WHEN l.ready_at IS NULL THEN 0
-		ELSE l.hourly_usd * extract(epoch FROM least(coalesce(l.destroyed_at, $1), $1) - l.ready_at)::float8 / 3600 END AS est_spent
-	FROM lab_instances l LEFT JOIN (SELECT lab_id, sum(usd)::float8 AS usd, max(updated_at) AS updated_at FROM cost_actuals GROUP BY lab_id) a ON a.lab_id = l.id`
+	coalesce(m.usd, CASE WHEN l.ready_at IS NULL THEN 0
+		ELSE l.hourly_usd * extract(epoch FROM least(coalesce(l.destroyed_at, $1), $1) - l.ready_at)::float8 / 3600 END) AS est_spent
+	FROM lab_instances l
+	LEFT JOIN (SELECT lab_id, sum(usd)::float8 AS usd, max(updated_at) AS updated_at FROM cost_actuals GROUP BY lab_id) a ON a.lab_id = l.id
+	LEFT JOIN (SELECT lab_id, sum((hourly_usd + usage_hourly_usd)
+		* extract(epoch FROM least(coalesce(ended_at, $1), $1) - least(started_at, $1))::float8 / 3600) AS usd
+		FROM lab_resources GROUP BY lab_id) m ON m.lab_id = l.id`
 
 // spend sums this calendar month (UTC) for a team, or one program when training != "".
 // ponytail: a lab counts in the month it was requested; one running across midnight on the 1st stays in the old month.
@@ -59,7 +64,7 @@ func (s *Service) spend(ctx context.Context, p *config.Platform, team, training 
 			coalesce(sum(CASE
 				WHEN settled THEN actual
 				WHEN state = 'provisioning' THEN estimate_usd
-				WHEN state = 'ready' THEN hourly_usd * extract(epoch FROM greatest(ends_at, $1) - ready_at)::float8 / 3600
+				WHEN state = 'ready' THEN est_spent + hourly_usd * extract(epoch FROM greatest(ends_at - $1, interval '0'))::float8 / 3600
 				ELSE est_spent END), 0),
 			coalesce(sum(CASE WHEN settled THEN actual ELSE 0 END), 0)
 		FROM labs`, now, team, training, monthStart(now)).Scan(&sp.SpentUSD, &sp.CommittedUSD, &sp.ActualUSD)

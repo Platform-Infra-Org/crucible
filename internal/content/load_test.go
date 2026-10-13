@@ -481,7 +481,7 @@ AWS`, "AWS", aws, 1)
 		"paren key":              {tf("v.tf", "terraform {\n  required_providers {\n    y = { (\"source\") = \"evil2/y\" }\n  }\n}\n"), "keys must be literal"},
 		"too many files":         {manyTF(201), "files"},
 		"big file":               {tf("big.tf", "# "+strings.Repeat("x", 200<<10)+"\n"), "keep each file under 128 KiB"},
-		// fix round 1 (task-5-review I3): infracost evaluates the module in the API pod, so file reads stay inside it
+		// fix round 1 (task-5-review I3): the estimate's plan evaluates the module, so file reads stay inside it
 		"file abs":            {tf("f.tf", "locals {\n  x = file(\"/var/run/secrets/x\")\n}\n"), "file reads"},
 		"file dotdot":         {tf("f.tf", "locals {\n  x = file(\"../x\")\n}\n"), "file reads"},
 		"file var":            {tf("f.tf", "locals {\n  x = file(var.p)\n}\n"), "file reads"},
@@ -692,5 +692,99 @@ func TestLinksSymlinks(t *testing.T) {
 	j := strings.Join(all, "\n")
 	if !strings.Contains(j, "symlinks are not allowed") || !strings.Contains(j, "broken asset link") || strings.Contains(j, "secret-path") {
 		t.Fatalf("symlinked asset is rejected and a symlinked .md is never read:\n%s", j)
+	}
+}
+
+const awsLabYAML = `id: l1
+runtime: aws
+terminals: [{name: ws, service: workspace}]
+tasks:
+  - id: t1
+    instructions: tasks/t1.md
+    check: {script: checks/t1.sh, run_in: workspace}
+aws:
+  region: eu-west-1
+  max_hourly_usd: 0.1
+`
+
+func TestTerraformRuntimeIsAWSUnderTheHood(t *testing.T) {
+	tr, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(awsLabYAML, "runtime: aws", "runtime: terraform\ncloud: aws", 1)}))
+	if len(probs) > 0 {
+		t.Fatal(probs)
+	}
+	if l := tr.Modules[0].Lab; l.Runtime != "aws" || l.Cloud != "aws" {
+		t.Fatalf("%q %q", l.Runtime, l.Cloud)
+	}
+	_, probs = Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(awsLabYAML, "runtime: aws", "runtime: terraform\ncloud: azure", 1)}))
+	if !strings.Contains(fmt.Sprint(probs), "cloud must be aws") {
+		t.Fatal(probs)
+	}
+}
+
+func TestPricesAndUsageAreChecked(t *testing.T) {
+	for name, c := range map[string]struct{ extra, want string }{
+		"bad price":    {"  prices: {aws_kinesis_stream: 0}\n", "aws.prices"},
+		"not a type":   {"  prices: {Kinesis: 1}\n", "aws.prices"},
+		"negative use": {"  usage: {aws_s3_bucket.data: {storage_gb: -1}}\n", "aws.usage"},
+		"bad address":  {"  usage: {\"not an address\": {storage_gb: 1}}\n", "aws.usage"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + c.extra}))
+			if !strings.Contains(fmt.Sprint(probs), c.want) {
+				t.Fatalf("want %q in %v", c.want, probs)
+			}
+		})
+	}
+}
+
+func TestUnpricedTypeInANestedModuleIsRefused(t *testing.T) {
+	files := map[string]string{
+		"modules/m1/lab/terraform/main.tf":   "module \"q\" {\n  source = \"./q\"\n}\n",
+		"modules/m1/lab/terraform/q/main.tf": "resource \"aws_kinesis_stream\" \"s\" {\n  name = \"s\"\n  shard_count = 1\n}\n",
+	}
+	_, probs := Load(awsTree(t, files))
+	if !strings.Contains(fmt.Sprint(probs), "aws_kinesis_stream") || !strings.Contains(fmt.Sprint(probs), "aws.prices") {
+		t.Fatalf("an unpriced type deep in a local module is refused: %v", probs)
+	}
+	ok := map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  prices: {aws_kinesis_stream: 0.015}\n"}
+	maps.Copy(ok, files)
+	if _, probs := Load(awsTree(t, ok)); len(probs) > 0 {
+		t.Fatalf("declared: %v", probs)
+	}
+}
+
+func TestOnlyManagedResourcesAreTypeChecked(t *testing.T) {
+	tf := func(body string) map[string]string { return map[string]string{"modules/m1/lab/terraform/x.tf": body} }
+	_, probs := Load(awsTree(t, tf("resource \"random_shuffle\" \"s\" {\n  input = [\"a\"]\n}\n")))
+	if !strings.Contains(fmt.Sprint(probs), "random_shuffle") {
+		t.Fatalf("a non-aws unpriced type is refused: %v", probs)
+	}
+	for name, body := range map[string]string{
+		"free random": "resource \"random_id\" \"i\" {\n  byte_length = 4\n}\n",
+		"data source": "data \"aws_kinesis_stream\" \"s\" {\n  name = \"s\"\n}\n",
+	} {
+		if _, probs := Load(awsTree(t, tf(body))); len(probs) > 0 {
+			t.Fatalf("%s: %v", name, probs)
+		}
+	}
+}
+
+func TestPricesRejectNaNAndInf(t *testing.T) {
+	_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  prices: {aws_kinesis_stream: .inf}\n"}))
+	if !strings.Contains(fmt.Sprint(probs), "aws.prices") {
+		t.Fatal(probs)
+	}
+	_, probs = Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  usage: {aws_s3_bucket.data: {storage_gb: .nan}}\n"}))
+	if !strings.Contains(fmt.Sprint(probs), "aws.usage") {
+		t.Fatal(probs)
+	}
+}
+
+func TestUsageAcceptsCountedModules(t *testing.T) {
+	for _, a := range []string{`module.net[0].aws_nat_gateway.x`, `module.a[\"k\"].module.b.aws_s3_bucket.y`, `module.a.aws_s3_bucket.y[2]`} {
+		_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  usage: {\"" + a + "\": {storage_gb: 1}}\n"}))
+		if len(probs) > 0 {
+			t.Fatalf("%s: %v", a, probs)
+		}
 	}
 }

@@ -14,8 +14,10 @@ repository can hold several trainings, a folder each.
 
 Give the repository's URL and say how Crucible should sign in:
 
-- **Nothing — the repository is public.** Anyone can read it, so Crucible needs no credential. It cannot write to
-  it either, so content here cannot be edited in Crucible.
+- **No credential of its own.** Crucible adds no credential: a public repository is read as it is. This is not a
+  promise that Crucible cannot write. An `https://` repository may still be reached with this instance's own git
+  credentials, if whoever runs Crucible set them, and then edits can be pushed with those. **Test connection** shows
+  which: *Can write* or *Read only*.
 - **An access token.** For a private `https://` repository, or any whose content people will edit in Crucible.
 - **A deploy key Crucible makes.** For an `ssh://` or `git@host:path` repository. Crucible generates the pair,
   keeps the private half and shows you the public half to add at your host. Nothing secret ever leaves your side,
@@ -44,22 +46,28 @@ revoke it by deleting it at the host. Choosing **Replace credential** and saving
 old key stops working — add the new one.
 
 The first time Crucible reaches a host it records that host's fingerprint and refuses it if it ever changes
-afterwards.
+afterwards. The fingerprint is kept in Crucible's database, so a restart or a rebuilt server still holds it. Only a
+host met for the first time in the last minute or so before a restart is met afresh, as if for the first time.
 
 Crucible stores the token encrypted and never shows it again — not on this page, not through its API, not in the
 audit log, which records only that a credential was set. To change it, choose **Replace credential** and type a new
 one; leaving the box empty keeps the one already stored.
 
-An instance with no `CRUCIBLE_SECRET_KEY` cannot keep a credential at all. The page says so, and only public
-repositories can be connected until whoever runs this Crucible sets that key.
+An instance with no `CRUCIBLE_SECRET_KEY` cannot keep a credential at all. The page says so, and repositories can be
+connected only with no credential of Crucible's own until whoever runs this Crucible sets that key. On AWS,
+`crucible aws init` makes it; an install from before that re-runs `init` (see the AWS runbook). Changing or losing
+the key makes every stored token and deploy key unreadable, and those repositories are reconnected.
 
 ## What the status means
 
-- **Reachable** — Crucible listed the repository's branches with the credential it has.
+- **Reachable** — Crucible listed the repository's branches with the credential it has. Beside it, **Can write** or
+  **Read only** says whether the repository would take a push from Crucible.
 - **Cannot be read** — with the reason. A repository that has just been connected or changed says **Not checked
   yet** until something reads from it; **Test connection** checks it now.
 
-Testing checks that Crucible can *read*. Whether it can *write* is proven the first time an approved edit merges.
+Testing checks that Crucible can *read*, and then whether it may *write*: it asks the host to start a push and stops
+before sending anything, so nothing in the repository changes. **Read only** means edits made in Crucible cannot be
+submitted; give the token or deploy key write access and test again.
 
 ## Disconnecting
 

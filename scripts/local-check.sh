@@ -24,6 +24,9 @@ echo "== lint content"
 ./bin/crucible lint examples/forge-001
 ./bin/crucible lint examples/platform
 
+echo "== toolbox image for cluster labs (the stack offers them; cached after the first build)"
+make toolbox
+
 echo "== seed git repos"
 ./scripts/seed-git.sh
 

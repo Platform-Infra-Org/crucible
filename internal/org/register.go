@@ -69,7 +69,7 @@ func (s *Store) repoURL(ctx context.Context, id int64) (forGit, shown string, er
 		Scan(&shown, &auth, &username, &sealed); err != nil {
 		return "", "", apperr.Wrap(apperr.NotFound, "that repository is not connected")
 	}
-	forGit, err = s.fetchURL(id, shown, auth, username, sealed)
+	forGit, err = s.fetchURL(ctx, id, shown, auth, username, sealed)
 	return forGit, shown, err
 }
 

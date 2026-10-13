@@ -172,8 +172,12 @@ run "aws_labs_off_by_default" {
     error_message = "the node assumes no lab role by default"
   }
   assert {
-    condition     = strcontains(aws_instance.node.user_data, "/helm-values") && strcontains(aws_instance.node.user_data, "-f \"$work/values.yaml\"") && strcontains(aws_instance.node.user_data, "INFRACOST_API_KEY")
-    error_message = "deploy.sh passes the helm values from SSM and the infracost key"
+    condition     = strcontains(aws_instance.node.user_data, "/helm-values") && strcontains(aws_instance.node.user_data, "-f \"$work/values.yaml\"")
+    error_message = "deploy.sh passes the helm values from SSM"
+  }
+  assert {
+    condition     = toset(keys(aws_ssm_parameter.secret)) == toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+    error_message = "Crucible prices aws labs itself from the free AWS Price List: no pricing API key among the secrets"
   }
 }
 
@@ -185,20 +189,23 @@ run "aws_labs_wiring" {
     lab_state_bucket  = "crucible-444455556666-labstate"
     lab_state_region  = "eu-west-1"
     lab_regions       = "eu-west-1"
-    infracost_api_key = "ico-test"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_prefix = "cur"
+    lab_export_name   = "crucible-labs"
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
     condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab", "arn:aws:iam::444455556666:role/crucible-lab-ops"])
-    error_message = "the node may assume exactly the two lab account roles"
+    error_message = "the node may assume and tag sessions of exactly the lab and ops roles"
   }
   assert {
-    condition     = !strcontains(aws_instance.node.user_data, "ico-test") && aws_ssm_parameter.secret["infracost_api_key"].type == "SecureString"
-    error_message = "the infracost key is a SecureString, never in user data"
+    condition     = toset(one([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "sts:AssumeRole") && !contains(s.actions, "sts:TagSession")])) == toset(["arn:aws:iam::444455556666:role/crucible-lab-plan"])
+    error_message = "the plan role has its own AssumeRole-only statement (estimates use no session tags)"
   }
   assert {
     condition     = output.lab_role_arn == "arn:aws:iam::444455556666:role/crucible-lab"
@@ -208,4 +215,127 @@ run "aws_labs_wiring" {
     condition     = output.node_role_name == "crucible-node"
     error_message = "main publishes its node role name; labs-init trusts exactly that role"
   }
+}
+
+run "aws_labs_need_the_plan_role_and_export" {
+  command = plan
+  variables {
+    lab_role_arn     = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket = "crucible-444455556666-labstate"
+    lab_state_region = "eu-west-1"
+  }
+  expect_failures = [var.lab_role_arn]
+}
+
+run "secret_key_reaches_the_api_when_init_made_it" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "param secret_key") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SECRET_KEY=")
+    error_message = "deploy.sh must put /<name>/secret_key into crucible-secrets as CRUCIBLE_SECRET_KEY"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "ParameterNotFound") && strcontains(aws_instance.node.user_data, "re-run 'crucible aws init'")
+    error_message = "an install from before secret_key existed must deploy without it and say how to add it"
+  }
+  assert {
+    condition     = contains(flatten([for s in data.aws_iam_policy_document.node.statement : s.resources if contains(s.actions, "ssm:GetParameter")]), "arn:aws:ssm:eu-west-1:*:parameter/crucible/*")
+    error_message = "the node role must be able to read /<name>/secret_key"
+  }
+}
+
+run "cluster_labs_off_without_a_toolbox_image" {
+  command = plan
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == ""
+    error_message = "no toolbox image by default: cluster labs stay off"
+  }
+}
+
+run "toolbox_image_reaches_helm" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == "ghcr.io/example/crucible-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    error_message = "toolbox_image must reach the helm values deploy.sh passes (toolboxImage)"
+  }
+}
+
+run "toolbox_image_must_be_pinned_by_digest" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox:latest"
+  }
+  expect_failures = [var.toolbox_image]
+}
+
+run "toolbox_image_rejects_a_short_digest" {
+  command = plan
+  variables {
+    toolbox_image = "ghcr.io/example/crucible-toolbox@sha256:0123"
+  }
+  expect_failures = [var.toolbox_image]
+}
+
+run "smtp_off_by_default_keeps_hand_added_keys" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "SMTP_ADDR=''\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_PASSWORD_SET=''\n")
+    error_message = "no SMTP settings by default"
+  }
+  assert {
+    condition     = length(aws_ssm_parameter.smtp_password) == 0
+    error_message = "no SMTP password parameter unless one is set (SSM rejects empty values)"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "if [ -n \"$${SMTP_ADDR:-}\" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_ADDR=\"$SMTP_ADDR\"); fi") && strcontains(aws_instance.node.user_data, "\"$${smtp[@]}\"")
+    error_message = "deploy.sh adds each SMTP key only when it is set, so keys an operator added by hand survive"
+  }
+}
+
+run "smtp_settings_reach_crucible_secrets" {
+  command = plan
+  variables {
+    smtp_addr     = "email-smtp.eu-west-1.amazonaws.com:587"
+    smtp_from     = "Crucible <crucible@example.com>"
+    smtp_username = "AKIAEXAMPLE"
+    smtp_password = "smtp-pw-dddddddd"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "SMTP_ADDR='email-smtp.eu-west-1.amazonaws.com:587'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_FROM='Crucible <crucible@example.com>'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_USERNAME='AKIAEXAMPLE'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_PASSWORD_SET='1'\n")
+    error_message = "the plain SMTP settings go into /<name>/env"
+  }
+  assert {
+    condition     = !strcontains(aws_ssm_parameter.env.value, "smtp-pw-dddddddd") && !strcontains(aws_ssm_parameter.helm_values.value, "smtp-pw-dddddddd") && !strcontains(aws_instance.node.user_data, "smtp-pw-dddddddd")
+    error_message = "the SMTP password stays out of plain parameters and user data"
+  }
+  assert {
+    condition     = aws_ssm_parameter.smtp_password[0].name == "/crucible/smtp_password" && aws_ssm_parameter.smtp_password[0].type == "SecureString" && aws_ssm_parameter.smtp_password[0].value == "smtp-pw-dddddddd"
+    error_message = "the SMTP password is a SecureString /<name>/smtp_password"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_PASSWORD=\"$(param smtp_password)\"") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_FROM=") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_USERNAME=")
+    error_message = "deploy.sh puts the SMTP settings into crucible-secrets"
+  }
+}
+
+run "smtp_addr_must_be_host_port" {
+  command = plan
+  variables {
+    smtp_addr = "smtp.example.com"
+  }
+  expect_failures = [var.smtp_addr]
+}
+
+run "smtp_from_rejects_a_quote" {
+  command = plan
+  variables {
+    smtp_from = "x'; reboot; '"
+  }
+  expect_failures = [var.smtp_from]
 }

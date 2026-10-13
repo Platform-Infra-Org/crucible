@@ -71,7 +71,6 @@ locals {
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
     quiz_secret        = random_password.quiz.result
-    infracost_api_key  = var.infracost_api_key == "" ? "none" : var.infracost_api_key
   }
 }
 
@@ -91,6 +90,10 @@ resource "aws_ssm_parameter" "env" {
     GIT_BOT_NAME='${var.git_bot_name}'
     GIT_BOT_EMAIL=${var.git_bot_email}
     BOOTSTRAP_ADMIN='${var.bootstrap_admin}'
+    SMTP_ADDR='${var.smtp_addr}'
+    SMTP_FROM='${var.smtp_from}'
+    SMTP_USERNAME='${var.smtp_username}'
+    SMTP_PASSWORD_SET='${nonsensitive(var.smtp_password != "") ? "1" : ""}'
   ENV
 }
 
@@ -99,6 +102,7 @@ resource "aws_ssm_parameter" "helm_values" {
   name = "/${var.name}/helm-values"
   type = "String"
   value = yamlencode({
+    toolboxImage = var.toolbox_image # empty: cluster labs stay off
     awsLabs = {
       enabled     = var.lab_role_arn != ""
       labRoleArn  = var.lab_role_arn
@@ -106,15 +110,28 @@ resource "aws_ssm_parameter" "helm_values" {
       stateBucket = var.lab_state_bucket
       stateRegion = var.lab_state_region
       regions     = var.lab_regions == "" ? var.region : var.lab_regions
+      # estimates (plan role) and billed spend (the billing export)
+      planRoleArn  = var.lab_plan_role_arn
+      exportBucket = var.lab_export_bucket
+      exportPrefix = var.lab_export_prefix
+      exportName   = var.lab_export_name
     }
   })
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "infracost_api_key"])
+  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]
+}
+
+# Only when set: SSM rejects empty values, and deploy.sh reads it only when /<name>/env says SMTP_PASSWORD_SET.
+resource "aws_ssm_parameter" "smtp_password" {
+  count = nonsensitive(var.smtp_password != "") ? 1 : 0
+  name  = "/${var.name}/smtp_password"
+  type  = "SecureString"
+  value = var.smtp_password
 }
 
 # --- instance role ---
@@ -150,6 +167,13 @@ data "aws_iam_policy_document" "node" {
     content {
       actions   = ["sts:AssumeRole", "sts:TagSession"] # lab sessions carry crucible:* tags
       resources = [var.lab_role_arn, var.lab_ops_role_arn]
+    }
+  }
+  dynamic "statement" {
+    for_each = var.lab_plan_role_arn == "" ? [] : [1]
+    content {
+      actions   = ["sts:AssumeRole"] # estimates' read-only terraform plan; no session tags
+      resources = [var.lab_plan_role_arn]
     }
   }
 }
@@ -207,7 +231,7 @@ resource "aws_instance" "node" {
 
   tags = { Name = var.name }
 
-  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
+  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.smtp_password, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
 
   lifecycle {
     ignore_changes = [ami, user_data] # never replace the node because Ubuntu published a new AMI

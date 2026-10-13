@@ -1,6 +1,7 @@
 package labs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
@@ -312,7 +314,7 @@ func stuckReason(p *corev1.Pod) bool { r, _ := stuckOneShot(p); return r != "" }
 // Destroy stops a running apply (cancelling an in-process ProvisionLab, then deleting the apply pod), runs terraform
 // destroy (with fresh credentials), then deletes the namespace. Service.destroyRuntime runs the tag sweep afterwards.
 // Without a namespace, or with one already terminating, there is nothing to run terraform in: the tag sweep and the
-// reaper clean up instead.
+// reaper clean up instead, and Destroy returns errTerraformSkipped.
 func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 	if !validLabID(inst.ID) {
 		return errors.New("invalid lab id")
@@ -331,13 +333,16 @@ func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 		return apierrors.IsNotFound(err) || apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause)
 	}
 	var errs []error
+	skipped := false
 	if err := a.Cluster.deletePod(ctx, labNamespace(inst.ID), tfApplyPod); err != nil {
 		errs = append(errs, fmt.Errorf("stopping terraform apply: %w", err))
 	} else if !a.moduleExists(ctx, inst.ID) {
 		// provisioning failed before the module existed: no apply ever ran, so there is nothing for terraform
 	} else if err := a.runTF(ctx, inst, tfDestroyPod, "destroy"); err != nil && !gone(err) {
 		errs = append(errs, err)
-	} else if err == nil && a.DryRun != nil {
+	} else if err != nil {
+		skipped = true
+	} else if a.DryRun != nil {
 		a.DryRun.SimulateDestroy(inst.ID)
 	}
 	// Terraform may have used up ctx; the namespace (with live credentials) is deleted regardless.
@@ -347,8 +352,16 @@ func (a *AWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 		errs = append(errs, err)
 	}
 	a.prune(inst.ID)
-	return errors.Join(errs...)
+	if err := errors.Join(errs...); err != nil || !skipped {
+		return err
+	}
+	return errTerraformSkipped
 }
+
+// errTerraformSkipped: Destroy otherwise worked, but terraform destroy could not run (no namespace, or one already
+// terminating), so what the apply created runs until the tag sweep and the reaper delete it. destroyRuntime treats it
+// as success and leaves the lab's meter running.
+var errTerraformSkipped = errors.New("terraform destroy did not run")
 
 // Refresh re-assumes the lab role when the mounted credentials have less than refreshBefore left (spec §14: one
 // hour, auto-refreshed); kubelet updates the mounted file within about a minute. After a restart nothing is
@@ -360,4 +373,122 @@ func (a *AWSRunner) Refresh(ctx context.Context, inst *Instance) error {
 		return nil
 	}
 	return a.renew(ctx, inst)
+}
+
+const maxPlanJSON = 16 << 20
+
+var _ Planner = (*AWSRunner)(nil)
+
+// Plan is an estimate's `terraform plan` of the lab's module (spec 2026-10-12 §2): a one-shot planPod in
+// crucible-estimates with the read-only plan role's credentials and nothing else (no lab session, no ops role). It
+// returns `terraform show -json`, read from the pod log (at most 16 MiB). The run's credentials, module and pod are
+// deleted afterwards. A dry run never plans: it prices from fixed rates.
+func (a *AWSRunner) Plan(ctx context.Context, lab *content.Lab) ([]byte, error) {
+	if a.DryRun != nil {
+		return nil, errors.New("a dry run prices aws labs from fixed rates, not a terraform plan")
+	}
+	if lab.AWS == nil {
+		return nil, errors.New("not an aws lab")
+	}
+	module, err := planBundle(lab)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, planDeadline+3*time.Minute) // room to schedule; inside the credentials
+	defer cancel()
+	creds, err := a.Cloud.AssumePlan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("getting plan credentials: %w", err)
+	}
+	core := a.Cluster.Client.CoreV1()
+	ns, policy := estimatesObjects()
+	if _, err := core.Namespaces().Create(ctx, ns, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("creating %s: %w", estimatesNS, err)
+	}
+	_, err = a.Cluster.Client.NetworkingV1().NetworkPolicies(estimatesNS).Create(ctx, policy, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("creating %s: %w", estimatesNS, err)
+	}
+	name := "tf-plan-" + newLabID()
+	meta := metav1.ObjectMeta{Name: name, Namespace: estimatesNS, Labels: map[string]string{labLabel: estimatesLabel}}
+	defer func() { // best effort, even once ctx is spent; the credentials expire within 15 minutes regardless
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer cancel()
+		_ = a.Cluster.deletePod(dctx, estimatesNS, name)
+		_ = core.Secrets(estimatesNS).Delete(dctx, name, metav1.DeleteOptions{})
+		_ = core.ConfigMaps(estimatesNS).Delete(dctx, name, metav1.DeleteOptions{})
+	}()
+	if _, err := core.Secrets(estimatesNS).Create(ctx, &corev1.Secret{ObjectMeta: meta,
+		Data: map[string][]byte{"credentials": creds.File()}}, metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	if _, err := core.ConfigMaps(estimatesNS).Create(ctx, &corev1.ConfigMap{ObjectMeta: meta,
+		BinaryData: map[string][]byte{"module.tgz": module}}, metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	if _, err := core.Pods(estimatesNS).Create(ctx, planPod(name, a.TerraformImage), metav1.CreateOptions{}); err != nil {
+		return nil, fmt.Errorf("starting terraform plan: %w", err)
+	}
+	ok, msg, err := a.Cluster.waitDone(ctx, estimatesNS, name)
+	if err != nil {
+		return nil, fmt.Errorf("terraform plan: %w", err)
+	}
+	if !ok {
+		for _, v := range []string{creds.SessionToken, creds.SecretAccessKey, creds.AccessKeyID} {
+			if v != "" {
+				msg = strings.ReplaceAll(msg, v, "***")
+			}
+		}
+		return nil, &labFault{"terraform plan failed: " + tailOf([]byte(msg))}
+	}
+	out, err := core.Pods(estimatesNS).GetLogs(name, &corev1.PodLogOptions{Container: "terraform",
+		LimitBytes: ptr.To(int64(maxPlanJSON + 1))}).DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the plan: %w", err)
+	}
+	if len(out) > maxPlanJSON {
+		return nil, errors.New("the plan's output is over 16 MiB")
+	}
+	out = bytes.TrimSpace(out)
+	return out[bytes.LastIndexByte(out, '\n')+1:], nil
+}
+
+// planLeakAge: a plan run older than this is a leftover (Plan gives up after planDeadline plus three minutes).
+const planLeakAge = 15 * time.Minute
+
+// reapPlans deletes plan runs' pods, credentials and modules older than planLeakAge: an API that died mid-plan never
+// ran Plan's deferred delete. The sweep calls it.
+func (a *AWSRunner) reapPlans(ctx context.Context, now time.Time) error {
+	core := a.Cluster.Client.CoreV1()
+	sel := metav1.ListOptions{LabelSelector: labLabel + "=" + estimatesLabel}
+	var errs []error
+	reap := func(m metav1.ObjectMeta, del func(context.Context, string, metav1.DeleteOptions) error) {
+		if strings.HasPrefix(m.Name, "tf-plan-") && m.CreationTimestamp.Time.Before(now.Add(-planLeakAge)) {
+			if err := del(ctx, m.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, err)
+			}
+		}
+	}
+	pods, err := core.Pods(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, p := range pods.Items {
+		reap(p.ObjectMeta, core.Pods(estimatesNS).Delete)
+	}
+	secrets, err := core.Secrets(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, x := range secrets.Items {
+		reap(x.ObjectMeta, core.Secrets(estimatesNS).Delete)
+	}
+	cms, err := core.ConfigMaps(estimatesNS).List(ctx, sel)
+	if err != nil {
+		return err
+	}
+	for _, x := range cms.Items {
+		reap(x.ObjectMeta, core.ConfigMaps(estimatesNS).Delete)
+	}
+	return errors.Join(errs...)
 }

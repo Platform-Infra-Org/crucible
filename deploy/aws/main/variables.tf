@@ -83,6 +83,10 @@ variable "cognito_user_pool_id" { type = string }
 variable "lab_role_arn" {
   type    = string
   default = ""
+  validation {
+    condition     = var.lab_role_arn == "" || (var.lab_plan_role_arn != "" && var.lab_export_bucket != "" && var.lab_export_name != "")
+    error_message = "aws labs need the plan role and the billing export (lab_plan_role_arn, lab_export_bucket, lab_export_name): re-run `crucible aws labs-init`, then `crucible aws up`."
+  }
 }
 variable "lab_ops_role_arn" {
   type    = string
@@ -101,11 +105,23 @@ variable "lab_regions" {
   default     = ""
   description = "Comma-separated regions aws labs may use (the labs stack's allowed_regions)"
 }
-variable "infracost_api_key" {
+variable "lab_plan_role_arn" {
   type        = string
   default     = ""
-  sensitive   = true
-  description = "Free key from `infracost auth login`. Without it aws labs cannot be priced, so they cannot be requested."
+  description = "The read-only role cost estimates plan with"
+}
+variable "lab_export_bucket" {
+  type        = string
+  default     = ""
+  description = "The billing export (CUR 2.0) bucket billed spend is read from"
+}
+variable "lab_export_prefix" {
+  type    = string
+  default = "cur"
+}
+variable "lab_export_name" {
+  type    = string
+  default = ""
 }
 variable "bootstrap_admin" {
   type        = string
@@ -115,4 +131,47 @@ variable "bootstrap_admin" {
     condition     = var.bootstrap_admin == "" || can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$", var.bootstrap_admin))
     error_message = "bootstrap_admin must be empty or a plain email address (letters, digits and . _ % + - only)."
   }
+}
+variable "toolbox_image" {
+  type        = string
+  default     = ""
+  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = cluster labs off."
+  validation {
+    condition     = var.toolbox_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.toolbox_image))
+    error_message = "toolbox_image must be empty or an image pinned by digest, e.g. ghcr.io/you/crucible-toolbox@sha256:<64 hex>: laptops pull it, so never a tag."
+  }
+}
+
+# Email (optional). Without smtp_addr Crucible sends no email; Slack/Teams webhooks still work.
+variable "smtp_addr" {
+  type        = string
+  default     = ""
+  description = "SMTP server as host:port, e.g. email-smtp.eu-west-1.amazonaws.com:587. Empty = no email (keys added to crucible-secrets by hand are kept)."
+  validation {
+    condition     = var.smtp_addr == "" || can(regex("^[A-Za-z0-9.-]+:[0-9]{1,5}$", var.smtp_addr))
+    error_message = "smtp_addr must be empty or host:port, e.g. smtp.example.com:587."
+  }
+}
+variable "smtp_from" {
+  type        = string
+  default     = ""
+  description = "Sender: an address or \"Name <address>\" (default in the API: crucible@localhost)"
+  validation {
+    condition     = !can(regex("['\\x00-\\x1f]", var.smtp_from))
+    error_message = "smtp_from must not contain a single quote or a control character."
+  }
+}
+variable "smtp_username" {
+  type    = string
+  default = ""
+  validation {
+    condition     = !can(regex("['\\x00-\\x1f]", var.smtp_username))
+    error_message = "smtp_username must not contain a single quote or a control character."
+  }
+}
+variable "smtp_password" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Stored as the SecureString /<name>/smtp_password; deploy.sh copies it into crucible-secrets"
 }

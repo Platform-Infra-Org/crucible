@@ -1,5 +1,6 @@
 id: cloud-heat
-runtime: aws
+runtime: terraform
+cloud: aws
 ttl: 1h
 idle_timeout: 30m
 task_order: free
@@ -17,3 +18,5 @@ tasks:
 aws:
   region: eu-west-1
   max_hourly_usd: 0.05
+  usage:                       # expected usage of usage-priced resources, by resource address
+    aws_s3_bucket.forge: { storage_gb: 1 }

@@ -194,7 +194,7 @@ func editor(p *config.Platform, training, email string) bool {
 // answer keys and check scripts included, so nobody else gets in: being a participant grants nothing. Scoring stays
 // closed to participants (rbac.Score).
 func canPropose(p *config.Platform, t *content.Training, email string) bool {
-	return (rbac.Checker{P: p}).IsAdmin(email) || editor(p, t.ID, email)
+	return (rbac.Checker{P: p}).MayEdit(email, t.ID)
 }
 
 // canReview: Crucible admins and the training's editors and admins, never the author; participating or not.

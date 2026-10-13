@@ -10,6 +10,11 @@ mock_provider "aws" {
   }
 }
 
+# The billing-region provider alias (Data Exports live in us-east-1) is mocked too.
+mock_provider "aws" {
+  alias = "billing"
+}
+
 variables {
   region = "eu-west-1"
 }
@@ -54,8 +59,8 @@ run "lab_role_is_bounded_tagged_and_short_lived" {
     error_message = "no IAM for lab roles"
   }
   assert {
-    condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "ce:GetCostAndUsage", "cloudtrail:LookupEvents"])
-    error_message = "the ops role only reads the inventory, bucket names, costs and CloudTrail"
+    condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"])
+    error_message = "the ops role only reads the inventory, bucket names and CloudTrail"
   }
   assert {
     condition     = aws_s3_account_public_access_block.labs.block_public_policy && aws_s3_account_public_access_block.labs.restrict_public_buckets
@@ -197,4 +202,118 @@ run "the_trust_names_the_node_role_main_created" {
     condition     = jsondecode(aws_iam_role.lab.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node" && jsondecode(aws_iam_role.ops.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/forge-node"
     error_message = "labs-init passes main's node role name to both trusts"
   }
+}
+
+run "plan_role_reads_only" {
+  command = apply
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement :
+    alltrue([for a in flatten([s.Action]) : can(regex("^[a-z0-9]+:(Describe|Get|List)", a))])])
+    error_message = "the plan role may only describe, get and list"
+  }
+  assert {
+    condition     = aws_iam_role.plan.max_session_duration == 3600 && aws_iam_role.plan.permissions_boundary == aws_iam_policy.boundary.arn
+    error_message = "the plan role sits inside the boundary"
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.plan.assume_role_policy).Statement[0].Condition.ArnEquals["aws:PrincipalArn"] == "arn:aws:iam::444455556666:role/crucible-node"
+    error_message = "only Crucible's node role may assume the plan role"
+  }
+}
+
+run "ops_reads_the_export_not_cost_explorer" {
+  command = apply
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.ops.policy, "ce:")
+    error_message = "no Cost Explorer: it is paid per call"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.ops.policy, aws_s3_bucket.exports.arn)
+    error_message = "the ops role reads the export bucket"
+  }
+  assert {
+    condition     = strcontains(aws_iam_role_policy.ops.policy, "labs/*")
+    error_message = "the ops role reads lab state for metering"
+  }
+}
+
+run "export_and_budget" {
+  command = apply
+  variables {
+    budget_monthly_usd = 100
+    budget_emails      = ["admin@example.com"]
+  }
+  assert {
+    condition     = aws_bcmdataexports_export.labs.export[0].destination_configurations[0].s3_destination[0].s3_bucket == aws_s3_bucket.exports.bucket
+    error_message = "the CUR export lands in the export bucket"
+  }
+  assert {
+    condition     = aws_budgets_budget.labs[0].limit_amount == "100" && length(aws_budgets_budget.labs[0].notification) == 2
+    error_message = "a monthly budget alerting at 80% and 100%"
+  }
+  assert {
+    condition     = output.budget_monthly_usd == 100 && output.budget_emails == tolist(["admin@example.com"])
+    error_message = "labs-init reads the budget back from the outputs to keep it on a re-run"
+  }
+}
+
+run "no_budget_without_emails" {
+  command = apply
+  assert {
+    condition     = length(aws_budgets_budget.labs) == 0
+    error_message = "no budget without someone to tell"
+  }
+}
+
+run "plan_role_actions_fit_the_boundary" {
+  command = apply
+  assert {
+    condition     = toset(flatten([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : s.Action])) == toset(["ec2:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets"])
+    error_message = "the plan role has exactly these actions"
+  }
+  assert {
+    condition     = alltrue([for s in jsondecode(aws_iam_role_policy.plan.policy).Statement : alltrue([for a in flatten([s.Action]) : contains(["ec2", "s3", "sts", "tag"], split(":", a)[0])])])
+    error_message = "every plan action is inside the boundary's Ceiling, or it is silently denied"
+  }
+}
+
+run "export_query_names_columns" {
+  command = apply
+  assert {
+    condition = alltrue([for c in ["line_item_usage_start_date", "line_item_unblended_cost", "resource_tags"] :
+    strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, c)]) && !strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, "*")
+    error_message = "the export query lists its columns"
+  }
+}
+
+run "export_bucket_policy_guards_confused_deputy" {
+  command = apply
+  assert {
+    condition     = strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:cur:us-east-1:444455556666:definition/*") && strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:bcm-data-exports:us-east-1:444455556666:export/*")
+    error_message = "the export services write only for this account's exports"
+  }
+}
+
+run "ops_export_and_state_reads_are_exact" {
+  command = apply
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadLabState"]).Resource == "arn:aws:s3:::crucible-444455556666-labstate/labs/*" && one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadLabState"]).Action == "s3:GetObject"
+    error_message = "state is read at labs/* only"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Action, "") == "s3:ListBucket"]).Resource == aws_s3_bucket.exports.arn
+    error_message = "ListBucket only on the export bucket"
+  }
+}
+
+run "budget_must_be_positive" {
+  command = plan
+  variables { budget_monthly_usd = 0 }
+  expect_failures = [var.budget_monthly_usd]
+}
+
+run "budget_emails_capped_at_ten" {
+  command = plan
+  variables { budget_emails = [for i in range(11) : "a${i}@example.com"] }
+  expect_failures = [var.budget_emails]
 }

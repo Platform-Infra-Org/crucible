@@ -54,3 +54,16 @@ run "cognito_is_invite_only_and_protected" {
     error_message = "authorization-code flow with a client secret only"
   }
 }
+
+run "secret_key_outlives_the_main_stack" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_parameter.secret_key.name == "/crucible/secret_key" && aws_ssm_parameter.secret_key.type == "SecureString"
+    error_message = "CRUCIBLE_SECRET_KEY must be the SecureString /<name>/secret_key, beside the node's other secrets"
+  }
+  assert {
+    condition     = random_password.secret_key.length == 48 && !random_password.secret_key.special
+    error_message = "the secret key is 48 characters with no special characters"
+  }
+}

@@ -1,5 +1,5 @@
 // Package awscloud is Crucible's narrow view of the shared AWS lab account (spec §8.2, §9.3): lab credentials with
-// session tags, the tag inventory, deleting leftovers, CloudTrail create calls and Cost Explorer. Client talks to
+// session tags, the tag inventory, deleting leftovers, CloudTrail create calls and the billing export in S3. Client talks to
 // AWS; Fake keeps everything in memory for tests and for CRUCIBLE_AWS_LABS=dryrun.
 package awscloud
 
@@ -63,6 +63,8 @@ var ErrTruncated = errors.New("CloudTrail lookup stopped at its page cap; older 
 type Cloud interface {
 	// AssumeLab returns one-hour credentials for the lab role, tagged with the session's lab, team and training.
 	AssumeLab(ctx context.Context, s Session) (Credentials, error)
+	// AssumePlan returns 15-minute credentials for the read-only plan role that estimates run `terraform plan` with.
+	AssumePlan(ctx context.Context) (Credentials, error)
 	// Tagged lists resources in region tagged crucible:lab-id (= labID, or any value when labID is "").
 	Tagged(ctx context.Context, region, labID string) ([]Resource, error)
 	// Delete removes one resource with lab credentials. deleted is false when it was already gone;
@@ -73,6 +75,8 @@ type Cloud interface {
 	// LabWrites lists successful create calls by lab sessions since `since` whose request had no lab tag.
 	// ErrTruncated (with the events read so far) when it stopped before the end.
 	LabWrites(ctx context.Context, region string, since time.Time) ([]TrailEvent, error)
+	// ReadState returns a lab's Terraform state object from the state bucket (in region), read as the ops role.
+	ReadState(ctx context.Context, region, bucket, key string) ([]byte, error)
 }
 
 var labIDRe = regexp.MustCompile(`^[0-9a-f]{12}$`)

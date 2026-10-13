@@ -2,10 +2,14 @@ package awscloud
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,8 +21,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/cloudtrail"
 	cttypes "github.com/aws/aws-sdk-go-v2/service/cloudtrail/types"
-	"github.com/aws/aws-sdk-go-v2/service/costexplorer"
-	cetypes "github.com/aws/aws-sdk-go-v2/service/costexplorer/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	tagging "github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
@@ -31,9 +33,13 @@ import (
 )
 
 type Config struct {
-	LabRoleARN string // assumed per lab, with session tags (deploy/aws/labs output lab_role_arn)
-	OpsRoleARN string // inventory, CloudTrail and Cost Explorer (output ops_role_arn)
-	Endpoint   string // tests only: every service at this URL (S3 path-style)
+	LabRoleARN  string // assumed per lab, with session tags (deploy/aws/labs output lab_role_arn)
+	OpsRoleARN  string // inventory, CloudTrail and the billing export in S3 (output ops_role_arn)
+	PlanRoleARN string // read-only, for estimates' terraform plan (output plan_role_arn); unset = no estimates
+	// The CUR 2.0 export: s3://<ExportBucket>/<ExportPrefix>/<ExportName>/data/BILLING_PERIOD=YYYY-MM/*.csv.gz
+	ExportBucket, ExportPrefix, ExportName string
+	ExportRegion                           string // the export bucket's region: the labs stack's (CRUCIBLE_AWS_STATE_REGION)
+	Endpoint                               string // tests only: every service at this URL (S3 path-style)
 }
 
 // Client is the real lab account. Its own identity is the default credential chain: the node's instance role.
@@ -88,6 +94,20 @@ func (c *Client) AssumeLab(ctx context.Context, s Session) (Credentials, error) 
 	}
 	out, err := c.sts().AssumeRole(ctx, &sts.AssumeRoleInput{RoleArn: aws.String(c.cfg.LabRoleARN),
 		RoleSessionName: aws.String(SessionName(s.LabID)), DurationSeconds: aws.Int32(3600), Tags: tags})
+	if err != nil {
+		return Credentials{}, err
+	}
+	k := out.Credentials
+	return Credentials{AccessKeyID: aws.ToString(k.AccessKeyId), SecretAccessKey: aws.ToString(k.SecretAccessKey),
+		SessionToken: aws.ToString(k.SessionToken), Expires: aws.ToTime(k.Expiration)}, nil
+}
+
+func (c *Client) AssumePlan(ctx context.Context) (Credentials, error) {
+	if c.cfg.PlanRoleARN == "" {
+		return Credentials{}, errors.New("estimates need the plan role (CRUCIBLE_AWS_PLAN_ROLE_ARN)")
+	}
+	out, err := c.sts().AssumeRole(ctx, &sts.AssumeRoleInput{RoleArn: aws.String(c.cfg.PlanRoleARN),
+		RoleSessionName: aws.String("crucible-plan"), DurationSeconds: aws.Int32(900)})
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -273,45 +293,181 @@ func deleteBucket(ctx context.Context, cl *s3.Client, bucket string) error {
 	return err
 }
 
-func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error) {
-	cl := costexplorer.NewFromConfig(c.ops, func(o *costexplorer.Options) { o.Region = "us-east-1"; o.BaseEndpoint = c.endpoint() })
-	in := &costexplorer.GetCostAndUsageInput{
-		TimePeriod:  &cetypes.DateInterval{Start: aws.String(from.Format(time.DateOnly)), End: aws.String(to.Format(time.DateOnly))},
-		Granularity: cetypes.GranularityDaily,
-		Metrics:     []string{"UnblendedCost"},
-		GroupBy:     []cetypes.GroupDefinition{{Type: cetypes.GroupDefinitionTypeTag, Key: aws.String(TagLab)}},
+// maxState bounds one lab's Terraform state.
+const maxState = 32 << 20
+
+func (c *Client) ReadState(ctx context.Context, region, bucket, key string) ([]byte, error) {
+	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
+		o.Region, o.BaseEndpoint, o.UsePathStyle = region, c.endpoint(), c.cfg.Endpoint != ""
+	})
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		return nil, err
 	}
-	var out []DailyCost
-	for {
-		res, err := cl.GetCostAndUsage(ctx, in)
+	defer obj.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(obj.Body, maxState+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxState {
+		return nil, fmt.Errorf("state %s is over 32 MiB", key)
+	}
+	return b, nil
+}
+
+// maxExportObject bounds one export file after decompression.
+const maxExportObject = 512 << 20
+
+// Costs reads the billed spend from the free CUR 2.0 export in S3 (gzipped CSV; per billing month the window touches, the files its manifest lists), summed per lab and UTC day over [from, to). Untagged lines are skipped, and so are
+// credits, refunds and discounts: billed spend is gross, so it errs high. Any unreadable file or
+// malformed cell fails the whole read: a half-read bill must never settle a lab. No files yet is no costs.
+func (c *Client) Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error) {
+	cl := s3.NewFromConfig(c.ops, func(o *s3.Options) {
+		o.BaseEndpoint, o.UsePathStyle = c.endpoint(), c.cfg.Endpoint != ""
+		if c.cfg.ExportRegion != "" {
+			o.Region = c.cfg.ExportRegion
+		}
+	})
+	type key struct {
+		day time.Time
+		lab string
+	}
+	sums := map[key]float64{}
+	for m := time.Date(from.Year(), from.Month(), 1, 0, 0, 0, 0, time.UTC); m.Before(to); m = m.AddDate(0, 1, 0) {
+		keys, err := c.manifestFiles(ctx, cl, m)
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range res.ResultsByTime {
-			day, err := time.Parse(time.DateOnly, aws.ToString(r.TimePeriod.Start))
-			if err != nil {
-				return nil, err
-			}
-			for _, g := range r.Groups {
-				if len(g.Keys) == 0 {
-					continue
-				}
-				id := strings.TrimPrefix(g.Keys[0], TagLab+"$")
-				if id == "" {
-					continue // untagged spend: not a lab's
-				}
-				usd, err := strconv.ParseFloat(aws.ToString(g.Metrics["UnblendedCost"].Amount), 64)
-				if err != nil {
-					return nil, err
-				}
-				out = append(out, DailyCost{Day: day, LabID: id, USD: usd})
+		for _, k := range keys {
+			if err := readExportObject(ctx, cl, c.cfg.ExportBucket, k, from, to, func(d time.Time, lab string, usd float64) {
+				sums[key{d, lab}] += usd
+			}); err != nil {
+				return nil, fmt.Errorf("export file %s: %w", k, err)
 			}
 		}
-		if res.NextPageToken == nil {
-			return out, nil
-		}
-		in.NextPageToken = res.NextPageToken
 	}
+	out := make([]DailyCost, 0, len(sums))
+	for k, usd := range sums {
+		out = append(out, DailyCost{Day: k.day, LabID: k.lab, USD: usd})
+	}
+	slices.SortFunc(out, func(a, b DailyCost) int {
+		if d := a.Day.Compare(b.Day); d != 0 {
+			return d
+		}
+		return strings.Compare(a.LabID, b.LabID)
+	})
+	return out, nil
+}
+
+// manifestFiles returns the keys of the month's current data files, from the export's manifest (the data prefix
+// also holds files of earlier runs). No manifest: the export has not run for that month yet.
+func (c *Client) manifestFiles(ctx context.Context, cl *s3.Client, m time.Time) ([]string, error) {
+	base := strings.TrimPrefix(strings.Trim(c.cfg.ExportPrefix, "/")+"/"+c.cfg.ExportName, "/")
+	key := base + "/metadata/BILLING_PERIOD=" + m.Format("2006-01") + "/" + c.cfg.ExportName + "-Manifest.json"
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(c.cfg.ExportBucket), Key: aws.String(key)})
+	var nk *s3types.NoSuchKey
+	if errors.As(err, &nk) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer obj.Body.Close()
+	var man struct {
+		DataFiles []string `json:"dataFiles"`
+	}
+	if err := json.NewDecoder(io.LimitReader(obj.Body, 16<<20)).Decode(&man); err != nil {
+		return nil, fmt.Errorf("manifest %s: %w", key, err)
+	}
+	pre := "s3://" + c.cfg.ExportBucket + "/"
+	keys := make([]string, 0, len(man.DataFiles))
+	for _, f := range man.DataFiles {
+		k, ok := strings.CutPrefix(f, pre)
+		if !ok {
+			return nil, fmt.Errorf("manifest %s lists %q outside bucket %s", key, f, c.cfg.ExportBucket)
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// labTagKeys are the spellings of the lab tag in CUR 2.0's resource_tags JSON.
+var labTagKeys = []string{"user_" + TagLab, "user_crucible_lab_id"}
+
+func readExportObject(ctx context.Context, cl *s3.Client, bucket, key string, from, to time.Time, add func(time.Time, string, float64)) error {
+	obj, err := cl.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+	if err != nil {
+		return err
+	}
+	defer obj.Body.Close()
+	zr, err := gzip.NewReader(obj.Body)
+	if err != nil {
+		return err
+	}
+	lr := &io.LimitedReader{R: zr, N: maxExportObject + 1}
+	r := csv.NewReader(lr)
+	r.FieldsPerRecord = -1
+	head, err := r.Read()
+	if err != nil {
+		return err
+	}
+	col := map[string]int{}
+	for i, h := range head {
+		col[h] = i
+	}
+	di, ok1 := col["line_item_usage_start_date"]
+	ci, ok2 := col["line_item_unblended_cost"]
+	ti, ok3 := col["resource_tags"]
+	yi, ok4 := col["line_item_line_item_type"]
+	if !ok1 || !ok2 || !ok3 || !ok4 {
+		return errors.New("missing line_item_usage_start_date, line_item_unblended_cost, resource_tags or line_item_line_item_type column")
+	}
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if lr.N <= 0 {
+			return errors.New("file larger than 512 MiB uncompressed")
+		}
+		if len(rec) <= max(di, ci, ti, yi) {
+			return errors.New("short row")
+		}
+		if t := rec[yi]; t == "Credit" || t == "Refund" || t == "SavingsPlanNegation" || strings.HasSuffix(t, "Discount") {
+			continue // gross of credits: a credit may run out, and spend that errs high is the safe side
+		}
+		var tags map[string]string
+		if t := rec[ti]; t != "" && json.Unmarshal([]byte(t), &tags) != nil {
+			return fmt.Errorf("bad resource_tags %q", rec[ti])
+		}
+		lab := ""
+		for _, k := range labTagKeys {
+			if lab = tags[k]; lab != "" {
+				break
+			}
+		}
+		if lab == "" {
+			continue // untagged spend: not a lab's
+		}
+		if len(rec[di]) < 10 {
+			return fmt.Errorf("bad usage date %q", rec[di])
+		}
+		d, err := time.Parse(time.DateOnly, rec[di][:10])
+		if err != nil {
+			return err
+		}
+		usd, err := strconv.ParseFloat(rec[ci], 64)
+		if err != nil || math.IsNaN(usd) || math.IsInf(usd, 0) {
+			return fmt.Errorf("bad cost %q", rec[ci])
+		}
+		if !d.Before(from) && d.Before(to) {
+			add(d, lab, usd)
+		}
+	}
+	return nil
 }
 
 func (c *Client) LabWrites(ctx context.Context, region string, since time.Time) ([]TrailEvent, error) {

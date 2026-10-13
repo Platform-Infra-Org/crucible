@@ -188,22 +188,46 @@ func TestIngestCostsUpsertsAndMarksFailures(t *testing.T) {
 	if n != 1 {
 		t.Fatal("a credit is stored as $0")
 	}
-	cloud.AddCost(awscloud.DailyCost{Day: day, LabID: "aaaaaaaaaaaa", USD: 0.5}) // Cost Explorer revised the day
+	cloud.AddCost(awscloud.DailyCost{Day: day, LabID: "aaaaaaaaaaaa", USD: 0.5}) // the export revised the day
 	_ = f.s.IngestCosts(ctx)
 	if total() != 0.5 {
 		t.Fatalf("a revised day replaces the old amount: %v", total())
 	}
 	okBefore := f.clk.Now()
 	f.clk.Add(time.Hour)
-	cloud.Err = errors.New("Cost Explorer is down")
+	cloud.Err = errors.New("the billing export is down")
 	if err := f.s.IngestCosts(ctx); err != nil {
 		t.Fatalf("a failed ingestion is recorded, not retried in a storm: %v", err)
 	}
 	var okAt time.Time
 	var msg string
 	_ = f.s.DB.QueryRow(ctx, `SELECT ingest_ok_at, ingest_error FROM aws_ops`).Scan(&okAt, &msg)
-	if total() != 0.5 || !okAt.Equal(okBefore) || msg != "Cost Explorer is down" {
+	if total() != 0.5 || !okAt.Equal(okBefore) || msg != "the billing export is down" {
 		t.Fatalf("old rows kept, last success kept, error shown: %v %v %q", total(), okAt, msg)
+	}
+}
+
+func TestExportReadFailureLeavesActualsStale(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	if err := f.s.IngestCosts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var okBefore time.Time
+	_ = f.s.DB.QueryRow(ctx, `SELECT ingest_ok_at FROM aws_ops`).Scan(&okBefore)
+	f.clk.Add(time.Hour)
+	cloud.FailCosts(errors.New("export file x: bad cost \"abc\""))
+	_ = f.s.IngestCosts(ctx)
+	var okAt time.Time
+	var msg string
+	_ = f.s.DB.QueryRow(ctx, `SELECT ingest_ok_at, ingest_error FROM aws_ops`).Scan(&okAt, &msg)
+	if !okAt.Equal(okBefore) || msg == "" {
+		t.Fatalf("a bad export keeps ingest_ok_at and records the error: %v %q", okAt, msg)
+	}
+	if l, err := f.s.Ledger(ctx, f.admin); err != nil || !l.ActualsStale {
+		t.Fatalf("the Ledger says actuals are stale: %v %v", l.ActualsStale, err)
 	}
 }
 

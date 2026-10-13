@@ -38,6 +38,12 @@ whatever is left on a cluster you still have (the `lab-<id>` namespace) is yours
 
 An AWS lab builds real cloud resources in a shared AWS account, so it costs money. The lab page shows the estimate.
 
+- **How this estimate was worked out**, under the button, lists every resource the lab's Terraform will create, with
+  its price per hour from AWS list prices or the lab's own declared price and, where the lab states how much it will use (storage, traffic), that
+  usage per hour. The note beside a resource says more: *free* (AWS doesn't charge for it), *declared* (the lab sets
+  its price itself) or *usage not stated* (only the hourly part is counted). The estimate is the total per hour times
+  the lab's full time.
+
 - If it needs an approval, the button reads **Request approval ($…)**. Your request goes to the training's admins, the
   leaders of the team that owns it, or an admin, depending on the amount, and moves up a tier if nobody answers in time. The page shows who it
   is waiting for. **Withdraw request** cancels it.

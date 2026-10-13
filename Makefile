@@ -1,4 +1,4 @@
-.PHONY: test build web local-check cluster-check toolbox
+.PHONY: test build web local-check cluster-check toolbox tools
 test:
 	go test ./...
 build:
@@ -10,6 +10,8 @@ local-check:
 	./scripts/local-check.sh
 cluster-check:
 	./scripts/cluster-check.sh
+tools: # pinned Go, Terraform and kind into .local/tools, checksum-verified (scripts/tools.sh --dry-run shows what)
+	./scripts/tools.sh
 
 TOOLBOX_TAG ?= dev
 toolbox:

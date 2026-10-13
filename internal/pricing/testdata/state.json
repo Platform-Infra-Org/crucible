@@ -1,0 +1,5 @@
+{"version":4,"terraform_version":"1.9.0","serial":3,"lineage":"x","outputs":{},"resources":[
+{"mode":"managed","type":"aws_instance","name":"web","provider":"provider[\"registry.terraform.io/hashicorp/aws\"]","instances":[{"schema_version":1,"attributes":{"instance_type":"t3.micro"}}]},
+{"mode":"data","type":"aws_ami","name":"ubuntu","provider":"provider[\"registry.terraform.io/hashicorp/aws\"]","instances":[{"attributes":{"id":"ami-1"}}]},
+{"module":"module.net","mode":"managed","type":"aws_nat_gateway","name":"this","provider":"provider[\"registry.terraform.io/hashicorp/aws\"]","instances":[{"index_key":0,"attributes":{"connectivity_type":"public"}}]}
+]}

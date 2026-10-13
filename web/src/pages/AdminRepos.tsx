@@ -86,9 +86,14 @@ function RepoCard({ repo, canKeepSecrets, onChange }: { repo: Repo; canKeepSecre
         <h2><code>{repo.url}</code></h2>
         <span className="spacer" />
         <span className={s.cls}>{s.text}</span>
+        {repo.status === 'ok' && repo.can_write !== null && (
+          <span className={repo.can_write ? 'badge complete' : 'badge warn'}>{repo.can_write ? 'Can write' : 'Read only'}</span>
+        )}
         <span className="badge">{repo.auth === 'token' ? 'Token' : repo.auth === 'ssh' ? 'Deploy key' : 'No credential'}</span>
       </div>
       {repo.last_error && <p className="error">{repo.last_error}</p>}
+      {repo.status === 'ok' && repo.can_write === false && <p className="hint">Crucible can read this repository but
+        not push to it, so edits made here cannot be submitted.</p>}
       <p className="repo-trainings">
         <span className="eyebrow">Trainings</span>
         {repo.trainings.length > 0
@@ -154,15 +159,22 @@ export function isSSH(url: string) {
   return /^ssh:\/\//i.test(url) || (!url.includes('://') && /^[^@/:\s]+@/.test(url))
 }
 
-function Kinds({ url, auth, setAuth, canKeepSecrets }: { url: string; auth: Repo['auth']; setAuth: (a: Repo['auth']) => void; canKeepSecrets: boolean }) {
+// Kinds is how Crucible signs in. "No credential" is Crucible adding none, not a promise that nothing can write: git
+// still offers the instance's own git credentials (the image's credential helper) to an https:// repository.
+export function Kinds({ url, auth, setAuth, canKeepSecrets }: { url: string; auth: Repo['auth']; setAuth: (a: Repo['auth']) => void; canKeepSecrets: boolean }) {
   return (
+    <>
     <label>How Crucible signs in
       <select value={auth} onChange={(e) => setAuth(e.target.value as Repo['auth'])}>
-        <option value="none">Nothing — the repository is public</option>
+        <option value="none">No credential of its own</option>
         <option value="token" disabled={!canKeepSecrets || !/^https?:\/\//i.test(url)}>An access token</option>
         <option value="ssh" disabled={!canKeepSecrets || !(isSSH(url) || /^https?:\/\//i.test(url))}>A deploy key Crucible makes</option>
       </select>
     </label>
+    {auth === 'none' && <p className="muted">Crucible adds no credential of its own. A public repository is read as it
+      is; an https:// one may still be reached with this instance&apos;s own git credentials, if whoever runs Crucible
+      set them. Test connection shows whether Crucible can write.</p>}
+    </>
   )
 }
 

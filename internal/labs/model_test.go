@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,5 +107,17 @@ func TestParseRates(t *testing.T) {
 		if _, err := ParseRates(bad); err == nil {
 			t.Errorf("%q must be rejected", bad)
 		}
+	}
+}
+
+func TestEstimateRoundsUpAndAFreeLabIsPlusZero(t *testing.T) {
+	if e := roundEstimate(0); e != 0 || math.Signbit(e) {
+		t.Fatalf("a free lab's estimate is +0, not %v (signbit %v)", e, math.Signbit(e))
+	}
+	if e := roundEstimate(0.001); e != 0.01 {
+		t.Fatalf("a paid lab never rounds to free: %v", e)
+	}
+	if e := roundEstimate(0.5); e != 0.5 {
+		t.Fatalf("an exact cent stays: %v", e)
 	}
 }

@@ -8,6 +8,7 @@ code, pre { font-family: 'JetBrains Mono', monospace; }
 .muted { color: var(--muted); }
 .error { color: var(--danger); }
 .warn { color: var(--accent-2); }
+p.warn { overflow-wrap: anywhere; } /* a lab's blocked reason may quote a terraform error: never widen a phone */
 .pass { color: var(--ok); }
 .spacer { flex: 1; }
 .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin: 1rem 0; position: relative; }
@@ -152,6 +153,18 @@ button.tag-pill:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, 
 .lab-settings { margin-top: 1rem; }
 .lab-settings summary { cursor: pointer; color: var(--accent); }
 .lab-settings[open] summary { margin-bottom: 0.75rem; }
+/* Cost breakdown table: an aws lab's estimate line by line. Left-aligned even in the centred lobby; prices line up. */
+.cost-breakdown { max-width: 44rem; margin-inline: auto; text-align: left; }
+.cost-breakdown td:nth-child(n+3), .cost-breakdown tfoot td { font-variant-numeric: tabular-nums; }
+.cost-breakdown code { overflow-wrap: anywhere; }
+.cost-breakdown tfoot th, .cost-breakdown tfoot td { border-bottom: 0; font-weight: 600; }
+.cost-breakdown td:first-child { min-width: 10rem; }
+/* A phone: the type is the start of the address anyway, so its column goes and the address keeps room to read. */
+@media (max-width: 640px) {
+  .cost-breakdown :is(th, td):nth-child(2) { display: none; }
+  .cost-breakdown :is(th, td) { padding-inline: 0.3rem; }
+  .cost-breakdown td:first-child { min-width: 6rem; }
+}
 a.button-link { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; }
 a.button-link:hover { border-color: var(--accent); }
 
@@ -411,6 +424,7 @@ meter { width: 8rem; vertical-align: middle; }
 
 .burn { display: grid; grid-template-columns: minmax(10rem, max-content) minmax(8rem, 1fr) max-content; gap: 0.75rem; align-items: center; margin: 0.25rem 0; }
 .burn meter { width: 100%; }
+@media (max-width: 640px) { .burn { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; margin-bottom: 0.6rem; } } /* a phone: label, meter, figures stacked */
 .bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
 .bar-day { flex: 1; display: flex; align-items: flex-end; gap: 1px; height: 100%; }
 .bar { flex: 1; min-height: 1px; border-radius: 2px 2px 0 0; }

@@ -382,7 +382,8 @@ svg .revert { fill: var(--iron); fill-opacity: 0.35; stroke: var(--iron); stroke
             <tr><td>When it acts</td><td>Twice: build at the start, destroy at the end.</td><td>All the time, reconciling.</td></tr>
             <tr><td>A trainee changes a resource</td><td>The change stays. <span class="good">Fits labs.</span></td><td>Reverted at the next check, unless updates are switched off. <span class="bad">Needs care.</span></td></tr>
             <tr><td>Where it remembers what it made</td><td>State file in S3, which the trainee's credentials can read. No secrets in state.</td><td>Objects in the cluster. <span class="good">No state file for trainees to read.</span></td></tr>
-            <tr><td>Pricing before approval</td><td>infracost reads the module. <span class="good">Works today.</span></td><td>infracost doesn't read Crossplane YAML. <span class="bad">Needs our own estimator.</span></td></tr>
+            <tr><td>Pricing before approval</td><td>Crucible runs a read-only <code>terraform plan</code> and prices it from the free AWS Price List. <span class="good">Works today.</span></td><td>No plan to read: Crucible's pricers would have to read Crossplane objects instead. <span class="bad">Needs new work.</span></td></tr>
+            <tr><td>Spend while it runs</td><td>Metered from the lab's state file after its apply and every 15 minutes while it runs; the billing export replaces it later.</td><td>Metered from the objects' status, still to build; the billing export works the same.</td></tr>
             <tr><td>Crucible's tags on everything</td><td>Provider <code>default_tags</code> in the file Crucible adds.</td><td>No equivalent: Crucible must stamp tags into every object before applying. IAM still refuses untagged creates.</td></tr>
             <tr><td>Credentials</td><td>One file per lab, read only by that lab's pods.</td><td>A ProviderConfig per lab; the shared provider pod holds every running lab's credentials.</td></tr>
             <tr><td>Running cost on the server</td><td>A pod for a few minutes per lab.</td><td>Provider controllers and many custom resource definitions, running all the time on the one 16 GiB server.</td></tr>
@@ -390,7 +391,7 @@ svg .revert { fill: var(--iron); fill-opacity: 0.35; stroke: var(--iron); stroke
             <tr><td>Finding out it worked</td><td>The pod's exit code and log.</td><td>Each object's <code>Ready</code> condition and events.</td></tr>
             <tr><td>Clean-up at the end</td><td><code>terraform destroy</code> from the state, then the tag sweep.</td><td>Delete the objects, wait until they are gone, then the tag sweep.</td></tr>
             <tr><td>Lint and preview</td><td>Built and tested.</td><td>To be built: allowed kinds, required tags, no own ProviderConfig, management policies.</td></tr>
-            <tr><td>Other clouds later</td><td>Providers for GCP and Azure; infracost prices them.</td><td>Providers for GCP and Azure; pricing still our own.</td></tr>
+            <tr><td>Other clouds later</td><td>Providers for GCP and Azure; <code>runtime: terraform</code> takes a <code>cloud:</code>, and each new cloud needs its own pricers and billing reader.</td><td>Providers for GCP and Azure; the same pricers and billing readers, plus reading Crossplane objects.</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -402,7 +403,7 @@ svg .revert { fill: var(--iron); fill-opacity: 0.35; stroke: var(--iron); stroke
             <p class="plus">Advantages</p>
             <ul>
               <li>Already built, tested and documented end to end.</li>
-              <li>infracost prices labs, so approvals and budgets work.</li>
+              <li>Crucible prices the plan itself, for free, so approvals and budgets work.</li>
               <li>Acts only at start and end, so trainees' changes stand.</li>
               <li>Nothing runs between labs; light on the single server.</li>
               <li>Each lab's credentials stay inside its own pods.</li>
@@ -425,7 +426,7 @@ svg .revert { fill: var(--iron); fill-opacity: 0.35; stroke: var(--iron); stroke
             </ul>
             <p class="minus">Disadvantages</p>
             <ul>
-              <li>No infracost: every lab would need our own price estimate before approval.</li>
+              <li>No <code>terraform plan</code>: Crucible's pricers and metering would need a Crossplane reader before approval.</li>
               <li>Reverts trainees' changes unless every resource limits its management policies.</li>
               <li>Always-on controllers and custom resource definitions on a small server.</li>
               <li>One provider pod holds every running lab's credentials.</li>
@@ -438,10 +439,10 @@ svg .revert { fill: var(--iron); fill-opacity: 0.35; stroke: var(--iron); stroke
       <section id="adopt">
         <h2>If we adopted Crossplane</h2>
         <p class="lede">As a second engine for AWS labs, beside Terraform, never as a replacement. A lab would choose it with something like
-          <code>engine: crossplane</code> under <code>runtime: aws</code>.</p>
+          <code>runtime: crossplane</code> with <code>cloud: aws</code>, beside today's <code>runtime: terraform</code>.</p>
         <ol class="steps">
           <li><h4>Try it small, in dry run</h4><p>On the kind cluster from <code>make cluster-check</code>: install Crossplane and only the S3 provider, and build one bucket for one lab with that lab's credentials. Measure the memory the controllers use.</p></li>
-          <li><h4>Solve pricing</h4><p>An estimator that turns a lab's objects into an hourly price (instance types and volume sizes against the AWS Price List), so approvals and budgets keep failing closed.</p></li>
+          <li><h4>Solve pricing</h4><p>Turn a lab's objects into the resources Crucible's pricers already take (type and attributes, today read from a Terraform plan), priced from the same AWS Price List data, so approvals and budgets keep failing closed. Meter from the objects instead of a state file.</p></li>
           <li><h4>Solve reverting</h4><p>Require management policies of create, observe and delete on every lab object, and make lint refuse anything else.</p></li>
           <li><h4>Wire the runner</h4><p>A per-lab ProviderConfig pointing at the lab's credentials Secret (renewed hourly, as today); tags stamped into every object; readiness from <code>Ready</code> conditions; deletion and waiting at the end; the same sweep and reaper.</p></li>
           <li><h4>Tighten the cluster</h4><p>Extend the service account's permissions and the admission policy only as far as Crossplane objects in lab namespaces.</p></li>

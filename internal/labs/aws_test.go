@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -502,5 +503,115 @@ func TestAWSDestroyWithoutModuleRunsNoTerraform(t *testing.T) {
 	}
 	if got := steps(cs, "create", "delete"); slices.Contains(got, "create pods") || !slices.Contains(got, "delete namespaces") {
 		t.Fatalf("no terraform without a module: %v", got)
+	}
+}
+
+// An estimate plans the module in crucible-estimates with the plan role's credentials only: no lab session, no lab
+// namespace, and nothing left behind.
+func TestAWSPlanRunsWithThePlanRoleOnly(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodSucceeded, "")
+	var secrets []*corev1.Secret
+	var modules []*corev1.ConfigMap
+	cs.PrependReactor("create", "*", func(act k8stesting.Action) (bool, runtime.Object, error) {
+		switch o := act.(k8stesting.CreateAction).GetObject().(type) {
+		case *corev1.Secret:
+			secrets = append(secrets, o.DeepCopy())
+		case *corev1.ConfigMap:
+			modules = append(modules, o.DeepCopy())
+		}
+		return false, nil, nil
+	})
+	a, cloud, _ := testAWS(cs)
+	out, err := a.Plan(ctx, cloudHeat(t))
+	if err != nil || string(out) != "fake logs" { // the fake clientset's pod log
+		t.Fatalf("the plan JSON is the pod's output: %q %v", out, err)
+	}
+	if got := steps(cs, "create"); !slices.Equal(got, []string{"create namespaces", "create networkpolicies", "create secrets",
+		"create configmaps", "create pods"}) {
+		t.Fatalf("namespace and policy first, then the run's credentials, module and pod: %v", got)
+	}
+	plan, _ := (&awscloud.Fake{}).AssumePlan(ctx)
+	if len(secrets) != 1 || secrets[0].Namespace != estimatesNS || string(secrets[0].Data["credentials"]) != string(plan.File()) {
+		t.Fatalf("the plan role's credentials, nothing else: %+v", secrets)
+	}
+	if len(cloud.Assumed()) != 0 {
+		t.Fatalf("no lab session for an estimate: %+v", cloud.Assumed())
+	}
+	if len(modules) != 1 || !strings.Contains(untar(t, modules[0].BinaryData["module.tgz"])["main.tf"], "aws_s3_bucket") {
+		t.Fatalf("the lab's module: %+v", modules)
+	}
+	for _, kind := range []string{"pods", "secrets", "configmaps"} {
+		if !slices.Contains(steps(cs, "delete"), "delete "+kind) {
+			t.Fatalf("the run's %s are deleted afterwards: %v", kind, steps(cs, "delete"))
+		}
+	}
+	if _, err := a.Plan(ctx, cloudHeat(t)); err != nil {
+		t.Fatalf("the namespace and policy already exist the second time: %v", err)
+	}
+}
+
+func TestAWSPlanFailureIsMaskedAndCleanedUp(t *testing.T) {
+	ctx := context.Background()
+	plan, _ := (&awscloud.Fake{}).AssumePlan(ctx)
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodFailed, "Error: AccessDenied for "+plan.SecretAccessKey+" "+plan.SessionToken)
+	a, _, _ := testAWS(cs)
+	_, err := a.Plan(ctx, cloudHeat(t))
+	if err == nil || !strings.Contains(err.Error(), "terraform plan failed: Error: AccessDenied") ||
+		strings.Contains(err.Error(), plan.SecretAccessKey) || strings.Contains(err.Error(), plan.SessionToken) {
+		t.Fatalf("the tail without the credentials: %v", err)
+	}
+	if lf := (*labFault)(nil); !errors.As(err, &lf) {
+		t.Fatalf("a failed plan is the lab's fault, shown to its editors: %T", err)
+	}
+	if !slices.Contains(steps(cs, "delete"), "delete secrets") {
+		t.Fatal("the credentials are deleted after a failure too")
+	}
+}
+
+func TestAWSPlanNeverRunsInDryRun(t *testing.T) {
+	cs := fake.NewClientset()
+	a, _, _ := testAWS(cs)
+	a.DryRun = &awscloud.Fake{}
+	if _, err := a.Plan(context.Background(), cloudHeat(t)); err == nil || len(cs.Actions()) != 0 {
+		t.Fatalf("a dry run prices from fixed rates, never a plan: %v %v", err, cs.Actions())
+	}
+}
+
+// A plan whose API died mid-run leaves its pod, credentials and module behind; the sweep deletes them after 15 minutes.
+func TestSweepDeletesLeakedPlanObjects(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	old, fresh := metav1.NewTime(f.clk.Now().Add(-16*time.Minute)), metav1.NewTime(f.clk.Now().Add(-5*time.Minute))
+	meta := func(ns, name string, at metav1.Time) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: at, Labels: map[string]string{labLabel: estimatesLabel}}
+	}
+	cs := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.Secret{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.ConfigMap{ObjectMeta: meta(estimatesNS, "tf-plan-aaaaaaaaaaaa", old)},
+		&corev1.Pod{ObjectMeta: meta(estimatesNS, "tf-plan-bbbbbbbbbbbb", fresh)},
+		&corev1.Secret{ObjectMeta: meta(estimatesNS, "tf-plan-bbbbbbbbbbbb", fresh)},
+		&corev1.Pod{ObjectMeta: meta(labNamespace(testID), tfApplyPod, old)},
+		&corev1.Secret{ObjectMeta: meta(labNamespace(testID), awsSecret, old)})
+	a, _, _ := testAWS(cs)
+	f.s.Runners["aws"] = a
+	f.s.Sweep(ctx)
+	gone := func(err error) bool { return apierrors.IsNotFound(err) }
+	core := cs.CoreV1()
+	_, e1 := core.Pods(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	_, e2 := core.Secrets(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	_, e3 := core.ConfigMaps(estimatesNS).Get(ctx, "tf-plan-aaaaaaaaaaaa", metav1.GetOptions{})
+	if !gone(e1) || !gone(e2) || !gone(e3) {
+		t.Fatalf("a leaked run is deleted: %v %v %v", e1, e2, e3)
+	}
+	_, e4 := core.Pods(estimatesNS).Get(ctx, "tf-plan-bbbbbbbbbbbb", metav1.GetOptions{})
+	_, e5 := core.Secrets(estimatesNS).Get(ctx, "tf-plan-bbbbbbbbbbbb", metav1.GetOptions{})
+	_, e6 := core.Pods(labNamespace(testID)).Get(ctx, tfApplyPod, metav1.GetOptions{})
+	_, e7 := core.Secrets(labNamespace(testID)).Get(ctx, awsSecret, metav1.GetOptions{})
+	if e4 != nil || e5 != nil || e6 != nil || e7 != nil {
+		t.Fatalf("a running plan and lab objects are left alone: %v %v %v %v", e4, e5, e6, e7)
 	}
 }

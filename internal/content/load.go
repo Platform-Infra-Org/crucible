@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -24,12 +25,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"crucible/internal/agentproto"
+	"crucible/internal/pricing"
 	"crucible/internal/yamlx"
 )
 
 type loader struct {
-	root  string
-	probs []Problem
+	root    string
+	probs   []Problem
+	tfTypes map[string]string // awsModule: managed resource type → a file declaring it
 }
 
 func (l *loader) add(path, format string, a ...any) {
@@ -360,6 +363,17 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 		lab.Compose = "compose.yaml"
 	}
 
+	if lab.Runtime == "terraform" { // a Terraform lab runs on its cloud's runtime (spec 2026-10-12 §1)
+		if lab.Cloud != "aws" {
+			l.add(lf, "cloud must be aws for runtime: terraform")
+		}
+		lab.Runtime = "aws"
+	} else if lab.Runtime == "aws" {
+		lab.Cloud = "aws"
+	} else if lab.Cloud != "" {
+		l.add(lf, "cloud is only for runtime: terraform")
+	}
+
 	services := map[string]bool{}
 	switch lab.Runtime {
 	case "local":
@@ -382,7 +396,7 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 		services["workspace"] = true // AWS labs get one workspace container (spec §8.2)
 		l.awsModule(dir, lf, lab)
 	default:
-		l.add(lf, "runtime must be cluster, local or aws")
+		l.add(lf, "runtime must be local, cluster, terraform (or aws)")
 	}
 	if lab.AWS != nil && lab.Runtime != "aws" {
 		l.add(lf, "aws: is only for runtime: aws")
@@ -769,6 +783,8 @@ func interpolates(n *yaml.Node) bool {
 }
 
 var (
+	tfTypeRe    = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9_]+$`)
+	tfAddrRe    = regexp.MustCompile(`^(module\.[a-zA-Z0-9_-]+(\[[^\]]+\])?\.)*[a-z0-9]+_[a-z0-9_]+\.[a-zA-Z0-9_-]+(\[[^\]]+\])?$`)
 	awsRegionRe = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d$`)
 	// required_providers may only name HashiCorp's own providers: anything else is a downloaded binary on the runner
 	hashicorpProvider = regexp.MustCompile(`^(registry\.terraform\.io/)?hashicorp/[a-z0-9-]+$`)
@@ -801,7 +817,7 @@ var (
 // awsModule checks an aws lab (spec §4.5, §8.2). Region and price ceiling are required. terraform/ holds a module
 // Crucible runs as-is after adding its own provider, backend and variables, so the module must not declare provider,
 // backend, cloud or import blocks nor ship tfvars or state; providers must be HashiCorp's; module sources must be local
-// so neither infracost (in the API pod) nor terraform fetches code from the network. Every .tf and .tf.json is parsed
+// so terraform never fetches code from the network. Every .tf and .tf.json is parsed
 // with HCL: a regex cannot be made sound for this. This runs inside crucible-api on an author's push, so sizes are
 // capped before anything is parsed, nesting depth is capped before the (recursive) parser runs, and no expression is
 // ever evaluated: the values lint cares about must be literal strings. hashicorp/local and hashicorp/external (host
@@ -813,6 +829,25 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	}
 	if lab.AWS == nil || lab.AWS.MaxHourlyUSD <= 0 {
 		l.add(lf, "aws.max_hourly_usd must be set above 0 for runtime: aws")
+	}
+	prices := map[string]float64{}
+	if lab.AWS != nil {
+		prices = lab.AWS.Prices
+		for t, p := range prices {
+			if !tfTypeRe.MatchString(t) || !(p > 0) || math.IsInf(p, 0) {
+				l.add(lf, "aws.prices: %s needs a resource type and a price above 0 (USD per hour)", t)
+			}
+		}
+		for a, u := range lab.AWS.Usage {
+			if !tfAddrRe.MatchString(a) {
+				l.add(lf, "aws.usage: %q is not a resource address", a)
+			}
+			for k, v := range u {
+				if v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+					l.add(lf, "aws.usage: %s.%s must not be negative", a, k)
+				}
+			}
+		}
 	}
 	root := filepath.Join(dir, "terraform")
 	var tfs []string
@@ -864,8 +899,14 @@ func (l *loader) awsModule(dir, lf string, lab *Lab) {
 	if tooBig {
 		return
 	}
-	for _, p := range tfs {
+	l.tfTypes = map[string]string{}
+	for _, p := range tfs { // every .tf under terraform/, so local modules (which must live there) are covered
 		l.tfFile(root, p, strings.HasSuffix(strings.ToLower(p), ".json"))
+	}
+	for _, t := range slices.Sorted(maps.Keys(l.tfTypes)) {
+		if _, ok := prices[t]; !ok && !pricing.KnownAWS(t) {
+			l.add(l.tfTypes[t], "%s: Crucible can't price this resource type yet; declare it under aws.prices (USD per hour)", t)
+		}
 	}
 }
 
@@ -903,6 +944,9 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
 		case "resource", "data", "ephemeral", "action":
+			if blk.Type == "resource" && l.tfTypes[blk.Labels[0]] == "" {
+				l.tfTypes[blk.Labels[0]] = p
+			}
 			if prov, _, _ := strings.Cut(blk.Labels[0], "_"); tfBannedProviders["hashicorp/"+prov] {
 				l.add(p, "%s %q: hashicorp/%s is not allowed (it reads host files or runs commands)", blk.Type, blk.Labels[0], prov)
 			}
@@ -940,8 +984,8 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 	}
 }
 
-// tfFileFuncs are terraform's functions that read files. infracost evaluates the module inside crucible-api, so a
-// read of the pod's own files (service account token, mounted config) could steer the price shown to trainees.
+// tfFileFuncs are terraform's functions that read files. the estimate's terraform plan evaluates the module, so a
+// read outside it (the pod's mounted credentials and config) could leak them or steer the price shown to trainees.
 var tfFileFuncs = map[string]bool{"file": true, "filebase64": true, "filemd5": true, "filesha1": true,
 	"filesha256": true, "filesha512": true, "filebase64sha256": true, "filebase64sha512": true, "fileexists": true,
 	"fileset": true, "templatefile": true}

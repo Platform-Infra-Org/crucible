@@ -2,7 +2,11 @@
 package httpapi
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -83,7 +87,7 @@ func NewRouter(d Deps) chi.Router {
 		httpx.JSON(w, http.StatusOK, meta)
 	})
 	r.Post("/api/git/hook", func(w http.ResponseWriter, r *http.Request) {
-		if d.HookSecret == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Crucible-Secret")), []byte(d.HookSecret)) != 1 {
+		if !hookAuthorized(r, d.HookSecret) {
 			httpx.Error(w, apperr.Wrap(apperr.NotFound, "not found"))
 			return
 		}
@@ -287,4 +291,35 @@ func canScore(p *config.Platform, email string) bool {
 		}
 	}
 	return false
+}
+
+// hookBodyLimit caps the body read to check a GitHub signature; a push payload is far smaller.
+const hookBodyLimit = 1 << 20
+
+// hookAuthorized accepts the hook secret as Crucible's X-Crucible-Secret header, GitLab's X-Gitlab-Token (the secret
+// verbatim) or GitHub's X-Hub-Signature-256 (sha256=<hex HMAC-SHA256 of the raw body>). Every comparison is
+// constant-time; an empty configured secret refuses everything.
+func hookAuthorized(r *http.Request, secret string) bool {
+	if secret == "" {
+		return false
+	}
+	is := func(v string) bool { return subtle.ConstantTimeCompare([]byte(v), []byte(secret)) == 1 }
+	if is(r.Header.Get("X-Crucible-Secret")) || is(r.Header.Get("X-Gitlab-Token")) {
+		return true
+	}
+	sig, ok := strings.CutPrefix(r.Header.Get("X-Hub-Signature-256"), "sha256=")
+	if !ok {
+		return false
+	}
+	want, err := hex.DecodeString(sig)
+	if err != nil {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, hookBodyLimit+1))
+	if err != nil || len(body) > hookBodyLimit {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hmac.Equal(want, mac.Sum(nil))
 }

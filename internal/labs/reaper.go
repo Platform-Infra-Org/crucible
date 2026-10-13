@@ -20,6 +20,11 @@ import (
 // reconcileCluster removed without terraform destroy). Resources with an unknown or malformed lab id are reported,
 // never deleted: they may belong to another deployment or to a restored database. Successful create calls by lab
 // sessions without the lab tag (CloudTrail) are reported. If the database cannot be read, nothing is deleted.
+// After a run that listed every region, the meters of labs that ended over an hour ago and had nothing tagged left
+// in any region end (a failed terraform destroy left them running; the tag sweep or an earlier run cleaned up after
+// it). A lab with leftovers listed in this run, deleted or not, keeps its meter until a run lists nothing for it.
+// ponytail: lab_instances has no region; a region dropped from CRUCIBLE_AWS_LAB_REGIONS after a lab ran there is no
+// longer listed, so that lab's meter ends with the next complete run. Store the region if regions ever shrink.
 // Deletes AWS refuses for now (awscloud.ErrNotYet) are retried by the next run. Admins get one summary when
 // something new turns up.
 func (s *Service) Reap(ctx context.Context) error {
@@ -29,10 +34,13 @@ func (s *Service) Reap(ctx context.Context) error {
 	now := s.Now()
 	var errs []error
 	report := func(source, labID, arn, detail string) { s.finding(ctx, source, labID, arn, "reported", detail) }
+	complete := len(s.AWSRegions) > 0 // every region listed and every ended lab's leftovers handled: meters of ended labs can end
+	listed := []string{}              // labs with tagged resources in this run: their meters stay open
 	for _, region := range s.AWSRegions {
 		res, err := s.Cloud.Tagged(ctx, region, "")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: listing tagged resources: %w", region, err))
+			complete = false
 			continue
 		}
 		byLab := map[string][]awscloud.Resource{}
@@ -47,9 +55,11 @@ func (s *Service) Reap(ctx context.Context) error {
 			}
 			byLab[r.LabID] = append(byLab[r.LabID], r)
 		}
+		listed = append(listed, ids...)
 		ended, known, err := s.labsEnded(ctx, ids, now)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: reading labs: %w", region, err))
+			complete = false
 			continue // never guess: without the database nothing is deleted
 		}
 		for _, id := range ids {
@@ -62,6 +72,7 @@ func (s *Service) Reap(ctx context.Context) error {
 				creds, err := s.Cloud.AssumeLab(ctx, awscloud.Session{LabID: id})
 				if err != nil {
 					errs = append(errs, fmt.Errorf("lab %s: credentials: %w", id, err))
+					complete = false
 					continue
 				}
 				stuck := ended[id].Before(now.Add(-notYetGrace))
@@ -81,6 +92,13 @@ func (s *Service) Reap(ctx context.Context) error {
 	// The run's ctx may be spent (timeout, shutdown): outcomes and the email go out on a fresh one.
 	wctx, wcancel := finalCtx(ctx)
 	defer wcancel()
+	if complete {
+		if _, err := s.DB.Exec(wctx, `UPDATE lab_resources SET ended_at = $1 WHERE ended_at IS NULL AND lab_id IN (
+			SELECT id FROM lab_instances WHERE state NOT IN ('pending_approval', 'provisioning', 'ready', 'destroying')
+				AND coalesce(destroyed_at, created_at) < $2) AND lab_id <> ALL($3)`, now, now.Add(-time.Hour), listed); err != nil {
+			errs = append(errs, fmt.Errorf("ending the meters of ended labs: %w", err))
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		s.Log.Warn("reaper run incomplete", "err", err)
 		_, _ = s.DB.Exec(wctx, `UPDATE aws_ops SET reap_error = $1, reap_error_at = $2`, cleanText(err.Error()), now)
@@ -167,7 +185,7 @@ func (s *Service) labsEnded(ctx context.Context, ids []string, now time.Time) (e
 	return ended, known, rows.Err()
 }
 
-// IngestCosts stores Cost Explorer's daily cost per lab (spec §9.3): month to date plus the three days before,
+// IngestCosts stores the billed daily cost per lab, read from the CUR 2.0 export in S3 (spec §9.3): month to date plus the three days before,
 // because a day's figure keeps changing for a while. Days are UTC, the end is exclusive. Every row in the window is
 // upserted and ingest_ok_at moves only when the whole run committed (the spend settle rule relies on it). A failure
 // is recorded for the Ledger ("actuals stale") and retried by the next periodic run; caps keep using estimates
@@ -177,12 +195,12 @@ func (s *Service) IngestCosts(ctx context.Context) error {
 		return nil
 	}
 	now := s.Now().UTC()
-	// End is exclusive: tomorrow (UTC) includes today, and is never past the 1st of next month, the latest end
-	// Cost Explorer accepts.
+	// End is exclusive: tomorrow (UTC) includes today. The export is overwritten daily and a month's late
+	// corrections land in its own prefix, so the window's months are re-read in full.
 	from, to := monthStart(now.AddDate(0, 0, -3)), now.Truncate(24*time.Hour).AddDate(0, 0, 1)
 	err := s.ingestCosts(ctx, from, to, now)
 	if err != nil {
-		s.Log.Warn("cost explorer ingestion failed; the Ledger marks actuals stale", "err", err)
+		s.Log.Warn("billing export ingestion failed; the Ledger marks actuals stale", "err", err)
 		wctx, wcancel := finalCtx(ctx) // ctx may be the reason it failed
 		defer wcancel()
 		_, _ = s.DB.Exec(wctx, `UPDATE aws_ops SET ingest_error = $1, ingest_error_at = $2`, cleanText(err.Error()), now)

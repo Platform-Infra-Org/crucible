@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { ProgramConfig, TrainingsAdmin } from '../types'
-import { ManageTrainingsPage } from './ManageTrainings'
+import { ManageTrainingsPage, giveWarning } from './ManageTrainings'
 
 const prog = (over: Partial<ProgramConfig> = {}): ProgramConfig => ({
   team: 'forge', training: 'forge-101', title: 'Forge 101', version: 2,
@@ -57,12 +57,21 @@ describe('manage trainings', () => {
     expect(h).toContain('Give to this team')
     expect(h).toMatch(/<option value="anvil"[^>]*>Anvil<\/option>/)
   })
+  // Moving changes no admin: the named ones (forge's groups among them) keep managing it, and anvil gains nothing.
+  test('giving a training away says its admins stay as they are', () => {
+    const w = giveWarning('Forge 101', 'forge', 'anvil')
+    expect(w).toContain('Its admins stay as they are')
+    expect(w).toContain('forge')
+    expect(w).toContain('Nobody on anvil manages it until named as an admin')
+    expect(w).not.toContain('stop managing')
+  })
   test('an editor reads the roles without controls', () => {
     page = { ...base, is_admin: false, can_create: false, trainings: [
       { id: 'forge-101', title: 'Forge 101', available: true, team: 'forge', can_manage: false, program: prog({ can_manage: false }) },
     ] }
     const h = render()
-    expect(h).toContain('Read-only')
+    expect(h).toContain('Read-only: only the training&#x27;s admins and Crucible&#x27;s administrators make changes here.')
+    expect(h).not.toContain('leaders, seniors and juniors') // the owning team grants nothing by itself
     expect(h).toContain('guest@x')
     expect(h).not.toContain('Remove guest@x')
     expect(h).not.toContain('Repository')

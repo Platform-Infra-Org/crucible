@@ -51,7 +51,8 @@ you can change them afterwards. A training can never be left with no admins at a
 training and are not listed on any of them.
 
 Only a Crucible admin gives a training to another team, under **Team**; its roles, version, schedule and
-budget move with it. A training no team owns yet (registered before teams owned trainings) waits there for an admin to
+budget move with it. Its admins stay exactly as they are, including any groups of the old team named there, and nobody
+on the new team manages it until named as an admin. A training no team owns yet (registered before teams owned trainings) waits there for an admin to
 give it to one.
 
 Under **Source**, managers see where the content comes from:

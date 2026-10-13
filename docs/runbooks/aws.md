@@ -139,8 +139,11 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    `deploy/aws/labs/terraform.tfstate` as you did for the persistent stack. labs-init also turns on account-wide
    S3 Block Public Access in that account. The lab roles trust Crucible's node role by exact name: labs-init reads it
    from main's `node_role_name` output when it can, and otherwise trusts `crucible-node` and says so. If your
-   `crucible.tfvars` sets another `name`, run labs-init again after the first `up`. With `allowed_regions`, the list
-   must include `--region` (the state bucket's region); the stack refuses it otherwise.
+   `crucible.tfvars` sets another `name`, run labs-init again after the first `up`. **Lab regions:** labs use `--region`
+   alone unless you pass `--allowed-regions eu-west-1,eu-central-1` (comma-separated, the stack's `allowed_regions`).
+   The list must include `--region` (the state bucket's region); labs-init refuses it otherwise, before running
+   terraform. A re-run without the flag keeps the current list. `crucible aws up` then passes the list to the node
+   (`CRUCIBLE_AWS_LAB_REGIONS`), so run `up` after changing it.
    labs-init also creates, all free:
    - the read-only **plan role** that estimates use (`ec2:Describe*`, `s3:GetBucket*`, `s3:ListAllMyBuckets`, inside
      the lab permission boundary);

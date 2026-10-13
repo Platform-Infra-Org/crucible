@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -146,7 +147,12 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 // with credentials for the lab account; pass the Crucible account when that is a different one. budgetUSD (> 0) and
 // budgetEmails set the account's AWS Budget alert; each one left unset keeps the stack's current value (its outputs),
 // so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails []string) error {
+// allowedRegions (the regions labs may use) must include region; left empty it keeps the stack's current list, and a
+// new stack allows region alone.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string) error {
+	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
+		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
+	}
 	d := o.dir("labs")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -166,6 +172,18 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 		args = append(args, "-var", "budget_emails="+string(b))
 	} else if v := cur["budget_emails"]; v != "" && v != "[]" {
 		args = append(args, "-var", "budget_emails="+v)
+	}
+	if len(allowedRegions) == 0 { // keep the stack's list; a single region is always its --region, the default
+		if v := cur["regions"]; strings.Contains(v, ",") {
+			allowedRegions = strings.Split(v, ",")
+			if !slices.Contains(allowedRegions, region) {
+				return fmt.Errorf("the lab stack allows %s, which lacks --region %s: pass --allowed-regions with the list you want", v, region)
+			}
+		}
+	}
+	if len(allowedRegions) > 0 {
+		b, _ := json.Marshal(allowedRegions) // a JSON list is an HCL list
+		args = append(args, "-var", "allowed_regions="+string(b))
 	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {

@@ -350,7 +350,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 		return fakeAWS(cmd)
 	}}
 	o := r.ops(t.TempDir())
-	if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333", 0, nil); err != nil {
+	if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333", 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var crucible_account_id=111122223333") < 0 {
@@ -412,7 +412,7 @@ func TestLabsInitTrustsMainsNodeRole(t *testing.T) {
 		}
 		return fakeAWS(cmd)
 	}}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var node_role_name=forge-node") < 0 {
@@ -427,7 +427,7 @@ func TestLabsInitBeforeMainSaysWhichRoleItTrusts(t *testing.T) {
 		}
 		return nil
 	}}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "node_role_name") >= 0 {
@@ -441,14 +441,14 @@ func TestLabsInitBeforeMainSaysWhichRoleItTrusts(t *testing.T) {
 // labs-init sets the account's AWS Budget (a free backstop) when asked; without the flags the stack defaults apply.
 func TestLabsInitPassesTheBudget(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 250, []string{"ops@example.com", "fin@example.com"}); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 250, []string{"ops@example.com", "fin@example.com"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=250 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
 		t.Fatalf("labs-init must pass the budget:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "budget_") >= 0 {
@@ -465,17 +465,74 @@ func TestLabsInitKeepsTheBudget(t *testing.T) {
 		return fakeAWS(cmd)
 	}
 	r := &recorder{output: labs}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=250 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
 		t.Fatalf("without the flags the current budget is kept, not reset:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: labs}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 300, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 300, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=300 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
 		t.Fatalf("a new amount keeps the emails:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// labs-init --allowed-regions sets the regions labs may use (an HCL list); without it a new stack has only --region.
+func TestLabsInitPassesTheAllowedRegions(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1", "eu-central-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var allowed_regions=["eu-west-1","eu-central-1"]`) < 0 {
+		t.Fatalf("labs-init must pass the allowed regions:\n%s", strings.Join(r.calls, "\n"))
+	}
+	r = &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "allowed_regions") >= 0 {
+		t.Fatalf("no flag, no allowed_regions var:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// Re-running labs-init without --allowed-regions keeps the stack's regions (its comma-joined regions output).
+func TestLabsInitKeepsTheAllowedRegions(t *testing.T) {
+	labs := func(regions string) func(string) string {
+		return func(cmd string) string {
+			if strings.Contains(cmd, filepath.Join("deploy", "aws", "labs")+" output -json") {
+				return `{"lab_role_arn":{"value":"arn:aws:iam::1:role/crucible-lab"},"regions":{"value":"` + regions + `"}}`
+			}
+			return fakeAWS(cmd)
+		}
+	}
+	r := &recorder{output: labs("eu-west-1,eu-central-1")}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var allowed_regions=["eu-west-1","eu-central-1"]`) < 0 {
+		t.Fatalf("without the flag the current regions are kept, not reset:\n%s", strings.Join(r.calls, "\n"))
+	}
+	r = &recorder{output: labs("eu-west-1,eu-central-1")}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var allowed_regions=["eu-west-1"]`) < 0 || indexOf(r.calls, "eu-central-1") >= 0 {
+		t.Fatalf("the flag replaces the kept regions:\n%s", strings.Join(r.calls, "\n"))
+	}
+	r = &recorder{output: labs("eu-west-1,eu-central-1")}
+	err := r.ops(t.TempDir()).LabsInit(context.Background(), "us-east-1", "", 0, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "--allowed-regions") || indexOf(r.calls, "labs apply") >= 0 {
+		t.Fatalf("kept regions without the new --region must be refused before the apply: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitRefusesRegionsWithoutItsRegion(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-central-1"})
+	if err == nil || !strings.Contains(err.Error(), "eu-west-1") || len(r.calls) != 0 {
+		t.Fatalf("must refuse before terraform runs: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 }

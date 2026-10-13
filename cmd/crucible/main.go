@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	_ "time/tzdata" // schedules name IANA zones; the runtime image has no zoneinfo
 
@@ -22,7 +23,7 @@ const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION --domain HOSTNAME
-  crucible aws labs-init --region REGION [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]...
+  crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]...
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
   crucible aws sleep [--no-snapshot]
@@ -38,7 +39,8 @@ the database and Keycloak data). --keycloak-port defaults to $KEYCLOAK_PORT, els
 lint is offline: an aws lab whose resources Crucible can't price fails unless aws.prices declares their USD per
 hour (aws.usage states monthly usage, such as storage_gb, for usage-priced resources).
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
-a re-run without them keeps the current budget.
+a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
+the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.
 --var-file defaults to deploy/aws/main/crucible.tfvars in the repo root.
 --no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
@@ -80,6 +82,7 @@ func awsCmd(args []string) int {
 	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
+	allowed := fs.String("allowed-regions", "", "labs-init: comma-separated regions labs may use, including --region (default: keep the current list, or --region alone)")
 	var budgetEmails []string
 	fs.Func("budget-email", "labs-init: who the AWS Budget alerts (repeat for more)", func(v string) error {
 		budgetEmails = append(budgetEmails, v)
@@ -113,7 +116,17 @@ func awsCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, "--budget-usd must be positive (or leave it out for the stack's default)")
 			return 2
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails)
+		var regions []string
+		for _, r := range strings.Split(*allowed, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				regions = append(regions, r)
+			}
+		}
+		if len(regions) > 0 && !slices.Contains(regions, *region) {
+			fmt.Fprintf(os.Stderr, "--allowed-regions must include --region %s\n", *region)
+			return 2
+		}
+		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs)
 	case "deploy":

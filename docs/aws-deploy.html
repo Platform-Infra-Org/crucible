@@ -630,9 +630,11 @@ smtp_password = "…"                                         <span class="c"># 
   --crucible-account 111122223333 \
   --budget-usd 200 --budget-email ops@example.com</code></pre></div>
         <ul class="muted">
-          <li><code>--region</code> (required): the lab state bucket's region, and the only lab region unless the stack's
-            <code>allowed_regions</code> says otherwise. <code>labs-init</code> has no flag for <code>allowed_regions</code>, and the runbook doesn't
-            say how to set it. If set, it must include <code>--region</code>.</li>
+          <li><code>--region</code> (required): the lab state bucket's region, and the only lab region unless you pass
+            <code>--allowed-regions</code>.</li>
+          <li><code>--allowed-regions eu-west-1,eu-central-1</code>: the regions labs may use, comma-separated (the stack's
+            <code>allowed_regions</code>). It must include <code>--region</code>; labs-init refuses it otherwise, before running Terraform. A re-run
+            without it keeps the current list. <code>up</code> passes the list to the node, so run <code>up</code> after changing it.</li>
           <li><code>--crucible-account</code>: the account id that runs Crucible, when it isn't this one. It becomes the stack's
             <code>crucible_account_id</code>. The lab roles then trust that account's node role.</li>
           <li><code>--budget-usd</code> and <code>--budget-email</code> (repeat, at most 10): the alert-only AWS Budget

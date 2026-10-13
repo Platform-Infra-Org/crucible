@@ -59,3 +59,11 @@ func TestLabsInitRefusesANegativeBudget(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+// An allowed-regions list without --region is refused before anything runs (terraform would refuse it only after init).
+func TestLabsInitRefusesAllowedRegionsWithoutItsRegion(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	if code := awsCmd([]string{"labs-init", "--region", "eu-west-1", "--allowed-regions", "eu-central-1, us-east-1"}); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+}

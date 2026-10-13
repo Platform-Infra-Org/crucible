@@ -280,3 +280,62 @@ run "toolbox_image_rejects_a_short_digest" {
   }
   expect_failures = [var.toolbox_image]
 }
+
+run "smtp_off_by_default_keeps_hand_added_keys" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "SMTP_ADDR=''\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_PASSWORD_SET=''\n")
+    error_message = "no SMTP settings by default"
+  }
+  assert {
+    condition     = length(aws_ssm_parameter.smtp_password) == 0
+    error_message = "no SMTP password parameter unless one is set (SSM rejects empty values)"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "if [ -n \"$${SMTP_ADDR:-}\" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_ADDR=\"$SMTP_ADDR\"); fi") && strcontains(aws_instance.node.user_data, "\"$${smtp[@]}\"")
+    error_message = "deploy.sh adds each SMTP key only when it is set, so keys an operator added by hand survive"
+  }
+}
+
+run "smtp_settings_reach_crucible_secrets" {
+  command = plan
+  variables {
+    smtp_addr     = "email-smtp.eu-west-1.amazonaws.com:587"
+    smtp_from     = "Crucible <crucible@example.com>"
+    smtp_username = "AKIAEXAMPLE"
+    smtp_password = "smtp-pw-dddddddd"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "SMTP_ADDR='email-smtp.eu-west-1.amazonaws.com:587'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_FROM='Crucible <crucible@example.com>'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_USERNAME='AKIAEXAMPLE'\n") && strcontains(aws_ssm_parameter.env.value, "SMTP_PASSWORD_SET='1'\n")
+    error_message = "the plain SMTP settings go into /<name>/env"
+  }
+  assert {
+    condition     = !strcontains(aws_ssm_parameter.env.value, "smtp-pw-dddddddd") && !strcontains(aws_ssm_parameter.helm_values.value, "smtp-pw-dddddddd") && !strcontains(aws_instance.node.user_data, "smtp-pw-dddddddd")
+    error_message = "the SMTP password stays out of plain parameters and user data"
+  }
+  assert {
+    condition     = aws_ssm_parameter.smtp_password[0].name == "/crucible/smtp_password" && aws_ssm_parameter.smtp_password[0].type == "SecureString" && aws_ssm_parameter.smtp_password[0].value == "smtp-pw-dddddddd"
+    error_message = "the SMTP password is a SecureString /<name>/smtp_password"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_PASSWORD=\"$(param smtp_password)\"") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_FROM=") && strcontains(aws_instance.node.user_data, "--from-literal=CRUCIBLE_SMTP_USERNAME=")
+    error_message = "deploy.sh puts the SMTP settings into crucible-secrets"
+  }
+}
+
+run "smtp_addr_must_be_host_port" {
+  command = plan
+  variables {
+    smtp_addr = "smtp.example.com"
+  }
+  expect_failures = [var.smtp_addr]
+}
+
+run "smtp_from_rejects_a_quote" {
+  command = plan
+  variables {
+    smtp_from = "x'; reboot; '"
+  }
+  expect_failures = [var.smtp_from]
+}

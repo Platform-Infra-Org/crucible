@@ -141,3 +141,37 @@ variable "toolbox_image" {
     error_message = "toolbox_image must be empty or an image pinned by digest, e.g. ghcr.io/you/crucible-toolbox@sha256:<64 hex>: laptops pull it, so never a tag."
   }
 }
+
+# Email (optional). Without smtp_addr Crucible sends no email; Slack/Teams webhooks still work.
+variable "smtp_addr" {
+  type        = string
+  default     = ""
+  description = "SMTP server as host:port, e.g. email-smtp.eu-west-1.amazonaws.com:587. Empty = no email (keys added to crucible-secrets by hand are kept)."
+  validation {
+    condition     = var.smtp_addr == "" || can(regex("^[A-Za-z0-9.-]+:[0-9]{1,5}$", var.smtp_addr))
+    error_message = "smtp_addr must be empty or host:port, e.g. smtp.example.com:587."
+  }
+}
+variable "smtp_from" {
+  type        = string
+  default     = ""
+  description = "Sender: an address or \"Name <address>\" (default in the API: crucible@localhost)"
+  validation {
+    condition     = !can(regex("['\\x00-\\x1f]", var.smtp_from))
+    error_message = "smtp_from must not contain a single quote or a control character."
+  }
+}
+variable "smtp_username" {
+  type    = string
+  default = ""
+  validation {
+    condition     = !can(regex("['\\x00-\\x1f]", var.smtp_username))
+    error_message = "smtp_username must not contain a single quote or a control character."
+  }
+}
+variable "smtp_password" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "Stored as the SecureString /<name>/smtp_password; deploy.sh copies it into crucible-secrets"
+}

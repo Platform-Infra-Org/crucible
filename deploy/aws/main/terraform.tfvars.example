@@ -5,6 +5,10 @@ bootstrap_admin    = "you@example.com"                        # first start: the
 git_credentials    = "https://crucible-bot:TOKEN@git.example.com"   # read the training repos, push merged content edits
 # Sign-in (Cognito issuer, client id and secret) is wired automatically from the persistent stack.
 # toolbox_image    = "ghcr.io/you/crucible-toolbox@sha256:<64 hex>"   # cluster labs; by digest, never a tag (runbook: the toolbox image)
+# smtp_addr        = "email-smtp.eu-west-1.amazonaws.com:587"   # email (optional): host:port; empty = no email
+# smtp_from        = "Crucible <crucible@example.com>"
+# smtp_username    = "AKIA..."
+# smtp_password    = "..."                                      # stored as a SecureString; never in plain parameters
 # route53_zone_id  = "Z0123456789"   # optional: manage the A record
 # instance_type    = "t3a.large"     # cheaper if you only use local labs
 # schedule_enabled = false           # run 24/7

@@ -130,8 +130,14 @@ elif grep -q ParameterNotFound "$work/err"; then
 else
   cat "$work/err" >&2; exit 1
 fi
+# Email: each CRUCIBLE_SMTP_* key only when its setting is set, so keys an operator added by hand (kubectl edit) stay.
+smtp=()
+if [ -n "$${SMTP_ADDR:-}" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_ADDR="$SMTP_ADDR"); fi
+if [ -n "$${SMTP_FROM:-}" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_FROM="$SMTP_FROM"); fi
+if [ -n "$${SMTP_USERNAME:-}" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_USERNAME="$SMTP_USERNAME"); fi
+if [ -n "$${SMTP_PASSWORD_SET:-}" ]; then smtp+=(--from-literal=CRUCIBLE_SMTP_PASSWORD="$(param smtp_password)"); fi
 kubectl -n crucible create secret generic crucible-secrets \
-  "$${secret_key[@]}" \
+  "$${secret_key[@]}" "$${smtp[@]}" \
   --from-literal=OIDC_CLIENT_SECRET="$(param oidc_client_secret)" \
   --from-literal=CRUCIBLE_GIT_HOOK_SECRET="$(param git_hook_secret)" \
   --from-literal=CRUCIBLE_QUIZ_SECRET="$(param quiz_secret)" \

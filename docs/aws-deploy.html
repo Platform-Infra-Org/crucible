@@ -400,6 +400,7 @@ schedule_timezone = "Europe/Bucharest"
         <tr><th scope="row"><code>git_bot_email</code></th><td><code>crucible-bot@example.com</code></td><td class="req">change it</td><td>The author email of the commits Crucible pushes. Hosts that require verified commit emails reject the default.</td></tr>
         <tr><th scope="row"><code>git_bot_name</code></th><td><code>Crucible Bot</code></td><td class="req">no</td><td>The author name of those commits.</td></tr>
         <tr><th scope="row"><code>toolbox_image</code></th><td><code>""</code></td><td class="req">for cluster labs</td><td>The cluster-lab toolbox image trainees' laptops pull, pinned by digest: <code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>. Terraform refuses a tag. It reaches the node's Helm values (<code>toolboxImage</code>), so a change needs only <code>up</code>. Empty: cluster labs stay off.</td></tr>
+        <tr><th scope="row"><code>smtp_addr</code>, <code>smtp_from</code>, <code>smtp_username</code>, <code>smtp_password</code></th><td><code>""</code></td><td class="req">for email</td><td>The SMTP server (<code>host:port</code>), the sender (an address or <code>Name &lt;address&gt;</code>), and the login. The password is stored as the SecureString <code>/crucible/smtp_password</code>, the rest in <code>/crucible/env</code>. Without <code>smtp_addr</code> Crucible sends no email. See <a href="#email">Email</a>.</td></tr>
         <tr><th scope="row"><code>route53_zone_id</code></th><td><code>""</code></td><td class="req">no</td><td>A Route 53 hosted zone that holds <code>domain</code>. When set, Terraform creates the A record (TTL 300) and keeps it on the Elastic IP, even after a rebuild. Empty: you create the record yourself.</td></tr>
         <tr><th scope="row"><code>instance_type</code></th><td><code>t3a.xlarge</code></td><td class="req">no</td><td>The node's size (4 vCPU, 16 GiB). AWS lab workspaces run on it. The example suggests <code>t3a.large</code> as cheaper. It must be x86_64: the image is Ubuntu amd64 and sysbox is amd64-only.</td></tr>
         <tr><th scope="row"><code>disk_gb</code></th><td><code>60</code></td><td class="req">no</td><td>The encrypted gp3 root disk: k3s, Postgres data, images. The runbook doesn't cover resizing it on a running node.</td></tr>
@@ -602,14 +603,18 @@ aws cognito-idp admin-create-user \
         </ul>
         <p>A right secret gets <code>202</code>. Anything else gets <code>404</code>. The secret changes on every teardown → up: update the
           webhook then.</p></li>
-      <li><h3>Email (optional)</h3>
-        <p>Without SMTP, Crucible sends no email; Slack and Teams webhooks still work. To turn it on, add <code>CRUCIBLE_SMTP_ADDR</code>
-          (host:port), <code>CRUCIBLE_SMTP_FROM</code>, <code>CRUCIBLE_SMTP_USERNAME</code> and <code>CRUCIBLE_SMTP_PASSWORD</code> to the
-          <code>crucible-secrets</code> Secret on the node, then restart the API:</p>
-        <div class="cmd"><pre><code>sudo k3s kubectl -n crucible edit secret crucible-secrets      <span class="c"># values under data: are base64</span>
-sudo k3s kubectl -n crucible rollout restart deploy/crucible</code></pre></div>
-        <p>A rebuilt node (<code>teardown</code> → <code>up</code>) starts without these keys, so add them again. The runbook doesn't say whether
-          they survive a normal deploy, which re-applies the Secret. Check after your next deploy.</p></li>
+      <li id="email"><h3>Email (optional)</h3>
+        <p>Without SMTP, Crucible sends no email; Slack and Teams webhooks still work. To turn it on, set the SMTP settings in
+          <code>crucible.tfvars</code> and run <code>crucible aws up</code>:</p>
+        <div class="cmd"><pre><code>smtp_addr     = "email-smtp.eu-west-1.amazonaws.com:587"   <span class="c"># host:port</span>
+smtp_from     = "Crucible &lt;crucible@example.com&gt;"
+smtp_username = "AKIA…"
+smtp_password = "…"                                         <span class="c"># a SecureString, /crucible/smtp_password</span></code></pre></div>
+        <p>Every deploy copies the ones you set into <code>crucible-secrets</code> as <code>CRUCIBLE_SMTP_*</code>, so they survive
+          <code>teardown</code> → <code>up</code>. A deploy of the release already running doesn't restart the API, so after a change run this on the node:</p>
+        <div class="cmd"><pre><code>sudo k3s kubectl -n crucible rollout restart deploy/crucible</code></pre></div>
+        <p>An empty setting is never written, so keys you added by hand with <code>kubectl edit secret crucible-secrets</code> stay. A node built
+          before these settings existed keeps its old deploy script, which ignores them: keep the hand-added keys, or rebuild the node.</p></li>
     </ol>
   </section>
 
@@ -754,7 +759,7 @@ crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
       <div><h3>What survives</h3><p>The secret key, so restored repository tokens and deploy keys still open. Pinned SSH host keys, because they're in
         the database. Cognito users. Uploads. The labs stack.</p></div>
       <div><h3>What changes</h3><p>The Elastic IP, the webhook secret, the database password and the quiz secret. They're all in the main stack. A new
-        quiz secret reshuffles quizzes in progress. SMTP keys you added by hand are gone. Anything written after the teardown's snapshot is
+        quiz secret reshuffles quizzes in progress. SMTP keys you added by hand are gone; the <code>smtp_*</code> settings come back. Anything written after the teardown's snapshot is
         lost, so the snapshot must succeed (it refuses to go on otherwise).</p></div>
       <div><h3>Second machine or fresh clone</h3><p>Copy the persistent state back first (and the labs state, if you use labs), then run
         <code>crucible aws up</code>. It's idempotent, and it sets up the S3 backend that <code>deploy</code> and the others need.</p></div>
@@ -881,8 +886,9 @@ sudo k3s kubectl -n crucible-estimates get pods</code></pre></div>
         <tr><th scope="row"><code>/crucible/git_hook_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td class="money">Regenerated: update your webhooks.</td></tr>
         <tr><th scope="row"><code>/crucible/db_password</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td>Regenerated, for the new, restored database.</td></tr>
         <tr><th scope="row"><code>/crucible/quiz_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 48 characters</td><td class="money">Regenerated: quizzes in progress get a new question order.</td></tr>
+        <tr><th scope="row"><code>/crucible/smtp_password</code></th><td>SSM SecureString, main stack, only when set</td><td>Your <code>smtp_password</code></td><td>Recreated from your tfvars.</td></tr>
         <tr><th scope="row"><code>/crucible/env</code>, <code>/crucible/helm-values</code></th><td>SSM String, main stack</td><td>Terraform, from your tfvars and the labs outputs</td><td>Recreated. Not secret.</td></tr>
-        <tr><th scope="row"><code>crucible-secrets</code></th><td>Kubernetes Secret, namespace <code>crucible</code></td><td><code>deploy.sh</code>, from the SSM values above, on every deploy: <code>CRUCIBLE_SECRET_KEY</code>, <code>OIDC_CLIENT_SECRET</code>, <code>CRUCIBLE_GIT_HOOK_SECRET</code>, <code>CRUCIBLE_QUIZ_SECRET</code>, <code>POSTGRES_PASSWORD</code>, <code>git-credentials</code>; plus SMTP keys you add by hand</td><td>Rebuilt on the new node; SMTP keys must be added again.</td></tr>
+        <tr><th scope="row"><code>crucible-secrets</code></th><td>Kubernetes Secret, namespace <code>crucible</code></td><td><code>deploy.sh</code>, from the SSM values above, on every deploy: <code>CRUCIBLE_SECRET_KEY</code>, <code>OIDC_CLIENT_SECRET</code>, <code>CRUCIBLE_GIT_HOOK_SECRET</code>, <code>CRUCIBLE_QUIZ_SECRET</code>, <code>POSTGRES_PASSWORD</code>, <code>git-credentials</code>; the <code>CRUCIBLE_SMTP_*</code> keys whose <code>smtp_*</code> settings are set</td><td>Rebuilt on the new node from the SSM values. SMTP keys added by hand must be added again.</td></tr>
         <tr><th scope="row">Persistent state</th><td><code>deploy/aws/persistent/terraform.tfstate</code>, local</td><td><code>init</code></td><td>Untouched. Holds the secret key and Cognito client secret in plain text: back it up, privately.</td></tr>
         <tr><th scope="row">Labs state</th><td><code>deploy/aws/labs/terraform.tfstate</code>, local</td><td><code>labs-init</code></td><td>Untouched. Back it up.</td></tr>
         <tr><th scope="row">Main state</th><td><code>s3://crucible-&lt;account&gt;-tfstate/main.tfstate</code></td><td><code>up</code></td><td>Emptied by the destroy, refilled by <code>up</code>. Holds the main stack's secrets.</td></tr>

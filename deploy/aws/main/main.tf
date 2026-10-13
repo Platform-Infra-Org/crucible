@@ -90,6 +90,10 @@ resource "aws_ssm_parameter" "env" {
     GIT_BOT_NAME='${var.git_bot_name}'
     GIT_BOT_EMAIL=${var.git_bot_email}
     BOOTSTRAP_ADMIN='${var.bootstrap_admin}'
+    SMTP_ADDR='${var.smtp_addr}'
+    SMTP_FROM='${var.smtp_from}'
+    SMTP_USERNAME='${var.smtp_username}'
+    SMTP_PASSWORD_SET='${nonsensitive(var.smtp_password != "") ? "1" : ""}'
   ENV
 }
 
@@ -120,6 +124,14 @@ resource "aws_ssm_parameter" "secret" {
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]
+}
+
+# Only when set: SSM rejects empty values, and deploy.sh reads it only when /<name>/env says SMTP_PASSWORD_SET.
+resource "aws_ssm_parameter" "smtp_password" {
+  count = nonsensitive(var.smtp_password != "") ? 1 : 0
+  name  = "/${var.name}/smtp_password"
+  type  = "SecureString"
+  value = var.smtp_password
 }
 
 # --- instance role ---
@@ -219,7 +231,7 @@ resource "aws_instance" "node" {
 
   tags = { Name = var.name }
 
-  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
+  depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.smtp_password, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
 
   lifecycle {
     ignore_changes = [ami, user_data] # never replace the node because Ubuntu published a new AMI

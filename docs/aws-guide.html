@@ -415,7 +415,7 @@ tr.total td { font-weight: 700; }
         <p class="prose">For every command in order, with what to expect, how to check each step and what to do when one fails, follow the <a href="aws-deploy.html">AWS deployment walkthrough</a>.</p>
         <ol class="steps">
           <li><h4>Install the tools</h4>
-            <p>Terraform 1.10 or later, AWS CLI v2, Docker with buildx, Helm 3, Go 1.26. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
+            <p>Terraform 1.10 or later, AWS CLI v2 with its Session Manager plugin (for <code>aws ssm start-session</code>), Docker with buildx, Helm 3, Go 1.26. In a fresh clone, <code>make tools</code> installs the repo's pinned Go and Terraform into <code>.local/tools</code>. The region needs its default VPC: <code>aws ec2 describe-vpcs --filters Name=is-default,Values=true</code> shows it, and <code>aws ec2 create-default-vpc</code> makes one. Either install the CLI with <code>go install ./cmd/crucible</code> and type <code>crucible …</code>, or prefix every command with <code>go run ./cmd/crucible</code>.</p></li>
           <li><h4>Create the persistent stack</h4>
             <p>Makes the state and data buckets, the Cognito sign-in and the secret key that seals repository credentials. Nothing it creates is ever deleted by Crucible.</p>
             <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div></li>

@@ -25,8 +25,9 @@ writes content edits back to git as a bot. Configuration and people live in Post
 
 ## Toolchain
 
-The system Go (1.20) and Terraform are too old. The repo brings its own Go 1.26 and Terraform in `.local/tools`.
-Prefix every shell that builds or tests:
+The system Go (1.20) and Terraform are too old. The repo brings its own Go 1.26 and Terraform in `.local/tools`
+(git-ignored): `make tools` installs the pinned Go, Terraform and kind there, checksum-verified, and does nothing when
+they are already there (`scripts/tools.sh --dry-run` prints what it would fetch). Prefix every shell that builds or tests:
 
 ```bash
 export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH

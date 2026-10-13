@@ -300,16 +300,17 @@ svg .ahm { fill: var(--muted); }
       <tbody>
         <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>All three stacks (<code>required_version = "&gt;= 1.10"</code>).</td></tr>
         <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Uploading releases, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
-        <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>Only for <code>aws ssm start-session</code>, a shell on the node. The runbook doesn't list it, but the AWS CLI needs it for interactive sessions.</td></tr>
+        <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>For <code>aws ssm start-session</code>, a shell on the node: the AWS CLI needs it for every interactive session. Install it from AWS's <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin page</a>; <code>session-manager-plugin --version</code> checks it.</td></tr>
         <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Building the <code>linux/amd64</code> image. On an Apple-silicon Mac this is a cross-build and is slower.</td></tr>
         <tr><th scope="row">Helm</th><td>3</td><td>Packaging the chart (<code>helm package</code>).</td></tr>
-        <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old; if you have the repo's toolchain in <code>.local/tools</code>, put it first on your <code>PATH</code>. That folder is git-ignored, so a fresh clone doesn't have it.</td></tr>
+        <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old. <code>make tools</code> installs the repo's pinned Go and Terraform (and kind) into <code>.local/tools</code>, checksum-verified; it's git-ignored, so a fresh clone runs it once. Then put it first on your <code>PATH</code>.</td></tr>
         <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository. <code>deploy</code> ships the commit you have checked out.</td></tr>
       </tbody>
     </table></div>
     <p>Run every command from the repository root. Install the command once, then type <code>crucible …</code>. If you'd rather not,
       type <code>go run ./cmd/crucible</code> wherever this page says <code>crucible</code>.</p>
     <div class="cmd"><pre><code><span class="c"># only if you use the repo's own toolchain</span>
+make tools                     <span class="c"># once per clone; scripts/tools.sh --dry-run shows what it fetches</span>
 export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
 go install ./cmd/crucible      <span class="c"># puts crucible in $(go env GOPATH)/bin; make sure that is on your PATH</span>
 crucible aws status            <span class="c"># before init, this fails with "did you run `crucible aws init`/`up`?": that's fine</span></code></pre></div>
@@ -322,8 +323,10 @@ crucible aws status            <span class="c"># before init, this fails with "d
         built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
         give Terraform a Route 53 hosted zone that holds the name.</p></div>
       <div><h3>The region</h3><p><code>init</code> takes the region, and everything in the main account follows it: the node goes where the user pool is.
-        The account needs its <b>default VPC</b> in that region, because the node is placed in its first default subnet. Labs' regions
-        are set separately, in the lab account.</p></div>
+        The account needs its <b>default VPC</b> in that region, because the node is placed in its first default subnet; <code>up</code>
+        fails without one. Labs' regions are set separately, in the lab account.</p>
+        <div class="cmd"><pre><code>aws ec2 describe-vpcs --region eu-west-1 --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'   <span class="c"># [] means none</span>
+aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if there is none</span></code></pre></div></div>
       <div><h3>AWS labs or not</h3><p>AWS labs create real resources, so they belong in a <b>second, standalone AWS account</b>. The runbook strongly
         recommends one: the permission boundary limits labs to EC2 and S3, small instances and allowed regions, but isolation in a
         shared account is best-effort. You can add labs later; Crucible works without them.</p></div>

@@ -307,8 +307,9 @@ body.hide-done .item.done { display: none; }
         <div class="phase-head"><h2>1 · Bring up the forge</h2><span class="count"></span></div>
         <ul class="items">
           <li class="item" data-id="stack-path"><label><input type="checkbox" id="c-stack-path"><span class="t">Use the repo's own toolchain</span></label>
-            <div class="body"><p>The system Go and Terraform are too old; the repo carries Go 1.26 and Terraform in <code>.local/tools</code>.</p>
-              <div class="cmd"><pre><code>export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
+            <div class="body"><p>The system Go and Terraform are too old; the repo uses its own Go 1.26 and Terraform in <code>.local/tools</code>. That folder is git-ignored: <code>make tools</code> installs the pinned versions (and kind) there, checksum-verified, and does nothing when they're already there.</p>
+              <div class="cmd"><pre><code>make tools
+export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
 go version</code></pre></div>
               <p class="expect"><b>Expect</b><code>go1.26</code>. Every later shell that builds or tests needs this line first.</p></div></li>
           <li class="item" data-id="stack-up"><label><input type="checkbox" id="c-stack-up"><span class="t">Start the local stack</span></label>

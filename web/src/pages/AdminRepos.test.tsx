@@ -11,7 +11,7 @@ const repo = (over: Partial<Repo> = {}): Repo => ({
 let view: ReposView = { repos: [repo()], can_keep_secrets: true }
 vi.mock('../useFetch', () => ({ useFetch: () => ({ data: view, error: null, reload: () => {} }) }))
 
-const { AdminReposPage } = await import('./AdminRepos')
+const { AdminReposPage, Kinds } = await import('./AdminRepos')
 const html = () => renderToStaticMarkup(<MemoryRouter><AdminReposPage /></MemoryRouter>)
 
 describe('Repositories', () => {
@@ -53,6 +53,25 @@ describe('Repositories', () => {
     expect(out).toContain('ssh-ed25519 AAAAC3')
     expect(out).toContain('write access')
     expect(out).not.toContain('PRIVATE KEY')
+  })
+
+  // Test connection also tries a push (a dry run), so an admin sees whether edits can reach the repository, even one
+  // connected with no credential that the instance's own git credentials can push to.
+  test('says whether Crucible can write once it can read', () => {
+    view = { repos: [repo({ status: 'ok', can_write: true }), repo({ id: 2, url: 'https://github.com/org/b.git', status: 'ok', can_write: false })], can_keep_secrets: true }
+    const out = html()
+    expect(out).toContain('Can write')
+    expect(out).toContain('Read only')
+    view = { repos: [repo({ status: 'unknown', can_write: null })], can_keep_secrets: true }
+    expect(html()).not.toMatch(/Can write|Read only/)
+  })
+
+  // No credential is not a promise of read-only: git may still use the instance's own credentials for an https repo.
+  test('the no-credential choice says what Crucible adds, not that nothing can write', () => {
+    const out = renderToStaticMarkup(<Kinds url="https://github.com/org/t.git" auth="none" setAuth={() => {}} canKeepSecrets />)
+    expect(out).toContain('No credential of its own')
+    expect(out).toContain('git credentials')
+    expect(out).not.toContain('the repository is public')
   })
 
   test('without a secret key the page says so', () => {

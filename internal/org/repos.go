@@ -242,7 +242,7 @@ func (s *Store) fetchURL(ctx context.Context, id int64, raw, auth, username, sea
 }
 
 // Check tries a connected repository and records what it found, so a credential that stops working shows as one red
-// row rather than as several trainings that quietly stop syncing.
+// row rather than as several trainings that quietly stop syncing. It also records whether a push would be accepted.
 func (s *Store) Check(ctx context.Context, id int64) {
 	var raw, auth, username, sealed string
 	if err := s.DB.QueryRow(ctx, `SELECT url, auth, username, secret FROM repositories WHERE id = $1`, id).
@@ -251,13 +251,18 @@ func (s *Store) Check(ctx context.Context, id int64) {
 		return
 	}
 	failure := ""
+	var canWrite *bool
 	url, err := s.fetchURL(ctx, id, raw, auth, username, sealed)
 	if err != nil {
 		failure = err.Error()
 	} else if err := gitsync.CheckRemote(ctx, url); err != nil {
 		failure = err.Error() // already redacted by gitsync
+	} else {
+		// Only once it reads: then a refused push means this credential may not write, not that the host is down.
+		ok := gitsync.CheckWrite(ctx, url) == nil
+		canWrite = &ok
 	}
-	if err := s.RecordCheck(ctx, id, nil, failure); err != nil {
+	if err := s.RecordCheck(ctx, id, canWrite, failure); err != nil {
 		slog.Warn("cannot record the repository check", "repo", id, "err", err)
 	}
 }

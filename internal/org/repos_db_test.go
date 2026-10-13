@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"crucible/internal/db/dbtest"
+	"crucible/internal/gitsync"
 	"crucible/internal/secrets"
 )
 
@@ -232,5 +233,34 @@ func TestPinnedHostKeySurvivesAWipedDataDir(t *testing.T) {
 	restored, err := os.ReadFile(filepath.Join(dir, "known_hosts"))
 	if err != nil || string(restored) != string(pinned) {
 		t.Fatalf("known_hosts was not restored as pinned (%v):\n got %q\nwant %q", err, restored, pinned)
+	}
+}
+
+// Test connection says whether Crucible can write as well as read, so an admin sees what the instance's own git
+// credentials allow even on a repository connected with none.
+func TestCheckRecordsWhetherItCanWrite(t *testing.T) {
+	gitsync.AllowFileTransport = true
+	t.Cleanup(func() { gitsync.AllowFileTransport = false })
+	ctx := context.Background()
+	s := repoStore(t)
+	remote := filepath.Join(t.TempDir(), "r.git")
+	if out, err := exec.Command("git", "init", "-q", "--bare", remote).CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	var id int64
+	if err := s.DB.QueryRow(ctx, `INSERT INTO repositories (url) VALUES ($1), ($2) RETURNING id`, remote, remote+"-missing").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	s.Check(ctx, id)
+	s.Check(ctx, id+1)
+	repos, err := s.Repos(ctx)
+	if err != nil || len(repos) != 2 {
+		t.Fatalf("repos: %v %d", err, len(repos))
+	}
+	if r := repos[0]; r.Status != "ok" || r.CanWrite == nil || !*r.CanWrite {
+		t.Fatalf("a writable repository: status %q, can_write %v, error %q", r.Status, r.CanWrite, r.LastError)
+	}
+	if r := repos[1]; r.Status != "failed" || r.CanWrite != nil {
+		t.Fatalf("an unreachable repository must say nothing about writing: status %q, can_write %v", r.Status, r.CanWrite)
 	}
 }

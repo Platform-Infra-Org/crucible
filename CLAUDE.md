@@ -22,6 +22,10 @@ writes content edits back to git as a bot. Configuration and people live in Post
   `deploy/` changes.
 - Reaching the app over SSM: `docs/ssm-access.html` — why the VPC has no inbound path, how a Session Manager port-forward
   tunnel reaches the k3s node, the one-time setup and the connect script, and what it does not solve.
+- AWS and networking primer: `docs/aws-primer.html` — questions and answers with diagrams, in eight chapters: IAM and
+  SCPs, VPC networking and our org's spoke VPC, exposing an internal app (ALB, WAF, ACM), VPNs and Transit Gateway,
+  Tailscale and Cloudflare Tunnel, WebSockets and timeouts, Kubernetes networking (Traefik, klipper-lb, kube-proxy,
+  CNI), and sign-in. Update it when the facts it states about `deploy/` or our account change.
 - Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
   from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 

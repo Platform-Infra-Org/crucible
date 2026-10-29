@@ -1,0 +1,1700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crucible AWS Primer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: a sticky chapter rail beside one reading column of question cards; diagrams scroll sideways on phones. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #eaeef2;
+  --ink: #16212b;
+  --muted: #55626f;
+  --line: #d3dae1;
+  --accent: #0a6a86;      /* traffic going out, the normal path */
+  --warm: #b0500b;        /* traffic coming in */
+  --ok: #2b784a;
+  --deny: #ad2a1f;
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  --warm-soft: color-mix(in srgb, var(--warm) 11%, var(--surface));
+  --deny-soft: color-mix(in srgb, var(--deny) 10%, var(--surface));
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1419; --surface: #151d24; --surface-2: #1c262f; --ink: #e2e8ee; --muted: #98a6b3; --line: #2c3843;
+    --accent: #5db9d5; --warm: #f19b57; --ok: #63c18b; --deny: #f17a6e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1419; --surface: #151d24; --surface-2: #1c262f; --ink: #e2e8ee; --muted: #98a6b3; --line: #2c3843;
+  --accent: #5db9d5; --warm: #f19b57; --ok: #63c18b; --deny: #f17a6e; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+img { max-width: 100%; }
+body { background: var(--bg); color: var(--ink); font: 15.5px/1.62 var(--body); margin: 0; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 80px; }
+
+header.top { display: grid; gap: 14px; padding-block: 10px 26px; border-bottom: 1px solid var(--line); margin-bottom: 28px; }
+.eyebrow { font: 600 0.74rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+h1 { font: 700 clamp(2rem, 4.4vw, 3rem)/1.05 var(--display); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.lede { max-width: 68ch; color: var(--muted); margin: 0; font-size: 1.04rem; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.85rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 22px; height: 3px; border-radius: 2px; display: inline-block; }
+.sw.out { background: var(--accent); } .sw.in { background: var(--warm); } .sw.no { background: var(--deny); }
+.tagdot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.tagdot.c { background: var(--accent); } .tagdot.o { background: var(--warm); }
+
+.search { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.search label { font: 600 0.74rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.search input { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); width: min(420px, 100%); }
+.search input:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; border-color: var(--accent); }
+.count { font: 0.85rem var(--mono); color: var(--muted); }
+
+.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 40px; align-items: start; }
+nav.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 16px); max-height: calc(100vh - 32px); overflow: auto; font-size: 0.9rem; padding-right: 6px; }
+nav.rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+nav.rail a { color: var(--muted); text-decoration: none; display: grid; grid-template-columns: 2.2em 1fr; padding: 5px 8px; border-radius: 6px; }
+nav.rail a:hover { color: var(--ink); background: var(--surface-2); }
+nav.rail a span { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); padding-top: 1px; }
+nav.rail .navhead { font: 600 0.72rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 8px; }
+
+main { min-width: 0; display: grid; gap: 54px; }
+section.ch { display: grid; gap: 16px; scroll-margin-top: 20px; }
+.chhead { display: grid; gap: 6px; padding-bottom: 4px; }
+.chnum { font: 500 0.8rem/1 var(--mono); color: var(--accent); letter-spacing: 0.06em; }
+h2 { font: 700 1.75rem/1.15 var(--display); margin: 0; text-wrap: balance; }
+.chhead p { margin: 0; color: var(--muted); max-width: 68ch; }
+
+article.qa { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px 24px 22px; scroll-margin-top: 20px; min-width: 0; }
+article.qa h3 { font: 600 1.18rem/1.3 var(--display); margin: 0 0 12px; display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline; text-wrap: balance; }
+.qn { font: 500 0.8rem/1 var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 4px 6px; }
+.ans { display: grid; gap: 12px; max-width: 74ch; }
+.ans > * { margin: 0; }
+.ans ul, .ans ol { padding-left: 1.3em; display: grid; gap: 5px; }
+.ans li > ul { margin-top: 5px; }
+.ans strong { font-weight: 600; }
+.ans h4 { font: 600 0.78rem/1.2 var(--mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-top: 6px; }
+code { font: 0.86em var(--mono); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { font: 0.84rem/1.5 var(--mono); background: var(--surface-2); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0; }
+pre code { background: none; padding: 0; }
+a { color: var(--accent); }
+
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); background: var(--surface-2); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 500; }
+
+.note { border-radius: 8px; padding: 11px 14px; font-size: 0.93rem; display: grid; gap: 6px; max-width: 74ch; }
+.note b.lab { font: 600 0.7rem/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; }
+.note.crucible { background: var(--accent-soft); border-left: 3px solid var(--accent); }
+.note.crucible b.lab { color: var(--accent); }
+.note.org { background: var(--warm-soft); border-left: 3px solid var(--warm); }
+.note.org b.lab { color: var(--warm); }
+.note > * { margin: 0; }
+.note ul { padding-left: 1.2em; display: grid; gap: 3px; }
+
+figure.dg { margin: 4px 0; display: grid; gap: 8px; max-width: 100%; }
+.dgscroll { overflow-x: auto; background: var(--surface-2); border-radius: 8px; padding: 10px; }
+figure.dg svg { display: block; width: 100%; min-width: 620px; height: auto; }
+figcaption { font-size: 0.84rem; color: var(--muted); }
+
+svg text { font-family: var(--body); font-size: 13px; fill: var(--ink); }
+svg .tb { font-weight: 600; }
+svg .tm { fill: var(--muted); font-size: 12px; }
+svg .ts { font-size: 11.5px; fill: var(--muted); }
+svg .ta { fill: var(--accent); font-size: 12px; font-weight: 500; }
+svg .tw { fill: var(--warm); font-size: 12px; font-weight: 500; }
+svg .tx { fill: var(--deny); font-size: 12px; font-weight: 500; }
+svg .mono { font-family: var(--mono); font-size: 11.5px; }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.3; }
+svg .boxa { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.3; }
+svg .boxw { fill: var(--warm-soft); stroke: var(--warm); stroke-width: 1.3; }
+svg .boxx { fill: var(--deny-soft); stroke: var(--deny); stroke-width: 1.3; }
+svg .boxd { fill: var(--surface); stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
+svg .zone { fill: color-mix(in srgb, var(--surface) 55%, var(--surface-2)); stroke: var(--line); stroke-width: 1.3; stroke-dasharray: 6 4; }
+svg .la { stroke: var(--accent); stroke-width: 2; fill: none; }
+svg .lw { stroke: var(--warm); stroke-width: 2; fill: none; }
+svg .lx { stroke: var(--deny); stroke-width: 2; fill: none; stroke-dasharray: 6 4; }
+svg .lm { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+svg .ld { stroke: var(--accent); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+svg .fa { fill: var(--accent); } svg .fw { fill: var(--warm); } svg .fx { fill: var(--deny); } svg .fm { fill: var(--muted); }
+
+.empty { display: none; color: var(--muted); padding: 30px; border: 1px dashed var(--line); border-radius: 10px; text-align: center; }
+.empty.show { display: block; }
+
+footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.86rem; display: grid; gap: 6px; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  nav.rail { position: static; max-height: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 10px; }
+  nav.rail ol { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+}
+@media (max-width: 520px) {
+  .wrap { padding-inline: 16px; }
+  article.qa { padding: 16px 16px 18px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fa"/></marker>
+    <marker id="mw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fw"/></marker>
+    <marker id="mx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fx"/></marker>
+    <marker id="mm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="fm"/></marker>
+  </defs>
+</svg>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">Crucible deploy notes · training</div>
+  <h1>Crucible AWS Primer</h1>
+  <p class="lede">Every AWS, networking and Kubernetes question asked while planning Crucible's AWS deploy, with the answers, grouped into chapters that build on each other. Start at chapter 1 if AWS is new to you, or search for a term.</p>
+  <div class="legend">
+    <span><i class="sw out"></i> traffic going out</span>
+    <span><i class="sw in"></i> traffic coming in</span>
+    <span><i class="sw no"></i> blocked</span>
+    <span><i class="tagdot c"></i> In Crucible: how it applies to the app</span>
+    <span><i class="tagdot o"></i> In our account: what we found in our AWS account</span>
+  </div>
+  <div class="search">
+    <label for="q">Search</label>
+    <input id="q" type="search" placeholder="NAT, WAF, trust policy, VXLAN…" autocomplete="off">
+    <span class="count" id="count" aria-live="polite"></span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="rail" aria-label="Chapters">
+  <p class="navhead">Chapters</p>
+  <ol>
+    <li><a href="#ch1"><span>01</span>Accounts, identity and guardrails</a></li>
+    <li><a href="#ch2"><span>02</span>VPC networking</a></li>
+    <li><a href="#ch3"><span>03</span>Exposing an internal web app</a></li>
+    <li><a href="#ch4"><span>04</span>Connecting offices and people</a></li>
+    <li><a href="#ch5"><span>05</span>Zero-trust access</a></li>
+    <li><a href="#ch6"><span>06</span>Long-lived web connections</a></li>
+    <li><a href="#ch7"><span>07</span>Kubernetes networking</a></li>
+    <li><a href="#ch8"><span>08</span>Signing people in</a></li>
+  </ol>
+</nav>
+
+<main id="main">
+
+<!-- ============ 1 ============ -->
+<section class="ch" id="ch1">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 01</span>
+    <h2>Accounts, identity and guardrails</h2>
+    <p>Who may do what in AWS, and the layers that cap it: the organization, the role, and the request itself.</p>
+  </div>
+
+  <article class="qa" id="q1-1">
+    <h3><span class="qn">1.1</span>What is a Service Control Policy (SCP)?</h3>
+    <div class="ans">
+      <p>AWS Organizations groups many AWS accounts under one <strong>management account</strong>. An SCP is a guardrail the organization attaches to an account, or to a group of accounts (an organizational unit, OU). It sets the <strong>maximum</strong> permissions anyone in that account can have.</p>
+      <ul>
+        <li><strong>It never grants anything.</strong> A request succeeds only if the SCP allows it and the caller's own IAM permissions allow it.</li>
+        <li><strong>An explicit Deny in an SCP beats everything,</strong> even an administrator role or the account's root user.</li>
+        <li><strong>Only the organization's admins can change SCPs,</strong> from the management account.</li>
+        <li><strong>Typical uses:</strong> only approved regions; no leaving the organization; no turning off CloudTrail; nothing that exposes workloads to the internet (Elastic IPs, internet gateways, public IPs) outside the networking team's control.</li>
+      </ul>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 200" role="img" aria-labelledby="d8t"><title id="d8t">How AWS decides whether a request is allowed</title>
+          <rect class="boxx" x="150" y="8" width="490" height="30" rx="6"/>
+          <text x="395" y="28" text-anchor="middle" class="tx">An explicit Deny in any layer wins, even for admins and root</text>
+          <rect class="box" x="10" y="62" width="100" height="66" rx="6"/>
+          <text x="60" y="92" text-anchor="middle" class="tb">API request</text>
+          <text x="60" y="110" text-anchor="middle" class="ts">e.g. AllocateAddress</text>
+          <rect class="box" x="150" y="62" width="150" height="66" rx="6"/>
+          <text x="225" y="90" text-anchor="middle" class="tb">SCP</text>
+          <text x="225" y="108" text-anchor="middle" class="ts">the organization's ceiling</text>
+          <rect class="box" x="340" y="62" width="150" height="66" rx="6"/>
+          <text x="415" y="90" text-anchor="middle" class="tb">Permission boundary</text>
+          <text x="415" y="108" text-anchor="middle" class="ts">the role's ceiling</text>
+          <rect class="box" x="530" y="62" width="110" height="66" rx="6"/>
+          <text x="585" y="90" text-anchor="middle" class="tb">Role policy</text>
+          <text x="585" y="108" text-anchor="middle" class="ts">the actual grant</text>
+          <rect class="boxa" x="670" y="70" width="80" height="50" rx="6"/>
+          <text x="710" y="100" text-anchor="middle" class="tb">Allowed</text>
+          <line class="la" x1="110" y1="95" x2="147" y2="95" marker-end="url(#ma)"/>
+          <line class="la" x1="300" y1="95" x2="337" y2="95" marker-end="url(#ma)"/>
+          <line class="la" x1="490" y1="95" x2="527" y2="95" marker-end="url(#ma)"/>
+          <line class="la" x1="640" y1="95" x2="667" y2="95" marker-end="url(#ma)"/>
+          <text x="10" y="156" class="tm">Ceilings only take permissions away; only the role policy grants them.</text>
+          <text x="10" y="172" class="tm">Allowed means inside every ceiling, granted by the policy, and denied by nothing.</text>
+          <text x="10" y="188" class="tm">A permission boundary is optional; without one, that gate is open.</text>
+        </svg>
+        </div>
+        <figcaption>Every API call passes these gates. Identity Center (1.2) decides who may become the role in the first place.</figcaption>
+      </figure>
+      <aside class="note org"><b class="lab">In our account</b><p>A dry run of <code>ec2:AllocateAddress</code> returned "explicit deny in a service control policy", so our admin role can't create Elastic IPs. We weren't at the quota: 2 of 5 used.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-2">
+    <h3><span class="qn">1.2</span>What is IAM Identity Center?</h3>
+    <div class="ans">
+      <p>IAM Identity Center, formerly "AWS SSO", is AWS's single sign-on for people who work across many accounts. It's run centrally, usually from the organization's management account.</p>
+      <ul>
+        <li><strong>Users:</strong> stored in Identity Center's own directory or, more commonly, synced from the company identity provider (Entra, Okta, Google Workspace) over SAML and SCIM. People sign in with their normal company login and MFA.</li>
+        <li><strong>Permission sets:</strong> bundles of IAM policies such as "Workload-Admin" or "ReadOnly". Admins assign a person or group a permission set in specific accounts.</li>
+        <li><strong>Roles:</strong> each assignment becomes an IAM role in that account, named <code>AWSReservedSSO_&lt;permission set&gt;_&lt;id&gt;</code>.</li>
+        <li><strong>Access portal:</strong> a page listing the accounts and roles you may use, to open the console or get CLI credentials.</li>
+        <li><strong>CLI credentials are temporary.</strong> The session that renews them lasts a fixed time, often 8 to 12 hours, which is why <code>aws login</code> expires and asks for a browser sign-in again. No long-lived access keys exist.</li>
+      </ul>
+      <p><strong>How it fits with SCPs:</strong> Identity Center decides who may become which role in which account. SCPs then cap what any role in that account can do. So even an "admin" permission set can't allocate an Elastic IP where an SCP denies it.</p>
+      <p><strong>Not the same as an access proxy.</strong> Identity Center signs people in to <em>AWS</em>. A proxy such as Cloudflare Access gates <em>an app's web traffic</em> (5.1). Both can use the same company identity provider underneath.</p>
+      <aside class="note org"><b class="lab">In our account</b><p>We sign in through Identity Center with the <code>Workload-Admin-PS</code> permission set, in region <code>il-central-1</code>.</p></aside>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Identity Center can also act as a SAML identity provider for applications. Crucible speaks OIDC, so the pattern would be Crucible → Cognito → Identity Center (SAML). Colleagues would then sign in to Crucible with the same company login they use for AWS.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-3">
+    <h3><span class="qn">1.3</span>What does "the node role is trusted into the lab account" mean?</h3>
+    <div class="ans">
+      <p>An IAM role has two halves:</p>
+      <ul>
+        <li><strong>Its permission policies:</strong> what the role may do.</li>
+        <li><strong>Its trust policy:</strong> who may <em>become</em> it, by calling <code>sts:AssumeRole</code>.</li>
+      </ul>
+      <p>The lab role's trust policy names one identity: the IAM role of Crucible's EC2 node. So only Crucible's server can assume it. AWS then returns temporary lab credentials that last an hour.</p>
+      <h4>Why "in one account it's the same rule"</h4>
+      <p>For one role to assume another, AWS checks two things: does the caller's own policy allow <code>sts:AssumeRole</code> on the target, and does the target's trust policy accept the caller?</p>
+      <ul>
+        <li><strong>Across two accounts,</strong> AWS always requires both.</li>
+        <li><strong>Within one account,</strong> a trust policy that names the caller's role directly can be enough by itself.</li>
+        <li><strong>Crucible's lab role is written the other way:</strong> its trust names the whole account, plus a condition that the caller must be the node role's ARN. With that form, the node role's own policy must allow the call too.</li>
+      </ul>
+      <p>So both halves are needed whether the lab account is separate or the same one, and the same Terraform works for both.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-4">
+    <h3><span class="qn">1.4</span>Is Crucible's lab account literally a second AWS account? Does <code>labs-init</code> create one?</h3>
+    <div class="ans">
+      <p>It's meant to be separate, but it doesn't have to be, and <code>labs-init</code> doesn't create one. It runs the labs Terraform stack in whatever account your current credentials point at.</p>
+      <ul>
+        <li><strong>Recommended: a separate account,</strong> created by you first (AWS Organizations → Add account). Then run <code>crucible aws labs-init</code> with credentials for it and <code>--crucible-account &lt;main account id&gt;</code>. Why it's better:
+          <ul>
+            <li><strong>Containment:</strong> what a lab or trainee does stays away from Crucible's own servers, buckets and Cognito.</li>
+            <li><strong>Cost:</strong> the billing export, the AWS Budget and the cost alerts cover only lab spend.</li>
+            <li><strong>Cleanup:</strong> the reaper can treat everything tagged <code>crucible:lab-id</code> in that account as lab-owned.</li>
+          </ul>
+        </li>
+        <li><strong>One account also works.</strong> Leave out <code>--crucible-account</code>, and the labs stack trusts the node in its own account. One thing to know: the labs stack turns on S3's <em>account-wide</em> public-access block, so check that nothing else there needs public buckets.</li>
+      </ul>
+      <aside class="note org"><b class="lab">In our account</b><p>The organization's SCPs would also apply to labs. Ideally labs get a sandbox account without the networking restrictions, since labs create EC2 and S3 resources freely.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-5">
+    <h3><span class="qn">1.5</span>What is a permission boundary? Does it limit what Terraform can do?</h3>
+    <div class="ans">
+      <p>A permission boundary is an IAM ceiling attached to a role. A request succeeds only if both the role's own policy and the boundary allow it, and an explicit Deny in either wins (see the diagram in 1.1).</p>
+      <p><strong>Yes, it limits Terraform, inside AWS rather than in the module.</strong> Terraform can declare anything. But every apply, destroy, workspace terminal and sweep acts with a lab-role session, so every AWS call is checked. A module that declares something outside the limits passes <code>plan</code>, then fails at apply with <code>AccessDenied</code>.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Crucible's lab boundary allows</th><th>Limit</th></tr></thead>
+        <tbody>
+          <tr><td>Services</td><td>Only <code>ec2:*</code>, <code>s3:*</code>, <code>sts:GetCallerIdentity</code>, <code>tag:GetResources</code>. RDS, Lambda, IAM, ELB and the rest are out.</td></tr>
+          <tr><td>Regions</td><td>Only the allowed regions (<code>--region</code>, <code>--allowed-regions</code>).</td></tr>
+          <tr><td>Instances</td><td>Only <code>allowed_instance_types</code> (default t3, t3a, t4g nano and micro); shared tenancy; no Marketplace AMIs.</td></tr>
+          <tr><td>Volumes</td><td>gp2 or gp3, at most 50 GiB by default, baseline IOPS (≤ 3000) and throughput (≤ 125 MB/s).</td></tr>
+          <tr><td>S3</td><td>Nothing that locks a bucket against cleanup or hands it to someone else: no object lock, retention, bucket policy or ACL changes.</td></tr>
+        </tbody>
+      </table></div>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>The pricer can price NAT gateways, Elastic IPs and load balancers, but the lab role can't create them. A lab using them lints clean and gets an estimate, then fails safely at apply. The proposed fix is for lint to refuse types the role can't create. Widening what labs may create should stay in Terraform, as reviewed "packs" passed to <code>labs-init</code>, never in the web UI. An admin setting in the UI could still narrow it.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-6">
+    <h3><span class="qn">1.6</span>How does IAM stop a lab from touching another lab's resources?</h3>
+    <div class="ans">
+      <p>Three pieces work together: a tag fixed on the credentials, one policy that refers to it, and tags forced into every resource.</p>
+      <ol>
+        <li><strong>Session tags.</strong> Crucible assumes the lab role with the session tag <code>crucible:lab-id=&lt;id&gt;</code>, and the trust policy requires that tag. The trainee holds the resulting one-hour credentials but can't assume the role again, so they can't swap the id.</li>
+        <li><strong>One policy for every lab.</strong> The policy refers to <code>${aws:PrincipalTag/crucible:lab-id}</code>. AWS fills that in with the caller's own lab id on every request, so each lab only ever matches itself.</li>
+        <li><strong>Creates must carry the tag.</strong> <code>RunInstances</code>, <code>CreateVolume</code> and <code>CreateSecurityGroup</code> are allowed only if the request tags the resource with your own lab id (<code>aws:RequestTag</code>). <code>CreateTags</code> works only as part of a create (<code>ec2:CreateAction</code>), so you can't create first and tag later. S3 buckets are limited by name instead (<code>crucible-lab-&lt;id&gt;…</code>).</li>
+        <li><strong>Tags can't be removed or changed.</strong> Changing <code>crucible:*</code> tags after creation is denied, and so is "delete all tags", which carries no key list.</li>
+        <li><strong>Only your own resources.</strong> Stopping, changing or deleting requires the resource to carry your lab tag (<code>aws:ResourceTag</code>).</li>
+        <li><strong>Only your own security group.</strong> EC2 checks every security group and network interface in a launch as a resource of its own. Ones tagged for another lab, or untagged (like the VPC's shared default group), are denied.</li>
+      </ol>
+      <p>Terraform's side: Crucible writes the provider block itself, with <code>default_tags</code> on every resource, and lint refuses a provider block in the author's module.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>These rules are pinned by <code>deploy/aws/labs/labs.tftest.hcl</code>, a Terraform test with a mock AWS provider. It checks that the policy documents say the right thing. Only a real account can show that AWS enforces them, so the runbook has by-hand checks.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-7">
+    <h3><span class="qn">1.7</span>What is CloudTrail?</h3>
+    <div class="ans">
+      <p>AWS's audit log. Every API call in the account is recorded:</p>
+      <ul>
+        <li>who made it, what it was, when, and from which IP;</li>
+        <li>whether it was allowed;</li>
+        <li>whether it came from a console click, a CLI command or a role, such as a lab's Terraform creating an instance.</li>
+      </ul>
+      <p>The last 90 days are searchable by default. Organizations usually also copy everything to a central, tamper-proof bucket, and an SCP stops anyone turning it off.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-8">
+    <h3><span class="qn">1.8</span>What is IMDS?</h3>
+    <div class="ans">
+      <p>The EC2 Instance Metadata Service, at <code>http://169.254.169.254</code> from inside any EC2 instance. Among other things it hands out the instance's IAM role credentials.</p>
+      <p>That makes it a target: a pod on the node that reaches it gets the node's credentials.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>On Crucible's node, those credentials can assume the lab, ops and plan roles. So:</p><ul><li>lab pods' NetworkPolicy blocks egress to 169.254.169.254;</li><li>pods set <code>AWS_EC2_METADATA_DISABLED</code>;</li><li>an init container makes the pod wait until the block is in place.</li></ul><p><code>cluster-check</code> proves the block with a stand-in metadata server on kind.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q1-9">
+    <h3><span class="qn">1.9</span>What does "a shell through SSM" mean?</h3>
+    <div class="ans">
+      <p>SSM is AWS Systems Manager; the shell comes from its <strong>Session Manager</strong> feature.</p>
+      <ol>
+        <li><strong>The agent:</strong> an SSM agent on the instance keeps an <em>outbound</em> HTTPS connection to the SSM service. The instance's role needs the <code>AmazonSSMManagedInstanceCore</code> policy.</li>
+        <li><strong>Opening a shell:</strong> you run <code>aws ssm start-session --target &lt;instance-id&gt;</code>, with the Session Manager plugin installed. AWS relays a terminal over that connection.</li>
+        <li><strong>Why it's better than SSH:</strong>
+          <ul>
+            <li>no open SSH port and no keys to manage;</li>
+            <li>access is controlled by IAM (<code>ssm:StartSession</code>);</li>
+            <li>sessions can be recorded.</li>
+          </ul>
+        </li>
+      </ol>
+      <p><strong>Port forwarding</strong> works the same way and reaches a private app from your laptop without a VPN:</p>
+      <pre><code>aws ssm start-session --target &lt;node-instance-id&gt; \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters 'portNumber=80,localPortNumber=8080'
+# then open http://localhost:8080</code></pre>
+      <p>That's for admins and testing, not for handing to trainees.</p>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="ch" id="ch2">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 02</span>
+    <h2>VPC networking</h2>
+    <p>How a private network inside AWS is built, which doors lead in and out, and how our organization's network is laid out.</p>
+  </div>
+
+  <article class="qa" id="q2-1">
+    <h3><span class="qn">2.1</span>What is a VPC?</h3>
+    <div class="ans">
+      <p>A Virtual Private Cloud is your own private network inside AWS, in one region. It's made of:</p>
+      <ul>
+        <li><strong>An IP range</strong> in CIDR notation, e.g. <code>10.2.128.0/22</code>: 1,024 private addresses that mean nothing outside your network.</li>
+        <li><strong>Subnets:</strong> slices of that range, each in one data center (availability zone, AZ).</li>
+        <li><strong>Route tables:</strong> they decide where each subnet's traffic goes.</li>
+        <li><strong>Gateways:</strong>
+          <ul>
+            <li>an <strong>internet gateway</strong> is the door to the internet;</li>
+            <li>a <strong>NAT gateway</strong> lets traffic out but nothing in;</li>
+            <li>a <strong>VPC endpoint</strong> is a private path to one service.</li>
+          </ul>
+        </li>
+        <li><strong>Security groups:</strong> the firewall on each network interface.</li>
+      </ul>
+      <p><strong>Is a "private subnet" in AWS?</strong> Yes, subnets are part of the VPC. "Private" means its route table has no route to the internet gateway and its servers have no public IPs.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-2">
+    <h3><span class="qn">2.2</span>How is our organization's network built?</h3>
+    <div class="ans">
+      <p>The central networking team gives each account a standard <strong>spoke VPC</strong>, built by a stack named <code>SPOKE-Networking-…</code>. Ours spans two availability zones, with three tiers of subnet.</p>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 430" role="img" aria-labelledby="d1t"><title id="d1t">Our spoke VPC: workloads go out through a firewall and NAT; nothing comes in</title>
+          <rect class="boxw" x="290" y="8" width="180" height="34" rx="6"/>
+          <text x="380" y="30" text-anchor="middle" class="tb">Internet</text>
+          <rect class="box" x="320" y="70" width="120" height="32" rx="6"/>
+          <text x="380" y="91" text-anchor="middle">Internet gateway</text>
+          <line class="la" x1="380" y1="70" x2="380" y2="45" marker-end="url(#ma)"/>
+          <path class="lx" d="M290,25 L110,25 L110,108"/>
+          <text x="110" y="124" text-anchor="middle" class="tx" style="font-size:17px">✕</text>
+          <text x="122" y="50" class="tx">No way in: no public IPs,</text>
+          <text x="122" y="66" class="tx">and the SCP denies EIPs</text>
+          <rect class="zone" x="16" y="134" width="728" height="288" rx="10"/>
+          <text x="205" y="158" text-anchor="middle" class="tm">il-central-1a</text>
+          <text x="555" y="158" text-anchor="middle" class="tm">il-central-1b</text>
+          <rect class="box" x="40" y="170" width="330" height="48" rx="6"/>
+          <text x="56" y="190" class="tb">natSubnet1 · /27</text><text x="56" y="207" class="ts">NAT gateway, route to the internet gateway</text>
+          <rect class="box" x="390" y="170" width="330" height="48" rx="6"/>
+          <text x="406" y="190" class="tb">natSubnet2 · /27</text><text x="406" y="207" class="ts">NAT gateway, route to the internet gateway</text>
+          <rect class="box" x="40" y="240" width="330" height="48" rx="6"/>
+          <text x="56" y="260" class="tb">firewallSubnet1 · /27</text><text x="56" y="277" class="ts">AWS Network Firewall endpoint</text>
+          <rect class="box" x="390" y="240" width="330" height="48" rx="6"/>
+          <text x="406" y="260" class="tb">firewallSubnet2 · /27</text><text x="406" y="277" class="ts">AWS Network Firewall endpoint</text>
+          <rect class="boxa" x="40" y="310" width="330" height="56" rx="6"/>
+          <text x="56" y="332" class="tb">spokeSubnet1 · 10.2.129.0/24</text><text x="56" y="350" class="ts">Workloads · no public IPs</text>
+          <rect class="boxa" x="390" y="310" width="330" height="56" rx="6"/>
+          <text x="406" y="332" class="tb">spokeSubnet2 · 10.2.130.0/24</text><text x="406" y="350" class="ts">Workloads · no public IPs</text>
+          <line class="la" x1="300" y1="310" x2="300" y2="291" marker-end="url(#ma)"/>
+          <line class="la" x1="300" y1="240" x2="300" y2="221" marker-end="url(#ma)"/>
+          <path class="la" d="M300,170 L300,86 L317,86" marker-end="url(#ma)"/>
+          <line class="la" x1="460" y1="310" x2="460" y2="291" marker-end="url(#ma)"/>
+          <line class="la" x1="460" y1="240" x2="460" y2="221" marker-end="url(#ma)"/>
+          <path class="la" d="M460,170 L460,86 L443,86" marker-end="url(#ma)"/>
+          <text x="470" y="126" class="ta">outbound only</text>
+          <text x="30" y="404" class="tm">Spoke VPC · 10.2.128.0/22 · each subnet's default route points one tier up</text>
+        </svg>
+        </div>
+        <figcaption>Going out: workload → Network Firewall (inspected, maybe blocked) → NAT (given the NAT's public IP) → internet gateway → internet. Replies return the same way.</figcaption>
+      </figure>
+      <div class="tbl"><table>
+        <thead><tr><th>Subnets</th><th>Default route goes to</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>spokeSubnet1</code>, <code>2</code></td><td>a firewall endpoint (<code>vpce-…</code>)</td><td>Where workloads run; no public IPs</td></tr>
+          <tr><td><code>firewallSubnet1</code>, <code>2</code></td><td>a NAT gateway</td><td>Network Firewall inspects traffic</td></tr>
+          <tr><td><code>natSubnet1</code>, <code>2</code></td><td>the internet gateway</td><td>NAT gateways swap private addresses for their public IP</td></tr>
+        </tbody>
+      </table></div>
+      <aside class="note org"><b class="lab">In our account</b><ul><li>There's no default VPC; this is the only one.</li><li>Nothing on the internet can connect in.</li><li>We only read the default routes. There may also be routes to the company network, for example a Transit Gateway; that check is still pending.</li></ul></aside>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible's AWS stack as built expects a default VPC, an Elastic IP and inbound 80/443 for Let's Encrypt, and none of that is possible here. Running it in this network needs:</p><ul><li>an existing-VPC option;</li><li>no Elastic IP;</li><li>a front door: an ALB (3.6), a VPN (4.4) or a tunnel (5.3);</li><li>the firewall to allow the node's outbound hosts.</li></ul></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-3">
+    <h3><span class="qn">2.3</span>What does "NAT only affects connections that start inside the network" mean?</h3>
+    <div class="ans">
+      <p>Devices in an office or a private subnet have private addresses (<code>10.x</code>, <code>192.168.x</code>) that the internet can't reach. The router does <strong>NAT</strong> (network address translation):</p>
+      <ol>
+        <li>A laptop opens a connection out.</li>
+        <li>The router swaps in its own public IP and port, and records the mapping in a table.</li>
+        <li>A reply arrives on that public port; the router looks it up and hands it back to the laptop.</li>
+      </ol>
+      <p>A connection that <em>starts</em> outside matches no entry, so there's no inside machine to hand it to, and it's dropped.</p>
+      <pre><code>out:   10.2.129.15:51000  →  NAT  →  52.x.x.x:31744  →  github.com:443   (entry recorded)
+reply: github.com:443  →  52.x.x.x:31744  →  table hit  →  10.2.129.15:51000
+in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>People behind NAT reach Crucible fine, because browsers and the laptop agent always connect <em>out</em> to the server. Nothing ever connects in to a laptop.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-4">
+    <h3><span class="qn">2.4</span>What is the AWS NAT gateway, and why can't anyone make requests into it?</h3>
+    <div class="ans">
+      <p>AWS's managed version of that router, for private subnets. Instances without public IPs reach the internet through it while staying unreachable from outside.</p>
+      <ul>
+        <li><strong>Outbound only, by design.</strong> Unlike a home router, it offers no port forwarding at all. Instances can fetch updates and call APIs, but nothing on the internet can reach them through it.</li>
+        <li><strong>Cost:</strong> roughly $0.045–0.06 an hour plus about $0.045 per GB processed, so over $30 a month even when idle.</li>
+        <li><strong>To accept connections from outside,</strong> you need a public IP on the instance or a load balancer in front of it.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-5">
+    <h3><span class="qn">2.5</span>What's the difference between a VPC endpoint and an internet gateway?</h3>
+    <div class="ans">
+      <ul>
+        <li><strong>An internet gateway</strong> is the VPC's door to the <em>whole public internet</em>. For a server with a public IP, it translates between that public address and the server's private one.</li>
+        <li><strong>A VPC endpoint</strong> is a private doorway to <em>one specific destination</em>, without crossing the internet. Three kinds:
+          <ul>
+            <li><strong>Gateway endpoints</strong> (S3, DynamoDB): a route-table entry that sends that service's traffic over AWS's private network.</li>
+            <li><strong>Interface endpoints</strong> (PrivateLink): a network interface with a private IP in your subnet that <em>is</em> the service, e.g. SSM or STS.</li>
+            <li><strong>Gateway Load Balancer endpoints:</strong> send traffic into an inspection appliance. AWS Network Firewall uses this kind.</li>
+          </ul>
+        </li>
+      </ul>
+      <aside class="note org"><b class="lab">In our account</b><p>The spoke subnets' default route points at a <code>vpce-…</code>. That's a Network Firewall endpoint, not a door to the internet.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-6">
+    <h3><span class="qn">2.6</span>What is an Elastic IP? Is it a direct bypass to the server?</h3>
+    <div class="ans">
+      <p>An Elastic IP (EIP) is a fixed public IPv4 address that the internet gateway maps one-to-one to a server's private address.</p>
+      <p><strong>It's almost a bypass.</strong></p>
+      <ul>
+        <li><strong>What it passes:</strong> the internet gateway, which only translates addresses; then the server's security group and the subnet's network ACL.</li>
+        <li><strong>What doesn't happen:</strong> nothing reads what the traffic contains. There's no load balancer, no WAF, and normally no central firewall, unless the network team routed inbound traffic through one.</li>
+      </ul>
+      <p>So it doesn't skip every rule, but it skips the controls an organization relies on. That's why SCPs often deny it. The cost is about $3.60 a month, since AWS charges for every public IPv4 address.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-7">
+    <h3><span class="qn">2.7</span>What is a security group?</h3>
+    <div class="ans">
+      <p>AWS's firewall attached to a network interface: an instance, a load balancer, a VPN endpoint.</p>
+      <ul>
+        <li><strong>Allow-only:</strong> rules allow traffic by port, protocol and source; anything not allowed is blocked. There are no deny rules.</li>
+        <li><strong>Stateful:</strong> if a connection is allowed in, its replies are allowed out automatically.</li>
+        <li><strong>A source can be another security group.</strong> "Allow from group X" means "from anything with X attached", which stays right when IPs change.</li>
+      </ul>
+      <div class="tbl"><table>
+        <thead><tr><th>Group</th><th>Inbound</th><th>Outbound</th></tr></thead>
+        <tbody>
+          <tr><td>Crucible today: <code>crucible-web</code></td><td>80, 443 from anywhere; no SSH (shell via SSM)</td><td>everything</td></tr>
+          <tr><td>ALB design: <code>alb-sg</code></td><td>443 (and 80, for the redirect) from anywhere if public, or from VPN and office ranges if internal</td><td>port 80 to <code>node-sg</code> only</td></tr>
+          <tr><td>ALB design: <code>node-sg</code></td><td>port 80 from <code>alb-sg</code> only</td><td>everything, then through the Network Firewall</td></tr>
+          <tr><td>Each AWS lab</td><td>its own group, tagged with its lab id (1.6)</td><td>as the lab defines</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </article>
+
+  <article class="qa" id="q2-8">
+    <h3><span class="qn">2.8</span>What is AWS Network Firewall? Is it the same as security groups?</h3>
+    <div class="ans">
+      <p>A managed firewall that inspects traffic entering and leaving a VPC.</p>
+      <ul>
+        <li><strong>Where it runs:</strong> in dedicated firewall subnets, where it appears as VPC endpoints. Route tables steer traffic through it.</li>
+        <li><strong>What it matches:</strong> ports and IPs, domain names (e.g. allow only <code>*.github.com</code>), and intrusion-detection signatures.</li>
+        <li><strong>Cost:</strong> about $0.40 an hour per endpoint, plus a per-GB charge, usually paid centrally.</li>
+      </ul>
+      <p>It's a separate layer from security groups, and traffic has to pass both:</p>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>Security group</th><th>Network Firewall</th></tr></thead>
+        <tbody>
+          <tr><td>Where</td><td>On each network interface</td><td>In the network path, at the VPC's edge</td></tr>
+          <tr><td>Who manages it</td><td>Usually the app team</td><td>The central network or security team</td></tr>
+          <tr><td>What it can do</td><td>Allow ports from sources; stateful; no deny rules</td><td>Allow and deny; domain names; intrusion signatures; logging</td></tr>
+        </tbody>
+      </table></div>
+      <p>A third, rarely used layer exists: <strong>network ACLs</strong>, stateless allow and deny lists on whole subnets.</p>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="ch" id="ch3">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 03</span>
+    <h2>Exposing an internal web app</h2>
+    <p>The conventional front doors, why organizations prefer a load balancer over a public server, and what an ALB with a WAF looks like in our VPC.</p>
+  </div>
+
+  <article class="qa" id="q3-1">
+    <h3><span class="qn">3.1</span>What are the conventional ways to expose an internal web app?</h3>
+    <div class="ans">
+      <p>From most private to most public:</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Pattern</th><th>Who can reach it</th><th>Front door</th><th>Fits when</th></tr></thead>
+        <tbody>
+          <tr><td>1. Private, over the company network</td><td>Office network, or home over the company VPN</td><td>Internal ALB with an ACM certificate; internal DNS</td><td>All users are staff. The most common pattern in landing zones.</td></tr>
+          <tr><td>2. Private, behind an access proxy</td><td>Anyone who passes the company sign-in (and device check)</td><td>AWS Verified Access, Cloudflare Access, Zscaler</td><td>Staff without a VPN; feels like a public URL</td></tr>
+          <tr><td>3. Public, through central ingress</td><td>The internet, through one governed door</td><td>Internet-facing ALB with WAF, often run by the network team</td><td>Outsiders or outside services must reach it</td></tr>
+          <tr><td>4. Public, directly</td><td>The internet, straight to the server</td><td>The server's own public IP or ALB</td><td>Small setups; landing zones usually forbid it</td></tr>
+        </tbody>
+      </table></div>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Today's deploy is pattern 4 (an Elastic IP on the node), which our SCP blocks. Whatever the pattern:</p><ul><li>the front door must carry <strong>WebSockets</strong> (agent link, terminals);</li><li>its <strong>idle timeout</strong> should be raised above 60 seconds;</li><li>TLS moves to the load balancer or proxy;</li><li>the sign-in callback URL must be the hostname people actually use.</li></ul></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-2">
+    <h3><span class="qn">3.2</span>Why is a public load balancer acceptable but a public Elastic IP isn't?</h3>
+    <div class="ans">
+      <p>It isn't about having a public IP. It's about <strong>what</strong> is exposed and <strong>who controls it</strong>.</p>
+      <ul>
+        <li><strong>An Elastic IP on an instance puts the server itself on the internet.</strong> Every port its security group allows is open, and that's one edit away from "everything". Traffic skips the central firewall, the WAF and the logging.</li>
+        <li><strong>A load balancer exposes only what it's configured for,</strong> typically HTTPS on 443 for named hostnames:
+          <ul>
+            <li>it ends TLS and forwards only well-formed HTTP;</li>
+            <li>it can sit behind a WAF, log every request and require sign-in;</li>
+            <li>the servers behind it stay private, so even a wrong security group can't expose SSH.</li>
+          </ul>
+        </li>
+        <li><strong>Organizations want one governed front door.</strong> If every team could attach Elastic IPs, every team would run its own internet edge.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-3">
+    <h3><span class="qn">3.3</span>Does an access proxy log in to AWS with SSO, and is that why it works?</h3>
+    <div class="ans">
+      <p>No, it's not an AWS login. It's single sign-on with the <strong>company identity provider</strong>.</p>
+      <ol>
+        <li>A user opens <code>https://crucible.company.com</code>. That address belongs to the proxy.</li>
+        <li>The proxy sends them to sign in with the company identity provider, often with MFA, and may check the device is managed.</li>
+        <li>Only then does it forward the request, over its own private path, to the app. Users need no AWS permissions.</li>
+      </ol>
+      <p><strong>How the proxy reaches the private app:</strong></p>
+      <ul>
+        <li><strong>AWS Verified Access</strong> connects into your VPC.</li>
+        <li><strong>Cloudflare and Zscaler</strong> run a small connector inside your network that <em>dials out</em> to the vendor. That's why it works through NAT.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-4">
+    <h3><span class="qn">3.4</span>Why choose pattern 3 at all? Isn't it public access?</h3>
+    <div class="ans">
+      <p>Yes, anyone can reach the front door. Teams choose it when the people or systems that need the app can't be on the company network:</p>
+      <ul>
+        <li>partners, contractors or external trainees with no VPN account;</li>
+        <li>phones and unmanaged devices;</li>
+        <li><strong>outside services that call in.</strong> For Crucible, that's GitHub.com's webhook, and laptop agents at home without a VPN.</li>
+      </ul>
+      <p>It's still much safer than pattern 4. There's one front door, with WAF, rate limits, optional allowlists and sign-in, run by people whose job is the internet edge, and the servers stay private.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>If every user is staff, pattern 1 or 2 fits best. Without an inbound path the git webhook can't arrive, so Crucible falls back to fetching every 60 seconds, which is fine.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-5">
+    <h3><span class="qn">3.5</span>In pattern 1, why use a load balancer if everyone needs the VPN anyway?</h3>
+    <div class="ans">
+      <p>It isn't strictly needed; the VPN only provides reachability. A load balancer adds:</p>
+      <ul>
+        <li><strong>TLS certificates from ACM,</strong> renewed by AWS. Let's Encrypt's usual check can't reach a private server.</li>
+        <li><strong>A stable address.</strong> The node's private IP changes when it's rebuilt; the load balancer's name doesn't.</li>
+        <li><strong>Health checks,</strong> two availability zones, access logs, and optionally a WAF.</li>
+        <li><strong>Convention:</strong> networking teams often require every app behind one, so all apps are handled alike.</li>
+      </ul>
+      <p>For a single-node app you could skip it. VPN users would reach the node's private IP by an internal DNS name, with TLS from an internal certificate or Let's Encrypt's DNS check. That saves about $16–20 a month.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-6">
+    <h3><span class="qn">3.6</span>Can we add an ALB to our network, or does the organization block that too?</h3>
+    <div class="ans">
+      <p>Not necessarily blocked; it has to be checked. Two things decide it:</p>
+      <ul>
+        <li><strong>Does the SCP allow creating load balancers?</strong> The IAM policy simulator can answer that without creating anything, since it includes SCPs in its result.</li>
+        <li><strong>Is there somewhere for it to sit?</strong>
+          <ul>
+            <li>An <strong>internet-facing ALB</strong> needs public subnets in two AZs (route to the internet gateway). Here only the networking team's small <code>natSubnet</code>s qualify. They're big enough (an ALB needs 8 free addresses per subnet), but using them is the networking team's call.</li>
+            <li>An <strong>internal ALB</strong> can go in the spoke subnets, and is reachable only from wherever the company network connects in.</li>
+          </ul>
+        </li>
+      </ul>
+      <p>The three possible outcomes:</p>
+      <ol>
+        <li>Internet-facing allowed: a public ALB with WAF, if the networking team agrees.</li>
+        <li>Only internal allowed: pattern 1, reached over the company network or VPN.</li>
+        <li>Both denied: ingress has to come from the networking team's central entry point.</li>
+      </ol>
+      <aside class="note org"><b class="lab">In our account</b><p>Not checked yet: the AWS session expired before the simulator ran. It needs <code>aws login</code> again, then a read-only simulation of an internet-facing and an internal ALB.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-7">
+    <h3><span class="qn">3.7</span>How would we set up an ALB with a WAF, and how would the VPC look?</h3>
+    <div class="ans">
+      <p>This assumes the organization allows an internet-facing ALB. The internal variant follows below.</p>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 480" role="img" aria-labelledby="d2t"><title id="d2t">Our VPC with an internet-facing ALB and WAF in front of a private Crucible node</title>
+          <text x="600" y="78" class="tw">━ coming in</text>
+          <text x="600" y="96" class="ta">━ going out</text>
+          <rect class="boxw" x="200" y="8" width="360" height="34" rx="6"/>
+          <text x="380" y="30" text-anchor="middle" class="tb">People · laptop agents · GitHub webhook</text>
+          <line class="lw" x1="380" y1="42" x2="380" y2="67" marker-end="url(#mw)"/>
+          <text x="392" y="60" class="tm">https://crucible.company.com</text>
+          <rect class="box" x="320" y="70" width="120" height="30" rx="6"/>
+          <text x="380" y="90" text-anchor="middle">Internet gateway</text>
+          <rect class="zone" x="20" y="120" width="720" height="122" rx="10"/>
+          <text x="36" y="168" class="tm">Public ingress</text><text x="36" y="184" class="tm">subnets, AZ a + b</text>
+          <line class="lw" x1="380" y1="100" x2="380" y2="135" marker-end="url(#mw)"/>
+          <rect class="boxw" x="200" y="138" width="360" height="36" rx="6"/>
+          <text x="380" y="161" text-anchor="middle" class="tb">AWS WAF web ACL · managed rules, rate limit</text>
+          <line class="lw" x1="380" y1="174" x2="380" y2="185" marker-end="url(#mw)"/>
+          <rect class="box" x="200" y="188" width="360" height="44" rx="6"/>
+          <text x="380" y="206" text-anchor="middle" class="tb">Application Load Balancer</text>
+          <text x="380" y="223" text-anchor="middle" class="ts">:80 → HTTPS redirect · :443 TLS with an ACM certificate</text>
+          <line class="lw" x1="380" y1="232" x2="380" y2="277" marker-end="url(#mw)"/>
+          <text x="392" y="260" class="tm">HTTP :80, inside the VPC</text>
+          <rect class="zone" x="20" y="262" width="720" height="96" rx="10"/>
+          <text x="36" y="302" class="tm">spokeSubnet1</text><text x="36" y="318" class="tm">(private)</text>
+          <rect class="boxa" x="200" y="280" width="360" height="62" rx="6"/>
+          <text x="380" y="299" text-anchor="middle" class="tb">Crucible node · no public IP</text>
+          <text x="380" y="316" text-anchor="middle" class="ts">k3s: Traefik :80 → crucible pod</text>
+          <text x="380" y="332" text-anchor="middle" class="ts">security group: port 80 from the ALB's group only</text>
+          <line class="la" x1="380" y1="342" x2="380" y2="395" marker-end="url(#ma)"/>
+          <text x="392" y="372" class="ta">outbound only</text>
+          <rect class="zone" x="20" y="382" width="720" height="86" rx="10"/>
+          <text x="36" y="420" class="tm">Outbound,</text><text x="36" y="436" class="tm">unchanged</text>
+          <rect class="box" x="200" y="398" width="360" height="56" rx="6"/>
+          <text x="380" y="420" text-anchor="middle" class="tb">Network Firewall → NAT → internet</text>
+          <text x="380" y="438" text-anchor="middle" class="ts">k3s install, git host, Price List, registries, AWS APIs</text>
+        </svg>
+        </div>
+        <figcaption>Two separate flows. Coming in: internet → internet gateway → WAF → ALB → node. Going out: node → firewall → NAT → internet. The node itself is never reachable from outside.</figcaption>
+      </figure>
+      <h4>What's needed, piece by piece</h4>
+      <ol>
+        <li><strong>Public subnets for the ALB</strong> in two AZs. Ideally the networking team adds a small dedicated "ingress" subnet in each.</li>
+        <li><strong>An ACM certificate</strong> for <code>crucible.company.com</code>, validated by a DNS record (3.9).</li>
+        <li><strong>The ALB and its security group:</strong>
+          <ul>
+            <li>listener :80 redirects to HTTPS;</li>
+            <li>listener :443 uses the certificate and a TLS 1.2/1.3 policy;</li>
+            <li>idle timeout raised from 60 s to about 300 s, for WebSockets (6.3).</li>
+          </ul>
+        </li>
+        <li><strong>A target group</strong> with the node on port 80 and a <code>GET /healthz</code> health check (3.8).</li>
+        <li><strong>A regional AWS WAF web ACL</strong> attached to the ALB:
+          <ul>
+            <li>AWS managed rules: common exploits, known bad inputs, IP reputation;</li>
+            <li>a rate-based rule;</li>
+            <li>an optional office IP allowlist, which would also block home agents and GitHub unless those paths get exceptions.</li>
+          </ul>
+        </li>
+        <li><strong>DNS:</strong> the hostname as an alias or CNAME to the ALB's DNS name.</li>
+        <li><strong>The node in a private spoke subnet,</strong> with no Elastic IP. Its security group allows port 80 only from the ALB's group.</li>
+        <li><strong>The firewall's outbound allowlist</strong> for the node: k3s and GitHub at first boot, Docker registries, the git host, the AWS Price List, and AWS APIs (S3, SSM, STS, Cognito) unless VPC endpoints exist. Let's Encrypt is no longer needed.</li>
+      </ol>
+      <aside class="note crucible"><b class="lab">In Crucible</b><ul><li>The WAF's common rule set blocks request bodies over 8 KB. Crucible's uploads and content edits are bigger, so that rule goes to count-only, or excludes those paths. Start the whole WAF in count mode.</li><li>Traefik stops doing TLS: no Let's Encrypt, no redirect.</li><li>Rough cost: ALB about $18–25 a month, WAF about $10 a month, ACM free.</li></ul></aside>
+      <h4>If only an internal ALB is allowed</h4>
+      <ul>
+        <li>The scheme is <code>internal</code>, in the spoke subnets.</li>
+        <li>Users arrive over the VPN or the office network; DNS goes in an internal zone.</li>
+        <li>A WAF is optional (3.10).</li>
+        <li>The GitHub webhook can't arrive, so Crucible polls; home agents need the VPN.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-8">
+    <h3><span class="qn">3.8</span>What is a target group?</h3>
+    <div class="ans">
+      <p>The ALB's list of where to send traffic, and how to check those destinations are healthy.</p>
+      <ul>
+        <li><strong>Members:</strong> EC2 instances, IP addresses, or Lambda functions.</li>
+        <li><strong>Port and protocol</strong> to forward to on each member, e.g. port 80 over HTTP, since the ALB already handled HTTPS.</li>
+        <li><strong>Health check:</strong> the ALB calls a path on each member every few seconds, and only sends traffic to members that pass. If none pass, users get a 503 from the ALB rather than a hang.</li>
+        <li><strong>Other settings:</strong> sticky sessions, and a deregistration delay for finishing in-flight requests when a member is removed.</li>
+      </ul>
+      <p>The flow: a <strong>listener</strong> (<code>:443</code>) receives a request, its <strong>rules</strong> (by host or path) pick a target group, and the group picks a healthy member. One ALB can serve several apps, each with its own target group.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-9">
+    <h3><span class="qn">3.9</span>What is ACM?</h3>
+    <div class="ans">
+      <p>AWS Certificate Manager: AWS's service for TLS certificates, the thing behind the padlock in HTTPS.</p>
+      <ul>
+        <li><strong>Public certificates are free.</strong> You request one and prove you control the domain, usually with a DNS record ACM gives you.</li>
+        <li><strong>It renews them automatically,</strong> as long as that DNS record stays.</li>
+        <li><strong>It only works with AWS services:</strong> ALB, NLB, CloudFront, API Gateway, Client VPN. AWS holds the private key, and by default you can't export it.</li>
+        <li><strong>ACM Private CA</strong> is a separate, paid internal certificate authority. A public certificate on an internal ALB is usually simpler, and works even when the site is only reachable over a VPN.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Behind an ALB, ACM replaces Let's Encrypt, which needs the internet to reach port 80.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-10">
+    <h3><span class="qn">3.10</span>If we set up a VPN, do we need a WAF? What are the conventions?</h3>
+    <div class="ans">
+      <p>Not strictly. A WAF mainly defends apps the internet can reach.</p>
+      <ul>
+        <li><strong>Internet-facing apps:</strong> a WAF is standard, often required. Anyone can send traffic, so you want attack filtering, IP reputation, rate limits and bot control.</li>
+        <li><strong>Internal apps behind a VPN:</strong> usually no WAF. The defense is that only company people and devices can reach the app, plus its own login. A WAF there mostly adds false positives and cost.</li>
+        <li><strong>The exception: zero-trust or compliance-driven companies.</strong> Some treat the internal network as untrusted too, since a compromised laptop is on the VPN as well. Some audits (PCI DSS, some SOC 2 controls) expect a WAF in front of web apps with sensitive data. AWS WAF works on internal ALBs too.</li>
+      </ul>
+      <p><strong>Behind a VPN, these still matter:</strong></p>
+      <ul>
+        <li>TLS with ACM, even inside the network;</li>
+        <li>every user signs in to the app;</li>
+        <li>narrow security groups (ALB from VPN and office ranges, node from the ALB only);</li>
+        <li>ALB access logs and CloudTrail;</li>
+        <li>patching.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><ul><li>A WAF can't see inside WebSockets: it inspects the upgrade request and nothing after the <code>101</code>.</li><li>Crucible already checks Origin on every state change, sends a strict CSP, checks permissions per route and checks the webhook secret.</li><li>Recommendation: start without a WAF behind a VPN, and add one, in count mode first, if Crucible is ever exposed publicly.</li></ul></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q3-11">
+    <h3><span class="qn">3.11</span>What's the difference between an ALB and an NLB?</h3>
+    <div class="ans">
+      <p>The layer they work at.</p>
+      <ul>
+        <li><strong>ALB</strong> (Application Load Balancer), layer 7: it understands HTTP and routes each request by host, path and headers.</li>
+        <li><strong>NLB</strong> (Network Load Balancer), layer 4: it sees only TCP or UDP connections and forwards bytes without reading them.</li>
+      </ul>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>ALB</th><th>NLB</th></tr></thead>
+        <tbody>
+          <tr><td>Understands</td><td>HTTP, HTTPS, gRPC, WebSockets</td><td>TCP, UDP, TLS</td></tr>
+          <tr><td>Routing by host or path</td><td>Yes</td><td>No, by port only</td></tr>
+          <tr><td>TLS with ACM</td><td>Yes</td><td>Yes, or passes TLS through</td></tr>
+          <tr><td>AWS WAF</td><td><strong>Yes</strong></td><td><strong>No</strong></td></tr>
+          <tr><td>Built-in sign-in (Cognito, OIDC)</td><td>Yes</td><td>No</td></tr>
+          <tr><td>Redirects, fixed responses</td><td>Yes</td><td>No</td></tr>
+          <tr><td>Client IP at the backend</td><td>In <code>X-Forwarded-For</code></td><td>Preserved</td></tr>
+          <tr><td>Fixed IP addresses</td><td>No; a DNS name whose IPs change</td><td>One stable IP per zone</td></tr>
+          <tr><td>PrivateLink (share with other VPCs)</td><td>No</td><td>Yes</td></tr>
+          <tr><td>Idle timeout</td><td>60 s default, up to 4000 s</td><td>350 s for TCP</td></tr>
+          <tr><td>Typical use</td><td>Websites, APIs, web apps</td><td>Non-HTTP protocols, fixed IPs, extreme throughput, PrivateLink</td></tr>
+        </tbody>
+      </table></div>
+      <p>Both cost roughly $16–20 a month plus usage.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>The ALB is the natural choice for Crucible: it handles TLS with ACM, redirects, WAF and path routing. An NLB makes sense only for fixed IPs in someone's allowlist, or PrivateLink.</p></aside>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="ch" id="ch4">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 04</span>
+    <h2>Connecting offices and people</h2>
+    <p>How separate networks join AWS: the Transit Gateway hub, site-to-site VPNs and private lines, and VPNs for individual people.</p>
+  </div>
+
+  <article class="qa" id="q4-1">
+    <h3><span class="qn">4.1</span>What is a Transit Gateway?</h3>
+    <div class="ans">
+      <p>An AWS-managed router for a whole region. It joins many VPCs, plus offices and data centers (over VPN or Direct Connect), as a hub. Without it, every pair of VPCs would need its own peering link.</p>
+      <ul>
+        <li><strong>Attachments</strong> are its ports: one per VPC, VPN or Direct Connect gateway.</li>
+        <li><strong>Its route tables</strong> are the rulebook, e.g. "office A may reach spokes 1 to 5" and "spokes may not reach each other".</li>
+        <li><strong>In large organizations,</strong> every account's spoke VPC attaches to it, often with a central inspection VPC in the path.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q4-2">
+    <h3><span class="qn">4.2</span>How does an office network connect to a Transit Gateway and a VPC, when the office is a separate building?</h3>
+    <div class="ans">
+      <p>With an <strong>encrypted tunnel over the internet</strong>, or a <strong>private fiber line</strong>. Either way, private addresses on both sides keep working as if they were one network.</p>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 290" role="img" aria-labelledby="d3t"><title id="d3t">An office joined to a Transit Gateway by two IPsec tunnels</title>
+          <rect class="zone" x="10" y="30" width="200" height="232" rx="10"/>
+          <text x="24" y="52" class="tm">Office · 192.168.0.0/16</text>
+          <rect class="box" x="30" y="66" width="160" height="44" rx="6"/>
+          <text x="110" y="85" text-anchor="middle" class="tb">Laptop</text><text x="110" y="101" text-anchor="middle" class="ts mono">192.168.1.20</text>
+          <line class="la" x1="110" y1="110" x2="110" y2="166" marker-end="url(#ma)"/>
+          <rect class="box" x="30" y="170" width="160" height="54" rx="6"/>
+          <text x="110" y="191" text-anchor="middle" class="tb">Office router</text><text x="110" y="208" text-anchor="middle" class="ts">firewall with a public IP</text>
+          <path class="la" d="M190,186 C262,186 282,82 347,82" marker-end="url(#ma)"/>
+          <path class="la" d="M190,206 C272,206 292,102 347,102" marker-end="url(#ma)"/>
+          <text x="275" y="244" text-anchor="middle" class="tm">2 IPsec tunnels, encrypted,</text>
+          <text x="275" y="260" text-anchor="middle" class="tm">over the public internet</text>
+          <rect class="zone" x="340" y="10" width="410" height="270" rx="10"/>
+          <rect class="box" x="350" y="62" width="170" height="60" rx="6"/>
+          <text x="435" y="86" text-anchor="middle" class="tb">VPN attachment</text><text x="435" y="104" text-anchor="middle" class="ts">2 tunnel endpoints, BGP</text>
+          <line class="la" x1="435" y1="122" x2="435" y2="157" marker-end="url(#ma)"/>
+          <rect class="boxa" x="350" y="160" width="170" height="72" rx="6"/>
+          <text x="435" y="184" text-anchor="middle" class="tb">Transit Gateway</text><text x="435" y="202" text-anchor="middle" class="ts">route tables decide</text><text x="435" y="217" text-anchor="middle" class="ts">who reaches whom</text>
+          <rect class="boxa" x="570" y="40" width="170" height="60" rx="6"/>
+          <text x="655" y="64" text-anchor="middle" class="tb">Our spoke VPC</text><text x="655" y="82" text-anchor="middle" class="ts mono">10.2.128.0/22</text>
+          <rect class="box" x="570" y="120" width="170" height="46" rx="6"/>
+          <text x="655" y="148" text-anchor="middle">Other spoke VPCs</text>
+          <rect class="box" x="570" y="186" width="170" height="46" rx="6"/>
+          <text x="655" y="214" text-anchor="middle">Inspection VPC</text>
+          <path class="la" d="M520,178 L545,178 L545,70 L567,70" marker-end="url(#ma)"/>
+          <path class="la" d="M520,196 L567,143" marker-end="url(#ma)"/>
+          <path class="la" d="M520,212 L567,209" marker-end="url(#ma)"/>
+          <text x="354" y="270" class="tm">AWS: the networking account's hub, shared with the spokes</text>
+        </svg>
+        </div>
+        <figcaption>A packet from 192.168.1.20 to 10.2.129.15 is encrypted by the office router and wrapped in an outer packet between two public IPs. AWS unwraps it, and the original private packet continues inside AWS.</figcaption>
+      </figure>
+      <h4>1. Site-to-Site VPN, the most common</h4>
+      <ul>
+        <li><strong>The office side</strong> is a router or firewall the company already has, with a public IP.</li>
+        <li><strong>The AWS side</strong> is a <em>customer gateway</em> resource recording that IP, plus a VPN connection attached to the Transit Gateway. AWS always provides two tunnels, in different AZs.</li>
+        <li><strong>Routing:</strong> the office advertises its ranges and AWS advertises the VPC ranges, usually with BGP.</li>
+        <li><strong>Return route:</strong> the spoke subnets need a route back to the office range through the Transit Gateway.</li>
+        <li><strong>Speed and cost:</strong> up to about 1.25 Gbps per tunnel, roughly $0.05 an hour per connection plus data.</li>
+      </ul>
+      <h4>2. AWS Direct Connect, a private line</h4>
+      <ul>
+        <li>A physical fiber connection in a shared data center, between the company's router (or a telecom partner's) and AWS. Traffic never crosses the internet.</li>
+        <li>A "transit" virtual interface leads to a Direct Connect gateway, then to the Transit Gateway.</li>
+        <li>It takes weeks to set up and costs more. A VPN often runs on top for encryption, or as a backup.</li>
+      </ul>
+      <h4>3. People at home</h4>
+      <p>They use the company's remote-access VPN, which ends at the office or a cloud VPN service, then follows the same path into AWS. The alternative is AWS Client VPN straight into AWS.</p>
+      <p><strong>Hard rule: IP ranges must not overlap.</strong> That's why central teams hand each spoke its own range.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q4-3">
+    <h3><span class="qn">4.3</span>How exactly is a VPN connected to a Transit Gateway?</h3>
+    <div class="ans">
+      <p>As an <strong>attachment</strong>. The two kinds of VPN plug in differently.</p>
+      <h4>Site-to-Site VPN</h4>
+      <ol>
+        <li><strong>Describe the office:</strong> a customer gateway with the router's public IP and its BGP AS number.
+          <pre><code>aws ec2 create-customer-gateway --type ipsec.1 --public-ip 203.0.113.10 --bgp-asn 65010</code></pre></li>
+        <li><strong>Create the VPN connection aimed at the Transit Gateway.</strong> That creates the VPN attachment automatically. (Aiming it at a "virtual private gateway" instead connects one VPC only, the older way.)
+          <pre><code>aws ec2 create-vpn-connection --type ipsec.1 \
+  --customer-gateway-id cgw-… --transit-gateway-id tgw-…</code></pre></li>
+        <li><strong>AWS provisions two tunnels.</strong> Each has an outside public IP in a different AZ, inside link addresses (e.g. <code>169.254.10.0/30</code>) for routing, and a pre-shared key. AWS generates a config file for the router's brand.</li>
+        <li><strong>The router brings the tunnels up.</strong> IKE authenticates both ends and agrees on keys; IPsec then encrypts and wraps every packet.</li>
+        <li><strong>BGP exchanges routes inside each tunnel.</strong> If one tunnel drops, traffic moves to the other within seconds. With BGP the Transit Gateway can also use both tunnels at once (ECMP).</li>
+        <li><strong>Transit Gateway route tables decide who sees whom.</strong> Each attachment is <em>associated</em> with one table, used for traffic entering from it. Routes arrive by <em>propagation</em> from attachments, or as static entries.</li>
+        <li><strong>The VPC needs a route back:</strong> <code>192.168.0.0/16 → tgw-…</code> in the spoke subnets' route table, or replies leave through the firewall and NAT and get lost.</li>
+      </ol>
+      <pre><code>laptop 192.168.1.20 → office router (10.2.128.0/22 via tunnel)
+  → encrypted over the internet → TGW VPN attachment (decrypted)
+  → attachment's route table: 10.2.128.0/22 → our VPC attachment → internal ALB
+reply: VPC route 192.168.0.0/16 → TGW → VPN attachment → tunnel → office</code></pre>
+      <h4>Client VPN</h4>
+      <p>It doesn't attach to a Transit Gateway directly.</p>
+      <ul>
+        <li>Its endpoint is associated with subnets in one VPC, usually a central networking VPC that has a Transit Gateway attachment.</li>
+        <li>You add routes and authorization rules for each range users should reach.</li>
+        <li>The path: laptop → Client VPN endpoint → that VPC → Transit Gateway → our spoke.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q4-4">
+    <h3><span class="qn">4.4</span>How do we set up a VPN into the internal subnet?</h3>
+    <div class="ans">
+      <p><strong>First ask whether one exists.</strong> In a spoke-and-hub organization, the company VPN usually already reaches the spokes through the Transit Gateway. Then it's a route and a firewall rule for <code>10.2.128.0/22</code>, done by the networking team.</p>
+      <p>If you need your own, from smallest to largest:</p>
+      <ol>
+        <li><strong>SSM port forwarding</strong>, just for admins and testing (1.9). No VPN at all.</li>
+        <li><strong>AWS Client VPN</strong>, managed OpenVPN for individual people:
+          <ul>
+            <li>a server certificate in ACM;</li>
+            <li>a client address range that overlaps nothing, e.g. <code>10.200.0.0/22</code>;</li>
+            <li>sign-in through SAML (company login with MFA);</li>
+            <li>split tunnel on, so only VPC traffic uses the VPN;</li>
+            <li>the VPC resolver for DNS;</li>
+            <li>associated with both spoke subnets, with an authorization rule for <code>10.2.128.0/22</code>;</li>
+            <li>its own security group, allowed into the internal ALB.</li>
+          </ul>
+          It costs about $73 a month per associated subnet, plus about $0.05 an hour per connected user. Check the SCP first: <code>ec2:CreateClientVpnEndpoint</code> may be denied.</li>
+        <li><strong>Site-to-Site VPN</strong> for a whole office (4.2). Network-team territory.</li>
+        <li><strong>Zero-trust alternatives:</strong> Tailscale or Cloudflare Tunnel (chapter 5). Light and cheap, but they bypass the company's network design, so they need security approval.</li>
+      </ol>
+      <aside class="note crucible"><b class="lab">In Crucible</b><ul><li>Browsers and terminals work normally behind a VPN.</li><li>Laptop agents connect only while the VPN is up.</li><li>Cluster labs are unaffected, since they reach the trainee's own cluster.</li><li>The GitHub webhook can't arrive, so Crucible polls every 60 seconds.</li></ul></aside>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="ch" id="ch5">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 05</span>
+    <h2>Zero-trust access</h2>
+    <p>Two ways into a closed network that need nothing inbound: a mesh VPN and an outbound tunnel with sign-in at the edge.</p>
+  </div>
+
+  <article class="qa" id="q5-1">
+    <h3><span class="qn">5.1</span>How do Tailscale and Cloudflare Tunnel work?</h3>
+    <div class="ans">
+      <p>Both work through NAT without opening anything inbound, but at different layers. Tailscale is a <strong>VPN</strong>: it gives devices network access to private IPs. Cloudflare Tunnel is a <strong>reverse proxy</strong>: it gives browsers access to specific web apps.</p>
+      <h4>Tailscale</h4>
+      <ul>
+        <li><strong>What it is:</strong> a mesh VPN built on WireGuard. Each signed-in device joins your "tailnet" with a stable <code>100.x.y.z</code> address.</li>
+        <li><strong>Control plane:</strong> Tailscale's servers. Devices sign in through your identity provider and receive keys and access rules there. Your traffic never passes through it.</li>
+        <li><strong>Data plane:</strong> devices talk directly, encrypted end to end. Both sides connect out and "punch through" NAT. If that fails, encrypted packets go via Tailscale's DERP relays on 443, which can't read them.</li>
+        <li><strong>Access rules:</strong> a policy file, e.g. "group:trainees may reach tag:crucible on 443". Everything else is denied.</li>
+        <li><strong>Putting Crucible on it:</strong>
+          <ul>
+            <li>install Tailscale on the node (<code>tailscale serve</code> can even provide HTTPS);</li>
+            <li>or run a <strong>subnet router</strong> in the spoke that advertises <code>10.2.128.0/22</code>.</li>
+          </ul>
+          Keep <code>tailscale funnel</code> off: it publishes a service to the internet.</li>
+      </ul>
+      <h4>Cloudflare Tunnel with Access</h4>
+      <ol>
+        <li><strong><code>cloudflared</code></strong> runs inside your network and <strong>connects out</strong> to several Cloudflare data centers, keeping those connections open. It uses port 7844, falling back to 443.</li>
+        <li><strong>DNS:</strong> the hostname points to Cloudflare, so the domain or subdomain must be on Cloudflare.</li>
+        <li><strong>Access:</strong> Cloudflare Access makes users sign in with the company identity provider, checks your rules, and sets a session cookie.</li>
+        <li><strong>Requests:</strong> allowed requests travel down the already-open tunnel to <code>cloudflared</code>, which hands them to the app locally. WebSockets work.</li>
+      </ol>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>Tailscale</th><th>Cloudflare Tunnel + Access</th></tr></thead>
+        <tbody>
+          <tr><td>Layer</td><td>Network VPN: reach private IPs</td><td>Web reverse proxy: reach one app's URL</td></tr>
+          <tr><td>Users install</td><td>The Tailscale app</td><td>Nothing; a browser</td></tr>
+          <tr><td>Public hostname</td><td>None; the app stays private</td><td>Yes, at Cloudflare, behind sign-in</td></tr>
+          <tr><td>Who can read the traffic</td><td>Only your devices</td><td>Cloudflare (it decrypts at its edge)</td></tr>
+          <tr><td>Crucible laptop agents</td><td>Work as-is</td><td>Need a service token or a path exception</td></tr>
+          <tr><td>GitHub webhook</td><td>No; Crucible polls</td><td>Yes, with a path exception</td></tr>
+          <tr><td>Firewall egress needed</td><td>Tailscale control plane, UDP 41641 or 443</td><td>Cloudflare, port 7844 or 443</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </article>
+
+  <article class="qa" id="q5-2">
+    <h3><span class="qn">5.2</span>Which has the better free tier: Tailscale or Cloudflare?</h3>
+    <div class="ans">
+      <p>For a training platform, <strong>Cloudflare</strong>, mainly because of how many people it covers.</p>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>Tailscale (free Personal plan)</th><th>Cloudflare Zero Trust (free plan)</th></tr></thead>
+        <tbody>
+          <tr><td>Users</td><td>Up to 6, unlimited devices each</td><td>Up to 50</td></tr>
+          <tr><td>Intended for</td><td>Individuals; companies are expected to pay</td><td>Organizations too</td></tr>
+          <tr><td>Main limits</td><td>3 access groups, 50 tagged resources</td><td>Logs kept 24 hours, community support, no SLA</td></tr>
+          <tr><td>Next step up</td><td>About $8 per user per month</td><td>About $7 per user per month</td></tr>
+          <tr><td>Extra requirement</td><td>Every user installs the app</td><td>The domain must be on Cloudflare</td></tr>
+        </tbody>
+      </table></div>
+      <p>Free tiers change often. These figures came from Tailscale's official pricing page and from third-party reviews of Cloudflare's; check the official pages before deciding:</p>
+      <ul>
+        <li><a href="https://www.cloudflare.com/plans/zero-trust-services/" target="_blank" rel="noopener">Cloudflare Zero Trust plans</a></li>
+        <li><a href="https://www.cloudflare.com/plans/" target="_blank" rel="noopener">Cloudflare plans (DNS, CDN, WAF)</a></li>
+        <li><a href="https://tailscale.com/pricing/" target="_blank" rel="noopener">Tailscale pricing</a></li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q5-3">
+    <h3><span class="qn">5.3</span>How would a Cloudflare Tunnel setup work for Crucible?</h3>
+    <div class="ans">
+      <p>This is a design; none of it is built yet. Nothing in AWS accepts inbound connections, and the node's security group has no inbound rules at all.</p>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 430" role="img" aria-labelledby="d4t"><title id="d4t">Crucible behind a Cloudflare Tunnel</title>
+          <rect class="boxw" x="180" y="8" width="400" height="34" rx="6"/>
+          <text x="380" y="30" text-anchor="middle" class="tb">Browser · laptop agent · GitHub webhook</text>
+          <line class="lw" x1="380" y1="42" x2="380" y2="73" marker-end="url(#mw)"/>
+          <text x="392" y="62" class="tm">https://crucible.company.com</text>
+          <rect class="boxw" x="60" y="76" width="640" height="110" rx="8"/>
+          <text x="80" y="100" class="tb">Cloudflare edge</text>
+          <text x="80" y="122" class="ts">TLS certificate · DDoS protection · optional WAF</text>
+          <text x="80" y="142" class="ts">Access: sign in with the company identity provider, then a session cookie</text>
+          <text x="80" y="162" class="ts">Bypass Access for /api/agent/ws and /api/git/hook; Crucible checks their own tokens</text>
+          <line class="la" x1="150" y1="262" x2="150" y2="190" marker-end="url(#ma)"/>
+          <line class="lw" x1="210" y1="190" x2="210" y2="262" marker-end="url(#mw)"/>
+          <text x="226" y="216" class="ta">cloudflared dials out on 7844 or 443, through the firewall and NAT</text>
+          <text x="226" y="236" class="tw">requests come back down that open tunnel</text>
+          <rect class="zone" x="60" y="266" width="640" height="150" rx="10"/>
+          <text x="76" y="286" class="tm">Spoke subnet · node has no public IP and no inbound rules</text>
+          <rect class="boxa" x="90" y="300" width="160" height="46" rx="6"/>
+          <text x="170" y="328" text-anchor="middle" class="tb">cloudflared pod</text>
+          <rect class="box" x="300" y="300" width="160" height="46" rx="6"/>
+          <text x="380" y="328" text-anchor="middle" class="tb">Traefik :80</text>
+          <rect class="boxa" x="510" y="300" width="160" height="46" rx="6"/>
+          <text x="590" y="328" text-anchor="middle" class="tb">crucible pod :8080</text>
+          <line class="lw" x1="250" y1="323" x2="297" y2="323" marker-end="url(#mw)"/>
+          <line class="lw" x1="460" y1="323" x2="507" y2="323" marker-end="url(#mw)"/>
+          <text x="76" y="376" class="ts">TLS ends at Cloudflare, so Traefik drops Let's Encrypt and its HTTPS redirect.</text>
+          <text x="76" y="396" class="ts">No ALB, no ACM certificate, no Elastic IP.</text>
+        </svg>
+        </div>
+        <figcaption>The tunnel is opened from inside (blue). Requests then travel back down it (orange).</figcaption>
+      </figure>
+      <ol>
+        <li><strong>The tunnel:</strong> create it in the Zero Trust dashboard to get a <strong>tunnel token</strong>. Add a public hostname, <code>crucible.company.com → http://traefik.kube-system.svc:80</code>; Cloudflare creates the DNS record.</li>
+        <li><strong><code>cloudflared</code> on the node:</strong>
+          <ul>
+            <li>a small Deployment in the Helm chart, two replicas;</li>
+            <li>the token in the <code>crucible-secrets</code> Secret, sourced from an SSM SecureString;</li>
+            <li>the firewall allows <code>*.argotunnel.com</code> and <code>*.cloudflare.com</code> on 7844 (TCP and UDP), or 443.</li>
+          </ul>
+        </li>
+        <li><strong>Crucible's settings:</strong>
+          <ul>
+            <li>the public URL is the Cloudflare hostname;</li>
+            <li>Traefik drops Let's Encrypt and the redirect;</li>
+            <li>the Origin check keeps working, because browsers still send the same hostname.</li>
+          </ul>
+        </li>
+        <li><strong>Access policies:</strong>
+          <ul>
+            <li>the main app requires company emails or a group;</li>
+            <li>a bypass for <code>/api/agent/ws</code>, where Crucible checks the agent's pairing token. The stricter option is an Access service token, which needs an agent change.</li>
+            <li>a bypass for <code>/api/git/hook</code>, where Crucible checks the webhook secret or signature.</li>
+          </ul>
+        </li>
+        <li><strong>Two sign-ins:</strong> after Access, users still sign in to Crucible through Cognito. Both can use the same identity provider, so the second is usually one click. Trusting Access's own token would remove it, but that's a code change.</li>
+      </ol>
+      <p><strong>Agree with the security team first:</strong></p>
+      <ul>
+        <li>Cloudflare decrypts traffic at its edge;</li>
+        <li>the tunnel is a path into a VPC built to have no ingress;</li>
+        <li>the two bypassed paths are reachable from the internet, protected by Crucible's own checks.</li>
+      </ul>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="ch" id="ch6">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 06</span>
+    <h2>Long-lived web connections</h2>
+    <p>HTTP keep-alive, WebSockets, and why idle timeouts on load balancers matter for Crucible's terminals and agents.</p>
+  </div>
+
+  <article class="qa" id="q6-1">
+    <h3><span class="qn">6.1</span>What is HTTP keep-alive, and how does it work?</h3>
+    <div class="ans">
+      <p><strong>The problem it solves:</strong> each new HTTPS connection costs round trips before any data moves, about one for TCP and one or two for TLS. On a 50 ms link that's 100–150 ms of waiting. HTTP 1.0 closed the connection after every response, so every image and API call paid that again.</p>
+      <p><strong>Keep-alive means: after the response, leave the connection open and reuse it.</strong></p>
+      <ul>
+        <li><strong>HTTP/1.1</strong> connections are persistent by default; either side ends one with <code>Connection: close</code>.</li>
+        <li><strong>Idle connections</strong> stay open for a while, often 5–60 seconds, sometimes announced as <code>Keep-Alive: timeout=5, max=100</code>.</li>
+        <li><strong>Requests take turns on one HTTP/1.1 connection,</strong> so a slow response blocks the ones behind it (head-of-line blocking). That's why browsers open about six connections per site.</li>
+        <li><strong>HTTP/2 and HTTP/3</strong> carry many requests at once on one connection, as interleaved streams.</li>
+      </ul>
+      <p>The rule never changes: <strong>the client asks, the server answers.</strong> Keep-alive only saves setup time.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q6-2">
+    <h3><span class="qn">6.2</span>Is a WebSocket basically a persistent HTTP connection? How does it differ from keep-alive?</h3>
+    <div class="ans">
+      <p>Close, but after the first exchange it stops being HTTP.</p>
+      <ol>
+        <li>The client sends an ordinary HTTP request with <code>Upgrade: websocket</code> and a random <code>Sec-WebSocket-Key</code>.</li>
+        <li>The server answers <code>101 Switching Protocols</code>, with a value derived from that key.</li>
+        <li>The same connection now carries small <strong>frames</strong>: text, binary, ping/pong and close.</li>
+        <li>Either side can send at any moment, both at once (full duplex), for hours.</li>
+      </ol>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 320" role="img" aria-labelledby="d9t"><title id="d9t">Keep-alive request and response turns compared with a WebSocket</title>
+          <text x="20" y="22" class="tb">HTTP keep-alive</text>
+          <text x="70" y="46" text-anchor="middle" class="tm">Browser</text><text x="320" y="46" text-anchor="middle" class="tm">Server</text>
+          <line class="lm" x1="70" y1="54" x2="70" y2="300"/><line class="lm" x1="320" y1="54" x2="320" y2="300"/>
+          <line class="la" x1="72" y1="86" x2="316" y2="86" marker-end="url(#ma)"/><text x="195" y="80" text-anchor="middle" class="ts mono">GET /api/me</text>
+          <line class="la" x1="318" y1="116" x2="74" y2="116" marker-end="url(#ma)"/><text x="195" y="110" text-anchor="middle" class="ts mono">200 + JSON</text>
+          <line class="la" x1="72" y1="156" x2="316" y2="156" marker-end="url(#ma)"/><text x="195" y="150" text-anchor="middle" class="ts mono">POST /api/labs</text>
+          <line class="la" x1="318" y1="186" x2="74" y2="186" marker-end="url(#ma)"/><text x="195" y="180" text-anchor="middle" class="ts mono">201 Created</text>
+          <text x="195" y="232" text-anchor="middle" class="tm">server can't speak unasked</text>
+          <text x="195" y="270" text-anchor="middle" class="tm">idle: closed after ~5–60 s</text>
+          <line class="lm" x1="380" y1="10" x2="380" y2="310" style="stroke-dasharray:3 4"/>
+          <text x="400" y="22" class="tb">WebSocket</text>
+          <text x="450" y="46" text-anchor="middle" class="tm">Client</text><text x="700" y="46" text-anchor="middle" class="tm">Server</text>
+          <line class="lm" x1="450" y1="54" x2="450" y2="300"/><line class="lm" x1="700" y1="54" x2="700" y2="300"/>
+          <line class="la" x1="452" y1="86" x2="696" y2="86" marker-end="url(#ma)"/><text x="575" y="80" text-anchor="middle" class="ts mono">GET + Upgrade: websocket</text>
+          <line class="la" x1="698" y1="116" x2="454" y2="116" marker-end="url(#ma)"/><text x="575" y="110" text-anchor="middle" class="ts mono">101 Switching Protocols</text>
+          <line class="lw" x1="698" y1="156" x2="454" y2="156" marker-end="url(#mw)"/><text x="575" y="150" text-anchor="middle" class="ts">server pushes: start this lab</text>
+          <line class="lw" x1="452" y1="184" x2="696" y2="184" marker-end="url(#mw)"/><text x="575" y="178" text-anchor="middle" class="ts">client: status</text>
+          <line class="lw" x1="698" y1="212" x2="454" y2="212" marker-end="url(#mw)"/><text x="575" y="206" text-anchor="middle" class="ts">terminal output</text>
+          <line class="la" x1="698" y1="244" x2="454" y2="244" marker-end="url(#ma)"/><text x="575" y="238" text-anchor="middle" class="ts mono">ping</text>
+          <line class="la" x1="452" y1="268" x2="696" y2="268" marker-end="url(#ma)"/><text x="575" y="262" text-anchor="middle" class="ts mono">pong</text>
+          <text x="575" y="296" text-anchor="middle" class="tm">stays open for hours</text>
+        </svg>
+        </div>
+      </figure>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>HTTP with keep-alive</th><th>WebSocket</th></tr></thead>
+        <tbody>
+          <tr><td>Purpose</td><td>Reuse a connection to save setup time</td><td>Hold an open two-way channel</td></tr>
+          <tr><td>Who can send</td><td>Client asks, server answers</td><td>Either side, any time</td></tr>
+          <tr><td>Unit</td><td>Request and response, each with headers</td><td>Small frames, a few bytes of overhead</td></tr>
+          <tr><td>Server pushing news</td><td>Impossible; the client polls</td><td>Natural</td></tr>
+          <tr><td>Idle connection</td><td>Closed after a short timeout</td><td>Kept open, with pings</td></tr>
+          <tr><td>State</td><td>Each request stands alone; easy to cache, retry, balance</td><td>One long session tied to one server</td></tr>
+          <tr><td>Proxies and firewalls</td><td>Fully understood</td><td>Must allow the upgrade; idle timeouts can drop it</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>Ping/pong is the WebSocket's own keep-alive,</strong> unrelated to HTTP keep-alive despite the name. It stops NATs, proxies and load balancers from deciding a quiet connection is dead.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><ul><li>Ordinary API calls are plain HTTP.</li><li>The laptop agent link (<code>/api/agent/ws</code>) and browser terminals are WebSockets.</li><li>Each agent's connection lives in one process's memory, which is why Crucible runs one API replica.</li></ul></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q6-3">
+    <h3><span class="qn">6.3</span>Do WebSockets follow the HTTP API call timeouts?</h3>
+    <div class="ans">
+      <p>No. After the upgrade a WebSocket isn't a request any more, so per-request timeouts stop applying. What counts instead:</p>
+      <ul>
+        <li><strong>Handshake timeouts:</strong> the upgrade itself is still HTTP. Crucible gives clients 10 seconds to send headers, and sets no overall read or write timeout that would cut a long connection.</li>
+        <li><strong>Idle timeouts at every hop:</strong>
+          <ul>
+            <li>AWS ALB: 60 seconds by default;</li>
+            <li>Cloudflare: about 100 seconds;</li>
+            <li>corporate proxies, NAT gateways and home routers: minutes to hours.</li>
+          </ul>
+          <strong>Any frame resets the clock, including a ping.</strong></li>
+        <li><strong>The app's own limits:</strong> Crucible bounds each message write, not the connection's lifetime.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><ul><li><strong>Agent link:</strong> the server pings every 15 seconds and drops the connection after 10 seconds without a reply. That stays well inside 60 seconds, and the agent reconnects by itself.</li><li><strong>Browser terminals have no server ping.</strong> A terminal quiet for over 60 seconds would be cut by an ALB with default settings. So raise the idle timeout to about 300 seconds; the sturdier fix is a server-side ping, a small change.</li></ul></aside>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 7 ============ -->
+<section class="ch" id="ch7">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 07</span>
+    <h2>Kubernetes networking</h2>
+    <p>How a request travels from a node's port to a pod, which pieces rewrite packets and which are real proxies, and how the pod network itself works.</p>
+  </div>
+
+  <article class="qa" id="q7-1">
+    <h3><span class="qn">7.1</span>What is Traefik, and why does Crucible's cluster need it?</h3>
+    <div class="ans">
+      <p>Traefik isn't an AWS service. It's an open-source reverse proxy and Kubernetes <strong>ingress controller</strong>, built into k3s. On Crucible's AWS node it's the front door: the only thing on the node's ports 80 and 443, handing requests to the Crucible pod.</p>
+      <ul>
+        <li><strong>The routing rule:</strong> the Helm chart's <code>Ingress</code> says "host <code>crucible.company.com</code>, HTTPS, certificate from resolver <code>le</code> → service <code>crucible</code> port 80".</li>
+        <li><strong>The configuration:</strong> <code>bootstrap.sh.tftpl</code> writes a k3s <code>HelmChartConfig</code> with:
+          <ul>
+            <li>a Let's Encrypt resolver using the HTTP-01 check on port 80;</li>
+            <li>a small volume for <code>acme.json</code>, so restarts don't request new certificates;</li>
+            <li>the HTTP → HTTPS redirect.</li>
+          </ul>
+        </li>
+      </ul>
+      <p><strong>Why it's needed:</strong></p>
+      <ul>
+        <li><strong>TLS:</strong> Crucible speaks plain HTTP on 8080, and browsers need HTTPS for secure cookies, sign-in callbacks and <code>wss://</code> terminals.</li>
+        <li><strong>Reaching a pod:</strong> pods don't listen on the node's ports by themselves; an ingress controller bridges that.</li>
+        <li><strong>Cost:</strong> it comes with k3s, so there's no ALB and no ACM certificate.</li>
+      </ul>
+      <p><strong>What it doesn't do:</strong> no sign-in, no WAF, and no real load balancing with one replica. Locally there's no Traefik at all.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>With an ALB or a Cloudflare Tunnel in front, Traefik stays as the router inside the cluster, but its certificate job moves to the front door.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-2">
+    <h3><span class="qn">7.2</span>How does Traefik load-balance across multiple replicas?</h3>
+    <div class="ans">
+      <p>Traefik skips the Service's virtual IP. It watches the Service's <strong>EndpointSlices</strong>, the list of ready pod IPs, and connects to pods directly.</p>
+      <ul>
+        <li><strong>Algorithm:</strong> weighted round robin, with equal weights by default.</li>
+        <li><strong>Health:</strong> only pods passing their <strong>readiness probe</strong> appear in the list. A failing pod drops out within a second or two.</li>
+        <li><strong>Sticky sessions (optional):</strong> the annotation <code>traefik.ingress.kubernetes.io/service.sticky.cookie: "true"</code> pins a browser to one pod with a cookie.</li>
+        <li><strong>WebSockets</strong> are balanced when they open, and stay on that pod until they close.</li>
+        <li><strong>Updates</strong> to the list apply live, with no reload.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible is pinned to <code>replicas: 1</code> with the <code>Recreate</code> strategy on purpose. The agent hub and locks live in memory, so an agent's WebSocket and its trainee's browser could land on different pods. A sticky cookie wouldn't fix that, because they're separate clients. More replicas would need shared state, which is an app change.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-3">
+    <h3><span class="qn">7.3</span>Can Traefik load-balance across multiple nodes? Is "a load balancer in front, Traefik on each node" right?</h3>
+    <div class="ans">
+      <p>Yes, in both senses.</p>
+      <ul>
+        <li><strong>To pods on other nodes: automatic.</strong> The pod network spans all nodes, so Traefik on node 1 reaches a pod on node 3 by its IP.</li>
+        <li><strong>As an entry point spread over nodes:</strong> something in front has to pick a node and notice a dead one. Traefik can't do that for itself. That's the standard pattern you described.</li>
+      </ul>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 300" role="img" aria-labelledby="d6t"><title id="d6t">A load balancer in front of Traefik on each node, routing to pods anywhere</title>
+          <rect class="boxw" x="10" y="124" width="100" height="46" rx="6"/>
+          <text x="60" y="152" text-anchor="middle" class="tb">Clients</text>
+          <line class="lw" x1="110" y1="147" x2="147" y2="147" marker-end="url(#mw)"/>
+          <rect class="boxw" x="150" y="106" width="140" height="82" rx="6"/>
+          <text x="220" y="132" text-anchor="middle" class="tb">Load balancer</text>
+          <text x="220" y="150" text-anchor="middle" class="ts">health-checks each</text>
+          <text x="220" y="165" text-anchor="middle" class="ts">node, skips dead ones</text>
+          <rect class="zone" x="340" y="10" width="410" height="80" rx="8"/>
+          <rect class="zone" x="340" y="110" width="410" height="80" rx="8"/>
+          <rect class="zone" x="340" y="210" width="410" height="80" rx="8"/>
+          <text x="514" y="30" text-anchor="middle" class="tm">node 1</text>
+          <text x="514" y="130" text-anchor="middle" class="tm">node 2</text>
+          <text x="514" y="230" text-anchor="middle" class="tm">node 3</text>
+          <rect class="boxa" x="356" y="28" width="110" height="44" rx="6"/><text x="411" y="55" text-anchor="middle" class="tb">Traefik</text>
+          <rect class="boxa" x="356" y="128" width="110" height="44" rx="6"/><text x="411" y="155" text-anchor="middle" class="tb">Traefik</text>
+          <rect class="boxa" x="356" y="228" width="110" height="44" rx="6"/><text x="411" y="255" text-anchor="middle" class="tb">Traefik</text>
+          <rect class="box" x="610" y="28" width="120" height="44" rx="6"/><text x="670" y="55" text-anchor="middle">app pod</text>
+          <text x="670" y="155" text-anchor="middle" class="tm">no app pod here</text>
+          <rect class="box" x="610" y="228" width="120" height="44" rx="6"/><text x="670" y="255" text-anchor="middle">app pod</text>
+          <path class="lw" d="M290,135 L353,50" marker-end="url(#mw)"/>
+          <line class="lw" x1="290" y1="147" x2="353" y2="150" marker-end="url(#mw)"/>
+          <path class="lw" d="M290,160 L353,250" marker-end="url(#mw)"/>
+          <line class="la" x1="466" y1="50" x2="607" y2="50" marker-end="url(#ma)"/>
+          <line class="la" x1="466" y1="250" x2="607" y2="250" marker-end="url(#ma)"/>
+          <path class="ld" d="M466,142 L607,62" marker-end="url(#ma)"/>
+          <path class="ld" d="M466,158 L607,238" marker-end="url(#ma)"/>
+          <text x="530" y="130" class="ta" style="font-size:11px">pod network</text>
+        </svg>
+        </div>
+        <figcaption>The load balancer picks a healthy node; Traefik there routes by host and path to a Service's pods, wherever they run. The dashed hops cross the pod network.</figcaption>
+      </figure>
+      <div class="tbl"><table>
+        <thead><tr><th>Front end</th><th>How</th><th>Fits our AWS org?</th></tr></thead>
+        <tbody>
+          <tr><td>AWS ALB or NLB</td><td>Target group holds the nodes; health checks remove dead ones</td><td>Yes, if the SCP allows load balancers</td></tr>
+          <tr><td>DNS with several A records</td><td>Each node's IP in DNS</td><td>Weak: clients cache dead IPs; needs public IPs</td></tr>
+          <tr><td>Floating virtual IP</td><td>keepalived, kube-vip, MetalLB move one IP to a healthy node</td><td>On-premises networks (7.8)</td></tr>
+          <tr><td>Cloudflare Tunnel</td><td><code>cloudflared</code> on several nodes; Cloudflare drops dead connectors</td><td>Yes, outbound only</td></tr>
+        </tbody>
+      </table></div>
+      <p>Details of the pattern:</p>
+      <ul>
+        <li><strong>TLS</strong> usually ends at the load balancer with ACM.</li>
+        <li><strong>The LB reaches Traefik</strong> through hostPorts or a NodePort (7.6).</li>
+        <li><strong>A request may cross nodes</strong> on its way to a pod.</li>
+      </ul>
+      <p>Traefik can also balance servers outside Kubernetes. With its file provider you list backend URLs, e.g. several VMs, and it works like nginx or HAProxy.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-4">
+    <h3><span class="qn">7.4</span>What is a DaemonSet?</h3>
+    <div class="ans">
+      <p>A Kubernetes object that runs <strong>exactly one copy of a pod on every node</strong>, or on each node matching a selector.</p>
+      <pre><code>Deployment (replicas: 3)              DaemonSet
+placed anywhere by the scheduler      one per node, always
+
+node 1: pod  pod                      node 1: pod
+node 2: pod                           node 2: pod
+node 3: (none)                        node 3: pod
+                                      node 4 joins → a pod appears there</code></pre>
+      <ul>
+        <li><strong>No replica count:</strong> the number of copies is the number of nodes.</li>
+        <li><strong>Limiting it:</strong> a <code>nodeSelector</code> or affinity restricts it to some nodes.</li>
+        <li><strong>Used for things that belong to a machine:</strong>
+          <ul>
+            <li>ingress at the node's edge;</li>
+            <li>log collectors (Fluent Bit);</li>
+            <li>node metrics (node-exporter);</li>
+            <li>networking (flannel, Calico, kube-proxy);</li>
+            <li>storage drivers (CSI node plugins).</li>
+          </ul>
+        </li>
+      </ul>
+      <p>In k3s, ServiceLB's <code>svclb-traefik-…</code> pods are a DaemonSet. Traefik itself is a one-replica Deployment.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-5">
+    <h3><span class="qn">7.5</span>What is klipper-lb, how does it bind ports, and is it a proxy?</h3>
+    <div class="ans">
+      <p>klipper-lb is k3s's built-in implementation of <code>type: LoadBalancer</code> Services. k3s calls it <strong>ServiceLB</strong>; klipper-lb is the small container it runs. On a plain machine nothing would create a cloud load balancer, so it uses the <strong>nodes' own IPs</strong> instead.</p>
+      <ol>
+        <li>k3s creates the Service <code>traefik</code>, of type LoadBalancer, on ports 80 and 443.</li>
+        <li>ServiceLB creates a DaemonSet <code>svclb-traefik-…</code>, so one pod runs on every node.</li>
+        <li>Each pod declares <code>hostPort: 80</code> and <code>443</code>.</li>
+        <li>ServiceLB writes the node IPs into the Service's status, which is why <code>kubectl get svc</code> shows an "external IP".</li>
+      </ol>
+      <p><strong>It isn't a proxy; it does NAT.</strong></p>
+      <ul>
+        <li><strong>A proxy</strong> (Traefik, an ALB) ends your connection and opens a new one, reading every byte.</li>
+        <li><strong>klipper-lb</strong> only rewrites packet addresses and lets the kernel forward them, so it stays one connection and no program touches the data.</li>
+      </ul>
+      <p>The container runs a short script once, then sleeps:</p>
+      <pre><code>echo 1 &gt; /proc/sys/net/ipv4/ip_forward                       # allow forwarding
+iptables -t nat -A PREROUTING  -p tcp --dport 443 \
+         -j DNAT --to-destination &lt;traefik ClusterIP&gt;:443     # rewrite destination
+iptables -t nat -A POSTROUTING -j MASQUERADE                 # replies come back this way
+sleep forever</code></pre>
+      <p>Even <code>hostPort</code> isn't a real socket: the CNI's <code>portmap</code> plugin writes a redirect rule on the node.</p>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 250" role="img" aria-labelledby="d5t"><title id="d5t">The path from a node's port 443 to the Crucible pod in k3s</title>
+          <rect class="boxw" x="10" y="20" width="110" height="50" rx="6"/>
+          <text x="65" y="50" text-anchor="middle" class="tb">Browser</text>
+          <rect class="boxd" x="170" y="20" width="140" height="50" rx="6"/>
+          <text x="240" y="42" text-anchor="middle" class="tb">node IP :443</text><text x="240" y="59" text-anchor="middle" class="ts">nothing listens</text>
+          <rect class="boxd" x="360" y="20" width="150" height="50" rx="6"/>
+          <text x="435" y="42" text-anchor="middle" class="tb">svclb pod</text><text x="435" y="59" text-anchor="middle" class="ts">iptables rules only</text>
+          <rect class="boxd" x="560" y="20" width="180" height="50" rx="6"/>
+          <text x="650" y="42" text-anchor="middle" class="tb">Traefik ClusterIP</text><text x="650" y="59" text-anchor="middle" class="ts">virtual, no process</text>
+          <line class="lw" x1="120" y1="45" x2="167" y2="45" marker-end="url(#mw)"/>
+          <line class="lw" x1="310" y1="45" x2="357" y2="45" marker-end="url(#mw)"/>
+          <line class="lw" x1="510" y1="45" x2="557" y2="45" marker-end="url(#mw)"/>
+          <text x="335" y="90" text-anchor="middle" class="ts">① hostPort rule</text>
+          <text x="535" y="90" text-anchor="middle" class="ts">② klipper's DNAT</text>
+          <line class="lw" x1="650" y1="70" x2="650" y2="147" marker-end="url(#mw)"/>
+          <text x="640" y="114" text-anchor="end" class="ts">③ kube-proxy rule</text>
+          <rect class="boxa" x="560" y="150" width="180" height="56" rx="6"/>
+          <text x="650" y="173" text-anchor="middle" class="tb">Traefik pod</text><text x="650" y="191" text-anchor="middle" class="ts">first real proxy: TLS ends</text>
+          <rect class="boxd" x="330" y="150" width="170" height="56" rx="6"/>
+          <text x="415" y="173" text-anchor="middle" class="tb">crucible Service</text><text x="415" y="191" text-anchor="middle" class="ts">ClusterIP :80</text>
+          <rect class="boxa" x="60" y="150" width="200" height="56" rx="6"/>
+          <text x="160" y="173" text-anchor="middle" class="tb">crucible pod :8080</text><text x="160" y="191" text-anchor="middle" class="ts">the app</text>
+          <line class="lw" x1="560" y1="178" x2="503" y2="178" marker-end="url(#mw)"/>
+          <line class="lw" x1="330" y1="178" x2="263" y2="178" marker-end="url(#mw)"/>
+          <text x="531" y="228" text-anchor="middle" class="ts">Ingress route</text>
+          <text x="296" y="228" text-anchor="middle" class="ts">④ kube-proxy rule</text>
+        </svg>
+        </div>
+        <figcaption>Dashed boxes are only kernel address rewrites; solid boxes are processes that handle the connection. Because of MASQUERADE in step ②, Traefik sees the svclb pod as the client, not the browser.</figcaption>
+      </figure>
+      <p><strong>Consequences:</strong></p>
+      <ul>
+        <li>one owner per port per node;</li>
+        <li>no spreading across nodes and no failover;</li>
+        <li>turn it off with <code>--disable servicelb</code> when an ALB or MetalLB takes over.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-6">
+    <h3><span class="qn">7.6</span>On EKS, how does a LoadBalancer Service create a real load balancer? And what are NodePorts?</h3>
+    <div class="ans">
+      <p>Kubernetes doesn't make load balancers itself. A <strong>controller</strong> watches for <code>type: LoadBalancer</code> Services and calls the cloud's API. On EKS that's the AWS Load Balancer Controller, or the older built-in cloud provider.</p>
+      <ol>
+        <li>You apply a LoadBalancer Service.</li>
+        <li>The controller calls AWS to create an NLB, a target group and listeners.</li>
+        <li>It registers targets: the nodes, or the pod IPs.</li>
+        <li>It writes the NLB's DNS name into the Service's status.</li>
+      </ol>
+      <ul>
+        <li><strong>Deleting the Service</strong> deletes the NLB.</li>
+        <li><strong>Annotations</strong> set options, e.g. <code>service.beta.kubernetes.io/aws-load-balancer-scheme: internal</code>.</li>
+        <li><strong>An <code>Ingress</code></strong> with the same controller makes an ALB instead.</li>
+      </ul>
+      <p>klipper-lb is k3s's stand-in for that controller.</p>
+      <h4>NodePort</h4>
+      <p>A Service type that opens the same port, in the range 30000–32767, on <strong>every node</strong>. Traffic to any node on that port reaches the Service's pods through kube-proxy.</p>
+      <pre><code>ALB → target group: node1:30080, node2:30080, node3:30080
+        → kube-proxy rules on that node → Traefik pod (any node) → app pod</code></pre>
+      <p><strong>Why the ALB targets NodePorts:</strong> it can only send to addresses the VPC can route. On k3s, pod IPs come from flannel's private overlay (7.10), which the VPC can't route, but node IPs are real VPC addresses. That's <strong>instance mode</strong>. <strong>IP mode</strong>, targeting pod IPs directly, needs pods with real VPC addresses, as the AWS VPC CNI gives them on EKS (7.11).</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-7">
+    <h3><span class="qn">7.7</span>Do we need a Traefik pod on every node? What's the convention?</h3>
+    <div class="ans">
+      <p>Technically one is enough: every node's svclb pod forwards to the Traefik Service, wherever the one pod runs. The catches:</p>
+      <ul>
+        <li><strong>Single point of failure:</strong> if that pod or its node dies, web traffic stops until it's rescheduled, about a minute.</li>
+        <li><strong>Extra hops:</strong> a request can cross nodes to reach Traefik, then cross again to the app.</li>
+        <li><strong>Lost client IP:</strong> forwarding across nodes rewrites the source. <code>externalTrafficPolicy: Local</code> keeps the real IP, but then only nodes with a Traefik pod accept traffic.</li>
+      </ul>
+      <div class="tbl"><table>
+        <thead><tr><th>Cluster</th><th>Usual setup</th></tr></thead>
+        <tbody>
+          <tr><td>Single node (Crucible today)</td><td>One Traefik pod, the k3s default</td></tr>
+          <tr><td>Small or medium</td><td>A Deployment with 2–3 replicas spread across nodes (anti-affinity) and a PodDisruptionBudget</td></tr>
+          <tr><td>Large, or needs the client IP</td><td>A DaemonSet on dedicated ingress nodes with <code>externalTrafficPolicy: Local</code>; the LB targets only those</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-8">
+    <h3><span class="qn">7.8</span>What is kube-proxy, and how does it work?</h3>
+    <div class="ans">
+      <p>A small program on every node that makes Service addresses work. In most clusters it's a DaemonSet; in k3s it's built into the k3s process.</p>
+      <p><strong>The problem:</strong> a Service's ClusterIP, e.g. <code>10.43.0.50</code>, belongs to no machine, and nothing listens there.</p>
+      <ol>
+        <li><strong>It watches</strong> Services and their EndpointSlices.</li>
+        <li><strong>It writes kernel rules,</strong> usually iptables, or nftables or IPVS.</li>
+        <li><strong>The kernel does the forwarding.</strong> kube-proxy isn't in the traffic path, despite its name.</li>
+        <li><strong>Connection tracking</strong> (conntrack) keeps each connection on the pod it first picked, which matters for long WebSockets.</li>
+      </ol>
+      <pre><code>packet to 10.43.0.50:80 (ClusterIP) or node:30080 (NodePort)
+  → 1/3 → 10.42.1.11:8080
+    1/2 → 10.42.2.12:8080
+    else → 10.42.3.13:8080
+  → rewrite destination (DNAT), send on</code></pre>
+      <p>Cilium can replace kube-proxy, doing the same job with eBPF programs.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-9">
+    <h3><span class="qn">7.9</span>Is MetalLB the same as klipper-lb?</h3>
+    <div class="ans">
+      <p>Same job, implementing LoadBalancer Services without a cloud, but a different mechanism.</p>
+      <div class="tbl"><table>
+        <thead><tr><th></th><th>klipper-lb (k3s ServiceLB)</th><th>MetalLB</th></tr></thead>
+        <tbody>
+          <tr><td>External IP</td><td>The nodes' own IPs</td><td>Extra IPs from a pool you give it</td></tr>
+          <tr><td>How traffic arrives</td><td>hostPort rules on every node</td><td>The IP is announced on the network</td></tr>
+          <tr><td>Ports</td><td>One Service per port per node</td><td>Each Service gets its own IP, so many can use 443</td></tr>
+          <tr><td>Node failure</td><td>Nothing happens</td><td>The IP moves, or routers stop sending there</td></tr>
+          <tr><td>Setup</td><td>None</td><td>Install, IP pool, mode</td></tr>
+        </tbody>
+      </table></div>
+      <p><strong>MetalLB's two modes:</strong></p>
+      <ul>
+        <li><strong>L2 mode:</strong> one node answers "that IP is me" (ARP), and another takes over if it dies. Simple, but one node carries all of that IP's traffic.</li>
+        <li><strong>BGP mode:</strong> every node advertises the IP to the routers, which spread traffic across nodes. Real load balancing, but it needs BGP-capable routers.</li>
+      </ul>
+      <p><strong>On AWS, neither fits well.</strong> The VPC ignores "that IP is me" announcements, because an IP only works when AWS assigned it to an interface, and the VPC router doesn't accept BGP from your nodes. On AWS the job goes to an ALB or NLB.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-10">
+    <h3><span class="qn">7.10</span>What is anti-affinity? What is a PodDisruptionBudget?</h3>
+    <div class="ans">
+      <p><strong>Anti-affinity</strong> is a scheduling rule: "don't put this pod on the same node (or zone) as pods labelled X". It spreads replicas so one failure can't take them all.</p>
+      <pre><code>affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:   # hard; "preferred…" is soft
+      - labelSelector: { matchLabels: { app: traefik } }
+        topologyKey: kubernetes.io/hostname           # same node; …/zone for same zone</code></pre>
+      <ul>
+        <li><strong>Hard vs soft:</strong> with the hard rule, a third replica on two nodes stays <code>Pending</code>; the soft one places it anyway.</li>
+        <li><strong>Affinity</strong> is the opposite: "put me near pods X".</li>
+        <li><strong><code>topologySpreadConstraints</code></strong> is the newer way to say "spread evenly".</li>
+      </ul>
+      <p><strong>A PodDisruptionBudget</strong> (PDB) says "during planned maintenance, never take down more than this many of my pods at once".</p>
+      <pre><code>apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: traefik }
+spec:
+  minAvailable: 1          # or maxUnavailable: 1
+  selector: { matchLabels: { app: traefik } }</code></pre>
+      <ul>
+        <li><strong>It guards voluntary disruptions</strong> that use the eviction API: <code>kubectl drain</code>, cluster upgrades, the autoscaler removing a node. Evictions that would break the budget are refused and retried.</li>
+        <li><strong>It doesn't guard</strong> crashes, a dying node, or <code>kubectl delete pod</code>.</li>
+        <li><strong>The trap:</strong> with one replica and <code>minAvailable: 1</code>, every drain blocks forever. That's why Crucible, with one replica by design, has no PDB.</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-11">
+    <h3><span class="qn">7.11</span>What is a CNI, and how does Flannel's VXLAN work?</h3>
+    <div class="ans">
+      <p><strong>CNI</strong> (Container Network Interface) is a standard for how a container gets its network: a short spec plus plugin programs that follow it.</p>
+      <p><strong>What Kubernetes requires of the network:</strong></p>
+      <ul>
+        <li>every pod gets its own IP;</li>
+        <li>every pod reaches every other pod, on any node, without address rewriting;</li>
+        <li>nodes reach pods.</li>
+      </ul>
+      <p><strong>When a pod starts:</strong></p>
+      <ol>
+        <li>containerd creates an empty network namespace for it.</li>
+        <li>It runs the plugin (in <code>/opt/cni/bin</code>, configured in <code>/etc/cni/net.d/</code>) with <code>ADD</code>.</li>
+        <li>The plugin creates a <strong>veth pair</strong>, a virtual cable with one end in the pod as <code>eth0</code>. It assigns an IP (IPAM) and sets routes.</li>
+        <li><code>DEL</code> cleans up when the pod is deleted.</li>
+      </ol>
+      <p>Plugins can be chained; <code>portmap</code>, which implements hostPort, runs after the main one.</p>
+      <div class="tbl"><table>
+        <thead><tr><th>Plugin</th><th>How pods on different nodes talk</th></tr></thead>
+        <tbody>
+          <tr><td>Flannel (k3s default)</td><td>Overlay: wraps pod packets inside node packets (VXLAN)</td></tr>
+          <tr><td>Calico</td><td>Usually plain routes or BGP; optional overlay; network policies</td></tr>
+          <tr><td>Cilium</td><td>eBPF; overlay or native routing; can replace kube-proxy</td></tr>
+          <tr><td>AWS VPC CNI</td><td>No wrapping: pods get real VPC IPs (7.12)</td></tr>
+        </tbody>
+      </table></div>
+      <h4>Flannel VXLAN, step by step</h4>
+      <ol>
+        <li><strong>Address plan:</strong> pods share <code>10.42.0.0/16</code>, and each node gets a /24 slice: node 1 <code>10.42.0.0/24</code>, node 2 <code>10.42.1.0/24</code>.</li>
+        <li><strong>Devices on each node:</strong> <code>cni0</code>, a virtual bridge every pod plugs into, and <code>flannel.1</code>, the VXLAN device that wraps and unwraps.</li>
+        <li><strong>flanneld</strong> writes, for each other node:
+          <ul>
+            <li>a route: "<code>10.42.1.0/24</code> via <code>flannel.1</code>";</li>
+            <li>that node's tunnel MAC address;</li>
+            <li>"that MAC lives at <code>10.2.128.11</code>".</li>
+          </ul>
+        </li>
+        <li><strong>The kernel</strong> does all the wrapping. flanneld isn't in the traffic path.</li>
+      </ol>
+      <figure class="dg">
+        <div class="dgscroll">
+        <svg viewBox="0 0 760 360" role="img" aria-labelledby="d7t"><title id="d7t">A pod packet wrapped in VXLAN between two nodes</title>
+          <rect class="zone" x="10" y="10" width="230" height="250" rx="10"/>
+          <text x="24" y="31" class="tm">node 1 · 10.2.128.10</text>
+          <rect class="box" x="30" y="46" width="190" height="40" rx="6"/><text x="125" y="71" text-anchor="middle" class="tb">pod A · 10.42.0.5</text>
+          <rect class="box" x="30" y="116" width="190" height="40" rx="6"/><text x="125" y="141" text-anchor="middle">cni0 bridge · 10.42.0.1</text>
+          <rect class="boxa" x="30" y="186" width="190" height="50" rx="6"/><text x="125" y="207" text-anchor="middle" class="tb">flannel.1 (VXLAN)</text><text x="125" y="224" text-anchor="middle" class="ts">wraps the packet</text>
+          <line class="la" x1="125" y1="86" x2="125" y2="113" marker-end="url(#ma)"/>
+          <line class="la" x1="125" y1="156" x2="125" y2="183" marker-end="url(#ma)"/>
+          <rect class="zone" x="520" y="10" width="230" height="250" rx="10"/>
+          <text x="534" y="31" class="tm">node 2 · 10.2.128.11</text>
+          <rect class="box" x="540" y="46" width="190" height="40" rx="6"/><text x="635" y="71" text-anchor="middle" class="tb">pod B · 10.42.1.7</text>
+          <rect class="box" x="540" y="116" width="190" height="40" rx="6"/><text x="635" y="141" text-anchor="middle">cni0 bridge · 10.42.1.1</text>
+          <rect class="boxa" x="540" y="186" width="190" height="50" rx="6"/><text x="635" y="207" text-anchor="middle" class="tb">flannel.1 (VXLAN)</text><text x="635" y="224" text-anchor="middle" class="ts">unwraps it</text>
+          <line class="la" x1="635" y1="186" x2="635" y2="159" marker-end="url(#ma)"/>
+          <line class="la" x1="635" y1="116" x2="635" y2="89" marker-end="url(#ma)"/>
+          <line class="la" x1="220" y1="211" x2="537" y2="211" marker-end="url(#ma)"/>
+          <text x="380" y="200" text-anchor="middle" class="tm">VPC: ordinary UDP between two instances</text>
+          <text x="110" y="276" class="tm">What crosses the VPC:</text>
+          <rect class="boxw" x="110" y="284" width="540" height="60" rx="6"/>
+          <rect class="box" x="118" y="292" width="170" height="44" rx="4"/><text x="203" y="310" text-anchor="middle" class="tb">outer IP</text><text x="203" y="327" text-anchor="middle" class="ts mono">10.2.128.10 → .11</text>
+          <rect class="box" x="294" y="292" width="80" height="44" rx="4"/><text x="334" y="310" text-anchor="middle" class="tb">UDP</text><text x="334" y="327" text-anchor="middle" class="ts mono">port 8472</text>
+          <rect class="box" x="380" y="292" width="90" height="44" rx="4"/><text x="425" y="310" text-anchor="middle" class="tb">VXLAN</text><text x="425" y="327" text-anchor="middle" class="ts mono">VNI 1</text>
+          <rect class="boxa" x="476" y="292" width="166" height="44" rx="4"/><text x="559" y="310" text-anchor="middle" class="tb">inner packet</text><text x="559" y="327" text-anchor="middle" class="ts mono">10.42.0.5 → 10.42.1.7</text>
+        </svg>
+        </div>
+        <figcaption>The VPC sees only node-to-node UDP and never a 10.42.x.x address. Pod B receives the original packet untouched. Pods on the same node skip all of this and talk across the bridge.</figcaption>
+      </figure>
+      <p><strong>Practical consequences:</strong></p>
+      <ul>
+        <li>each packet grows by 50 bytes, so pod interfaces get a smaller MTU (e.g. 1450 instead of 1500);</li>
+        <li>node security groups must allow UDP 8472 between nodes;</li>
+        <li>Flannel's other modes: <code>host-gw</code> (plain routes, needs one flat network) and <code>wireguard-native</code> (encrypted).</li>
+      </ul>
+      <p>On Crucible's single node, nothing ever goes through VXLAN.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q7-12">
+    <h3><span class="qn">7.12</span>What is the AWS VPC CNI?</h3>
+    <div class="ans">
+      <p>EKS's default CNI (the <code>aws-node</code> DaemonSet). Instead of an overlay, it gives each pod a <strong>real VPC address</strong> from the subnet, as a secondary IP on the node's network interfaces (ENIs). It keeps spare IPs ready and attaches extra ENIs as pods arrive.</p>
+      <pre><code>Flannel (k3s)                              VPC CNI (EKS)
+node 10.2.128.10                           node 10.2.128.10
+  └ pod 10.42.0.5  ← VPC can't route here     ├ pod 10.2.128.31  ← a real VPC address
+                                              └ pod 10.2.128.32</code></pre>
+      <p><strong>What it makes possible:</strong></p>
+      <ul>
+        <li>ALB IP mode, with no NodePort hop;</li>
+        <li>security groups per pod;</li>
+        <li>flow logs and firewalls that see pod addresses;</li>
+        <li>no wrapping overhead.</li>
+      </ul>
+      <p><strong>What it costs:</strong></p>
+      <ul>
+        <li><strong>It uses subnet IPs fast:</strong> every pod takes one, and a /22 has about 1,000 for everything.</li>
+        <li><strong>The instance size caps pods:</strong> a <code>t3.medium</code> allows 3 ENIs × 6 IPs, about 17 pods.</li>
+        <li><strong>The fixes:</strong> prefix delegation, which hands out a /28 per slot, and custom networking, which puts pods in a secondary range such as <code>100.64.0.0/16</code>.</li>
+      </ul>
+      <aside class="note org"><b class="lab">In our account</b><p>Our spoke is a /22. If Crucible ever moved to EKS, plan prefix delegation or a secondary range with the networking team first.</p></aside>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 8 ============ -->
+<section class="ch" id="ch8">
+  <div class="chhead">
+    <span class="chnum">CHAPTER 08</span>
+    <h2>Signing people in</h2>
+    <p>Cognito, Google sign-in and Keycloak for the app itself.</p>
+  </div>
+
+  <article class="qa" id="q8-1">
+    <h3><span class="qn">8.1</span>Does Cognito cost money?</h3>
+    <div class="ans">
+      <p>Crucible's user pool uses the Essentials tier, for the modern login pages. Per <code>docs/runbooks/cognito.md</code>, it's free up to 10,000 monthly active users, then about a cent per user. A training platform will almost certainly stay free. Check AWS's Cognito pricing page for current rates.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q8-2">
+    <h3><span class="qn">8.2</span>Can sign-in use Google, through Cognito or through Keycloak?</h3>
+    <div class="ans">
+      <ul>
+        <li><strong>Cognito: yes.</strong> Add Google as a social identity provider with OAuth credentials from Google Cloud Console. One catch: Cognito can't limit Google sign-in to the company domain by itself. A small "pre sign-up" Lambda that rejects other domains does that.</li>
+        <li><strong>Keycloak: yes, with domain limits built in.</strong> Google is a built-in identity provider. The trade-off is that production doesn't run Keycloak; you'd host it yourself, with its own database, backups and upgrades.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible is a standard OIDC client, so the choice is just an issuer and a client id. The recommendation is Google in Cognito plus the domain-limiting Lambda. If the company already connects its identity provider to IAM Identity Center, Cognito → Identity Center (1.2) is the other route. Neither is built yet.</p></aside>
+    </div>
+  </article>
+</section>
+
+<p class="empty" id="empty">No questions match that search. Try a shorter word, such as "NAT" or "tunnel".</p>
+</main>
+</div>
+
+<footer class="end">
+  <p>Built from the Crucible deploy discussions, October 2026. Facts about our account come from read-only checks: the Elastic IP SCP denial, and the VPC's subnets and default routes. Still to check: whether the SCP allows internet-facing or internal ALBs, and whether the VPC routes to a company Transit Gateway.</p>
+  <p>Prices are approximate list prices and change; check AWS's and the vendors' pricing pages before deciding.</p>
+</footer>
+</div>
+
+<script>
+(function () {
+  var input = document.getElementById('q');
+  var count = document.getElementById('count');
+  var empty = document.getElementById('empty');
+  var cards = Array.prototype.slice.call(document.querySelectorAll('article.qa'));
+  var chapters = Array.prototype.slice.call(document.querySelectorAll('section.ch'));
+  var text = cards.map(function (c) { return c.textContent.toLowerCase(); });
+  function show() {
+    var q = input.value.trim().toLowerCase();
+    var n = 0;
+    cards.forEach(function (c, i) {
+      var hit = !q || text[i].indexOf(q) !== -1;
+      c.hidden = !hit;
+      if (hit) n++;
+    });
+    chapters.forEach(function (ch) { ch.hidden = !ch.querySelector('article.qa:not([hidden])'); });
+    empty.classList.toggle('show', n === 0);
+    count.textContent = q ? n + ' of ' + cards.length + ' questions' : cards.length + ' questions';
+  }
+  input.addEventListener('input', show);
+  show();
+})();
+</script>
+</body>
+</html>

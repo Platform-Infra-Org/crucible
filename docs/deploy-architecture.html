@@ -67,6 +67,7 @@ section > .head { display: grid; gap: 8px; }
 .key span { display: inline-flex; align-items: center; gap: 8px; }
 .sw { width: 22px; height: 14px; border-radius: 4px; border: 1.5px solid var(--line); background: var(--surface); display: inline-block; }
 .sw.hot { border: 2px solid var(--accent); }
+.sw.aws { border: 2px solid var(--heat); }
 .sw.dash { border-style: dashed; }
 .sw.zone { background: var(--surface-2); }
 .sw.arrow { border: 0; height: 2px; border-radius: 0; background: var(--accent); }
@@ -78,6 +79,19 @@ th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.08em; text-transform: 
 tbody th { font: 600 0.9rem/1.4 var(--sans); letter-spacing: 0; text-transform: none; color: var(--text); background: transparent; }
 tr:last-child > * { border-bottom: 0; }
 td.money { color: var(--heat); font-weight: 600; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.total > * { font-weight: 700; }
+section h3.sub { font-size: 1.05rem; margin-top: 10px; }
+
+.note { border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 16px; border-radius: 0 10px 10px 0; max-width: 76ch; }
+.note.warn { border-left-color: var(--danger); }
+.note strong { display: block; margin-bottom: 2px; }
+
+.cols ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; color: var(--muted); font-size: 0.94rem; }
+.allow { color: var(--ok); font-weight: 600; }
+.deny { color: var(--danger); font-weight: 600; }
+pre { margin: 0; padding: 12px 14px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; font: 0.84rem/1.5 var(--mono); color: var(--text); }
+pre code { background: none; padding: 0; font-size: inherit; }
 
 ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; counter-reset: step; }
 ol.steps li { counter-increment: step; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 4px 14px; padding-block: 14px;
@@ -111,6 +125,9 @@ svg .al { font: 600 11.5px var(--sans); fill: var(--accent); paint-order: stroke
 svg .al.on1 { stroke: var(--surface); }
 svg .ahp { fill: var(--accent); }
 svg .ahm { fill: var(--muted); }
+svg .venn-a { fill: var(--accent); fill-opacity: 0.12; stroke: var(--accent); stroke-width: 1.6; }
+svg .venn-b { fill: var(--heat); fill-opacity: 0.12; stroke: var(--heat); stroke-width: 1.6; }
+svg .vt { font: 600 13px var(--sans); fill: var(--text); }
 body { margin: 0; }
 </style>
 </head>
@@ -130,16 +147,24 @@ body { margin: 0; }
     <p class="lede">Crucible is one Go process that serves the API and the React app, backed by Postgres and an OIDC sign-in.
       The same process runs in three settings: on your laptop under Docker Compose, in the kind-based end-to-end check, and in
       production on a single k3s node in AWS, with AWS labs in a separate lab account. This page draws each one from the files
-      in <code>deploy/</code>.</p>
+      in <code>deploy/</code>, then follows production down to who holds which AWS permission, how an AWS lab runs, and how a
+      release ships.</p>
+    <p class="lede">New to AWS? The <a href="aws-primer.html">AWS and networking primer</a> explains the words used here. To build
+      it, follow the <a href="aws-deploy.html">deployment walkthrough</a>, every command in order.</p>
     <nav class="toc" aria-label="Sections">
       <a href="#glance">At a glance</a>
       <a href="#local">Local stack</a>
       <a href="#check">cluster-check</a>
       <a href="#prod">Production on AWS</a>
+      <a href="#components">Every component and its cost</a>
       <a href="#node">Inside the node</a>
+      <a href="#backups">Backups</a>
+      <a href="#iam-roles">IAM roles</a>
+      <a href="#iam-fence">The IAM fence</a>
       <a href="#runtimes">Where labs run</a>
       <a href="#awslab">An AWS lab, start to finish</a>
       <a href="#ship">Shipping a release</a>
+      <a href="#limits">Limits and good habits</a>
     </nav>
   </header>
 
@@ -155,6 +180,8 @@ body { margin: 0; }
           <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code>, connected as <code>file://</code> repositories with no credential</td><td>Seeded git repos, the same way</td><td>Repositories on your git host, each connected once: HTTPS with a token, or SSH with a deploy key Crucible makes; push webhook and bot merges</td></tr>
           <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>Sealed with a random <code>CRUCIBLE_SECRET_KEY</code> that <code>crucible aws init</code> keeps in the persistent stack, so it survives teardown; <code>git_credentials</code> from SSM also serves <code>https://</code> repositories with no credential of their own</td></tr>
           <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
+          <tr><th scope="row">AWS identities</th><td>None</td><td>None: the fake lab account needs no credentials</td><td>The node role, and three roles in the lab account (<a href="#iam-roles">IAM roles</a>)</td></tr>
+          <tr><th scope="row">Monthly cost</th><td>Free</td><td>Free</td><td>About $50 in working hours, about $130 around the clock, plus labs (<a href="#costs">what it costs</a>)</td></tr>
           <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
           <tr><th scope="row">Started by</th><td><code>crucible local up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
         </tbody>
@@ -400,7 +427,7 @@ body { margin: 0; }
         <rect class="box dash" x="618" y="562" width="146" height="62" rx="8"/>
         <text class="bt" x="632" y="588">lab-&lt;id&gt;</text>
         <text class="bs" x="632" y="608">workspace, terraform</text>
-        <text class="bs" x="306" y="652">Inside the node in detail: next section.</text>
+        <text class="bs" x="306" y="652">Inside the node in detail: further down.</text>
         <text class="bs" x="306" y="674">Its role may only assume the three lab-account roles</text>
         <text class="bs" x="306" y="694">and read its bucket and parameters.</text>
 
@@ -455,12 +482,94 @@ body { margin: 0; }
         <path class="ar soft" d="M1172,130 H1182 V438 H1176" marker-end="url(#ahm)"/>
       </svg>
     </div>
-    <div class="cols">
-      <div><h3>persistent</h3><p><code>crucible aws init</code> creates the Cognito user pool, the data bucket (release tarballs, nightly snapshots, the always-kept latest snapshot, trainees' uploads) and the Terraform state bucket, and keeps <code>CRUCIBLE_SECRET_KEY</code> as the SSM parameter <code>/crucible/secret_key</code>. Nothing here is ever destroyed, so a rebuilt node can still open the repository credentials in the restored database.</p></div>
-      <div><h3>main</h3><p><code>crucible aws up</code> builds one EC2 node with an Elastic IP and installs k3s, Helm and sysbox on first boot. The scheduler stops it at night to save money; <code>teardown</code> then <code>up</code> rebuilds it and restores the newest snapshot.</p></div>
-      <div><h3>Secrets</h3><p>SSM holds the sign-in client secret, the database password, the quiz and webhook secrets and the optional <code>git_credentials</code> and <code>smtp_password</code>; each deploy copies them, and the <code>smtp_*</code> settings that are set, into the <code>crucible-secrets</code> Secret, with <code>CRUCIBLE_SECRET_KEY</code> (it seals connected repositories' tokens and deploy keys) from the persistent stack. A node set up before that key existed deploys without it and warns, until <code>init</code> is re-run. The SSH host keys Crucible pins live in Postgres, so a pod restart keeps them.</p></div>
-      <div><h3>labs</h3><p><code>crucible aws labs-init</code> sets up the lab account: three roles, a permission boundary, the lab state bucket, a free billing export and an alert-only AWS Budget. The one manual step is activating the <code>crucible:lab-id</code> cost-allocation tag.</p></div>
+    <p>The node needs no keys of its own: it acts as an IAM role, and that role may only read its bucket and parameters, write
+      its backups and uploads, and assume the three lab-account roles (<a href="#iam-roles">IAM roles</a>). To build all three
+      stacks, follow <a href="aws-deploy.html#up">crucible aws up</a> in the deployment walkthrough.</p>
+  </section>
+
+  <section id="components" aria-labelledby="components-h">
+    <div class="head"><span class="eyebrow">deploy/aws/persistent · deploy/aws/main · deploy/aws/labs</span><h2 id="components-h">Every component and what it costs</h2>
+      <p>Each stack is made by one <code>crucible aws</code> command and has its own lifetime. The tables name every AWS resource
+        Crucible creates or uses. The stacks name resources after <code>name</code>, which defaults to <code>crucible</code>, so
+        <code>crucible-node</code> below is <code>&lt;name&gt;-node</code> in the Terraform.</p></div>
+
+    <h3 class="sub">1 · persistent: made once by <code>crucible aws init</code>, never destroyed</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">State bucket</th><td>S3, versioned, private</td><td>Terraform's memory of the main stack. Versioning keeps every older state.</td></tr>
+          <tr><th scope="row">Data bucket</th><td>S3, versioned, encrypted, private, lifecycle rule</td><td>Release tarballs under <code>releases/</code> and the <code>current-release</code> pointer, nightly snapshots under <code>snapshots/</code> and the always-kept <code>latest/</code> (<a href="#backups">Backups</a>), trainees' uploads and terminal transcripts under <code>uploads/</code>.</td></tr>
+          <tr><th scope="row">User pool</th><td>Cognito</td><td>Everyone's sign-in account. Email is the identity Crucible trusts.</td></tr>
+          <tr><th scope="row">Login domain and branding</th><td>Cognito managed login</td><td>The hosted sign-in page people see.</td></tr>
+          <tr><th scope="row">App client</th><td>Cognito</td><td>Lets Crucible sign people in with the pool, over OpenID Connect.</td></tr>
+          <tr><th scope="row">Secret key</th><td>SSM Parameter Store, SecureString</td><td><code>/crucible/secret_key</code>, a random 48-character <code>CRUCIBLE_SECRET_KEY</code> that seals connected repositories' tokens and deploy keys. It lives here so that after a teardown and <code>up</code>, the rebuilt node can still open the repository credentials in the restored database. Terraform never changes it once made. A node set up before that key existed deploys without it and warns, until <code>init</code> is re-run.</td></tr>
+        </tbody>
+      </table>
     </div>
+    <p>This stack's own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. Back it up
+      (<a href="aws-deploy.html#init">init</a>).</p>
+
+    <h3 class="sub">2 · main: built by <code>crucible aws up</code>, can be torn down and rebuilt from the newest snapshot</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">The node</th><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB, Ubuntu 24.04. Runs k3s with Crucible, Postgres, Traefik, and the AWS lab workspaces and Terraform runs. Cluster labs run on trainees' own clusters, not here. First boot installs k3s, Helm and sysbox.</td></tr>
+          <tr><th scope="row">Disk</th><td>EBS gp3, 60 GiB, encrypted</td><td>The database and everything else on the node.</td></tr>
+          <tr><th scope="row">Public address</th><td>Elastic IP</td><td>A fixed IP your domain points at.</td></tr>
+          <tr><th scope="row">Firewall</th><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, the redirect) and 443 (HTTPS). No SSH port at all: a shell goes through SSM.</td></tr>
+          <tr><th scope="row">Network</th><td>Default VPC and subnet</td><td>Already there in every account. No NAT gateway or load balancer, which keeps it cheap.</td></tr>
+          <tr><th scope="row">Node identity</th><td>IAM role <code>crucible-node</code> and its instance profile</td><td>What the node, and its pods other than lab pods, may do in AWS. See <a href="#iam-roles">IAM roles</a>.</td></tr>
+          <tr><th scope="row">Metadata service</th><td>EC2 IMDSv2, hop limit 2</td><td>Hands the node role's credentials to programs on the node; a token is required, and pods can reach it, except lab pods. See <a href="#imds">IMDS</a>.</td></tr>
+          <tr><th scope="row">Settings and secrets</th><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), the Helm values, and encrypted parameters for the sign-in client secret, the database password, the quiz secret and the git webhook secret (all made by Terraform), plus the optional <code>git_credentials</code> and <code>smtp_password</code> from your settings. Each deploy copies them, and the <code>smtp_*</code> settings that are set, into the Kubernetes Secret <code>crucible-secrets</code>, together with <code>CRUCIBLE_SECRET_KEY</code> from the persistent stack. The SSH host keys Crucible pins live in Postgres, so a pod restart keeps them.</td></tr>
+          <tr><th scope="row">Wake and sleep</th><td>EventBridge Scheduler and its role <code>crucible-scheduler</code></td><td>Starts the node at 07:30 and stops it at 19:30, Monday to Friday, in your time zone (default <code>Europe/Bucharest</code>), to save money at night.</td></tr>
+          <tr><th scope="row">DNS record</th><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if the domain is in Route 53. Any other DNS provider works too.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub">3 · labs: made once by <code>crucible aws labs-init</code>, in the lab account</h3>
+    <p>The lab account can be the same as Crucible's, but a separate sandbox account is much safer. After <code>labs-init</code>,
+      you activate the <code>crucible:lab-id</code> cost-allocation tag by hand (the one manual step) and run <code>up</code>,
+      which reads the stack's outputs and switches AWS labs on (<a href="aws-deploy.html#labs">AWS labs setup</a>).</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Lab role</th><td>IAM role <code>crucible-lab</code></td><td>The identity every AWS lab acts as. Sessions last at most an hour. Only the node role may assume it, and only with a lab id tag.</td></tr>
+          <tr><th scope="row">Permission boundary</th><td>IAM managed policy <code>crucible-lab-boundary</code></td><td>The lab role's ceiling: EC2 and S3 only, small instance types, small volumes, allowed regions (<a href="#iam-fence">the IAM fence</a>).</td></tr>
+          <tr><th scope="row">Plan role</th><td>IAM role <code>crucible-lab-plan</code>, inside the boundary</td><td>Read-only, for estimates: <code>ec2:Describe*</code>, <code>s3:GetBucket*</code> and <code>s3:ListAllMyBuckets</code>, so a <code>terraform plan</code> can read data sources. Sessions last 15 minutes and have no state backend.</td></tr>
+          <tr><th scope="row">Ops role</th><td>IAM role <code>crucible-lab-ops</code></td><td>Read-only, for the reaper and the Ledger: list tagged resources and buckets, look up CloudTrail, read lab state files (metering) and the billing export bucket. No Cost Explorer.</td></tr>
+          <tr><th scope="row">Lab state bucket</th><td>S3 <code>crucible-&lt;account&gt;-labstate</code>, versioned, encrypted, private, HTTPS only</td><td>One Terraform state file per lab, <code>labs/&lt;id&gt;.tfstate</code>.</td></tr>
+          <tr><th scope="row">Billing export</th><td>S3 bucket <code>crucible-&lt;account&gt;-labexports</code> and Data Exports (CUR 2.0) <code>crucible-labs</code></td><td>The account's bill, daily, as gzip CSV under <code>cur/</code>, with resource tags. Free. The export itself lives in us-east-1.</td></tr>
+          <tr><th scope="row">Budget</th><td>AWS Budgets <code>crucible-labs-monthly</code></td><td>Alert-only: emails at 80% and 100% of the month's actual spend. Free. Made only when <code>labs-init</code> gets <code>--budget-email</code>.</td></tr>
+          <tr><th scope="row">Block Public Access</th><td>S3, account-wide</td><td>No bucket in the lab account can ever be made public.</td></tr>
+          <tr><th scope="row">Audit log</th><td>CloudTrail (built in, not created)</td><td>Who created what. Its free 90 days of history let the reaper spot anything a lab created without its tag.</td></tr>
+          <tr><th scope="row">Tag search</th><td>Resource Groups Tagging API (built in)</td><td>Finds everything carrying a tag, for the sweep and the reaper.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub" id="costs">What it costs</h3>
+    <p>From the design's estimate for <code>eu-west-1</code>. AWS prices change; check the current ones.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Item</th><th scope="col">Note</th><th scope="col" class="num">Working hours</th><th scope="col" class="num">24/7</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">EC2 node</th><td>t3a.xlarge on demand; 11 h × 22 days when scheduled</td><td class="num">~$40</td><td class="num">~$119</td></tr>
+          <tr><th scope="row">EBS disk</th><td>60 GiB gp3</td><td class="num">~$5.30</td><td class="num">~$5.30</td></tr>
+          <tr><th scope="row">Elastic IP</th><td>public IPv4 is billed by the hour</td><td class="num">~$3.70</td><td class="num">~$3.70</td></tr>
+          <tr><th scope="row">S3</th><td>snapshots, releases, uploads</td><td class="num">&lt; $1</td><td class="num">&lt; $1</td></tr>
+          <tr><th scope="row">Cognito, Scheduler, SSM</th><td>free tiers at this size</td><td class="num">~$0</td><td class="num">~$0</td></tr>
+          <tr><th scope="row">Lab account extras</th><td>billing export (only its files in S3), alert-only AWS Budget, Price List downloads; no Cost Explorer</td><td class="num">~$0</td><td class="num">~$0</td></tr>
+          <tr class="total"><th scope="row">Total</th><td>plus whatever labs spend</td><td class="num">~$50/month</td><td class="num">~$130/month</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><p><strong>Two cost notes.</strong>The <code>t3a</code> family bills extra if the CPU stays busy above its
+      baseline for long (about $0.05 per vCPU-hour of surplus). While the node sleeps, only the disk, the IP and S3 cost money,
+      roughly $10 a month.</p></div>
   </section>
 
   <section id="node" aria-labelledby="node-h">
@@ -557,9 +666,264 @@ body { margin: 0; }
     </div>
     <div class="cols">
       <div><h3>Why one replica</h3><p>The agent links, locks and live terminals are held in memory, so the chart pins <code>replicas: 1</code> and a <code>Recreate</code> rollout. Scaling out would need a shared hub.</p></div>
-      <div><h3>What IMDS is</h3><p>The EC2 metadata service at <code>169.254.169.254</code>, which hands out the node's credentials. Lab pods are cut off from it by the NetworkPolicy, a pod setting and an init guard that waits until the block is in place.</p></div>
-      <div><h3>Backups</h3><p>Every evening at 19:15 a CronJob dumps Postgres to <code>snapshots/</code> (kept 30 days) and <code>latest/</code> (kept for good). <code>sleep</code>, <code>teardown</code> and <code>up</code> take a snapshot first.</p></div>
+      <div><h3>AWS credentials</h3><p>Pods that call AWS take the node role's credentials from the metadata service. Lab pods are cut off from it, because that role can assume any lab's role. Who acts as which role, and why: <a href="#iam-roles">IAM roles</a>.</p></div>
     </div>
+  </section>
+
+  <section id="backups" aria-labelledby="backups-h">
+    <div class="head"><span class="eyebrow">deploy/helm/crucible · backup.yaml</span><h2 id="backups-h">Backups</h2>
+      <p>Postgres holds everything that isn't in git: configuration, people, progress and spend. It is dumped to the data bucket
+        every evening, and a rebuilt node restores it before Crucible starts.</p></div>
+    <div class="cols">
+      <div><h3>When</h3><p>The CronJob <code>crucible-backup</code> runs at 19:15 every day (<code>Europe/Bucharest</code>), before the node sleeps at 19:30. <code>crucible aws snapshot</code> runs it on demand, and <code>up</code>, <code>sleep</code> and <code>teardown</code> take a snapshot first unless you pass <code>--no-snapshot</code>.</p></div>
+      <div><h3>What is kept</h3><p>Dated dumps under <code>snapshots/</code> expire after 30 days. <code>latest/crucible-latest.dump</code> is kept for good, so a long teardown can still be restored.</p></div>
+      <div><h3>Restore</h3><p>On an empty database the API's init container fetches the newest <code>snapshots/</code> dump, falling back to <code>latest/</code>, and runs <code>pg_restore</code>. A teardown and <code>up</code> therefore comes back with its data.</p></div>
+    </div>
+    <p>Step by step, with the credentials each step uses: <a href="#walk-backup">the nightly snapshot</a>, under IAM roles.</p>
+  </section>
+
+  <section id="iam-roles" aria-labelledby="iam-roles-h">
+    <div class="head"><span class="eyebrow">deploy/aws/main · deploy/aws/labs · internal/awscloud</span><h2 id="iam-roles-h">IAM roles: who acts as whom</h2>
+      <p>An IAM role is an identity with no password and no permanent keys. Its <em>trust policy</em> says who may become it
+        (<code>sts:AssumeRole</code>). Its permission policies say what the temporary credentials it hands out may do, and those
+        credentials expire within hours. A permission boundary and the organization's SCPs can only narrow that, never widen it.
+        The <a href="aws-primer.html#q-iam-role">primer</a> explains roles in general; this section is how Crucible uses them.</p></div>
+
+    <div class="cols" id="imds">
+      <div><h3>How the node gets a role: IMDS</h3><p>An instance profile puts the role <code>crucible-node</code> on the EC2 node.
+        Programs there ask the instance metadata service (IMDS) at <code>169.254.169.254</code> for fresh credentials, so no keys
+        sit on disk. The node requires IMDSv2 (<code>http_tokens = "required"</code>: every request needs a token) with
+        <code>http_put_response_hop_limit = 2</code>, so pods, one network hop past the host, can reach it too.</p></div>
+      <div><h3>Why lab pods can't reach it</h3><p>The node role may assume any lab's role. So lab pods are blocked from IMDS three
+        ways: a NetworkPolicy egress deny to <code>169.254.169.254</code>, <code>AWS_EC2_METADATA_DISABLED</code> in the pod, and
+        an init container that waits until the block is in place. A trainee in a workspace only ever holds their own lab's
+        credentials.</p></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Identity</th><th scope="col">Where it lives</th><th scope="col">Who uses it, and when</th><th scope="col">What it may do</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">The operator</th><td>Their own Identity Center role, on their laptop after <code>aws login</code></td><td><code>crucible aws init</code>, <code>labs-init</code>, <code>up</code>, <code>deploy</code>, <code>snapshot</code>, <code>sleep</code>, <code>teardown</code></td><td>Runs Terraform, which creates every other role on this page; uploads releases to S3; <code>ssm send-command</code> to the node</td></tr>
+          <tr><th scope="row">Node role <code>crucible-node</code></th><td>Main stack; on the EC2 node through the instance profile</td><td>The boot and deploy scripts on the host (<code>aws ssm get-parameter</code> for <code>/crucible/env</code>, <code>/crucible/helm-values</code> and the secrets; <code>aws s3 cp</code> of <code>current-release</code> and <code>releases/&lt;sha&gt;/…</code>). The SSM agent (managed policy <code>AmazonSSMManagedInstanceCore</code>: shell, send-command). The backup CronJob and the restore init container. The Crucible API pod: uploads and transcripts under <code>uploads/</code>, and the starting point for assuming the lab-account roles</td><td>Data bucket: <code>ListBucket</code> and <code>GetObject</code> on everything; <code>PutObject</code> only on <code>snapshots/*</code>, <code>latest/crucible-latest.dump</code> and <code>uploads/*</code>. <code>ssm:GetParameter(s)</code> on <code>/crucible/*</code>. <code>sts:AssumeRole</code> and <code>sts:TagSession</code> on the lab and ops roles, <code>sts:AssumeRole</code> on the plan role, only once AWS labs are wired in</td></tr>
+          <tr><th scope="row">Scheduler role <code>crucible-scheduler</code></th><td>Main stack; trusted by EventBridge Scheduler</td><td>The weekday wake at 07:30 and sleep at 19:30</td><td><code>ec2:StartInstances</code> and <code>ec2:StopInstances</code></td></tr>
+          <tr><th scope="row">Lab role <code>crucible-lab</code></th><td>Labs stack, in the lab account (or the same account)</td><td>Assumed by the API once per AWS lab with the session tag <code>crucible:lab-id=&lt;id&gt;</code> (plus team and training), for at most an hour. Used by the Terraform apply and destroy pods, the trainee's workspace terminal, the sweep, and the reaper's deletes</td><td>EC2 and S3 inside the permission boundary <code>crucible-lab-boundary</code>. Creates must carry its own lab tag; it may change or delete only resources carrying it; its own state file <code>labs/&lt;id&gt;.tfstate</code></td></tr>
+          <tr><th scope="row">Plan role <code>crucible-lab-plan</code></th><td>Labs stack</td><td>Assumed for cost estimates by the <code>terraform plan</code> pods in <code>crucible-estimates</code>, 15 minutes, no session tags</td><td>Read-only: <code>ec2:Describe*</code>, <code>s3:GetBucket*</code>, <code>s3:ListAllMyBuckets</code>, inside the same boundary</td></tr>
+          <tr><th scope="row">Ops role <code>crucible-lab-ops</code></th><td>Labs stack</td><td>The reaper and the Ledger: inventory, CloudTrail lookups, the billing export, lab state reads</td><td><code>tag:GetResources</code>, <code>s3:ListAllMyBuckets</code>, <code>cloudtrail:LookupEvents</code>, read the export bucket, read <code>labs/*</code> state</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><b>Trust.</b> The lab, plan and ops roles each trust the node role only (<code>aws:PrincipalArn</code> is the node role's
+      ARN), and the lab role also requires a non-empty <code>crucible:lab-id</code> request tag. Because the trust names the
+      account and conditions on the node role's ARN, the node role's own policy must allow the call too, whether the lab account
+      is a second account or the same one.</p>
+    <p><b>No role at all.</b> The AWS Price List is a public bulk download from <code>pricing.us-east-1.amazonaws.com</code>, and
+      Cognito sign-in is plain OIDC between the browser and Cognito.</p>
+
+    <div class="figure">
+      <svg viewBox="0 0 1100 560" role="img" aria-labelledby="d6t d6d">
+        <title id="d6t">IAM roles: who acts as whom</title>
+        <desc id="d6d">The operator, signed in with their own role, runs Terraform and sends SSM commands to the node. On the EC2 node, the host scripts, the SSM agent, the backup and restore pods and the Crucible API pod all act as the node role, whose credentials come from IMDS. The node role assumes three roles in the lab account: the lab role with a lab-id session tag, used by Terraform pods, the workspace terminal and the sweep; the read-only plan role for estimates; and the ops role for the reaper and the Ledger. Lab pods are cut off from IMDS.</desc>
+
+        <rect class="box" x="20" y="60" width="200" height="176" rx="10"/>
+        <text class="bt" x="36" y="88">The operator</text>
+        <text class="cd" x="36" y="110">aws login</text>
+        <text class="bs" x="36" y="132">own Identity Center role</text>
+        <text class="bs" x="36" y="156">init, labs-init, up, deploy,</text>
+        <text class="bs" x="36" y="176">snapshot, sleep, teardown</text>
+        <text class="cd" x="36" y="204">ssm send-command</text>
+        <text class="bs" x="20" y="272">Terraform, run as the</text>
+        <text class="bs" x="20" y="292">operator, creates every</text>
+        <text class="bs" x="20" y="312">role on this diagram.</text>
+
+        <rect class="zone" x="250" y="14" width="490" height="532" rx="14"/>
+        <text class="zl" x="268" y="40">MAIN AWS ACCOUNT · deploy/aws/main</text>
+        <rect class="group" x="266" y="56" width="458" height="476" rx="12"/>
+        <text class="zl" x="282" y="80">EC2 NODE · instance profile crucible-node</text>
+
+        <rect class="box" x="282" y="96" width="196" height="72" rx="10"/>
+        <text class="bt" x="298" y="122">Host scripts</text>
+        <text class="bs" x="298" y="144">bootstrap.sh, deploy.sh:</text>
+        <text class="bs" x="298" y="162">parameters, release files</text>
+        <rect class="box" x="282" y="180" width="196" height="72" rx="10"/>
+        <text class="bt" x="298" y="206">SSM agent</text>
+        <text class="bs" x="298" y="228">shell and send-command,</text>
+        <text class="bs" x="298" y="246">through a managed policy</text>
+        <rect class="box" x="282" y="264" width="196" height="72" rx="10"/>
+        <text class="bt" x="298" y="290">Backup and restore</text>
+        <text class="bs" x="298" y="312">CronJob crucible-backup,</text>
+        <text class="bs" x="298" y="330">the API's init container</text>
+        <rect class="box hot" x="282" y="348" width="196" height="72" rx="10"/>
+        <text class="bt" x="298" y="374">Crucible API pod</text>
+        <text class="bs" x="298" y="396">uploads in S3; starts</text>
+        <text class="bs" x="298" y="414">every lab-account session</text>
+
+        <rect class="box" x="282" y="436" width="196" height="90" rx="10"/>
+        <text class="bt" x="298" y="460">IMDS</text>
+        <text class="cd" x="298" y="480">169.254.169.254</text>
+        <text class="bs" x="298" y="498">IMDSv2, hop limit 2</text>
+        <text class="bs" x="298" y="516">lab pods are cut off</text>
+
+        <rect class="box hot" x="510" y="96" width="200" height="336" rx="12"/>
+        <text class="bt" x="526" y="124">Node role</text>
+        <text class="cd" x="526" y="146">crucible-node</text>
+        <text class="bs" x="526" y="176">S3 data bucket: read all;</text>
+        <text class="bs" x="526" y="196">write only snapshots/,</text>
+        <text class="bs" x="526" y="216">latest/ and uploads/</text>
+        <text class="bs" x="526" y="246">SSM: /crucible/*</text>
+        <text class="bs" x="526" y="276">STS: assume the lab,</text>
+        <text class="bs" x="526" y="296">plan and ops roles</text>
+        <text class="bs" x="526" y="316">(once AWS labs are on)</text>
+        <text class="bs" x="526" y="350">all four on the left</text>
+        <text class="bs" x="526" y="370">act as this role</text>
+
+        <rect class="zone" x="780" y="14" width="306" height="532" rx="14"/>
+        <text class="zl aws" x="798" y="40">LAB ACCOUNT · deploy/aws/labs</text>
+        <rect class="box aws" x="796" y="56" width="274" height="170" rx="10"/>
+        <text class="bt" x="812" y="84">Lab role</text>
+        <text class="cd" x="812" y="106">crucible-lab</text>
+        <text class="bs" x="812" y="130">session tag crucible:lab-id, 1 h</text>
+        <text class="bs" x="812" y="150">inside crucible-lab-boundary</text>
+        <text class="bs" x="812" y="174">used by tf-apply and tf-destroy,</text>
+        <text class="bs" x="812" y="194">the workspace terminal, the sweep</text>
+        <text class="bs" x="812" y="214">and the reaper's deletes</text>
+        <rect class="box aws" x="796" y="242" width="274" height="112" rx="10"/>
+        <text class="bt" x="812" y="270">Plan role</text>
+        <text class="cd" x="812" y="292">crucible-lab-plan</text>
+        <text class="bs" x="812" y="316">read-only, 15 min, no session tags</text>
+        <text class="bs" x="812" y="338">used by terraform plan pods</text>
+        <rect class="box aws" x="796" y="370" width="274" height="112" rx="10"/>
+        <text class="bt" x="812" y="398">Ops role</text>
+        <text class="cd" x="812" y="420">crucible-lab-ops</text>
+        <text class="bs" x="812" y="444">tags, CloudTrail, the bill, lab state</text>
+        <text class="bs" x="812" y="464">used by the reaper and the Ledger</text>
+        <text class="bs" x="798" y="510">Each trusts only the node role.</text>
+        <text class="bs" x="798" y="530">The lab role needs a lab-id tag.</text>
+
+        <path class="ar" d="M220,200 H278" marker-end="url(#ah)"/>
+        <path class="ar" d="M478,132 H506" marker-end="url(#ah)"/>
+        <path class="ar" d="M478,216 H506" marker-end="url(#ah)"/>
+        <path class="ar" d="M478,300 H506" marker-end="url(#ah)"/>
+        <path class="ar" d="M478,384 H506" marker-end="url(#ah)"/>
+        <path class="ar" d="M478,486 H610 V436" marker-end="url(#ah)"/>
+        <text class="al" x="490" y="506">temporary credentials</text>
+        <path class="ar" d="M710,264 H760 V141 H792" marker-end="url(#ah)"/>
+        <path class="ar" d="M760,264 V426 H792" marker-end="url(#ah)"/>
+        <path class="ar" d="M760,298 H792" marker-end="url(#ah)"/>
+        <text class="al on1" transform="translate(754,362) rotate(-90)" text-anchor="middle">sts:AssumeRole</text>
+      </svg>
+    </div>
+    <div class="key">
+      <span><i class="sw hot"></i>Crucible's own identity and process</span>
+      <span><i class="sw aws"></i>A role in the lab account</span>
+      <span><i class="sw zone"></i>AWS account</span>
+      <span><i class="sw arrow"></i>Calls, or acts as</span>
+    </div>
+
+    <h3 class="sub" id="walk-backup">Walkthrough: the nightly Postgres snapshot</h3>
+    <ol class="steps">
+      <li><h3>The CronJob starts a pod <span class="lane k8s">ns crucible</span></h3>
+        <p>At 19:15 <code>Europe/Bucharest</code> the CronJob <code>crucible-backup</code> starts a pod from <code>postgres:18-alpine</code>.</p></li>
+      <li><h3>It dumps the database <span class="lane k8s">backup pod</span></h3>
+        <p><code>pg_dump -Fc</code> writes <code>/tmp/db.dump</code>, with the password from the <code>crucible-secrets</code> Secret.</p></li>
+      <li><h3>It gets credentials <span class="lane aws">IMDS · node role</span></h3>
+        <p><code>aws s3 cp</code> finds no keys, so it asks IMDS with an IMDSv2 token. IMDS returns the node role's temporary credentials.</p></li>
+      <li><h3>S3 checks the node role's policy <span class="lane aws">data bucket</span></h3>
+        <p><code>PutObject</code> on <code>snapshots/crucible-&lt;UTC&gt;.dump</code> and <code>latest/crucible-latest.dump</code> is allowed. <code>PutObject</code> on <code>releases/*</code> would be denied, so a backup pod can't replace a release.</p></li>
+      <li><h3>On demand <span class="lane">operator</span> <span class="lane aws">SSM agent · node role</span></h3>
+        <p><code>crucible aws snapshot</code> runs with the operator's role and calls <code>ssm send-command</code>. The SSM agent, as the node role, runs <code>/opt/crucible/snapshot.sh</code>, which creates a Job from the CronJob and waits up to 15 minutes. <code>up</code>, <code>sleep</code> and <code>teardown</code> do this first unless <code>--no-snapshot</code>.</p></li>
+      <li><h3>Restore <span class="lane k8s">API init container</span> <span class="lane aws">node role</span></h3>
+        <p>On an empty database, the API pod's init container uses the same node-role credentials, with <code>ListBucket</code> and <code>GetObject</code>, to fetch the newest <code>snapshots/</code> dump (falling back to <code>latest/</code>), and <code>pg_restore</code>s it.</p></li>
+    </ol>
+
+    <h3 class="sub" id="walk-lab">Walkthrough: an AWS lab starts</h3>
+    <ol class="steps">
+      <li><h3>The API assumes the lab role <span class="lane k8s">API pod</span> <span class="lane aws">node role</span></h3>
+        <p>With node-role credentials from IMDS, the API calls <code>sts:AssumeRole</code> on <code>crucible-lab</code> with the session tag <code>crucible:lab-id=&lt;id&gt;</code>.</p></li>
+      <li><h3>STS returns lab credentials <span class="lane aws">lab role</span></h3>
+        <p>They last one hour. Crucible stores them as a Secret in the lab's <code>lab-&lt;id&gt;</code> namespace and refreshes them about every 45 minutes while the lab runs.</p></li>
+      <li><h3>Terraform builds the lab <span class="lane k8s">tf-apply pod</span> <span class="lane aws">lab role</span></h3>
+        <p>The apply pod uses those credentials. Every call is checked against the lab role's policy and the boundary (<a href="#iam-fence">the IAM fence</a>).</p></li>
+      <li><h3>The node role stays out of reach <span class="lane k8s">lab-&lt;id&gt;</span></h3>
+        <p>Lab pods are blocked from IMDS, so they never see the node role.</p></li>
+    </ol>
+    <p>Estimates use the plan role the same way, read-only and without session tags; the reaper and the Ledger use the ops role.</p>
+  </section>
+
+  <section id="iam-fence" aria-labelledby="iam-fence-h">
+    <div class="head"><span class="eyebrow">deploy/aws/labs · main.tf</span><h2 id="iam-fence-h">The IAM fence</h2>
+      <p>Three IAM pieces keep labs apart: the trust policy decides who can become the lab role, the permission boundary caps what
+        the role can ever do, and the role's own policy limits each session to its own lab. A lab may do only what both the
+        boundary <em>and</em> the role policy allow.</p></div>
+    <div class="figure">
+      <svg viewBox="0 0 1180 390" role="img" aria-labelledby="d7t d7d">
+        <title id="d7t">The IAM fence</title>
+        <desc id="d7d">The Crucible API, as the node role, assumes the lab role with the session tag crucible:lab-id. The lab session can do only what lies in the overlap of the permission boundary (EC2 and S3, allowed regions, small sizes) and the role policy (only resources carrying its own lab id).</desc>
+        <rect class="box hot" x="20" y="130" width="190" height="120" rx="12"/>
+        <text class="bt" x="36" y="158">Crucible API</text>
+        <text class="bs" x="36" y="182">on the node, as</text>
+        <text class="cd" x="36" y="204">crucible-node</text>
+        <text class="bs" x="36" y="226">in the main account</text>
+
+        <path class="ar" d="M210,190 H416" marker-end="url(#ah)"/>
+        <text class="al on1" x="218" y="180">AssumeRole + TagSession</text>
+        <text class="bs" x="218" y="214">session tag</text>
+        <text class="cd" x="218" y="234">crucible:lab-id=3f9c2a7b1d04</text>
+
+        <rect class="box aws" x="420" y="100" width="220" height="180" rx="12"/>
+        <text class="bt" x="436" y="128">Lab session</text>
+        <text class="bs" x="436" y="152">role crucible-lab, 1 hour</text>
+        <text class="bs" x="436" y="176">trust: only crucible-node,</text>
+        <text class="bs" x="436" y="196">only with a lab-id tag;</text>
+        <text class="bs" x="436" y="216">the tag is stamped on</text>
+        <text class="bs" x="436" y="236">the session as</text>
+        <text class="cd" x="436" y="258">aws:PrincipalTag/…lab-id</text>
+
+        <ellipse class="venn-a" cx="830" cy="200" rx="170" ry="150"/>
+        <ellipse class="venn-b" cx="1010" cy="200" rx="150" ry="135"/>
+        <text class="vt" x="680" y="36">Permission boundary (the ceiling)</text>
+        <text class="vt" x="960" y="52">Role policy (own lab only)</text>
+        <text class="bs" x="690" y="134">EC2 and S3 only</text>
+        <text class="bs" x="690" y="152">allowed regions only</text>
+        <text class="bs" x="690" y="170">nano and micro sizes</text>
+        <text class="bs" x="690" y="188">gp2/gp3, up to 50 GiB</text>
+        <text class="bs" x="690" y="206">shared tenancy</text>
+        <text class="bs" x="690" y="224">no Marketplace images</text>
+        <text class="bs" x="690" y="242">no bucket locks</text>
+        <text class="bs" x="1020" y="150">create only with</text>
+        <text class="bs" x="1020" y="168">the session's tag;</text>
+        <text class="bs" x="1020" y="186">change and delete</text>
+        <text class="bs" x="1020" y="204">only what has it;</text>
+        <text class="bs" x="1020" y="222">buckets named</text>
+        <text class="bs" x="1020" y="240">crucible-lab-&lt;id&gt;…</text>
+        <text class="vt" x="930" y="198" text-anchor="middle">What the lab</text>
+        <text class="vt" x="930" y="217" text-anchor="middle">can really do</text>
+      </svg>
+    </div>
+    <div class="cols">
+      <div><h3>The permission boundary</h3>
+        <ul>
+          <li><span class="allow">Ceiling</span>: <code>ec2:*</code>, <code>s3:*</code>, reading one's own identity and tags. Nothing else, ever: no IAM, no other services.</li>
+          <li><span class="deny">OnlyLabRegions</span>: every call outside the allowed regions.</li>
+          <li><span class="deny">SmallInstancesOnly</span>: anything but <code>t3.nano/micro</code>, <code>t3a.nano/micro</code>, <code>t4g.nano/micro</code> (configurable).</li>
+          <li><span class="deny">SharedTenancyOnly</span>, <span class="deny">NoMarketplaceImages</span>.</li>
+          <li><span class="deny">SmallVolumesOnly</span>, <span class="deny">GeneralPurposeVolumesOnly</span>, <span class="deny">BaselineIops/ThroughputOnly</span>: volumes up to 50 GiB of gp2/gp3.</li>
+          <li><span class="deny">NoBucketLocks</span>: no object lock, bucket policies or ACLs that could stop the cleanup.</li>
+        </ul></div>
+      <div><h3>The lab role's policy (attribute-based access)</h3>
+        <ul>
+          <li><span class="allow">CreateTagged</span>: launch instances, create volumes and security groups only if the request carries <code>crucible:lab-id</code> equal to the session's.</li>
+          <li><span class="allow">ManageOwn</span>: change and delete only resources carrying the session's lab id.</li>
+          <li><span class="deny">OwnSecurityGroupsOnly</span>, <span class="deny">NotOtherLabsNetwork</span>: no launching into the shared default group or another lab's group.</li>
+          <li><span class="deny">KeepCrucibleTags</span>, <span class="deny">NoBlankDeleteTags</span>: lab tags can't be changed or stripped.</li>
+          <li><span class="allow">OwnBuckets</span>, <span class="allow">OwnState</span>: S3 buckets named <code>crucible-lab-&lt;id&gt;…</code> and only its own state file.</li>
+          <li><span class="allow">Read</span>: <code>Describe*</code> calls, needed by Terraform (these are account-wide).</li>
+        </ul></div>
+    </div>
+    <div class="note"><p><strong>Why tags, and not an account per lab?</strong>One shared lab account is quick and cheap to run.
+      Tags plus IAM conditions give each lab its own fence inside it. The trade-off is that isolation is best effort: a trainee
+      can <em>see</em> other labs' resources through <code>Describe</code> calls, though not change them. That is why a dedicated
+      sandbox account is recommended.</p></div>
   </section>
 
   <section id="runtimes" aria-labelledby="runtimes-h">
@@ -579,28 +943,66 @@ body { margin: 0; }
 
   <section id="awslab" aria-labelledby="awslab-h">
     <div class="head"><span class="eyebrow">Free FinOps · no paid services</span><h2 id="awslab-h">An AWS lab, start to finish</h2>
-      <p>Each step names where it runs. Prices come from the free public AWS Price List, and spend from the lab's own Terraform state, then from the free billing export. If price data is missing or stale, the lab can't be requested; Crucible never quotes $0.</p></div>
+      <p>An AWS lab is a folder in a training repo: a <code>lab.yaml</code>, task instructions, check scripts, and a Terraform
+        module that builds what the trainee will work on. Crucible runs that module for each trainee, in the lab account, with
+        credentials that can only touch that one lab. Prices come from the free public AWS Price List, and spend from the lab's
+        own Terraform state, then from the free billing export. If price data is missing or stale, the lab can't be requested;
+        Crucible never quotes $0.</p></div>
+    <div class="cols">
+      <div><h3>lab.yaml (Forge 401, "Cloud Heat")</h3>
+        <pre><code>id: cloud-heat
+runtime: terraform
+cloud: aws
+ttl: 1h
+idle_timeout: 30m
+terminals:
+  - { name: workspace, service: workspace }
+tasks:
+  - id: t2-bucket
+    instructions: tasks/02-bucket.md
+    check: { script: checks/02-bucket.sh, run_in: workspace }
+    points: 2
+aws:
+  region: eu-west-1
+  max_hourly_usd: 0.05
+  usage:
+    aws_s3_bucket.forge: { storage_gb: 1 }</code></pre></div>
+      <div><h3>terraform/main.tf</h3>
+        <pre><code># Crucible adds the provider (region,
+# crucible:* default tags) and the state
+# backend. The module never declares them.
+resource "aws_s3_bucket" "forge" {
+  bucket        = "crucible-lab-${var.crucible_lab_id}"
+  force_destroy = true
+}</code></pre>
+        <p>Next to the module Crucible writes <code>crucible.tf</code>: an S3 backend for <code>labs/&lt;id&gt;.tfstate</code>, the AWS provider with the lab's region, and default tags <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code> on everything the module creates. The lab id is passed in as <code>var.crucible_lab_id</code>.</p></div>
+    </div>
     <ol class="steps">
       <li><h3>Estimate <span class="lane k8s">crucible-estimates</span> <span class="lane aws">plan role</span></h3>
-        <p>A one-off pod runs <code>terraform plan</code> on the lab's module, with a read-only plan-role session (15 minutes) and no state. Crucible prices each planned resource from the price list it refreshes weekly, plus the author's declared prices and stated usage. The plan is cached per content version, and prices are applied fresh on every view.</p></li>
+        <p>Once per content version, a one-off pod runs <code>terraform plan</code> on the lab's module, with a read-only plan-role session (15 minutes) and no state. Crucible prices each planned resource from the price list it refreshes weekly, plus the author's declared prices and the usage the lab states. The estimate is that hourly price × the lab's time limit. The plan is cached per content version, and prices are applied fresh on every view; the lab page shows the breakdown, resource by resource. Crucible refuses a lab above its own <code>max_hourly_usd</code>, in a region you haven't allowed, with a resource it can't price, or when its price data is missing or over 30 days old.</p></li>
       <li><h3>Request and approval <span class="lane">crucible</span></h3>
-        <p>Estimate × the lab's hours picks an approval tier. Team budgets and caps are checked before anyone can approve. Over the lab's <code>max_hourly_usd</code>, it can't be requested at all.</p></li>
-      <li><h3>Apply <span class="lane k8s">lab-&lt;id&gt;</span> <span class="lane aws">lab role</span></h3>
-        <p>Crucible creates the lab namespace and a lab-role session tagged with the lab id (one hour, refreshed about every 45 minutes). A <code>tf-apply</code> pod builds the resources and writes <code>labs/&lt;id&gt;.tfstate</code> in the lab account. Crucible reads that state and starts metering.</p></li>
+        <p>The request shows the estimate, and the estimate picks an approval tier. AWS labs are never approved automatically: by price, the training's admins, the leaders of the team that owns it, or a Crucible admin approve. Team budgets and caps are checked before anyone can approve, and a request that would pass a budget cap needs an admin.</p></li>
+      <li><h3>Credentials <span class="lane k8s">lab-&lt;id&gt;</span> <span class="lane aws">lab role</span></h3>
+        <p>Crucible creates the lab namespace and a lab-role session tagged with the lab id: one hour, refreshed about every 45 minutes (<a href="#walk-lab">walkthrough</a>).</p></li>
+      <li><h3>Apply <span class="lane k8s">tf-apply</span> <span class="lane aws">lab role</span></h3>
+        <p>A <code>tf-apply</code> pod unpacks the module, runs <code>terraform init</code> (state <code>labs/&lt;id&gt;.tfstate</code> in the lab state bucket) and <code>terraform apply</code>. Every resource gets the lab's tags; IAM rejects any that would not. Crucible then reads the state with the ops role and starts metering: each resource at its list price, for as long as it exists.</p></li>
       <li><h3>Work <span class="lane k8s">workspace pod</span></h3>
-        <p>The trainee uses the browser terminal with the lab's credentials, and Check runs server-side. Crucible re-reads the state every 15 minutes, so resources added from the terminal are metered too.</p></li>
+        <p>A workspace pod with Docker-in-Docker, the AWS CLI, Terraform and kubectl backs the browser terminals, with the lab's credentials. Check and setup scripts run there too, server-side. The pods are blocked from the node's metadata service. Crucible re-reads the state every 15 minutes, so resources added from the terminal are metered too.</p></li>
       <li><h3>End <span class="lane k8s">tf-destroy</span> <span class="lane aws">lab role</span></h3>
-        <p>The trainee ends the lab, or it expires, idles, hits its budget, or an admin stops all labs. A <code>tf-destroy</code> pod removes the resources, then a tag sweep catches anything Terraform didn't own. The meter stops when the destroy succeeds.</p></li>
-      <li><h3>Clean up <span class="lane aws">ops role</span></h3>
-        <p>Every hour the reaper looks for resources still tagged with ended labs and deletes them. A lab's meter stays open until a full run finds nothing left.</p></li>
-      <li><h3>Billed <span class="lane aws">billing export</span></h3>
-        <p>AWS writes the CUR 2.0 export daily. Crucible reads it every six hours, counted before credits. Billed spend replaces metered spend 48 hours after the lab ends. Independently, the AWS Budget emails admins at 80% and 100% of the month.</p></li>
+        <p>The trainee ends the lab, or it reaches its time limit, idles, hits the schedule's close or a budget cap, or an admin stops all labs with the kill switch. A <code>tf-destroy</code> pod runs <code>terraform destroy</code>. The meter stops when the destroy succeeds.</p></li>
+      <li><h3>Sweep <span class="lane aws">lab role</span></h3>
+        <p>Anything else carrying the lab's tag, say a volume the trainee made by hand, is found with the Tagging API and deleted with the lab's credentials, including instances with termination protection and untagged buckets named <code>crucible-lab-&lt;id&gt;…</code>.</p></li>
+      <li><h3>Reaper <span class="lane aws">ops role</span> <span class="lane aws">lab role</span></h3>
+        <p>Every hour the reaper lists tagged resources with the read-only ops role and deletes leftovers of labs that ended over an hour ago, each with a lab-role session for that lab. It reports to admins, and never deletes, anything tagged with a lab it doesn't know, or created untagged (seen in CloudTrail). If a destroy failed or couldn't run, the lab's meter stays open until a full run finds nothing of it left.</p></li>
+      <li><h3>Billed <span class="lane aws">billing export</span> <span class="lane aws">ops role</span></h3>
+        <p>AWS writes the CUR 2.0 export daily. Every six hours Crucible reads it with the ops role and adds it up per <code>crucible:lab-id</code>, counted before credits. The Ledger shows the estimate, then the metered cost while the lab runs, then the billed cost, which replaces the metered one 48 hours after the lab ends. Independently, the AWS Budget emails admins at 80% and 100% of the month, whatever Crucible does.</p></li>
     </ol>
   </section>
 
   <section id="ship" aria-labelledby="ship-h">
     <div class="head"><span class="eyebrow">internal/awsops · bootstrap.sh.tftpl</span><h2 id="ship-h">Shipping a release</h2>
-      <p>There is no container registry. A release is a tarball in the data bucket that the node imports into containerd.</p></div>
+      <p>There is no container registry. Releases travel through S3: a release is a tarball in the data bucket that the node
+        imports into containerd.</p></div>
     <div class="figure small">
       <svg viewBox="0 0 1000 250" role="img" aria-labelledby="d5t d5d">
         <title id="d5t">Shipping a release</title>
@@ -631,25 +1033,46 @@ body { margin: 0; }
         <text class="al on1" x="420" y="208">aws ssm send-command runs the deploy script</text>
       </svg>
     </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th scope="col">You want to</th><th scope="col">Run</th></tr></thead>
-        <tbody>
-          <tr><th scope="row">Create sign-in, buckets, state (once)</th><td><code>crucible aws init --region … --domain …</code></td></tr>
-          <tr><th scope="row">Set up the lab account (once, re-run after upgrades)</th><td><code>crucible aws labs-init --budget-usd … --budget-email …</code></td></tr>
-          <tr><th scope="row">Build or change the node</th><td><code>crucible aws up</code></td></tr>
-          <tr><th scope="row">Ship the current commit</th><td><code>crucible aws deploy</code></td></tr>
-          <tr><th scope="row">Snapshot now / stop for the night / start early</th><td><code>crucible aws snapshot</code> · <code>sleep</code> · <code>wake</code></td></tr>
-          <tr><th scope="row">Rebuild from scratch</th><td><code>crucible aws teardown --yes</code>, then <code>crucible aws up</code></td></tr>
-          <tr><th scope="row">Shell on the node</th><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td></tr>
-        </tbody>
-      </table>
+    <ol class="steps">
+      <li><h3>Build <span class="lane">your machine</span></h3>
+        <p><code>crucible aws deploy</code> builds a Linux image of the current git commit with <code>docker buildx</code> (<code>linux/amd64</code>), saves and compresses it, and packages the Helm chart.</p></li>
+      <li><h3>Upload <span class="lane aws">data bucket</span></h3>
+        <p>Both go under <code>releases/&lt;commit&gt;/</code>, then <code>current-release</code> is pointed at them.</p></li>
+      <li><h3>Roll out <span class="lane aws">SSM</span> <span class="lane k8s">node</span></h3>
+        <p><code>aws ssm send-command</code> runs <code>/opt/crucible/deploy.sh</code> on the node, as the node role: it reads <code>current-release</code>, imports the image into containerd, runs <code>helm upgrade --install</code> with values and secrets from SSM, then checks <code>/healthz</code>.</p></li>
+    </ol>
+    <p>On first boot the node's start-up script installs sysbox, k3s, Helm and the AWS CLI, sets Traefik up for Let's Encrypt,
+      reads its settings from Parameter Store and runs the same deploy script; on an empty database the API restores the newest
+      snapshot first. Every command, with what to expect: <a href="aws-deploy.html#deploy">deploy</a> and
+      <a href="aws-deploy.html#everyday">everyday operations</a>.</p>
+  </section>
+
+  <section id="limits" aria-labelledby="limits-h">
+    <div class="head"><span class="eyebrow">AWS labs in practice</span><h2 id="limits-h">Limits and good habits</h2></div>
+    <div class="cols">
+      <div><h3>Keep in mind</h3>
+        <ul>
+          <li>Trainees can read their own lab's Terraform state. Never put passwords, keys or tokens in lab state or outputs.</li>
+          <li>A credential leaked from a workspace stays valid up to an hour after the lab ends; leftovers it makes are reaped within about two hours.</li>
+          <li>An instance launched with a detached network interface (<code>DeleteOnTermination=false</code>) can leave an untagged interface behind. Check now and then: <code>aws ec2 describe-network-interfaces --filters Name=status,Values=available</code>.</li>
+          <li>The sweep and the reaper only look in allowed regions. End every lab in a region before removing it.</li>
+        </ul></div>
+      <div><h3>Good habits</h3>
+        <ul>
+          <li>Use a separate sandbox account for labs, with a budget alert of its own in AWS Budgets.</li>
+          <li>Run one Crucible per lab account: the reaper reports, but never deletes, labs it doesn't know.</li>
+          <li>Keep backups of the three local state files: persistent, labs, and your <code>crucible.tfvars</code>.</li>
+          <li>Try a new lab in dry-run mode on your machine first (<code>make cluster-check</code>), where a fake account stands in for AWS.</li>
+        </ul></div>
     </div>
+    <div class="note warn"><p><strong>Real AWS is tested by hand.</strong>Nothing in the automated suites touches real AWS.
+      <code>docs/runbooks/aws.md</code> lists every check, and <a href="test-guide.html">the test guide</a> has the same steps as
+      a checklist.</p></div>
   </section>
 
   <footer>
-    <span>Drawn from <code>deploy/compose</code>, <code>deploy/helm/crucible</code>, <code>deploy/aws/{persistent,main,labs}</code>, <code>scripts/cluster-check.sh</code> and <code>docs/runbooks/aws.md</code> on branch <code>feat/free-finops-terraform-mode</code>.</span>
-    <span>For step-by-step setup see the AWS runbook; for AWS newcomers, <code>docs/aws-guide.html</code>.</span>
+    <span>Drawn from <code>deploy/compose</code>, <code>deploy/helm/crucible</code>, <code>deploy/aws/{persistent,main,labs}</code>, <code>internal/awscloud</code>, <code>scripts/cluster-check.sh</code> and <code>docs/runbooks/aws.md</code>.</span>
+    <span>Every command in order: <a href="aws-deploy.html">the deployment walkthrough</a>. AWS and networking basics: <a href="aws-primer.html">the primer</a>.</span>
   </footer>
 </main>
 </body>

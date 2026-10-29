@@ -265,8 +265,27 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
     </div>
   </article>
 
+  <article class="qa" id="q-iam-role">
+    <h3><span class="qn">1.3</span>What is an IAM role, and how do programs get its credentials?</h3>
+    <div class="ans">
+      <p>A role is an IAM identity with <strong>no password and no permanent keys</strong>. A user is for one person and keeps long-lived credentials. A role is something a person, a server or another account <em>becomes</em> for a while.</p>
+      <ul>
+        <li><strong>Trust policy:</strong> who may become the role, by calling <code>sts:AssumeRole</code> (see 1.4).</li>
+        <li><strong>Permission policies:</strong> what the role may do once it is assumed. A permission boundary and the organization's SCPs can only narrow this (1.1, 1.6).</li>
+        <li><strong>Temporary credentials:</strong> the Security Token Service (STS) answers an assume with an access key, a secret and a session token that expire within hours. Nobody has to rotate them.</li>
+      </ul>
+      <p><strong>Roles on servers.</strong> An EC2 instance gets a role through an <strong>instance profile</strong>, a wrapper that attaches the role to the instance. Programs on it, such as the AWS CLI and the SDKs, find no keys in the environment or on disk, so they ask the instance metadata service (IMDS, 1.10) at <code>169.254.169.254</code>. It returns the role's current temporary credentials, and fresh ones before they expire.</p>
+      <ul>
+        <li><strong>IMDSv2</strong> adds a step: the program first sends a <code>PUT</code> to get a session token, then sends it with every read. That defeats most request-forwarding tricks, and instances can be set to require it.</li>
+        <li><strong>Hop limit:</strong> the token response travels a limited number of network hops. The default of 1 reaches the host only. A pod in a container network is one hop further, so a node whose pods need the role sets the limit to 2.</li>
+        <li><strong>Why no keys on disk:</strong> nothing to leak into a repo, an image or a backup, and a stolen credential stops working within hours.</li>
+      </ul>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>The node, the lab, the plan and the ops roles each have one job, and the operator signs in through Identity Center. <a href="deploy-architecture.html#iam-roles">IAM roles in Crucible</a> lists them and walks through the nightly snapshot and an AWS lab start.</p></aside>
+    </div>
+  </article>
+
   <article class="qa" id="q1-3">
-    <h3><span class="qn">1.3</span>What does "the node role is trusted into the lab account" mean?</h3>
+    <h3><span class="qn">1.4</span>What does "the node role is trusted into the lab account" mean?</h3>
     <div class="ans">
       <p>An IAM role has two halves:</p>
       <ul>
@@ -286,7 +305,7 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
   </article>
 
   <article class="qa" id="q1-4">
-    <h3><span class="qn">1.4</span>Is Crucible's lab account literally a second AWS account? Does <code>labs-init</code> create one?</h3>
+    <h3><span class="qn">1.5</span>Is Crucible's lab account literally a second AWS account? Does <code>labs-init</code> create one?</h3>
     <div class="ans">
       <p>It's meant to be separate, but it doesn't have to be, and <code>labs-init</code> doesn't create one. It runs the labs Terraform stack in whatever account your current credentials point at.</p>
       <ul>
@@ -304,43 +323,51 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
   </article>
 
   <article class="qa" id="q1-5">
-    <h3><span class="qn">1.5</span>What is a permission boundary? Does it limit what Terraform can do?</h3>
+    <h3><span class="qn">1.6</span>What is a permission boundary? Does it limit what Terraform can do?</h3>
     <div class="ans">
       <p>A permission boundary is an IAM ceiling attached to a role. A request succeeds only if both the role's own policy and the boundary allow it, and an explicit Deny in either wins (see the diagram in 1.1).</p>
       <p><strong>Yes, it limits Terraform, inside AWS rather than in the module.</strong> Terraform can declare anything. But every apply, destroy, workspace terminal and sweep acts with a lab-role session, so every AWS call is checked. A module that declares something outside the limits passes <code>plan</code>, then fails at apply with <code>AccessDenied</code>.</p>
       <div class="tbl"><table>
-        <thead><tr><th>Crucible's lab boundary allows</th><th>Limit</th></tr></thead>
+        <thead><tr><th>Crucible's lab boundary</th><th>Limit</th></tr></thead>
         <tbody>
-          <tr><td>Services</td><td>Only <code>ec2:*</code>, <code>s3:*</code>, <code>sts:GetCallerIdentity</code>, <code>tag:GetResources</code>. RDS, Lambda, IAM, ELB and the rest are out.</td></tr>
-          <tr><td>Regions</td><td>Only the allowed regions (<code>--region</code>, <code>--allowed-regions</code>).</td></tr>
-          <tr><td>Instances</td><td>Only <code>allowed_instance_types</code> (default t3, t3a, t4g nano and micro); shared tenancy; no Marketplace AMIs.</td></tr>
-          <tr><td>Volumes</td><td>gp2 or gp3, at most 50 GiB by default, baseline IOPS (≤ 3000) and throughput (≤ 125 MB/s).</td></tr>
-          <tr><td>S3</td><td>Nothing that locks a bucket against cleanup or hands it to someone else: no object lock, retention, bucket policy or ACL changes.</td></tr>
+          <tr><td>Services</td><td>Only <code>ec2:*</code> and <code>s3:*</code> (plus two read helpers). RDS, Lambda, IAM, ELB and the rest are out.</td></tr>
+          <tr><td>The rest</td><td>Regions, instance types, volume sizes and S3 safety limits. <a href="deploy-architecture.html#iam-fence">The IAM fence</a> has the full list.</td></tr>
         </tbody>
       </table></div>
-      <aside class="note crucible"><b class="lab">In Crucible</b><p>The pricer can price NAT gateways, Elastic IPs and load balancers, but the lab role can't create them. A lab using them lints clean and gets an estimate, then fails safely at apply. The proposed fix is for lint to refuse types the role can't create. Widening what labs may create should stay in Terraform, as reviewed "packs" passed to <code>labs-init</code>, never in the web UI. An admin setting in the UI could still narrow it.</p></aside>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>The pricer can price NAT gateways, Elastic IPs and load balancers, but the lab role can't create them. Such a lab lints clean and gets an estimate, then fails safely at apply. Widening what labs may create stays in Terraform, as reviewed "packs" passed to <code>labs-init</code>, never in the web UI.</p></aside>
     </div>
   </article>
 
   <article class="qa" id="q1-6">
-    <h3><span class="qn">1.6</span>How does IAM stop a lab from touching another lab's resources?</h3>
+    <h3><span class="qn">1.7</span>How does IAM stop a lab from touching another lab's resources?</h3>
     <div class="ans">
       <p>Three pieces work together: a tag fixed on the credentials, one policy that refers to it, and tags forced into every resource.</p>
       <ol>
         <li><strong>Session tags.</strong> Crucible assumes the lab role with the session tag <code>crucible:lab-id=&lt;id&gt;</code>, and the trust policy requires that tag. The trainee holds the resulting one-hour credentials but can't assume the role again, so they can't swap the id.</li>
         <li><strong>One policy for every lab.</strong> The policy refers to <code>${aws:PrincipalTag/crucible:lab-id}</code>. AWS fills that in with the caller's own lab id on every request, so each lab only ever matches itself.</li>
-        <li><strong>Creates must carry the tag.</strong> <code>RunInstances</code>, <code>CreateVolume</code> and <code>CreateSecurityGroup</code> are allowed only if the request tags the resource with your own lab id (<code>aws:RequestTag</code>). <code>CreateTags</code> works only as part of a create (<code>ec2:CreateAction</code>), so you can't create first and tag later. S3 buckets are limited by name instead (<code>crucible-lab-&lt;id&gt;…</code>).</li>
-        <li><strong>Tags can't be removed or changed.</strong> Changing <code>crucible:*</code> tags after creation is denied, and so is "delete all tags", which carries no key list.</li>
-        <li><strong>Only your own resources.</strong> Stopping, changing or deleting requires the resource to carry your lab tag (<code>aws:ResourceTag</code>).</li>
-        <li><strong>Only your own security group.</strong> EC2 checks every security group and network interface in a launch as a resource of its own. Ones tagged for another lab, or untagged (like the VPC's shared default group), are denied.</li>
+        <li><strong>Creates must carry the tag, and only tagged resources can be changed.</strong> A create is allowed only if the request tags the resource with your own lab id (<code>aws:RequestTag</code>), and a stop, change or delete only if the resource carries it (<code>aws:ResourceTag</code>). Tags can't be edited or removed afterwards.</li>
       </ol>
-      <p>Terraform's side: Crucible writes the provider block itself, with <code>default_tags</code> on every resource, and lint refuses a provider block in the author's module.</p>
-      <aside class="note crucible"><b class="lab">In Crucible</b><p>These rules are pinned by <code>deploy/aws/labs/labs.tftest.hcl</code>, a Terraform test with a mock AWS provider. It checks that the policy documents say the right thing. Only a real account can show that AWS enforces them, so the runbook has by-hand checks.</p></aside>
+      <p>The exact statements, the security-group rule and the S3 name limit are in <a href="deploy-architecture.html#iam-fence">the IAM fence</a>. Terraform's side: Crucible writes the provider block itself, with <code>default_tags</code> on every resource, and lint refuses a provider block in the author's module.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>A Terraform test with a mock AWS provider (<code>deploy/aws/labs/labs.tftest.hcl</code>) pins these rules. Only a real account shows AWS enforcing them, so the runbook has by-hand checks.</p></aside>
+    </div>
+  </article>
+
+  <article class="qa" id="q-tags">
+    <h3><span class="qn">1.8</span>What are tags, and how do they reach IAM and the bill?</h3>
+    <div class="ans">
+      <p>A tag is a <code>key = value</code> label on a resource. Three things read them:</p>
+      <ul>
+        <li><strong>IAM</strong> can require a tag on create (<code>aws:RequestTag</code>) and check it on later calls (<code>aws:ResourceTag</code>, <code>aws:PrincipalTag</code>), as in 1.7.</li>
+        <li><strong>Cleanup tools</strong> can find everything with a tag through the Resource Groups Tagging API (<code>tag:GetResources</code>).</li>
+        <li><strong>Billing</strong> sees a tag only after you activate it as a <strong>cost-allocation tag</strong>. Then each line of the bill carries it.</li>
+      </ul>
+      <p>The detailed bill comes from a <strong>Data Export</strong> (CUR 2.0): AWS writes it as files into an S3 bucket every day, at no charge. Cost Explorer's API charges per call. <strong>AWS Budgets</strong> emails you when actual spend crosses a monthly threshold; alert-only budgets are free.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Every lab resource carries <code>crucible:lab-id</code>. Crucible reads each lab's real cost from the export by that tag.</p></aside>
     </div>
   </article>
 
   <article class="qa" id="q1-7">
-    <h3><span class="qn">1.7</span>What is CloudTrail?</h3>
+    <h3><span class="qn">1.9</span>What is CloudTrail?</h3>
     <div class="ans">
       <p>AWS's audit log. Every API call in the account is recorded:</p>
       <ul>
@@ -353,16 +380,16 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
   </article>
 
   <article class="qa" id="q1-8">
-    <h3><span class="qn">1.8</span>What is IMDS?</h3>
+    <h3><span class="qn">1.10</span>What is IMDS?</h3>
     <div class="ans">
-      <p>The EC2 Instance Metadata Service, at <code>http://169.254.169.254</code> from inside any EC2 instance. Among other things it hands out the instance's IAM role credentials.</p>
+      <p>The EC2 Instance Metadata Service, at <code>http://169.254.169.254</code> from inside any EC2 instance. Among other things it hands out the instance's IAM role credentials; <a href="#q-iam-role">1.3</a> covers how, including IMDSv2 tokens and the hop limit.</p>
       <p>That makes it a target: a pod on the node that reaches it gets the node's credentials.</p>
-      <aside class="note crucible"><b class="lab">In Crucible</b><p>On Crucible's node, those credentials can assume the lab, ops and plan roles. So:</p><ul><li>lab pods' NetworkPolicy blocks egress to 169.254.169.254;</li><li>pods set <code>AWS_EC2_METADATA_DISABLED</code>;</li><li>an init container makes the pod wait until the block is in place.</li></ul><p><code>cluster-check</code> proves the block with a stand-in metadata server on kind.</p></aside>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Those credentials can assume the lab, ops and plan roles, so lab pods are blocked from IMDS (a NetworkPolicy, <code>AWS_EC2_METADATA_DISABLED</code> and an init-container guard). <code>cluster-check</code> proves the block on kind.</p></aside>
     </div>
   </article>
 
   <article class="qa" id="q1-9">
-    <h3><span class="qn">1.9</span>What does "a shell through SSM" mean?</h3>
+    <h3><span class="qn">1.11</span>What does "a shell through SSM" mean?</h3>
     <div class="ans">
       <p>SSM is AWS Systems Manager; the shell comes from its <strong>Session Manager</strong> feature.</p>
       <ol>
@@ -376,12 +403,22 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
           </ul>
         </li>
       </ol>
+      <p>Session Manager is one part of Systems Manager. <strong>Parameter Store</strong> keeps settings and secrets, encrypted, and <strong>Run Command</strong> runs a script on instances remotely, both gated by IAM.</p>
       <p><strong>Port forwarding</strong> works the same way and reaches a private app from your laptop without a VPN:</p>
       <pre><code>aws ssm start-session --target &lt;node-instance-id&gt; \
   --document-name AWS-StartPortForwardingSession \
   --parameters 'portNumber=80,localPortNumber=8080'
 # then open http://localhost:8080</code></pre>
       <p>That's for admins and testing, not for handing to trainees.</p>
+    </div>
+  </article>
+
+  <article class="qa" id="q-terraform-state">
+    <h3><span class="qn">1.12</span>What is Terraform, and what is its state file?</h3>
+    <div class="ans">
+      <p>Terraform creates infrastructure from text files. <code>plan</code> shows what would change, <code>apply</code> does it, <code>destroy</code> removes it. It records what it made in a <strong>state file</strong>, which is how it later changes or deletes exactly those resources and nothing else.</p>
+      <p>Lose the state and Terraform no longer knows what it owns. Teams keep it in a shared, versioned place such as an S3 bucket.</p>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible's own infrastructure and every AWS lab are Terraform. Each lab has its own state file, <code>labs/&lt;id&gt;.tfstate</code>, so destroying one lab touches only that lab.</p></aside>
     </div>
   </article>
 </section>
@@ -545,7 +582,7 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
           <tr><td>Crucible today: <code>crucible-web</code></td><td>80, 443 from anywhere; no SSH (shell via SSM)</td><td>everything</td></tr>
           <tr><td>ALB design: <code>alb-sg</code></td><td>443 (and 80, for the redirect) from anywhere if public, or from VPN and office ranges if internal</td><td>port 80 to <code>node-sg</code> only</td></tr>
           <tr><td>ALB design: <code>node-sg</code></td><td>port 80 from <code>alb-sg</code> only</td><td>everything, then through the Network Firewall</td></tr>
-          <tr><td>Each AWS lab</td><td>its own group, tagged with its lab id (1.6)</td><td>as the lab defines</td></tr>
+          <tr><td>Each AWS lab</td><td>its own group, tagged with its lab id (1.7)</td><td>as the lab defines</td></tr>
         </tbody>
       </table></div>
     </div>
@@ -956,7 +993,7 @@ reply: VPC route 192.168.0.0/16 → TGW → VPN attachment → tunnel → office
       <p><strong>First ask whether one exists.</strong> In a spoke-and-hub organization, the company VPN usually already reaches the spokes through the Transit Gateway. Then it's a route and a firewall rule for <code>10.2.128.0/22</code>, done by the networking team.</p>
       <p>If you need your own, from smallest to largest:</p>
       <ol>
-        <li><strong>SSM port forwarding</strong>, just for admins and testing (1.9). No VPN at all.</li>
+        <li><strong>SSM port forwarding</strong>, just for admins and testing (1.11). No VPN at all.</li>
         <li><strong>AWS Client VPN</strong>, managed OpenVPN for individual people:
           <ul>
             <li>a server certificate in ACM;</li>

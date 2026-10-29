@@ -149,8 +149,8 @@ svg .ahm { fill: var(--muted); }
     <span class="eyebrow">Crucible · operator walkthrough</span>
     <h1>Deploying Crucible on AWS</h1>
     <p class="lede">Every step from an empty AWS account to your first training: the exact commands, what each one creates, what you
-      should see, how to check it worked, and what to do when it didn't. For what each AWS service is, read the
-      <a href="aws-guide.html">AWS guide</a>. For the full drawings, read the <a href="deploy-architecture.html">deploy architecture</a>.</p>
+      should see, how to check it worked, and what to do when it didn't. For what each AWS service is, read
+      <a href="deploy-architecture.html#components">every component</a>; for generic AWS and networking ideas, the <a href="aws-primer.html">AWS primer</a>. For the full drawings, read the <a href="deploy-architecture.html">deploy architecture</a>.</p>
     <nav class="toc" aria-label="Sections">
       <a href="#overview">What you'll end up with</a>
       <a href="#before">Before you start</a>
@@ -279,7 +279,7 @@ svg .ahm { fill: var(--muted); }
       <div><h3>What it costs</h3><p>The design's estimate for <code>eu-west-1</code>, on demand: the <code>t3a.xlarge</code> node about $40 a month when it
         sleeps outside working hours (11 h × 22 days), about $119 if it runs 24/7. Add the 60 GiB disk (about $5.30), the Elastic IP
         (about $3.70) and S3 (under $1). That makes <b>about $50 a month</b> on the schedule, <b>about $130</b> around the clock, plus
-        what labs spend. Asleep, it costs about $10 a month. Check current AWS prices; the <a href="aws-guide.html#components">AWS guide</a> has the table.</p></div>
+        what labs spend. Asleep, it costs about $10 a month. Check current AWS prices; <a href="deploy-architecture.html#components">Every component</a> has the table.</p></div>
       <div><h3>The cost drivers</h3><p>The instance type and how many hours it runs. <code>t3a</code> instances also bill surplus CPU credits if they stay busy
         above their baseline (40% for <code>t3a.xlarge</code>), about $0.05 per vCPU-hour; watch the <code>CPUSurplusCreditsCharged</code> metric.
         Cognito, the scheduler, SSM and the lab account's billing export and Budget are free at this size.</p></div>
@@ -318,7 +318,8 @@ crucible aws status            <span class="c"># before init, this fails with "d
     <div class="cols">
       <div><h3>AWS permissions</h3><p>Use administrator rights in the account. The stacks create S3 buckets, a Cognito user pool, SSM parameters,
         IAM roles and policies, an EC2 instance, a security group, an Elastic IP, EventBridge Scheduler schedules and, optionally, a
-        Route 53 record. Day to day you also run SSM commands and start and stop the instance. The runbook gives no minimal policy.</p></div>
+        Route 53 record. Day to day you also run SSM commands and start and stop the instance. The runbook gives no minimal policy.</p>
+        <p>These are your own role's permissions. The node and the lab roles are made by the stacks; see <a href="deploy-architecture.html#iam-roles">IAM roles</a>.</p></div>
       <div><h3>A domain you control</h3><p>Pick the final hostname now, such as <code>crucible.example.com</code>. The Cognito sign-in callback is
         built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
         give Terraform a Route 53 hosted zone that holds the name.</p></div>
@@ -340,7 +341,7 @@ aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if the
     <ol class="steps">
       <li><h3>Run init <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
-        <p>Both flags are required. It runs <code>terraform init</code>, then <code>terraform apply</code> in <code>deploy/aws/persistent</code>.
+        <p>Runs with your own role. Both flags are required. It runs <code>terraform init</code>, then <code>terraform apply</code> in <code>deploy/aws/persistent</code>.
           Terraform shows the plan and asks <code>Enter a value:</code>. Read it, then type <code>yes</code>. In a fresh account the plan
           adds 14 resources:</p>
         <ul class="muted">
@@ -354,7 +355,7 @@ aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if the
             deploy keys Crucible stores. Terraform never changes or deletes it once made.</li>
         </ul>
         <p>Every resource has <code>prevent_destroy</code> or deletion protection. To see each one's settings, read
-          <code>docs/runbooks/cognito.md</code> and the <a href="aws-guide.html#components">AWS guide</a>.</p></li>
+          <code>docs/runbooks/cognito.md</code> and the <a href="deploy-architecture.html#components">every component</a>.</p></li>
       <li><h3>Check it worked</h3>
         <div class="cmd"><pre><code>terraform -chdir=deploy/aws/persistent output
 curl -s "$(terraform -chdir=deploy/aws/persistent output -raw oidc_issuer)/.well-known/openid-configuration" | jq .issuer
@@ -445,11 +446,10 @@ schedule_timezone = "Europe/Bucharest"
         <p>If it can read <code>deploy/aws/labs</code>'s outputs, it turns AWS labs on. If it can't, and labs are off, it leaves them off
           without an error. If labs are already on and it can't read the outputs, it stops (see <a href="#labs">AWS labs</a>).</p></li>
       <li><h3>Applies <span class="lane aws">main account</span></h3>
-        <p>Terraform shows the plan and asks for <code>yes</code>. It creates:</p>
+        <p>Runs with your own role, which creates the node role below. Terraform shows the plan and asks for <code>yes</code>. It creates:</p>
         <ul class="muted">
           <li>a security group <code>crucible-web</code>: 80 and 443 in from anywhere, no SSH (the shell goes through SSM);</li>
-          <li>the node role and instance profile <code>crucible-node</code>: SSM access, reads the data bucket and <code>/crucible/*</code>,
-            writes only <code>snapshots/</code>, <code>latest/</code> and <code>uploads/</code>, and, with labs on, may assume the lab account's roles;</li>
+          <li>the node role and instance profile <code>crucible-node</code>: the identity the node uses for S3, SSM and, with labs on, the lab roles (what it may do: <a href="deploy-architecture.html#iam-roles">IAM roles</a>);</li>
           <li>SSM parameters: <code>/crucible/env</code> and <code>/crucible/helm-values</code> (settings), and five SecureStrings
             (see <a href="#secrets">Secrets</a>);</li>
           <li>the EC2 node <code>crucible</code>: the current Ubuntu 24.04 amd64 image, IMDSv2 only, an encrypted gp3 disk;</li>
@@ -524,7 +524,7 @@ schedule_timezone = "Europe/Bucharest"
         then <code>helm package deploy/helm/crucible</code>. Everything goes to <code>.local/release/</code>.</p></li>
       <li><h3>Uploads <span class="lane aws">data bucket</span></h3><p><code>releases/&lt;sha&gt;/crucible-image.tar.gz</code>, <code>releases/&lt;sha&gt;/chart.tgz</code>, then
         <code>current-release</code>, which names the sha. It prints <span class="out">release &lt;sha&gt; published; rolling out…</span>. There's no container registry.</p></li>
-      <li><h3>Rolls out <span class="lane k8s">node, via SSM</span></h3><p><code>aws ssm send-command</code> waits for <code>.ready</code>, then runs
+      <li><h3>Rolls out <span class="lane k8s">node, via SSM</span></h3><p>Your role sends the command; the node runs it with the node role. <code>aws ssm send-command</code> waits for <code>.ready</code>, then runs
         <code>/opt/crucible/deploy.sh</code>. That re-reads <code>/crucible/env</code>, downloads the release, imports the image into k3s,
         rebuilds the <code>crucible-secrets</code> Secret from SSM, and runs <code>helm upgrade --install</code> with <code>/crucible/helm-values</code>.</p></li>
       <li><h3>Checks health</h3><p>Polls <code>/healthz</code> as <code>up</code> does, and prints <span class="out">&lt;sha&gt; is live at &lt;url&gt;</span>.</p></li>
@@ -537,7 +537,7 @@ schedule_timezone = "Europe/Bucharest"
     <div class="cmd"><pre><code>crucible aws status
 curl -fsS -o /dev/null -w '%{http_code}\n' https://crucible.example.com/healthz      <span class="c"># 200</span>
 aws s3 cp "s3://$(terraform -chdir=deploy/aws/persistent output -raw data_bucket)/current-release" -   <span class="c"># the sha you shipped</span></code></pre></div>
-    <p>Then look inside the node. Open a shell over SSM (no SSH port is open):</p>
+    <p>Then look inside the node. Open a shell over SSM (no SSH port is open; <a href="aws-primer.html#q1-9">how a Session Manager shell works</a>):</p>
     <div class="cmd"><pre><code>aws ssm start-session --region eu-west-1 --target "$(terraform -chdir=deploy/aws/main output -raw instance_id)"</code></pre></div>
     <div class="cmd"><pre><code>sudo k3s kubectl -n crucible get pods                         <span class="c"># crucible and postgres Running</span>
 sudo k3s kubectl -n crucible get deploy crucible -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
@@ -626,9 +626,10 @@ smtp_password = "…"                                         <span class="c"># 
     <div class="head"><span class="eyebrow">deploy/aws/labs · optional</span><h2 id="labs-h">Optional: AWS labs</h2>
       <p>Do this after Crucible itself works. AWS labs run Terraform in the lab account with one-hour credentials scoped to one lab. Crucible
         prices them itself from the public AWS Price List, meters them from each lab's Terraform state, then replaces that with the free
-        billing export. How it all works: <a href="aws-guide.html#labs">AWS guide</a>.</p></div>
+        billing export. How it works, and what the permission boundary allows: <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a> and <a href="deploy-architecture.html#iam-fence">the IAM fence</a>.</p></div>
     <ol class="steps">
       <li><h3>Run labs-init <span class="lane aws">lab account credentials</span></h3>
+        <p>Runs with your own role in the lab account; it creates the lab, ops and plan roles (<a href="deploy-architecture.html#iam-roles">IAM roles</a>).</p>
         <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1 \
   --crucible-account 111122223333 \
   --budget-usd 200 --budget-email ops@example.com</code></pre></div>
@@ -658,6 +659,7 @@ smtp_password = "…"                                         <span class="c"># 
           after a tagged resource has existed, which can take up to 24 hours, so come back after your first lab. Activation isn't
           retroactive unless you ask for a backfill. Until it's active, billed spend stays empty and the Ledger shows metered spend.</p></li>
       <li><h3>Wire it in <span class="lane aws">Crucible account credentials</span></h3>
+        <p>Your own role again; from then on the node role assumes the lab roles.</p>
         <div class="cmd"><pre><code>crucible aws up</code></pre></div>
         <p>Run it on the machine that holds the labs state. <code>up</code> reads its outputs (the roles, state bucket, regions, plan role and
           export) and turns AWS labs on. Check the node afterwards: <code>systemctl is-active sysbox</code> must print <code>active</code>.</p></li>
@@ -699,12 +701,14 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <tr><th scope="row">Is it up?</th><td><code>crucible aws status</code></td><td>Instance state, URL and <code>healthz</code>.</td></tr>
         <tr><th scope="row">A shell on the node</th><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>As <code>ssm-user</code>; use <code>sudo k3s kubectl</code>. The id is <code>terraform -chdir=deploy/aws/main output -raw instance_id</code>.</td></tr>
         <tr><th scope="row">Change a setting</th><td>edit <code>crucible.tfvars</code>, then <code>crucible aws up</code></td><td>Snapshot, apply, redeploy.</td></tr>
+        <tr><th scope="row">Remove the server</th><td><code>crucible aws teardown --yes</code></td><td>Final snapshot, then destroys the main stack. Buckets, Cognito, the secret key and the labs stack stay. See <a href="#teardown">Teardown</a>.</td></tr>
+        <tr><th scope="row">Bring it back</th><td><code>crucible aws up</code></td><td>A new node restores the newest snapshot. The Elastic IP changes: update DNS.</td></tr>
         <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
       </tbody>
     </table></div>
     <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The
       nightly backup runs at <b>19:15</b>: a <code>pg_dump</code> to <code>snapshots/</code> in the data bucket (kept 30 days) and a copy to
-      <code>latest/crucible-latest.dump</code>, which never expires. Trainees' uploads live under <code>uploads/</code>, with no expiry.</p>
+      <code>latest/crucible-latest.dump</code>, which never expires, so a long teardown can still be restored. Your own role runs <code>snapshot</code>, <code>sleep</code> and <code>wake</code>; the node role does the backup (<a href="deploy-architecture.html#backups">backups</a>, <a href="deploy-architecture.html#iam-roles">IAM roles</a>). Trainees' uploads live under <code>uploads/</code>, with no expiry.</p>
   </section>
 
   <!-- ───────────── 10. upgrade ───────────── -->
@@ -909,7 +913,7 @@ sudo k3s kubectl -n crucible-estimates get pods</code></pre></div>
     <span>Checked against <code>docs/runbooks/aws.md</code>, <code>docs/runbooks/cognito.md</code>, <code>deploy/aws/{persistent,main,labs}</code>,
       <code>internal/awsops</code>, <code>cmd/crucible</code> and <code>deploy/helm/crucible</code> on branch <code>feat/free-finops-terraform-mode</code>.
       Where this page and the runbook disagree, the runbook wins.</span>
-    <span>Concepts: <a href="aws-guide.html">AWS guide</a>. Drawings: <a href="deploy-architecture.html">deploy architecture</a>.</span>
+    <span>Concepts: <a href="aws-primer.html">AWS primer</a>, <a href="deploy-architecture.html#components">every component</a>. Drawings: <a href="deploy-architecture.html">deploy architecture</a>.</span>
   </footer>
 </main>
 

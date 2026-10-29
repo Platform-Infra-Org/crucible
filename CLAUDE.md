@@ -10,24 +10,20 @@ writes content edits back to git as a bot. Configuration and people live in Post
   `docs/superpowers/plans/2026-10-05-crucible-roadmap.md`
 - Per-milestone plans: `docs/superpowers/plans/`; rulings made during the build: `docs/superpowers/rulings-m3-m7.md`
 - Operator guides: `docs/runbooks/aws.md`, `docs/runbooks/cognito.md`
-- AWS for newcomers: `docs/aws-guide.html` — every AWS component, an architecture diagram, deploying step by step, and
-  how AWS labs use Terraform and IAM. Update it when `deploy/aws` or the AWS lab path changes.
-- AWS deployment walkthrough: `docs/aws-deploy.html` — every `crucible aws` step in order, from `init` to the first sign-in,
-  AWS labs, upgrades, teardown and troubleshooting, with how to check each one. Update it when `deploy/aws`,
-  `internal/awsops` or `docs/runbooks/aws.md` changes.
-- Terraform or Crossplane for AWS labs: `docs/terraform-vs-crossplane.html` — how each would run a lab, with diagrams,
-  and the trade-offs here.
-- Deploy architecture: `docs/deploy-architecture.html` — diagrams of the local stack, `cluster-check`, production on AWS
-  (the three stacks, the k3s node, RBAC and admission), an AWS lab's life and shipping a release. Update it when
-  `deploy/` changes.
-- Reaching the app over SSM: `docs/ssm-access.html` — why the VPC has no inbound path, how a Session Manager port-forward
-  tunnel reaches the k3s node, the one-time setup and the connect script, and what it does not solve.
-- AWS and networking primer: `docs/aws-primer.html` — questions and answers with diagrams, in eight chapters: IAM and
-  SCPs, VPC networking and our org's spoke VPC, exposing an internal app (ALB, WAF, ACM), VPNs and Transit Gateway,
-  Tailscale and Cloudflare Tunnel, WebSockets and timeouts, Kubernetes networking (Traefik, klipper-lb, kube-proxy,
-  CNI), and sign-in. Update it when the facts it states about `deploy/` or our account change.
-- Manual test guide: `docs/test-guide.html` — what Crucible does, how AWS labs work, and a checklist of every capability
-  from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
+- Docs pages (`docs/*.html`), one job each; a topic lives in full on one page, and the others link to it:
+  - `docs/aws-primer.html`: AWS, networking and Kubernetes concepts as questions and answers with diagrams (IAM roles,
+    SCPs, VPCs and our org's spoke VPC, ALB/WAF/ACM, VPNs and Transit Gateway, Tailscale and Cloudflare Tunnel,
+    WebSockets, Traefik/klipper-lb/kube-proxy/CNI, sign-in). Update it when the facts it states about our account change.
+  - `docs/deploy-architecture.html`: how Crucible is built: the local stack, `cluster-check`, production on AWS (every
+    component and its cost, the k3s node, RBAC and admission, backups), IAM roles (who acts as whom, and when), the IAM
+    fence, an AWS lab's life, shipping a release, limits. Update it when `deploy/` or the AWS lab path changes.
+  - `docs/aws-deploy.html`: every `crucible aws` step in order, from `init` to the first sign-in, AWS labs, upgrades,
+    teardown and troubleshooting, with how to check each one. Update it when `deploy/aws`, `internal/awsops` or
+    `docs/runbooks/aws.md` changes.
+  - `docs/ssm-access.html`: reaching the app over a Session Manager port-forward when the VPC has no inbound path.
+  - `docs/terraform-vs-crossplane.html`: how each would run an AWS lab, with diagrams, and the trade-offs here.
+  - `docs/test-guide.html`: the manual test guide: what Crucible does in brief, and a checklist of every capability
+    from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 
 ## Toolchain
 

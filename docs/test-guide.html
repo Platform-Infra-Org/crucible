@@ -91,10 +91,6 @@ section > h2::after { content: ''; display: block; width: 2.5rem; height: 3px; m
 .pour li:not(:last-child)::after { content: ''; position: absolute; left: 1.08rem; top: 2.2rem; bottom: 0; width: 2px; background: linear-gradient(var(--accent), var(--border)); }
 .pour h3 { font-family: var(--body); font-size: 1rem; font-weight: 600; letter-spacing: 0; margin-top: 0.3rem; }
 .pour p { margin: 0.2rem 0 0; color: var(--muted); max-width: 70ch; }
-.guards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.6rem 1.5rem; padding: 1rem 1.2rem; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin: 0; }
-.guards div { min-width: 0; }
-.guards dt { font-weight: 600; }
-.guards dd { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.92rem; }
 .table-wrap { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
 th, td { text-align: left; padding: 0.6rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
@@ -226,51 +222,18 @@ body.hide-done .item.done { display: none; }
       <!-- ───────────── cloud labs ───────────── -->
       <section id="cloud">
         <h2>How cloud labs work</h2>
-        <p class="lede">An AWS lab is a Terraform module in the training repo plus tasks and check scripts. Crucible never lets it run without a
-          price, a person's approval and a way to clean up everything it made. Here is one lab's life.</p>
+        <p class="lede">An AWS lab is a Terraform module in the training repo plus tasks and check scripts. Crucible never runs one without a
+          price, a person's approval and a way to clean up everything it made. Phases 9a and 9b check each stage:</p>
         <ol class="pour">
-          <li><h3>The trainee asks</h3>
-            <p>The lab page shows an estimate. Crucible runs a read-only <code>terraform plan</code> of the lab once per content version, prices
-              each resource from the AWS list prices it downloads weekly, and multiplies the hourly total by the lab's time limit; <b>How this
-              estimate was worked out</b> shows it resource by resource. A lab above its own <code>max_hourly_usd</code>, in a region this Crucible
-              doesn't allow, with a resource Crucible can't price, or while the price data is missing or over 30 days old can't be requested.</p></li>
-          <li><h3>A person approves</h3>
-            <p>AWS labs never start on their own. The estimate picks the tier: the training's admins, the owning team's leaders, then a Crucible admin. A request that would pass a
-              team or program budget cap needs an admin, as an audited override. Unanswered requests move up a tier after the escalation hours,
-              counted only inside the program's schedule.</p></li>
-          <li><h3>Credentials for one lab</h3>
-            <p>Crucible assumes the lab role with AWS STS, tagging the session <code>crucible:lab-id=&lt;id&gt;</code>. The one-hour credentials are
-              refreshed for as long as the lab runs. A permission boundary limits them to EC2 and S3, small instance types and the allowed regions; IAM
-              refuses any create without the lab's own tag, and any change to another lab's resources.</p></li>
-          <li><h3>Terraform builds it</h3>
-            <p>In the lab's namespace on Crucible's cluster, a <code>tf-apply</code> pod runs <code>terraform apply</code>. Crucible adds its own
-              <code>crucible.tf</code> to the module: an S3 state backend keyed by the lab id, and the AWS provider with default tags
-              <code>crucible:lab-id</code>, <code>crucible:team</code> and <code>crucible:training</code>. Modules may not declare their own provider or backend.
-              After the lab's apply, and every 15 minutes while it runs, Crucible reads the lab's state and meters what it built at list prices.</p></li>
-          <li><h3>The trainee works</h3>
-            <p>A workspace pod with the AWS CLI, Terraform and kubectl backs the terminals. Checks and setup scripts run there with the lab's
-              credentials, out of the trainee's sight. The pods can't reach the node's metadata service, so they can never borrow the node's role.</p></li>
-          <li><h3>It ends, and is cleaned up</h3>
-            <p>The time limit, the idle timeout, the schedule closing, a budget cap, <b>End lab</b> or the kill switch all end it the same way:
-              <code>terraform destroy</code>, then a tag sweep deletes anything else carrying the lab's id, including what the trainee made by hand
-              and instances with termination protection.</p></li>
-          <li><h3>The reaper checks hourly</h3>
-            <p>Anything tagged with a lab that ended over an hour ago is deleted. Resources tagged with a lab Crucible doesn't know, and untagged
-              creates seen in CloudTrail, are reported to admins instead.</p></li>
-          <li><h3>The real bill arrives</h3>
-            <p>AWS writes the account's bill into a free billing export (CUR 2.0) every day; every six hours Crucible reads it and adds it up by the
-              <code>crucible:lab-id</code> cost-allocation tag. The Ledger shows a lab's estimate, its metered cost while it runs, and its billed cost,
-              which replaces the metered one once it settles (48 hours after the lab ends). No Cost Explorer. A free AWS Budget emails admins as a
-              backstop.</p></li>
+          <li><h3>Ask and approve</h3><p>The trainee sees an estimate and requests the lab; a person at the right cost tier approves.</p></li>
+          <li><h3>Build and work</h3><p>Crucible assumes a role scoped to this one lab, and Terraform builds it. The trainee works in a workspace pod.</p></li>
+          <li><h3>End and clean up</h3><p><code>terraform destroy</code>, a tag sweep, and an hourly reaper for anything left.</p></li>
+          <li><h3>Settle the bill</h3><p>The Ledger shows the estimate, the metered cost, then the billed cost once it settles.</p></li>
         </ol>
-
-        <h3 style="font-size:1.15rem;margin:1.5rem 0 0.75rem">The guardrails</h3>
-        <dl class="guards">
-          <div><dt>Tags are compulsory</dt><dd>EC2 creates without <code>crucible:lab-id</code> are denied, lab tags can't be removed, and every instance must use the lab's own security group.</dd></div>
-          <div><dt>Small and close</dt><dd>Small instance types, gp3 volumes of limited size, allowed regions only, no dedicated tenancy, no IAM.</dd></div>
-          <div><dt>Budgets fail closed</dt><dd>If Crucible can't read spend, it starts nothing. A running lab ends when its cost would reach a cap.</dd></div>
-          <div><dt>Isolation is best effort</dt><dd>Labs share one account. Trainees can read account-wide <code>Describe</code> calls and their own Terraform state, so use a dedicated sandbox account and keep secrets out of state.</dd></div>
-        </dl>
+        <p>How it is built is in <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a>. The roles are in
+          <a href="deploy-architecture.html#iam-roles">IAM roles</a>, and what the boundary forbids is in
+          <a href="deploy-architecture.html#iam-fence">the IAM fence</a>. Deploying the labs stack is in
+          <a href="aws-deploy.html#labs">AWS labs setup</a>. Labs share one account, so use a dedicated sandbox and keep secrets out of Terraform state.</p>
 
         <h3 style="font-size:1.15rem;margin:1.75rem 0 0">Three ways to run AWS labs</h3>
         <div class="table-wrap"><table>

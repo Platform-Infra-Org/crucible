@@ -9,6 +9,7 @@ need 'kind: CronJob'
 need 'pg_dump -h postgres -U crucible -Fc crucible'
 need "to_regclass('public.users')"                       # restore only into an empty database
 need 'router.tls.certresolver: le'
+need 'router.entrypoints: websecure'
 need 'host: crucible.example.com'
 need 'imagePullPolicy: Never'
 need 'type: Recreate'
@@ -32,6 +33,14 @@ need 'name: CRUCIBLE_LAB_CLUSTER'
 need 'requests: { cpu: 500m, memory: 1Gi }, limits: { cpu: 500m, memory: 1Gi }'   # postgres: Guaranteed QoS
 need 'requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: 250m, memory: 512Mi }'  # api: Guaranteed QoS
 base="--set backup.bucket=b --set backup.region=eu-west-1 --set oidc.issuer=https://sso"
+# access = ssm: plain HTTP on Traefik's web entrypoint, any Host (through the tunnel it is localhost:<port>).
+plain=$(helm template t "$chart" $base --set tls.enabled=false --set host= --set publicURL=http://localhost:18080)
+ing=$(sed -n '/^kind: Ingress$/,/^---$/p' <<<"$plain")
+grep -q 'router.entrypoints: web$' <<<"$ing" || { echo "tls off: the Ingress must use the web entrypoint"; exit 1; }
+if grep -qE 'router.tls|certresolver|^ *host:' <<<"$ing"; then echo "tls off: no TLS, no cert resolver, no host rule"; exit 1; fi
+grep -q 'CRUCIBLE_PUBLIC_URL, value: "http://localhost:18080"' <<<"$plain" || { echo "tls off: the API's public URL is the localhost one"; exit 1; }
+if helm template t "$chart" $base --set tls.enabled=false >/dev/null 2>&1; then echo "tls off with an https publicURL must fail"; exit 1; fi
+if helm template t "$chart" $base --set publicURL=http://localhost:18080 >/dev/null 2>&1; then echo "an http publicURL with tls on must fail"; exit 1; fi
 if grep -q CRUCIBLE_BOOTSTRAP_ADMIN <<<"$out"; then echo "bootstrap admin is opt-in"; exit 1; fi
 boot=$(helm template t "$chart" $base --set bootstrapAdmin=boss@example.com)
 grep -q 'name: CRUCIBLE_BOOTSTRAP_ADMIN, value: "boss@example.com"' <<<"$boot" || { echo "missing: bootstrap admin env"; exit 1; }

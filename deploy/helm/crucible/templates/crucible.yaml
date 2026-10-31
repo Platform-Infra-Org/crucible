@@ -124,18 +124,27 @@ spec:
   selector: { app: crucible }
   ports: [{ port: 80, targetPort: 8080 }]
 ---
+{{- if ne .Values.tls.enabled (hasPrefix "https://" .Values.publicURL) }}
+{{- fail (printf "tls.enabled=%v does not match publicURL %s: https needs TLS and http needs it off, or sign-in breaks" .Values.tls.enabled .Values.publicURL) }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: crucible
   annotations:
+    {{- if .Values.tls.enabled }}
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/router.tls.certresolver: {{ .Values.tls.certResolver }}
+    {{- else }}
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    {{- end }}
 spec:
   ingressClassName: traefik
   rules:
-    - host: {{ .Values.host }}
+    - {{- with .Values.host }}
+      host: {{ . }}
+      {{- end }}
       http:
         paths:
           - path: /

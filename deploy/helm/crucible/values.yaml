@@ -2,7 +2,7 @@ image:
   repository: docker.io/library/crucible   # imported into containerd from the S3 release tarball
   tag: dev
   pullPolicy: Never
-host: crucible.example.com
+host: crucible.example.com   # empty: the Ingress matches any Host (access = ssm, reached through a tunnel)
 publicURL: https://crucible.example.com
 syncInterval: 60s            # how often training content is fetched from git; configuration lives in Postgres
 bootstrapAdmin: ""            # first start only: seeds the first admin into an empty admins table. The only thing a fresh install needs (spec §5.1)
@@ -14,6 +14,7 @@ oidc:
   clientId: crucible
 secretName: crucible-secrets
 tls:
+  enabled: true              # false: plain HTTP on Traefik's web entrypoint (access = ssm); must match publicURL's scheme
   certResolver: le
 postgres:
   image: postgres:18-alpine

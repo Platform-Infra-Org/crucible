@@ -160,6 +160,16 @@ variable "lab_export_name" {
   type    = string
   default = ""
 }
+variable "lab_vpc_id" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: the VPC lab modules launch into (empty: the default VPC)"
+}
+variable "lab_subnet_ids" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: comma-separated subnets lab modules launch into"
+}
 variable "bootstrap_admin" {
   type        = string
   default     = ""

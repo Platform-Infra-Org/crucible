@@ -68,6 +68,37 @@ variable "max_volume_gib" {
   description = "Largest EBS volume a lab may create (gp2/gp3 only, baseline IOPS and throughput)"
 }
 
+# Where lab modules launch into when the account has no default VPC (`crucible aws labs-init --vpc-id --subnet-ids`).
+# Crucible hands them to every lab as var.crucible_vpc_id and var.crucible_subnet_ids. Empty: labs use the default VPC.
+variable "lab_vpc_id" {
+  type    = string
+  default = ""
+  validation {
+    condition     = var.lab_vpc_id == "" || can(regex("^vpc-[0-9a-f]+$", var.lab_vpc_id))
+    error_message = "lab_vpc_id must be vpc-<hex>"
+  }
+}
+variable "lab_subnet_ids" {
+  type    = list(string)
+  default = []
+  validation {
+    condition     = alltrue([for s in var.lab_subnet_ids : can(regex("^subnet-[0-9a-f]+$", s))]) && (length(var.lab_subnet_ids) == 0) == (var.lab_vpc_id == "")
+    error_message = "lab_subnet_ids must be subnet-<hex> values, given together with lab_vpc_id (both or neither)"
+  }
+}
+
+# Each lab subnet must exist in this region and sit in lab_vpc_id: a lab would otherwise fail at apply.
+data "aws_subnet" "lab" {
+  for_each = toset(var.lab_subnet_ids)
+  id       = each.value
+  lifecycle {
+    postcondition {
+      condition     = self.vpc_id == var.lab_vpc_id
+      error_message = "subnet ${self.id} is in ${self.vpc_id}, not ${var.lab_vpc_id}"
+    }
+  }
+}
+
 # AWS Data Exports (CUR 2.0) exist only in us-east-1; the export's S3 bucket may be anywhere.
 provider "aws" {
   alias  = "billing"
@@ -410,6 +441,8 @@ output "export_prefix" { value = "cur" }
 output "export_name" { value = local.export }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "state_region" { value = var.region }
+output "lab_vpc_id" { value = var.lab_vpc_id }
+output "lab_subnet_ids" { value = join(",", var.lab_subnet_ids) }
 output "regions" { value = join(",", local.regions) }
 # labs-init passes these back when re-run without --budget-usd/--budget-email, so a re-run keeps the budget.
 output "budget_monthly_usd" { value = var.budget_monthly_usd }

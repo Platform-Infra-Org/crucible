@@ -199,7 +199,7 @@ run "aws_labs_wiring" {
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
@@ -445,5 +445,25 @@ run "deploy_script_reads_the_url_from_env" {
   assert {
     condition     = strcontains(aws_instance.node.user_data, "publicURL=\"$${PUBLIC_URL:-https://$DOMAIN}\"") && strcontains(aws_instance.node.user_data, "host=\"$${HOST-$DOMAIN}\"") && strcontains(aws_instance.node.user_data, "tls.enabled=\"$${TLS_ENABLED:-true}\"")
     error_message = "deploy.sh takes the URL, host and TLS from /<name>/env, falling back to today's https://$DOMAIN"
+  }
+}
+
+run "lab_network_reaches_helm" {
+  command = plan
+  variables {
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "il-central-1"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_name   = "crucible-labs"
+    lab_vpc_id        = "vpc-0abc"
+    lab_subnet_ids    = "subnet-01,subnet-02"
+  }
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.vpcId == "vpc-0abc" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.subnetIds == "subnet-01,subnet-02"
+    error_message = "the lab network reaches the Helm values"
   }
 }

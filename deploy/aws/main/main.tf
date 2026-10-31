@@ -139,6 +139,9 @@ resource "aws_ssm_parameter" "helm_values" {
       exportBucket = var.lab_export_bucket
       exportPrefix = var.lab_export_prefix
       exportName   = var.lab_export_name
+      # where lab modules launch (var.crucible_vpc_id, var.crucible_subnet_ids); empty: the default VPC
+      vpcId     = var.lab_vpc_id
+      subnetIds = var.lab_subnet_ids
     }
   })
 }

@@ -103,6 +103,8 @@ spec:
             - { name: CRUCIBLE_AWS_EXPORT_BUCKET, value: {{ .Values.awsLabs.exportBucket | quote }} }
             - { name: CRUCIBLE_AWS_EXPORT_PREFIX, value: {{ .Values.awsLabs.exportPrefix | default "cur" | quote }} }
             - { name: CRUCIBLE_AWS_EXPORT_NAME, value: {{ .Values.awsLabs.exportName | quote }} }
+            - { name: CRUCIBLE_AWS_LAB_VPC_ID, value: {{ .Values.awsLabs.vpcId | quote }} }
+            - { name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: {{ .Values.awsLabs.subnetIds | quote }} }
             - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }   # STS regional endpoint
             {{- end }}
           readinessProbe:

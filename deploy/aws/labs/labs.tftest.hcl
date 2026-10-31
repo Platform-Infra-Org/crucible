@@ -8,6 +8,9 @@ mock_provider "aws" {
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::444455556666:role/crucible-lab" }
   }
+  mock_data "aws_subnet" {
+    defaults = { vpc_id = "vpc-0abc" }
+  }
 }
 
 # The billing-region provider alias (Data Exports live in us-east-1) is mocked too.
@@ -316,4 +319,43 @@ run "budget_emails_capped_at_ten" {
   command = plan
   variables { budget_emails = [for i in range(11) : "a${i}@example.com"] }
   expect_failures = [var.budget_emails]
+}
+
+run "no_lab_network_by_default" {
+  command = plan
+
+  assert {
+    condition     = output.lab_vpc_id == "" && output.lab_subnet_ids == ""
+    error_message = "without --vpc-id and --subnet-ids, labs use the default VPC"
+  }
+}
+
+run "lab_network_reaches_the_outputs" {
+  command = plan
+  variables {
+    lab_vpc_id     = "vpc-0abc"
+    lab_subnet_ids = ["subnet-01", "subnet-02"]
+  }
+
+  assert {
+    condition     = output.lab_vpc_id == "vpc-0abc" && output.lab_subnet_ids == "subnet-01,subnet-02"
+    error_message = "the lab network reaches the outputs `crucible aws up` passes on"
+  }
+}
+
+run "lab_network_is_both_or_neither" {
+  command = plan
+  variables {
+    lab_subnet_ids = ["subnet-01"]
+  }
+  expect_failures = [var.lab_subnet_ids]
+}
+
+run "lab_subnets_must_be_in_the_vpc" {
+  command = plan
+  variables {
+    lab_vpc_id     = "vpc-0other"
+    lab_subnet_ids = ["subnet-01"]
+  }
+  expect_failures = [data.aws_subnet.lab]
 }

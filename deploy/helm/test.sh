@@ -73,6 +73,10 @@ for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_A
   'name: CRUCIBLE_AWS_EXPORT_PREFIX, value: "cur"' 'name: CRUCIBLE_AWS_EXPORT_NAME, value: "crucible-labs"'; do
   grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
 done
+grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: ""' <<<"$awsout" || { echo "aws labs: an unset lab network is empty"; exit 1; }
+net=$(helm template t "$chart" $aws --set awsLabs.vpcId=vpc-0abc --set awsLabs.subnetIds=subnet-01\\,subnet-02)
+grep -q 'name: CRUCIBLE_AWS_LAB_VPC_ID, value: "vpc-0abc"' <<<"$net" || { echo "missing: lab VPC env"; exit 1; }
+grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: "subnet-01,subnet-02"' <<<"$net" || { echo "missing: lab subnets env"; exit 1; }
 # fixwave I1: the runner pod holds the lab credentials, so its images are pinned by digest, never a re-pushable tag.
 for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
   grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }

@@ -20,12 +20,13 @@ import (
 )
 
 type Ops struct {
-	Root   string // repo root
-	Exec   func(ctx context.Context, dir, name string, args ...string) error
-	Output func(ctx context.Context, dir, name string, args ...string) (string, error)
-	Sleep  func(time.Duration)
-	Get    func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
-	Log    io.Writer
+	Root     string // repo root
+	Exec     func(ctx context.Context, dir, name string, args ...string) error
+	Output   func(ctx context.Context, dir, name string, args ...string) (string, error)
+	Sleep    func(time.Duration)
+	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
+	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
+	Log      io.Writer
 }
 
 // Default runs real commands: Exec streams to the terminal, Output captures stdout.
@@ -47,8 +48,9 @@ func Default(root string) Ops {
 			}
 			return strings.TrimSpace(string(out)), err
 		},
-		Sleep: time.Sleep,
-		Log:   os.Stdout,
+		Sleep:    time.Sleep,
+		LookPath: exec.LookPath,
+		Log:      os.Stdout,
 	}
 }
 
@@ -626,4 +628,71 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot bool)
 	}
 	abs, _ := filepath.Abs(varFile)
 	return o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + o.dir("main"), "destroy", "-auto-approve", "-var-file=" + abs}, mainVars(p)...)...)
+}
+
+// ConnectOpts are `crucible aws connect`'s flags.
+type ConnectOpts struct {
+	Region, Name string
+	Port         int
+}
+
+// Connect opens a Session Manager port-forward from this laptop to the node's port 80, for access = ssm. It finds the
+// node by its Name tag, so it needs no Terraform state: a colleague needs only the crucible binary, the AWS CLI, the
+// Session Manager plugin and our SSO login. It runs in the foreground until Ctrl-C.
+func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
+	region := in.Region
+	if region == "" {
+		region, _ = o.Output(ctx, o.Root, "aws", "configure", "get", "region") // empty when none is set
+	}
+	if region == "" {
+		return errors.New("no region: pass --region (or set one with `aws configure set region …`)")
+	}
+	name := cmp.Or(in.Name, "crucible")
+	out, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", region,
+		"--filters", "Name=tag:Name,Values="+name, "Name=instance-state-name,Values=running",
+		"--query", "Reservations[].Instances[].[InstanceId,Tags[?Key==`crucible:public-url`]|[0].Value]", "--output", "text")
+	if err != nil {
+		return fmt.Errorf("finding the node: %w", err)
+	}
+	var nodes []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			nodes = append(nodes, l)
+		}
+	}
+	switch {
+	case len(nodes) == 0:
+		return fmt.Errorf("no running instance named %s in %s: if it's asleep, run `crucible aws wake`", name, region)
+	case len(nodes) > 1:
+		return fmt.Errorf("%d running instances are named %s in %s (%s): pass --name for the one you want", len(nodes), name, region, strings.Join(nodes, "; "))
+	}
+	f := strings.Fields(nodes[0])
+	id, url := f[0], ""
+	if len(f) > 1 && f[1] != "None" {
+		url = f[1]
+	}
+	switch {
+	case url == "":
+		return fmt.Errorf("%s has no crucible:public-url tag: run `crucible aws up` with this version of Crucible first", id)
+	case !strings.HasPrefix(url, "http://localhost:"):
+		return fmt.Errorf("this install has a public URL: open %s in a browser", url)
+	}
+	port, err := strconv.Atoi(strings.TrimPrefix(url, "http://localhost:"))
+	if err != nil {
+		return fmt.Errorf("%s's crucible:public-url %q isn't http://localhost:<port>", id, url)
+	}
+	if in.Port != 0 && in.Port != port {
+		return fmt.Errorf("crucible's address is %s: a different port (%d) breaks sign-in and saving, so use --port %d or leave it out", url, in.Port, port)
+	}
+	look := o.LookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	if _, err := look("session-manager-plugin"); err != nil {
+		return errors.New("the AWS Session Manager plugin isn't installed (session-manager-plugin): " +
+			"https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html")
+	}
+	fmt.Fprintf(o.Log, "Crucible is at %s while this runs; Ctrl-C closes it.\n", url)
+	return o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,
+		"--document-name", "AWS-StartPortForwardingSession", "--parameters", fmt.Sprintf("portNumber=80,localPortNumber=%d", port))
 }

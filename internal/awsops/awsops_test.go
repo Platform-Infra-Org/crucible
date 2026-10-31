@@ -19,6 +19,7 @@ type recorder struct {
 	noPackage bool                   // helm package produces nothing
 	log       bytes.Buffer
 	unhealthy bool // /healthz never answers
+	noPlugin  bool // session-manager-plugin is not installed
 }
 
 func (r *recorder) ops(root string) Ops {
@@ -50,6 +51,12 @@ func (r *recorder) ops(root string) Ops {
 		},
 		Sleep: func(time.Duration) {},
 		Log:   &r.log,
+		LookPath: func(string) (string, error) {
+			if r.noPlugin {
+				return "", errors.New("not found")
+			}
+			return "/usr/local/bin/session-manager-plugin", nil
+		},
 		Get: func(string) (*http.Response, error) {
 			if r.unhealthy {
 				return nil, errors.New("connection refused")
@@ -732,5 +739,91 @@ func TestUnregisteredNodeNamesTheFirewallHosts(t *testing.T) {
 	err := r.ops(t.TempDir()).Snapshot(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "ssmmessages.eu-west-1.amazonaws.com") || !strings.Contains(err.Error(), "network team") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// fakeNode answers connect's describe-instances with these "<id>\t<public-url tag>" lines.
+func fakeNode(lines string) func(string) string {
+	return func(cmd string) string {
+		if strings.Contains(cmd, "describe-instances") {
+			return lines
+		}
+		return fakeAWS(cmd)
+	}
+}
+
+func TestConnectForwardsTheNodesPort(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080")}
+	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "Name=tag:Name,Values=crucible Name=instance-state-name,Values=running") < 0 {
+		t.Fatalf("connect finds the running node by its Name tag:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if indexOf(r.calls, "aws ssm start-session --region il-central-1 --target i-0abc --document-name AWS-StartPortForwardingSession --parameters portNumber=80,localPortNumber=18080") < 0 {
+		t.Fatalf("start-session:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "http://localhost:18080") {
+		t.Fatalf("connect says where Crucible is:\n%s", r.log.String())
+	}
+}
+
+func TestConnectRefusesAnotherPort(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080")}
+	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1", Port: 9000})
+	if err == nil || !strings.Contains(err.Error(), "18080") || indexOf(r.calls, "start-session") >= 0 {
+		t.Fatalf("a different port breaks sign-in: %v", err)
+	}
+}
+
+func TestConnectRefusesAPublicInstall(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttps://c.example.com")}
+	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "eu-west-1"})
+	if err == nil || !strings.Contains(err.Error(), "open https://c.example.com") || indexOf(r.calls, "start-session") >= 0 {
+		t.Fatalf("a public install needs no tunnel: %v", err)
+	}
+}
+
+func TestConnectNeedsExactlyOneNode(t *testing.T) {
+	r := &recorder{output: fakeNode("")}
+	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"}); err == nil || !strings.Contains(err.Error(), "crucible aws wake") {
+		t.Fatalf("no node: %v", err)
+	}
+	r = &recorder{output: fakeNode("i-1\thttp://localhost:18080\ni-2\thttp://localhost:18080")}
+	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"}); err == nil || !strings.Contains(err.Error(), "--name") {
+		t.Fatalf("two nodes: %v", err)
+	}
+}
+
+// Review focus 3: a node made before this change has no crucible:public-url tag.
+func TestConnectNeedsTheTag(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\tNone")}
+	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
+	if err == nil || !strings.Contains(err.Error(), "crucible aws up") || indexOf(r.calls, "start-session") >= 0 {
+		t.Fatalf("an untagged node: %v", err)
+	}
+}
+
+func TestConnectNeedsThePlugin(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080"), noPlugin: true}
+	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
+	if err == nil || !strings.Contains(err.Error(), "session-manager-plugin") || indexOf(r.calls, "start-session") >= 0 {
+		t.Fatalf("missing plugin: %v", err)
+	}
+}
+
+func TestConnectRegion(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "configure get region") {
+			return "il-central-1"
+		}
+		return fakeNode("i-0abc\thttp://localhost:18080")(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err != nil || indexOf(r.calls, "describe-instances --region il-central-1") < 0 {
+		t.Fatalf("region from the AWS CLI's config: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+	r = &recorder{output: fakeAWS} // fakeAWS answers "configure get region" with ""
+	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err == nil || !strings.Contains(err.Error(), "--region") {
+		t.Fatalf("no region anywhere: %v", err)
 	}
 }

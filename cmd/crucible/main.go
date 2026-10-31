@@ -26,6 +26,7 @@ const usage = `usage:
   crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
+  crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws sleep [--no-snapshot]
   crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
   crucible local up [--keycloak-port PORT] [--no-build]
@@ -42,6 +43,7 @@ init --access ssm makes an install with no way in: no domain, no Elastic IP, no 
 http://localhost:<--local-port> through ` + "`crucible aws connect`" + `. A re-run without --access, --domain or --local-port
 keeps the current ones. labs-init --vpc-id and --subnet-ids (both or neither) are where lab modules launch, for an
 account without a default VPC; a re-run without them keeps the current ones.
+connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager plugin and your SSO login needed) and keeps it open until Ctrl-C.
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
 the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.
@@ -84,6 +86,8 @@ func awsCmd(args []string) int {
 	localPort := fs.Int("local-port", 0, "init, access ssm: the laptop port everyone opens Crucible on (default: keep the current one, else 18080)")
 	vpcID := fs.String("vpc-id", "", "labs-init: the VPC lab modules launch into (var.crucible_vpc_id), for an account without a default VPC")
 	subnetIDs := fs.String("subnet-ids", "", "labs-init: comma-separated subnets in that VPC (var.crucible_subnet_ids)")
+	name := fs.String("name", "", "connect: the node's Name tag (default crucible)")
+	port := fs.Int("port", 0, "connect: the local port (default: the one in Crucible's address; another one breaks sign-in)")
 	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
 	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
 	yes := fs.Bool("yes", false, "confirm teardown")
@@ -155,6 +159,8 @@ func awsCmd(args []string) int {
 		err = ops.Status(ctx)
 	case "teardown":
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot)
+	case "connect":
+		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2

@@ -80,6 +80,8 @@ func fakeAWS(cmd string) string {
 		return "Success"
 	case strings.Contains(cmd, "describe-instances"):
 		return "running"
+	case strings.Contains(cmd, "describe-instance-information"):
+		return "Online"
 	}
 	return ""
 }
@@ -706,10 +708,72 @@ func TestSSMModeStatusReportsBlockedHosts(t *testing.T) {
 			t.Fatalf("status lacks %q:\n%s", want, r.log.String())
 		}
 	}
-	for _, host := range []string{"il-central-1.ec2.archive.ubuntu.com", "ssm.il-central-1.amazonaws.com", "get.helm.sh", "production.cloudflare.docker.com"} {
+	for _, host := range []string{"http://il-central-1.ec2.archive.ubuntu.com", "http://security.ubuntu.com", "https://get.k3s.io", "https://ssm.il-central-1.amazonaws.com", "https://get.helm.sh", "https://production.cloudflare.docker.com",
+		"https://registry.terraform.io", "https://releases.hashicorp.com", "https://iam.amazonaws.com", "https://ec2.il-central-1.amazonaws.com", "https://tagging.il-central-1.amazonaws.com", "https://cloudtrail.il-central-1.amazonaws.com"} {
 		if indexOf(r.calls, host) < 0 {
 			t.Fatalf("egress check must try %s:\n%s", host, strings.Join(r.calls, "\n"))
 		}
+	}
+}
+
+func TestSSMModeStatusChecksTheCognitoHost(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "output -json") && strings.Contains(cmd, "persistent") {
+			return `{"state_bucket":{"value":"st"},"cognito_login_url":{"value":"https://crucible-x.auth.il-central-1.amazoncognito.com"}}`
+		}
+		if strings.Contains(cmd, "StandardOutputContent") {
+			return ""
+		}
+		return fakeSSM(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "https://crucible-x.auth.il-central-1.amazoncognito.com") < 0 || !strings.Contains(r.log.String(), "every host Crucible checks is reachable") {
+		t.Fatalf("cognito host:\n%s\n%s", strings.Join(r.calls, "\n"), r.log.String())
+	}
+}
+
+func TestSSMModeStatusSkipsChecksWhenSSMIsNotOnline(t *testing.T) {
+	for _, ping := range []string{"ConnectionLost", "", "None"} {
+		r := &recorder{output: func(cmd string) string {
+			if strings.Contains(cmd, "describe-instance-information") {
+				return ping
+			}
+			return fakeSSM(cmd)
+		}}
+		if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if indexOf(r.calls, "send-command") >= 0 || !strings.Contains(r.log.String(), "ssm: ") || !strings.Contains(r.log.String(), "ssmmessages.il-central-1.amazonaws.com") ||
+			!strings.Contains(r.log.String(), "ec2messages.il-central-1.amazonaws.com") {
+			t.Fatalf("ping %q:\n%s\n%s", ping, strings.Join(r.calls, "\n"), r.log.String())
+		}
+	}
+}
+
+func TestSSMModeStatusSaysWhenTheStateIsUnknown(t *testing.T) {
+	r := &recorder{output: fakeSSM, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "describe-instances") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.log.String(), "instance state unknown") || strings.Contains(r.log.String(), "isn't running") {
+		t.Fatalf("got:\n%s", r.log.String())
+	}
+}
+
+func TestConnectEndsQuietlyOnCtrlC(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080")}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := r.ops(t.TempDir())
+	o.Exec = func(context.Context, string, string, ...string) error { cancel(); return errors.New("signal: killed") }
+	if err := o.Connect(ctx, ConnectOpts{Region: "il-central-1"}); err != nil {
+		t.Fatalf("Ctrl-C is the normal way out: %v", err)
 	}
 }
 

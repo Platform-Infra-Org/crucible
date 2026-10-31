@@ -557,19 +557,27 @@ func (o Ops) waitLive(ctx context.Context, m map[string]string) error {
 	return nil
 }
 
-// egressHosts are what the node downloads from or calls. Behind an egress firewall each one must be allowed.
-func egressHosts(region string) []string {
-	return []string{"get.k3s.io", "github.com", "objects.githubusercontent.com", "get.helm.sh",
-		"registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com",
-		region + ".ec2.archive.ubuntu.com", "security.ubuntu.com", "awscli.amazonaws.com", "pricing.us-east-1.amazonaws.com",
-		"s3." + region + ".amazonaws.com", "sts." + region + ".amazonaws.com", "ssm." + region + ".amazonaws.com",
-		"cognito-idp." + region + ".amazonaws.com"}
+// egressHosts are what the node downloads from or calls, as URLs: apt uses plain HTTP, everything else HTTPS. Behind
+// an egress firewall each one must be allowed. extra adds hosts that depend on the install (Cognito's login domain).
+func egressHosts(region string, extra ...string) []string {
+	hosts := []string{"https://get.k3s.io", "https://github.com", "https://objects.githubusercontent.com", "https://get.helm.sh",
+		"https://registry-1.docker.io", "https://auth.docker.io", "https://production.cloudflare.docker.com",
+		"http://" + region + ".ec2.archive.ubuntu.com", "http://security.ubuntu.com", "https://awscli.amazonaws.com", "https://pricing.us-east-1.amazonaws.com",
+		"https://s3." + region + ".amazonaws.com", "https://sts." + region + ".amazonaws.com", "https://ssm." + region + ".amazonaws.com",
+		"https://cognito-idp." + region + ".amazonaws.com",
+		// the AWS-lab path
+		"https://registry.terraform.io", "https://releases.hashicorp.com", "https://iam.amazonaws.com",
+		"https://ec2." + region + ".amazonaws.com", "https://tagging." + region + ".amazonaws.com", "https://cloudtrail." + region + ".amazonaws.com"}
+	for _, h := range extra {
+		hosts = append(hosts, "https://"+h)
+	}
+	return hosts
 }
 
-// egressCheck prints "blocked <host>" for each host the node can't open an HTTPS connection to. Any HTTP answer,
-// even an error status, means the firewall let it through.
-func egressCheck(hosts []string) string {
-	return "for h in " + strings.Join(hosts, " ") + `; do curl -sS -o /dev/null --max-time 5 "https://$h" 2>/dev/null || echo "blocked $h"; done; true`
+// egressCheck prints "blocked <url>" for each URL the node can't open. Any HTTP answer, even an error status, means
+// the firewall let it through.
+func egressCheck(urls []string) string {
+	return "for u in " + strings.Join(urls, " ") + `; do curl -sS -o /dev/null --max-time 5 "$u" 2>/dev/null || echo "blocked $u"; done; true`
 }
 
 func (o Ops) Status(ctx context.Context) error {
@@ -578,6 +586,7 @@ func (o Ops) Status(ctx context.Context) error {
 		return err
 	}
 	st, err := o.state(ctx, m)
+	stateErr := err
 	if err != nil {
 		st = "unknown (" + err.Error() + ")"
 	}
@@ -590,8 +599,24 @@ func (o Ops) Status(ctx context.Context) error {
 		return nil
 	}
 	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s (through `crucible aws connect`)\n", m["instance_id"], st, m["url"])
+	if stateErr != nil {
+		fmt.Fprintf(o.Log, "healthz and egress: not checked (instance state unknown: %v)\n", stateErr)
+		return nil
+	}
 	if st != "running" {
 		fmt.Fprintln(o.Log, "healthz and egress: not checked (the node isn't running)")
+		return nil
+	}
+	r := m["region"]
+	ping, err := o.Output(ctx, o.Root, "aws", "ssm", "describe-instance-information", "--region", r,
+		"--filters", "Key=InstanceIds,Values="+m["instance_id"], "--query", "InstanceInformationList[0].PingStatus", "--output", "text")
+	if ping = strings.TrimSpace(ping); err != nil || ping == "" || ping == "None" {
+		ping = "not registered"
+	}
+	fmt.Fprintf(o.Log, "ssm: %s\n", ping)
+	if ping != "Online" {
+		fmt.Fprintf(o.Log, "healthz and egress: not checked (Session Manager can't reach the node). Ask the network team to allow "+
+			"ssm.%[1]s.amazonaws.com, ssmmessages.%[1]s.amazonaws.com and ec2messages.%[1]s.amazonaws.com.\n", r)
 		return nil
 	}
 	health := "ok"
@@ -599,12 +624,19 @@ func (o Ops) Status(ctx context.Context) error {
 		health = "not answering (" + err.Error() + ")"
 	}
 	fmt.Fprintf(o.Log, "healthz: %s\n", health)
-	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(m["region"])))
+	var extra []string
+	note := ""
+	if p, err := o.outputs(ctx, "persistent"); err == nil && p["cognito_login_url"] != "" {
+		extra = append(extra, strings.TrimPrefix(p["cognito_login_url"], "https://"))
+	} else {
+		note = ", but not the Cognito login domain (couldn't read it)"
+	}
+	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(r, extra...)))
 	switch {
 	case err != nil:
 		fmt.Fprintf(o.Log, "egress: not checked (%v)\n", err)
 	case strings.TrimSpace(out) == "":
-		fmt.Fprintln(o.Log, "egress: every host the node needs is reachable (check your git host by hand)")
+		fmt.Fprintf(o.Log, "egress: every host Crucible checks is reachable%s (check your git host by hand)\n", note)
 	default:
 		fmt.Fprintf(o.Log, "egress: the firewall blocks these, ask the network team to allow them:\n%s\n", strings.TrimSpace(out))
 	}
@@ -693,6 +725,10 @@ func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 			"https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html")
 	}
 	fmt.Fprintf(o.Log, "Crucible is at %s while this runs; Ctrl-C closes it.\n", url)
-	return o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,
+	err = o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,
 		"--document-name", "AWS-StartPortForwardingSession", "--parameters", fmt.Sprintf("portNumber=80,localPortNumber=%d", port))
+	if ctx.Err() != nil {
+		return nil // Ctrl-C is how the tunnel is meant to close
+	}
+	return err
 }

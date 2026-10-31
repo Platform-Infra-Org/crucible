@@ -243,7 +243,7 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
         </div>
         <figcaption>Every API call passes these gates. Identity Center (1.2) decides who may become the role in the first place.</figcaption>
       </figure>
-      <aside class="note org"><b class="lab">In our account</b><p>A dry run of <code>ec2:AllocateAddress</code> returned "explicit deny in a service control policy", so our admin role can't create Elastic IPs. We weren't at the quota: 2 of 5 used.</p></aside>
+      <aside class="note org"><b class="lab">In our account</b><p>A dry run of <code>ec2:AllocateAddress</code> returned "explicit deny in a service control policy", so our admin role can't create Elastic IPs. Other denials we found by dry run: internet gateways, load balancers (internal and internet-facing), VPC endpoints, subnets, routes and Client VPN endpoints. Launching instances, creating security groups and creating IAM roles were allowed.</p></aside>
     </div>
   </article>
 
@@ -318,7 +318,7 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
         </li>
         <li><strong>One account also works.</strong> Leave out <code>--crucible-account</code>, and the labs stack trusts the node in its own account. One thing to know: the labs stack turns on S3's <em>account-wide</em> public-access block, so check that nothing else there needs public buckets.</li>
       </ul>
-      <aside class="note org"><b class="lab">In our account</b><p>The organization's SCPs would also apply to labs. Ideally labs get a sandbox account without the networking restrictions, since labs create EC2 and S3 resources freely.</p></aside>
+      <aside class="note org"><b class="lab">In our account</b><p>We have one account, so AWS labs run in the same account as Crucible: run <code>labs-init</code> with our own credentials and without <code>--crucible-account</code>. This also sets S3's account-wide public-access block here. Lab instances go in the spoke subnets with no public IPs and leave through the same firewall. The SCPs apply to labs too: a lab module that creates an Elastic IP, a NAT gateway or a load balancer would be denied.</p></aside>
     </div>
   </article>
 
@@ -410,6 +410,7 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
   --parameters 'portNumber=80,localPortNumber=8080'
 # then open http://localhost:8080</code></pre>
       <p>That's for admins and testing, not for handing to trainees.</p>
+      <aside class="note org"><b class="lab">In our account</b><p>This is how we reach Crucible today: there is no public URL, so each person with our Identity Center access runs a port-forward from their laptop. Everyone uses the same local port, because Crucible's public URL must match the address in the browser. See <a href="ssm-access.html">Reaching the app over SSM</a> and <a href="deploy-architecture.html#access-ssm">the access section of the deploy architecture</a>. Whether <code>ssm:StartSession</code> is allowed for our role is not verified.</p></aside>
     </div>
   </article>
 
@@ -476,9 +477,9 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
           <rect class="box" x="390" y="170" width="330" height="48" rx="6"/>
           <text x="406" y="190" class="tb">natSubnet2 · /27</text><text x="406" y="207" class="ts">NAT gateway, route to the internet gateway</text>
           <rect class="box" x="40" y="240" width="330" height="48" rx="6"/>
-          <text x="56" y="260" class="tb">firewallSubnet1 · /27</text><text x="56" y="277" class="ts">AWS Network Firewall endpoint</text>
+          <text x="56" y="260" class="tb">firewallSubnet1 · /27</text><text x="56" y="277" class="ts">firewall endpoint (GWLB)</text>
           <rect class="box" x="390" y="240" width="330" height="48" rx="6"/>
-          <text x="406" y="260" class="tb">firewallSubnet2 · /27</text><text x="406" y="277" class="ts">AWS Network Firewall endpoint</text>
+          <text x="406" y="260" class="tb">firewallSubnet2 · /27</text><text x="406" y="277" class="ts">firewall endpoint (GWLB)</text>
           <rect class="boxa" x="40" y="310" width="330" height="56" rx="6"/>
           <text x="56" y="332" class="tb">spokeSubnet1 · 10.2.129.0/24</text><text x="56" y="350" class="ts">Workloads · no public IPs</text>
           <rect class="boxa" x="390" y="310" width="330" height="56" rx="6"/>
@@ -493,18 +494,18 @@ footer.end { margin-top: 60px; padding-top: 18px; border-top: 1px solid var(--li
           <text x="30" y="404" class="tm">Spoke VPC · 10.2.128.0/22 · each subnet's default route points one tier up</text>
         </svg>
         </div>
-        <figcaption>Going out: workload → Network Firewall (inspected, maybe blocked) → NAT (given the NAT's public IP) → internet gateway → internet. Replies return the same way.</figcaption>
+        <figcaption>Going out: workload → central firewall via a GWLB endpoint (inspected, maybe blocked) → NAT (given the NAT's public IP) → internet gateway → internet. Replies return the same way.</figcaption>
       </figure>
       <div class="tbl"><table>
         <thead><tr><th>Subnets</th><th>Default route goes to</th><th>Role</th></tr></thead>
         <tbody>
           <tr><td><code>spokeSubnet1</code>, <code>2</code></td><td>a firewall endpoint (<code>vpce-…</code>)</td><td>Where workloads run; no public IPs</td></tr>
-          <tr><td><code>firewallSubnet1</code>, <code>2</code></td><td>a NAT gateway</td><td>Network Firewall inspects traffic</td></tr>
+          <tr><td><code>firewallSubnet1</code>, <code>2</code></td><td>a NAT gateway</td><td>The central firewall inspects traffic</td></tr>
           <tr><td><code>natSubnet1</code>, <code>2</code></td><td>the internet gateway</td><td>NAT gateways swap private addresses for their public IP</td></tr>
         </tbody>
       </table></div>
-      <aside class="note org"><b class="lab">In our account</b><ul><li>There's no default VPC; this is the only one.</li><li>Nothing on the internet can connect in.</li><li>We only read the default routes. There may also be routes to the company network, for example a Transit Gateway; that check is still pending.</li></ul></aside>
-      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible's AWS stack as built expects a default VPC, an Elastic IP and inbound 80/443 for Let's Encrypt, and none of that is possible here. Running it in this network needs:</p><ul><li>an existing-VPC option;</li><li>no Elastic IP;</li><li>a front door: an ALB (3.6), a VPN (4.4) or a tunnel (5.3);</li><li>the firewall to allow the node's outbound hosts.</li></ul></aside>
+      <aside class="note org"><b class="lab">In our account</b><ul><li>One VPC (<code>10.2.128.0/22</code>, built by the stack <code>SPOKE-Networking-133089468093-Stack</code>) and no default VPC. Nothing on the internet can connect in.</li><li>The "firewall" is the central <code>RootHub-inspection-firewall</code>, run from the hub. The endpoints in <code>firewallSubnet1</code> and <code>2</code> are Gateway Load Balancer endpoints that send traffic to it. Both spoke subnets use the route table <code>spoke-rt-1b</code>, so both currently leave through the 1b endpoint.</li><li>The internet gateway has an ingress route table that sends return traffic for the two spoke /24s back through the firewall endpoints.</li><li>The two Elastic IPs in the account (<code>001-eip-1a</code>, <code>001-eip-1b</code>) belong to the NAT gateways, not to us.</li><li>There is no Transit Gateway attachment, so this VPC has no route to the office or a company VPN.</li><li>There are no VPC endpoints of our own, and the SCP denies creating them. SSM, S3, STS and other AWS API calls leave through the firewall and NAT to the public endpoints. Which hosts the firewall allows is not verified.</li></ul></aside>
+      <aside class="note crucible"><b class="lab">In Crucible</b><p>Crucible's AWS stack as built expects a default VPC, an Elastic IP and inbound 80/443 for Let's Encrypt, and none of that is possible here. Running it in this network needs:</p><ul><li>an existing-VPC option;</li><li>no Elastic IP and no default-VPC lookup;</li><li>a way in that needs nothing inbound: SSM today, a Cloudflare Tunnel later (5.3). An ALB (3.6) and a VPN (4.4) are ruled out for now;</li><li>the firewall to allow the node's outbound hosts.</li></ul></aside>
     </div>
   </article>
 
@@ -550,7 +551,7 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
           </ul>
         </li>
       </ul>
-      <aside class="note org"><b class="lab">In our account</b><p>The spoke subnets' default route points at a <code>vpce-…</code>. That's a Network Firewall endpoint, not a door to the internet.</p></aside>
+      <aside class="note org"><b class="lab">In our account</b><p>The spoke subnets' default route points at a <code>vpce-…</code>. That's a Gateway Load Balancer endpoint into the central firewall, not a door to the internet. We can't add endpoints of our own: the SCP denies <code>ec2:CreateVpcEndpoint</code>.</p></aside>
     </div>
   </article>
 
@@ -616,7 +617,7 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
   <div class="chhead">
     <span class="chnum">CHAPTER 03</span>
     <h2>Exposing an internal web app</h2>
-    <p>The conventional front doors, why organizations prefer a load balancer over a public server, and what an ALB with a WAF looks like in our VPC.</p>
+    <p>The conventional front doors, why organizations prefer a load balancer over a public server, and what an ALB with a WAF looks like (not possible in our account; see 3.6).</p>
   </div>
 
   <article class="qa" id="q3-1">
@@ -702,30 +703,15 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
   <article class="qa" id="q3-6">
     <h3><span class="qn">3.6</span>Can we add an ALB to our network, or does the organization block that too?</h3>
     <div class="ans">
-      <p>Not necessarily blocked; it has to be checked. Two things decide it:</p>
-      <ul>
-        <li><strong>Does the SCP allow creating load balancers?</strong> The IAM policy simulator can answer that without creating anything, since it includes SCPs in its result.</li>
-        <li><strong>Is there somewhere for it to sit?</strong>
-          <ul>
-            <li>An <strong>internet-facing ALB</strong> needs public subnets in two AZs (route to the internet gateway). Here only the networking team's small <code>natSubnet</code>s qualify. They're big enough (an ALB needs 8 free addresses per subnet), but using them is the networking team's call.</li>
-            <li>An <strong>internal ALB</strong> can go in the spoke subnets, and is reachable only from wherever the company network connects in.</li>
-          </ul>
-        </li>
-      </ul>
-      <p>The three possible outcomes:</p>
-      <ol>
-        <li>Internet-facing allowed: a public ALB with WAF, if the networking team agrees.</li>
-        <li>Only internal allowed: pattern 1, reached over the company network or VPN.</li>
-        <li>Both denied: ingress has to come from the networking team's central entry point.</li>
-      </ol>
-      <aside class="note org"><b class="lab">In our account</b><p>Not checked yet: the AWS session expired before the simulator ran. It needs <code>aws login</code> again, then a read-only simulation of an internet-facing and an internal ALB.</p></aside>
+      <p>In general it depends on two things: whether the SCP allows load balancers, and whether there are subnets for one to sit in (an internet-facing ALB needs public subnets in two AZs; an internal one can use the spoke subnets).</p>
+      <aside class="note org"><b class="lab">In our account</b><p>Checked on 2026-10-29 with a dry run that created nothing: the SCP denies <code>elasticloadbalancing:CreateLoadBalancer</code>, both internal and internet-facing. So there is no ALB here, and no NLB either. Three ways forward remain:</p><ol><li><strong>The networking team's central ingress.</strong> Ask them to publish Crucible through their own entry point and route it to the node. That is their call.</li><li><strong>SSM port forwarding, today.</strong> Nothing inbound is needed. See <a href="ssm-access.html">Reaching the app over SSM</a>.</li><li><strong>A Cloudflare Tunnel, as an option.</strong> It only dials out, so the SCPs don't stop it (5.3).</li></ol></aside>
     </div>
   </article>
 
   <article class="qa" id="q3-7">
     <h3><span class="qn">3.7</span>How would we set up an ALB with a WAF, and how would the VPC look?</h3>
     <div class="ans">
-      <p>This assumes the organization allows an internet-facing ALB. The internal variant follows below.</p>
+      <p>This is a generic design, and it assumes the organization allows an internet-facing ALB. In our account the SCP denies both kinds (3.6), so read it as a pattern for another account. The internal variant follows below.</p>
       <figure class="dg">
         <div class="dgscroll">
         <svg viewBox="0 0 760 480" role="img" aria-labelledby="d2t"><title id="d2t">Our VPC with an internet-facing ALB and WAF in front of a private Crucible node</title>
@@ -953,6 +939,7 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
       <h4>3. People at home</h4>
       <p>They use the company's remote-access VPN, which ends at the office or a cloud VPN service, then follows the same path into AWS. The alternative is AWS Client VPN straight into AWS.</p>
       <p><strong>Hard rule: IP ranges must not overlap.</strong> That's why central teams hand each spoke its own range.</p>
+      <aside class="note org"><b class="lab">In our account</b><p>Our VPC has no Transit Gateway attachment, so none of these paths reach it today. Adding one is the networking team's decision; <code>ec2:CreateTransitGatewayVpcAttachment</code> can't be dry-run, so we haven't tested it.</p></aside>
     </div>
   </article>
 
@@ -984,6 +971,7 @@ reply: VPC route 192.168.0.0/16 → TGW → VPN attachment → tunnel → office
         <li>You add routes and authorization rules for each range users should reach.</li>
         <li>The path: laptop → Client VPN endpoint → that VPC → Transit Gateway → our spoke.</li>
       </ul>
+      <aside class="note org"><b class="lab">In our account</b><p>The SCP denies <code>ec2:CreateClientVpnEndpoint</code>, and our VPC has no Transit Gateway attachment, so a company VPN can't reach it today.</p></aside>
     </div>
   </article>
 
@@ -1004,10 +992,11 @@ reply: VPC route 192.168.0.0/16 → TGW → VPN attachment → tunnel → office
             <li>associated with both spoke subnets, with an authorization rule for <code>10.2.128.0/22</code>;</li>
             <li>its own security group, allowed into the internal ALB.</li>
           </ul>
-          It costs about $73 a month per associated subnet, plus about $0.05 an hour per connected user. Check the SCP first: <code>ec2:CreateClientVpnEndpoint</code> may be denied.</li>
+          It costs about $73 a month per associated subnet, plus about $0.05 an hour per connected user. Check the SCP first: <code>ec2:CreateClientVpnEndpoint</code> may be denied (it is in our account).</li>
         <li><strong>Site-to-Site VPN</strong> for a whole office (4.2). Network-team territory.</li>
         <li><strong>Zero-trust alternatives:</strong> Tailscale or Cloudflare Tunnel (chapter 5). Light and cheap, but they bypass the company's network design, so they need security approval.</li>
       </ol>
+      <aside class="note org"><b class="lab">In our account</b><p>Option 2 is denied by the SCP, and option 3 needs a Transit Gateway attachment we don't have. For now only option 1 works, and it is what we use (<a href="ssm-access.html">Reaching the app over SSM</a>). Option 4, a Cloudflare Tunnel, is the future option (5.3).</p></aside>
       <aside class="note crucible"><b class="lab">In Crucible</b><ul><li>Browsers and terminals work normally behind a VPN.</li><li>Laptop agents connect only while the VPN is up.</li><li>Cluster labs are unaffected, since they reach the trainee's own cluster.</li><li>The GitHub webhook can't arrive, so Crucible polls every 60 seconds.</li></ul></aside>
     </div>
   </article>
@@ -1086,70 +1075,8 @@ reply: VPC route 192.168.0.0/16 → TGW → VPN attachment → tunnel → office
   <article class="qa" id="q5-3">
     <h3><span class="qn">5.3</span>How would a Cloudflare Tunnel setup work for Crucible?</h3>
     <div class="ans">
-      <p>This is a design; none of it is built yet. Nothing in AWS accepts inbound connections, and the node's security group has no inbound rules at all.</p>
-      <figure class="dg">
-        <div class="dgscroll">
-        <svg viewBox="0 0 760 430" role="img" aria-labelledby="d4t"><title id="d4t">Crucible behind a Cloudflare Tunnel</title>
-          <rect class="boxw" x="180" y="8" width="400" height="34" rx="6"/>
-          <text x="380" y="30" text-anchor="middle" class="tb">Browser · laptop agent · GitHub webhook</text>
-          <line class="lw" x1="380" y1="42" x2="380" y2="73" marker-end="url(#mw)"/>
-          <text x="392" y="62" class="tm">https://crucible.company.com</text>
-          <rect class="boxw" x="60" y="76" width="640" height="110" rx="8"/>
-          <text x="80" y="100" class="tb">Cloudflare edge</text>
-          <text x="80" y="122" class="ts">TLS certificate · DDoS protection · optional WAF</text>
-          <text x="80" y="142" class="ts">Access: sign in with the company identity provider, then a session cookie</text>
-          <text x="80" y="162" class="ts">Bypass Access for /api/agent/ws and /api/git/hook; Crucible checks their own tokens</text>
-          <line class="la" x1="150" y1="262" x2="150" y2="190" marker-end="url(#ma)"/>
-          <line class="lw" x1="210" y1="190" x2="210" y2="262" marker-end="url(#mw)"/>
-          <text x="226" y="216" class="ta">cloudflared dials out on 7844 or 443, through the firewall and NAT</text>
-          <text x="226" y="236" class="tw">requests come back down that open tunnel</text>
-          <rect class="zone" x="60" y="266" width="640" height="150" rx="10"/>
-          <text x="76" y="286" class="tm">Spoke subnet · node has no public IP and no inbound rules</text>
-          <rect class="boxa" x="90" y="300" width="160" height="46" rx="6"/>
-          <text x="170" y="328" text-anchor="middle" class="tb">cloudflared pod</text>
-          <rect class="box" x="300" y="300" width="160" height="46" rx="6"/>
-          <text x="380" y="328" text-anchor="middle" class="tb">Traefik :80</text>
-          <rect class="boxa" x="510" y="300" width="160" height="46" rx="6"/>
-          <text x="590" y="328" text-anchor="middle" class="tb">crucible pod :8080</text>
-          <line class="lw" x1="250" y1="323" x2="297" y2="323" marker-end="url(#mw)"/>
-          <line class="lw" x1="460" y1="323" x2="507" y2="323" marker-end="url(#mw)"/>
-          <text x="76" y="376" class="ts">TLS ends at Cloudflare, so Traefik drops Let's Encrypt and its HTTPS redirect.</text>
-          <text x="76" y="396" class="ts">No ALB, no ACM certificate, no Elastic IP.</text>
-        </svg>
-        </div>
-        <figcaption>The tunnel is opened from inside (blue). Requests then travel back down it (orange).</figcaption>
-      </figure>
-      <ol>
-        <li><strong>The tunnel:</strong> create it in the Zero Trust dashboard to get a <strong>tunnel token</strong>. Add a public hostname, <code>crucible.company.com → http://traefik.kube-system.svc:80</code>; Cloudflare creates the DNS record.</li>
-        <li><strong><code>cloudflared</code> on the node:</strong>
-          <ul>
-            <li>a small Deployment in the Helm chart, two replicas;</li>
-            <li>the token in the <code>crucible-secrets</code> Secret, sourced from an SSM SecureString;</li>
-            <li>the firewall allows <code>*.argotunnel.com</code> and <code>*.cloudflare.com</code> on 7844 (TCP and UDP), or 443.</li>
-          </ul>
-        </li>
-        <li><strong>Crucible's settings:</strong>
-          <ul>
-            <li>the public URL is the Cloudflare hostname;</li>
-            <li>Traefik drops Let's Encrypt and the redirect;</li>
-            <li>the Origin check keeps working, because browsers still send the same hostname.</li>
-          </ul>
-        </li>
-        <li><strong>Access policies:</strong>
-          <ul>
-            <li>the main app requires company emails or a group;</li>
-            <li>a bypass for <code>/api/agent/ws</code>, where Crucible checks the agent's pairing token. The stricter option is an Access service token, which needs an agent change.</li>
-            <li>a bypass for <code>/api/git/hook</code>, where Crucible checks the webhook secret or signature.</li>
-          </ul>
-        </li>
-        <li><strong>Two sign-ins:</strong> after Access, users still sign in to Crucible through Cognito. Both can use the same identity provider, so the second is usually one click. Trusting Access's own token would remove it, but that's a code change.</li>
-      </ol>
-      <p><strong>Agree with the security team first:</strong></p>
-      <ul>
-        <li>Cloudflare decrypts traffic at its edge;</li>
-        <li>the tunnel is a path into a VPC built to have no ingress;</li>
-        <li>the two bypassed paths are reachable from the internet, protected by Crucible's own checks.</li>
-      </ul>
+      <p>This is a design; none of it is built yet. A small <code>cloudflared</code> program runs next to Crucible and dials out to Cloudflare, so nothing in AWS accepts an inbound connection. A hostname such as <code>crucible.company.com</code> points at Cloudflare. Cloudflare Access makes people sign in with the company identity provider, then sends allowed requests down the tunnel that is already open. Two paths skip Access, the laptop agents' WebSocket and the Git webhook, because Crucible checks their own tokens. TLS ends at Cloudflare, so Traefik serves plain HTTP.</p>
+      <aside class="note org"><b class="lab">In our account</b><p>It fits our SCPs because it needs no Elastic IP, load balancer or internet gateway, only outbound traffic through the firewall. It still needs the firewall to allow Cloudflare's hosts, the domain on Cloudflare and the security team's approval, since Cloudflare decrypts traffic at its edge. Today we use SSM instead (<a href="ssm-access.html">Reaching the app over SSM</a>). The full design is in <a href="deploy-architecture.html#access-cloudflare">the access section of the deploy architecture</a>.</p></aside>
     </div>
   </article>
 </section>
@@ -1704,7 +1631,7 @@ node 10.2.128.10                           node 10.2.128.10
 </div>
 
 <footer class="end">
-  <p>Built from the Crucible deploy discussions, October 2026. Facts about our account come from read-only checks: the Elastic IP SCP denial, and the VPC's subnets and default routes. Still to check: whether the SCP allows internet-facing or internal ALBs, and whether the VPC routes to a company Transit Gateway.</p>
+  <p>Built from the Crucible deploy discussions, October 2026. Facts about our account come from read-only checks on 2026-10-29: describes, EC2 dry runs and requests built to fail validation. Nothing was created. Checked: the VPC, subnets and routes, the SCP decisions for Elastic IPs, internet gateways, load balancers, VPC endpoints, subnets, routes and Client VPN, and that there is no Transit Gateway attachment. Not verified: whether the SCPs allow S3 buckets, Cognito, SSM parameters, EventBridge Scheduler, Budgets, Data Exports and <code>ssm:StartSession</code> (the policy simulator can't be trusted for this role); whether a Transit Gateway attachment could be added; which hosts the firewall allows; and what the org's after-hours automation stops (it probably stops instances out of hours, so check with the platform team).</p>
   <p>Prices are approximate list prices and change; check AWS's and the vendors' pricing pages before deciding.</p>
 </footer>
 </div>

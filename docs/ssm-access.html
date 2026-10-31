@@ -159,6 +159,11 @@ pre .c { color: var(--muted); }
       dedicated NAT subnet, then an internet gateway named <code>egress-igw</code>. That is the design, and it is one-way: no
       subnet here has an inbound path from the internet — not for this instance, not for a load balancer, not for anything you
       could place in the existing subnets. A public IP on the instance was tried and was unreachable, for exactly this reason.</p>
+    <p>Other ways in are closed too. The VPC has no Transit Gateway attachment, so there is no route to an office or company VPN.
+      The organization&rsquo;s policies (SCPs) deny Elastic IPs, load balancers (internal and internet-facing), Client VPN and our own VPC endpoints
+      and routes. The SSM Agent&rsquo;s own traffic has no VPC endpoint either: it leaves through the central firewall and NAT to the public
+      SSM endpoints (<code>ssm</code>, <code>ssmmessages</code> and <code>ec2messages</code> in <code>il-central-1</code>), so the firewall
+      must allow them. That has not been verified.</p>
     <div class="figure small">
       <svg viewBox="0 0 760 240" role="img" aria-label="Traffic leaves the VPC through a firewall and NAT to the internet gateway; nothing comes back in.">
         <rect class="zone" x="16" y="30" width="470" height="190" rx="12"/>
@@ -320,13 +325,27 @@ open "http://localhost:$LOCAL_PORT" 2&gt;/dev/null \
           </tr>
           <tr>
             <th scope="row">One tunnel per person</th>
-            <td>Each person runs their own session on their own local port. Nobody collides, but there is also nothing to route
-              people to collectively — it is not a reverse proxy.</td>
+            <td>Each person runs their own session on their own laptop, all on local port 18080: Crucible's public URL is
+              <code>http://localhost:18080</code>, so a different port breaks sign-in and saving. Laptops don't collide, but there
+              is nothing to route people to collectively; it is not a reverse proxy.</td>
           </tr>
           <tr>
             <th scope="row"><code>ssm:StartSession</code> is assumed, not verified</th>
             <td>Likely covered by how broad <code>Workload-Admin-PS</code> is, but confirm it on this instance once — rather than
               finding out mid-demo.</td>
+          </tr>
+          <tr>
+            <th scope="row">Crucible needs a few settings to work through the tunnel</th>
+            <td><ul>
+              <li>Everyone uses the same local port, <code>18080</code>. Crucible&rsquo;s public URL must equal the address in the browser, or the Origin
+                check refuses every change.</li>
+              <li><code>CRUCIBLE_PUBLIC_URL</code> and the Cognito callback are <code>http://localhost:18080</code> (Cognito accepts plain http only for localhost).</li>
+              <li>Traefik serves plain HTTP on port 80. Today it redirects to HTTPS and asks for a Let&rsquo;s Encrypt certificate, which cannot work here.</li>
+              <li>Laptop agents reach Crucible through the same tunnel, so laptop and cluster labs work only while it is open.</li>
+              <li>Webhooks do not arrive, so Crucible polls every 60 seconds.</li>
+            </ul>
+            These app and deploy changes are not made yet. See <a href="deploy-architecture.html#access-ssm">how people reach Crucible</a> and
+            <a href="aws-deploy.html#our-account">what differs in our account</a>.</td>
           </tr>
           <tr>
             <th scope="row">It does not scale</th>
@@ -342,6 +361,10 @@ open "http://localhost:$LOCAL_PORT" 2&gt;/dev/null \
     <p>The actual answer is a genuine ingress path: a load balancer in a subnet that is reachable from outside, which does not
       exist anywhere in this VPC today and would have to be provisioned by the networking team. Worth raising with them the
       moment this stopgap starts being used as more than a stopgap.</p>
+    <p>A second option is a Cloudflare Tunnel. A small <code>cloudflared</code> process on the node dials out to Cloudflare, so it needs no inbound path,
+      no Elastic IP and no load balancer, and Cloudflare Access can gate the hostname by the company identity provider. It needs the firewall to allow
+      Cloudflare, the domain on Cloudflare and the security team&rsquo;s approval. The design is in
+      <a href="deploy-architecture.html#access-cloudflare">deploy-architecture.html</a>.</p>
   </section>
 
   <footer>

@@ -233,7 +233,7 @@ body.hide-done .item.done { display: none; }
         <p>How it is built is in <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a>. The roles are in
           <a href="deploy-architecture.html#iam-roles">IAM roles</a>, and what the boundary forbids is in
           <a href="deploy-architecture.html#iam-fence">the IAM fence</a>. Deploying the labs stack is in
-          <a href="aws-deploy.html#labs">AWS labs setup</a>. Labs share one account, so use a dedicated sandbox and keep secrets out of Terraform state.</p>
+          <a href="aws-deploy.html#labs">AWS labs setup</a>. Labs share one account, so use a dedicated sandbox and keep secrets out of Terraform state. For our own account, which has one account and no inbound path, see <a href="aws-deploy.html#our-account">what differs in our account</a>.</p>
 
         <h3 style="font-size:1.15rem;margin:1.75rem 0 0">Three ways to run AWS labs</h3>
         <div class="table-wrap"><table>
@@ -241,7 +241,7 @@ body.hide-done .item.done { display: none; }
           <tbody>
             <tr><td>Off</td><td><code>CRUCIBLE_AWS_LABS</code> unset</td><td>AWS labs can't be requested.</td><td>The plain local stack</td></tr>
             <tr><td>Dry run</td><td><code>CRUCIBLE_AWS_LABS=dryrun</code></td><td>Real workspace and Terraform pods on the cluster, but the pod only unpacks the module and a fake lab account stands in. Estimates come from <code>CRUCIBLE_DEV_LAB_USD_PER_HOUR</code>; fixture list prices meter the fake apply. Never touches AWS.</td><td>The kind stack from <code>make cluster-check</code></td></tr>
-            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, the labs stack (plan role, billing export)</td><td>Everything above, for real, in your lab account.</td><td>A deployed Crucible and an AWS sandbox account</td></tr>
+            <tr><td>On</td><td><code>CRUCIBLE_AWS_LABS=1</code>, the labs stack (plan role, billing export)</td><td>Everything above, for real, in the AWS account.</td><td>A deployed Crucible and an AWS sandbox account (in our case the same one account, reached over the <a href="ssm-access.html">SSM tunnel</a>)</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -566,16 +566,20 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
         <div class="phase-head"><h2>9b · Cloud labs on a real AWS sandbox</h2><span class="count"></span></div>
         <div class="note warn"><strong>This creates real resources and costs real money.</strong>Use a dedicated sandbox account and a deployed Crucible
           (<code>crucible aws init</code>, then <code>crucible aws up</code>). The full commands and every must-fail case are in <code>docs/runbooks/aws.md</code>.</div>
+        <div class="note"><strong>In our account</strong>There is one account, no Elastic IP and no public URL. Crucible and the labs share the account, and you reach
+          the app over the Session Manager tunnel at <code>http://localhost:18080</code>, with the tunnel open for every step that uses the app or a laptop lab
+          (<a href="ssm-access.html">how to open it</a>). Steps that say &ldquo;on the server&rdquo; mean an SSM session on the node. The deploy changes this needs
+          (no Elastic IP, plain HTTP, health checked over SSM) are not made yet; see <a href="aws-deploy.html#our-account">what differs in our account</a>.</div>
         <ul class="items">
           <li class="item" data-id="aw-secretkey"><label><input type="checkbox" id="c-aw-secretkey"><span class="t">The secret key is made once and outlives teardown <span class="pill cost">AWS</span></span></label>
             <div class="body"><ol class="how"><li>After <code>crucible aws init</code>: <code>aws ssm get-parameter --name /crucible/secret_key --query Parameter.Type --output text</code>.</li><li>After <code>crucible aws up</code>, on the server: <code>sudo k3s kubectl -n crucible get secret crucible-secrets -o jsonpath='{.data.CRUCIBLE_SECRET_KEY}' | wc -c</code>. Open <b>Administrator → Repositories</b> and connect a private repository with a token.</li><li><code>crucible aws teardown --yes</code>, then <code>crucible aws up</code>, and <b>Test connection</b> on that repository.</li></ol>
               <p class="expect"><b>Expect</b><code>SecureString</code>; a non-zero length; no <i>This instance has no CRUCIBLE_SECRET_KEY</i> warning, and the token is accepted. After teardown → up the repository is still <i>Token</i> and <i>Reachable</i>: the key came back with the restored database. On a server set up before the key existed, <code>crucible aws deploy</code> prints <i>WARNING: no /crucible/secret_key</i> until <code>init</code> is re-run.</p></div></li>
           <li class="item" data-id="aw-init"><label><input type="checkbox" id="c-aw-init"><span class="t">Create the labs stack <span class="pill cost">AWS</span></span></label>
-            <div class="body"><p>With lab-account credentials:</p>
-              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region eu-west-1 --budget-usd 50 --budget-email you@example.com</code></pre></div>
-              <p class="expect"><b>Expect</b>the lab, ops and plan roles, permission boundary, state bucket, the export bucket and CUR 2.0 export, the AWS Budget (alerts at 80% and 100%), and account-wide S3 Block Public Access. <code>--budget-usd -5</code> is refused before anything runs. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
+            <div class="body"><p>With your own credentials for the one account (no <code>--crucible-account</code>, so the labs stack trusts the node role in this account):</p>
+              <div class="cmd"><pre><code>go run ./cmd/crucible aws labs-init --region il-central-1 --budget-usd 50 --budget-email you@example.com</code></pre></div>
+              <p class="expect"><b>Expect</b>the lab, ops and plan roles, permission boundary, state bucket, the export bucket and CUR 2.0 export, the AWS Budget (alerts at 80% and 100%), and account-wide S3 Block Public Access for this account. <code>--budget-usd -5</code> is refused before anything runs. Back up <code>deploy/aws/labs/terraform.tfstate</code>.</p></div></li>
           <li class="item" data-id="aw-billing"><label><input type="checkbox" id="c-aw-billing"><span class="t">Turn on billed costs and wire it in <span class="pill cost">AWS</span></span></label>
-            <div class="body"><ol class="how"><li>Billing → Cost allocation tags (in the payer account if the lab account is in an organization): activate <code>crucible:lab-id</code> (it shows up after a tagged resource has existed; up to 24 hours). Free.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li><li>A day later, check the export as the runbook says: <code>aws s3 ls s3://&lt;export_bucket&gt;/cur/ --recursive</code>, and <code>terraform plan</code> of the labs stack shows no changes.</li></ol>
+            <div class="body"><ol class="how"><li>Billing → Cost allocation tags (in the payer account, as the account is in an organization): activate <code>crucible:lab-id</code> (it shows up after a tagged resource has existed; up to 24 hours). Free.</li><li>Run <code>crucible aws up</code> on the machine that holds the labs state.</li><li>A day later, check the export as the runbook says: <code>aws s3 ls s3://&lt;export_bucket&gt;/cur/ --recursive</code>, and <code>terraform plan</code> of the labs stack shows no changes.</li></ol>
               <p class="expect"><b>Expect</b>AWS labs switch on; the Ledger says <i>Price data from</i> today; the export bucket holds a manifest and <code>.csv.gz</code> files.</p></div></li>
           <li class="item" data-id="aw-run"><label><input type="checkbox" id="c-aw-run"><span class="t">Run Cloud Heat for real <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Request and approve it, then in the workspace terminal:</p>
@@ -600,7 +604,8 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
               <p class="expect"><b>Expect</b>no CloudTrail finding (every successful create was tagged); the user name is the session name <code>crucible-lab-&lt;id&gt;</code>.</p></div></li>
           <li class="item" data-id="aw-ec2"><label><input type="checkbox" id="c-aw-ec2"><span class="t">An EC2 lab end to end <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>In your sandbox content repo, add the runbook's <code>terraform/ec2.tf</code> (a <code>t3.nano</code>, its own security group, a data volume) next to Cloud Heat's <code>main.tf</code>.</p>
-              <p class="expect"><b>Expect</b>a non-zero estimate whose breakdown lists the instance (with its root volume and public IPv4), the data volume, and the attachment, the security group and rules as <i>free</i>; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p></div></li>
+              <p class="expect"><b>Expect</b>a non-zero estimate whose breakdown lists the instance (with its root volume, and a public IPv4 unless the module sets <code>associate_public_ip_address = false</code>: the estimator counts an unset one, to stay on the safe side), the data volume, and the attachment, the security group and rules as <i>free</i>; the instance, both volumes and the rules carry <code>crucible:lab-id</code>; <b>End lab</b> destroys everything with no failed findings.</p>
+              <p><b>In our account</b> there is no default VPC, so the runbook's <code>ec2.tf</code> as written fails: give the instance <code>subnet_id</code> = <code>spokeSubnet1</code> (<code>subnet-0fa66f46aa023ab6e</code>) and <code>associate_public_ip_address = false</code>, and give the security group <code>vpc_id</code> = <code>vpc-03aa39198d92c5a25</code>.</p></div></li>
           <li class="item" data-id="aw-bill"><label><input type="checkbox" id="c-aw-bill"><span class="t">The bill arrives <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>24–48 hours later: Ledger → <b>Refresh now</b>.</p>
               <p class="expect"><b>Expect</b>the lab's <b>Billed</b> figure without <i>(so far)</i>, close to its <b>Metered</b> one, and <i>Estimate vs billed</i> counts it.</p></div></li>

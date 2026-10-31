@@ -86,6 +86,9 @@ section h3.sub { font-size: 1.05rem; margin-top: 10px; }
 .note { border-left: 3px solid var(--accent); background: var(--surface); padding: 12px 16px; border-radius: 0 10px 10px 0; max-width: 76ch; }
 .note.warn { border-left-color: var(--danger); }
 .note strong { display: block; margin-bottom: 2px; }
+.note.ours { border-left-color: var(--heat); }
+.note ul { margin: 6px 0 0; padding-left: 1.1rem; display: grid; gap: 4px; }
+.note p + p, .note p + ul, .note ul + p { margin-top: 6px; }
 
 .cols ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 6px; color: var(--muted); font-size: 0.94rem; }
 .allow { color: var(--ok); font-weight: 600; }
@@ -146,9 +149,14 @@ body { margin: 0; }
     <h1>Crucible Deploy Architecture</h1>
     <p class="lede">Crucible is one Go process that serves the API and the React app, backed by Postgres and an OIDC sign-in.
       The same process runs in three settings: on your laptop under Docker Compose, in the kind-based end-to-end check, and in
-      production on a single k3s node in AWS, with AWS labs in a separate lab account. This page draws each one from the files
+      production on a single k3s node in AWS, with AWS labs in a lab account. This page draws each one from the files
       in <code>deploy/</code>, then follows production down to who holds which AWS permission, how an AWS lab runs, and how a
       release ships.</p>
+    <p class="lede">The production drawings show what <code>deploy/aws</code> builds today: an Elastic IP, a public domain with a
+      Let's Encrypt certificate, and ideally a separate lab account. Our account allows none of that, so it runs differently:
+      one account, no inbound path, and for now everyone reaches the app through an SSM tunnel. <a href="#our-account">Our
+      account</a> and <a href="#access">Reaching Crucible</a> explain it, and each affected section has an
+      <b>In our account</b> note. Nothing of Crucible is deployed there yet.</p>
     <p class="lede">New to AWS? The <a href="aws-primer.html">AWS and networking primer</a> explains the words used here. To build
       it, follow the <a href="aws-deploy.html">deployment walkthrough</a>, every command in order.</p>
     <nav class="toc" aria-label="Sections">
@@ -157,6 +165,8 @@ body { margin: 0; }
       <a href="#check">cluster-check</a>
       <a href="#prod">Production on AWS</a>
       <a href="#components">Every component and its cost</a>
+      <a href="#our-account">Our account</a>
+      <a href="#access">Reaching Crucible</a>
       <a href="#node">Inside the node</a>
       <a href="#backups">Backups</a>
       <a href="#iam-roles">IAM roles</a>
@@ -179,9 +189,10 @@ body { margin: 0; }
           <tr><th scope="row">Database</th><td>Postgres 18 container</td><td>Postgres 18, wiped each run</td><td>Postgres StatefulSet, 10 GiB, nightly dump to S3</td></tr>
           <tr><th scope="row">Training content</th><td>Seeded git repos mounted at <code>/git</code>, connected as <code>file://</code> repositories with no credential</td><td>Seeded git repos, the same way</td><td>Repositories on your git host, each connected once: HTTPS with a token, or SSH with a deploy key Crucible makes; push webhook and bot merges</td></tr>
           <tr><th scope="row">Repository credentials</th><td>Sealed with a development <code>CRUCIBLE_SECRET_KEY</code> set in the compose file</td><td>The same</td><td>Sealed with a random <code>CRUCIBLE_SECRET_KEY</code> that <code>crucible aws init</code> keeps in the persistent stack, so it survives teardown; <code>git_credentials</code> from SSM also serves <code>https://</code> repositories with no credential of their own</td></tr>
-          <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a separate lab account</td></tr>
+          <tr><th scope="row">AWS labs</th><td>Off</td><td>Dry run: real pods, a fake lab account</td><td>Real, in a lab account: a separate one in the general design, the same account in ours (<a href="#our-account">our account</a>)</td></tr>
           <tr><th scope="row">AWS identities</th><td>None</td><td>None: the fake lab account needs no credentials</td><td>The node role, and three roles in the lab account (<a href="#iam-roles">IAM roles</a>)</td></tr>
-          <tr><th scope="row">Monthly cost</th><td>Free</td><td>Free</td><td>About $50 in working hours, about $130 around the clock, plus labs (<a href="#costs">what it costs</a>)</td></tr>
+          <tr><th scope="row">How people reach it</th><td><code>http://localhost:8080</code></td><td>The same</td><td>As built: <code>https://&lt;domain&gt;</code> on an Elastic IP. In our account: <code>http://localhost:18080</code> through each person's SSM tunnel (<a href="#access">reaching Crucible</a>)</td></tr>
+          <tr><th scope="row">Monthly cost</th><td>Free</td><td>Free</td><td>About $50 in working hours, about $130 around the clock, plus labs; about $4 less in ours, with no Elastic IP (<a href="#costs">what it costs</a>)</td></tr>
           <tr><th scope="row">Kubernetes</th><td>None (labs run on your own Docker or cluster)</td><td>kind cluster <code>crucible-m4</code></td><td>k3s with sysbox, on the node</td></tr>
           <tr><th scope="row">Started by</th><td><code>crucible local up</code></td><td><code>make cluster-check</code></td><td><code>crucible aws up</code>, then <code>crucible aws deploy</code></td></tr>
         </tbody>
@@ -345,11 +356,11 @@ body { margin: 0; }
 
   <section id="prod" aria-labelledby="prod-h">
     <div class="head"><span class="eyebrow">deploy/aws/persistent · deploy/aws/main · deploy/aws/labs</span><h2 id="prod-h">Production on AWS</h2>
-      <p>Three Terraform stacks. <strong>persistent</strong> holds what must survive a rebuild: sign-in, the data bucket, Terraform state and the key that seals repository credentials. <strong>main</strong> is the node and everything around it; it can be torn down and rebuilt from the latest snapshot. <strong>labs</strong> lives in a separate, standalone AWS account, where trainees' AWS labs create real resources inside hard limits.</p></div>
+      <p>Three Terraform stacks. <strong>persistent</strong> holds what must survive a rebuild: sign-in, the data bucket, Terraform state and the key that seals repository credentials. <strong>main</strong> is the node and everything around it; it can be torn down and rebuilt from the latest snapshot. <strong>labs</strong> lives in the lab account, where trainees' AWS labs create real resources inside hard limits. The drawing is the code's design: a separate, standalone lab account and a public address.</p></div>
     <div class="figure">
       <svg viewBox="0 0 1200 760" role="img" aria-labelledby="d3t d3d">
-        <title id="d3t">Production on AWS</title>
-        <desc id="d3d">Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all connected to the node over HTTPS (the git host over SSH too, for repositories connected with a deploy key). The main account holds the persistent stack (Cognito, data bucket, state bucket, the secret-key parameter in SSM) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
+        <title id="d3t">Production on AWS, as deploy/aws builds it</title>
+        <desc id="d3d">As deploy/aws builds it today, not as it runs in our account. Outside AWS: people, trainee laptops, the git host, the AWS Price List and Let's Encrypt, all connected to the node over HTTPS (the git host over SSH too, for repositories connected with a deploy key). The main account holds the persistent stack (Cognito, data bucket, state bucket, the secret-key parameter in SSM) and the main stack (scheduler, SSM, Elastic IP, security group and the EC2 node running k3s). The node assumes the lab, plan and ops roles in the separate lab account, which also holds the lab state bucket, the billing export and an AWS Budget.</desc>
 
         <text class="zl" x="20" y="38">OUTSIDE AWS</text>
         <rect class="box" x="20" y="64" width="190" height="96" rx="10"/>
@@ -370,7 +381,7 @@ body { margin: 0; }
         <text class="bs" x="36" y="506">fetched weekly</text>
         <rect class="box" x="20" y="556" width="190" height="76" rx="10"/>
         <text class="bt" x="36" y="584">Let's Encrypt</text>
-        <text class="bs" x="36" y="608">TLS certificate</text>
+        <text class="bs" x="36" y="608">as built; can't reach ours</text>
 
         <rect class="zone" x="250" y="14" width="562" height="732" rx="14"/>
         <text class="zl" x="268" y="40">MAIN AWS ACCOUNT</text>
@@ -401,7 +412,7 @@ body { margin: 0; }
         <text class="bs" x="564" y="304">env, Helm values, secrets</text>
         <rect class="box" x="290" y="342" width="232" height="66" rx="10"/>
         <text class="bt" x="306" y="368">Elastic IP + DNS</text>
-        <text class="bs" x="306" y="390">A record (Route 53 if set)</text>
+        <text class="bs" x="306" y="390">as built; not in our account</text>
         <rect class="box" x="548" y="342" width="232" height="66" rx="10"/>
         <text class="bt" x="564" y="368">Security group</text>
         <text class="bs" x="564" y="390">80 and 443 in; shell via SSM</text>
@@ -485,6 +496,14 @@ body { margin: 0; }
     <p>The node needs no keys of its own: it acts as an IAM role, and that role may only read its bucket and parameters, write
       its backups and uploads, and assume the three lab-account roles (<a href="#iam-roles">IAM roles</a>). To build all three
       stacks, follow <a href="aws-deploy.html#up">crucible aws up</a> in the deployment walkthrough.</p>
+    <div class="note ours"><p><strong>In our account.</strong>One account holds all three stacks, so the lab-account column
+      is the same account as the main one. There is no Elastic IP, no public URL, no DNS record and no Let's Encrypt: the VPC
+      has no inbound path, and the organization's SCPs deny Elastic IPs and load balancers. People and laptop agents reach the
+      node through an SSM tunnel instead (<a href="#access-ssm">today</a>), and the git host's webhook can't arrive, so
+      Crucible fetches every 60 seconds. Outbound calls, to the git host, the Price List and AWS's own APIs, leave through
+      the networking team's firewall and NAT. <code>deploy/aws/main</code> can't deploy here until the changes listed under
+      <a href="#main-changes">the main stack</a> are made; they are not made yet. Step by step:
+      <a href="aws-deploy.html#our-account">the walkthrough's own section</a>.</p></div>
   </section>
 
   <section id="components" aria-labelledby="components-h">
@@ -517,22 +536,41 @@ body { margin: 0; }
         <tbody>
           <tr><th scope="row">The node</th><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB, Ubuntu 24.04. Runs k3s with Crucible, Postgres, Traefik, and the AWS lab workspaces and Terraform runs. Cluster labs run on trainees' own clusters, not here. First boot installs k3s, Helm and sysbox.</td></tr>
           <tr><th scope="row">Disk</th><td>EBS gp3, 60 GiB, encrypted</td><td>The database and everything else on the node.</td></tr>
-          <tr><th scope="row">Public address</th><td>Elastic IP</td><td>A fixed IP your domain points at.</td></tr>
-          <tr><th scope="row">Firewall</th><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, the redirect) and 443 (HTTPS). No SSH port at all: a shell goes through SSM.</td></tr>
-          <tr><th scope="row">Network</th><td>Default VPC and subnet</td><td>Already there in every account. No NAT gateway or load balancer, which keeps it cheap.</td></tr>
+          <tr><th scope="row">Public address</th><td>Elastic IP</td><td>A fixed IP your domain points at. <b>Not in our account</b>: the SCPs deny <code>ec2:AllocateAddress</code>, and nothing could reach it anyway.</td></tr>
+          <tr><th scope="row">Firewall</th><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, the redirect) and 443 (HTTPS). No SSH port at all: a shell goes through SSM. <b>In our account</b>: no inbound rules at all; the SSM tunnel needs none.</td></tr>
+          <tr><th scope="row">Network</th><td>Default VPC and subnet</td><td>Already there in most accounts. No NAT gateway or load balancer, which keeps it cheap. <b>In our account</b>: there is no default VPC (the organization deletes it); the node goes into <code>spokeSubnet1</code> of the networking team's VPC, which must be passed in as variables.</td></tr>
           <tr><th scope="row">Node identity</th><td>IAM role <code>crucible-node</code> and its instance profile</td><td>What the node, and its pods other than lab pods, may do in AWS. See <a href="#iam-roles">IAM roles</a>.</td></tr>
           <tr><th scope="row">Metadata service</th><td>EC2 IMDSv2, hop limit 2</td><td>Hands the node role's credentials to programs on the node; a token is required, and pods can reach it, except lab pods. See <a href="#imds">IMDS</a>.</td></tr>
           <tr><th scope="row">Settings and secrets</th><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), the Helm values, and encrypted parameters for the sign-in client secret, the database password, the quiz secret and the git webhook secret (all made by Terraform), plus the optional <code>git_credentials</code> and <code>smtp_password</code> from your settings. Each deploy copies them, and the <code>smtp_*</code> settings that are set, into the Kubernetes Secret <code>crucible-secrets</code>, together with <code>CRUCIBLE_SECRET_KEY</code> from the persistent stack. The SSH host keys Crucible pins live in Postgres, so a pod restart keeps them.</td></tr>
           <tr><th scope="row">Wake and sleep</th><td>EventBridge Scheduler and its role <code>crucible-scheduler</code></td><td>Starts the node at 07:30 and stops it at 19:30, Monday to Friday, in your time zone (default <code>Europe/Bucharest</code>), to save money at night.</td></tr>
-          <tr><th scope="row">DNS record</th><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if the domain is in Route 53. Any other DNS provider works too.</td></tr>
+          <tr><th scope="row">DNS record</th><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if the domain is in Route 53. Any other DNS provider works too. <b>Not in our account</b>: there is no public address to point at.</td></tr>
         </tbody>
       </table>
     </div>
+
+    <div class="note ours" id="main-changes"><p><strong>In our account: what <code>deploy/aws/main</code> needs first.</strong>As
+      built it looks up the default VPC (<code>data "aws_vpc" "default"</code>), creates an Elastic IP (<code>aws_eip.web</code>)
+      and an optional Route 53 record, opens 80 and 443 to the internet, has Traefik request Let's Encrypt certificates, and
+      <code>crucible aws up</code> waits for <code>https://&lt;domain&gt;/healthz</code>. To deploy here it needs:</p>
+      <ul>
+        <li>an existing VPC and subnet as variables (<code>spokeSubnet1</code>);</li>
+        <li>no Elastic IP and no DNS record;</li>
+        <li>no inbound security-group rules;</li>
+        <li>Traefik without TLS or the HTTPS redirect, serving plain HTTP on port 80;</li>
+        <li>the public URL and the Cognito callback on <code>http://localhost:18080</code> (<a href="#access-ssm">why</a>);</li>
+        <li><code>up</code> and <code>status</code> checking health over SSM instead of the public URL.</li>
+      </ul>
+      <p>None of these changes is made yet, so the current commands don't work here as they stand.</p></div>
 
     <h3 class="sub">3 · labs: made once by <code>crucible aws labs-init</code>, in the lab account</h3>
     <p>The lab account can be the same as Crucible's, but a separate sandbox account is much safer. After <code>labs-init</code>,
       you activate the <code>crucible:lab-id</code> cost-allocation tag by hand (the one manual step) and run <code>up</code>,
       which reads the stack's outputs and switches AWS labs on (<a href="aws-deploy.html#labs">AWS labs setup</a>).</p>
+    <div class="note ours"><p><strong>In our account: labs run in the same account.</strong>Run <code>crucible aws labs-init</code>
+      with our own credentials and without <code>--crucible-account</code>; the labs stack then trusts the node role in this
+      account. It also sets S3's account-wide public-access block for this whole account, not just for labs. Lab instances and
+      security groups go into the spoke subnets, get no public IPs and leave through the same firewall. Elastic IPs, NAT
+      gateways and load balancers in a lab module are denied by the SCPs as well as by the lab role.</p></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
@@ -544,7 +582,7 @@ body { margin: 0; }
           <tr><th scope="row">Lab state bucket</th><td>S3 <code>crucible-&lt;account&gt;-labstate</code>, versioned, encrypted, private, HTTPS only</td><td>One Terraform state file per lab, <code>labs/&lt;id&gt;.tfstate</code>.</td></tr>
           <tr><th scope="row">Billing export</th><td>S3 bucket <code>crucible-&lt;account&gt;-labexports</code> and Data Exports (CUR 2.0) <code>crucible-labs</code></td><td>The account's bill, daily, as gzip CSV under <code>cur/</code>, with resource tags. Free. The export itself lives in us-east-1.</td></tr>
           <tr><th scope="row">Budget</th><td>AWS Budgets <code>crucible-labs-monthly</code></td><td>Alert-only: emails at 80% and 100% of the month's actual spend. Free. Made only when <code>labs-init</code> gets <code>--budget-email</code>.</td></tr>
-          <tr><th scope="row">Block Public Access</th><td>S3, account-wide</td><td>No bucket in the lab account can ever be made public.</td></tr>
+          <tr><th scope="row">Block Public Access</th><td>S3, account-wide</td><td>No bucket in the lab account can ever be made public. In ours, that is Crucible's own account too.</td></tr>
           <tr><th scope="row">Audit log</th><td>CloudTrail (built in, not created)</td><td>Who created what. Its free 90 days of history let the reaper spot anything a lab created without its tag.</td></tr>
           <tr><th scope="row">Tag search</th><td>Resource Groups Tagging API (built in)</td><td>Finds everything carrying a tag, for the sweep and the reaper.</td></tr>
         </tbody>
@@ -552,24 +590,235 @@ body { margin: 0; }
     </div>
 
     <h3 class="sub" id="costs">What it costs</h3>
-    <p>From the design's estimate for <code>eu-west-1</code>. AWS prices change; check the current ones.</p>
+    <p>From the design's estimate for <code>eu-west-1</code>. AWS prices change, and our region, <code>il-central-1</code>, has its own; check the current ones.</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Item</th><th scope="col">Note</th><th scope="col" class="num">Working hours</th><th scope="col" class="num">24/7</th></tr></thead>
         <tbody>
           <tr><th scope="row">EC2 node</th><td>t3a.xlarge on demand; 11 h × 22 days when scheduled</td><td class="num">~$40</td><td class="num">~$119</td></tr>
           <tr><th scope="row">EBS disk</th><td>60 GiB gp3</td><td class="num">~$5.30</td><td class="num">~$5.30</td></tr>
-          <tr><th scope="row">Elastic IP</th><td>public IPv4 is billed by the hour</td><td class="num">~$3.70</td><td class="num">~$3.70</td></tr>
+          <tr><th scope="row">Elastic IP</th><td>public IPv4 is billed by the hour. <b>Not in our account</b>: no Elastic IP, so $0</td><td class="num">~$3.70</td><td class="num">~$3.70</td></tr>
           <tr><th scope="row">S3</th><td>snapshots, releases, uploads</td><td class="num">&lt; $1</td><td class="num">&lt; $1</td></tr>
           <tr><th scope="row">Cognito, Scheduler, SSM</th><td>free tiers at this size</td><td class="num">~$0</td><td class="num">~$0</td></tr>
-          <tr><th scope="row">Lab account extras</th><td>billing export (only its files in S3), alert-only AWS Budget, Price List downloads; no Cost Explorer</td><td class="num">~$0</td><td class="num">~$0</td></tr>
+          <tr><th scope="row">Lab account extras (ours: the same account)</th><td>billing export (only its files in S3), alert-only AWS Budget, Price List downloads; no Cost Explorer</td><td class="num">~$0</td><td class="num">~$0</td></tr>
           <tr class="total"><th scope="row">Total</th><td>plus whatever labs spend</td><td class="num">~$50/month</td><td class="num">~$130/month</td></tr>
+          <tr class="total"><th scope="row">Total in our account</th><td>the same, without the Elastic IP</td><td class="num">~$46/month</td><td class="num">~$126/month</td></tr>
         </tbody>
       </table>
     </div>
     <div class="note"><p><strong>Two cost notes.</strong>The <code>t3a</code> family bills extra if the CPU stays busy above its
       baseline for long (about $0.05 per vCPU-hour of surplus). While the node sleeps, only the disk, the IP and S3 cost money,
-      roughly $10 a month.</p></div>
+      roughly $10 a month; about $6 in ours, with no IP.</p></div>
+    <div class="note ours"><p><strong>In our account: the network isn't ours to pay for here.</strong>The NAT gateways, their
+      two Elastic IPs and the inspection firewall belong to the networking team's stack and exist whether Crucible runs or not.
+      The node's traffic through them may add data-processing charges; they are not estimated here.</p></div>
+  </section>
+
+  <section id="our-account" aria-labelledby="our-account-h">
+    <div class="head"><span class="eyebrow">Verified 2026-10-29 · read-only checks and dry runs</span><h2 id="our-account-h">Our account</h2>
+      <p>These facts shape how Crucible runs for us. They were checked with read-only describes, EC2 <code>--dry-run</code> calls
+        and requests built to fail validation; nothing was created.</p></div>
+    <div class="cols">
+      <div><h3>One account</h3><ul>
+        <li><code>133089468093</code> (Gray-Hippo-SandboxCloudEngineering-PRD-001), region <code>il-central-1</code>, under an AWS Organizations landing zone (Control Tower).</li>
+        <li>We sign in through Identity Center as <code>Workload-Admin-PS</code>.</li>
+        <li>No separate lab account: AWS labs run in this same account.</li>
+        <li>Nothing of Crucible exists here yet: no instances, load balancers, Crucible buckets, parameters or roles.</li>
+        <li>The organization runs after-hours automation (roles such as <code>afterhours-shut-down-role</code> and <code>EC2Stop-Role</code>) that probably stops instances out of hours. What it targets isn't confirmed; check with the platform team.</li>
+      </ul></div>
+      <div><h3>One VPC, built by the networking team</h3><ul>
+        <li><code>vpc-03aa39198d92c5a25</code>, <code>10.2.128.0/22</code>, from the stack <code>SPOKE-Networking-133089468093-Stack</code>. There is no default VPC: the organization deletes it.</li>
+        <li>Workloads go in <code>spokeSubnet1</code> (<code>10.2.129.0/24</code>, AZ 1a) or <code>spokeSubnet2</code> (<code>10.2.130.0/24</code>, AZ 1b). No public IPs on launch; about 251 free addresses each.</li>
+        <li>No Transit Gateway attachment, so no route to an office or the company VPN.</li>
+        <li>No VPC endpoints except the firewall's, so the node's SSM, S3 and STS calls go out to the public AWS endpoints. The firewall must allow them; which hosts it allows isn't verified.</li>
+      </ul></div>
+      <div><h3>The way out, and no way in</h3><ul>
+        <li>Spoke subnet, then a Gateway Load Balancer endpoint into the central inspection firewall (<code>RootHub-inspection-firewall</code>, run from the hub), then a firewall subnet, a NAT gateway, and the internet gateway <code>…-egress-igw</code>.</li>
+        <li>Both spoke subnets use the route table <code>spoke-rt-1b</code>, so both currently leave through the 1b firewall endpoint.</li>
+        <li>The internet gateway only sends return traffic back through the firewall. A public IP on an instance is allowed but unreachable: a colleague tried it.</li>
+        <li>The account's two Elastic IPs (<code>001-eip-1a</code>, <code>001-eip-1b</code>) belong to the NAT gateways, not to us.</li>
+      </ul></div>
+    </div>
+
+    <h3 class="sub" id="scps">What the organization's SCPs allow</h3>
+    <p>An EC2 <code>--dry-run</code> returns the real decision. The IAM policy simulator denies everything for our role, even
+      launching an instance, so it lacks context the real SCPs use and isn't trusted here.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Action</th><th scope="col">Result</th><th scope="col">What it means for Crucible</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>ec2:RunInstances</code> in a spoke subnet</th><td><span class="allow">Allowed</span>, with or without a public IP</td><td>The node and lab instances can launch.</td></tr>
+          <tr><th scope="row"><code>ec2:CreateSecurityGroup</code></th><td><span class="allow">Allowed</span></td><td>The node's group and labs' groups.</td></tr>
+          <tr><th scope="row"><code>iam:CreateRole</code></th><td><span class="allow">Allowed</span> (the request reached validation)</td><td>The node, scheduler and lab roles.</td></tr>
+          <tr><th scope="row"><code>ec2:AllocateAddress</code>, <code>ec2:CreateInternetGateway</code></th><td><span class="deny">Denied by SCP</span></td><td>No Elastic IP, no public path of our own.</td></tr>
+          <tr><th scope="row"><code>elasticloadbalancing:CreateLoadBalancer</code>, internal and internet-facing</th><td><span class="deny">Denied by SCP</span></td><td>No ALB or NLB in front of the node.</td></tr>
+          <tr><th scope="row"><code>ec2:CreateVpcEndpoint</code>, interface and gateway</th><td><span class="deny">Denied by SCP</span></td><td>AWS API calls go out through the firewall.</td></tr>
+          <tr><th scope="row"><code>ec2:CreateSubnet</code>, <code>ec2:CreateRoute</code>, <code>ec2:CreateClientVpnEndpoint</code></th><td><span class="deny">Denied by SCP</span></td><td>We can't change the network or add a VPN.</td></tr>
+          <tr><th scope="row"><code>ec2:CreateTransitGatewayVpcAttachment</code></th><td>Can't be dry-run</td><td>The networking team's call.</td></tr>
+          <tr><th scope="row">S3 CreateBucket, Cognito CreateUserPool, SSM PutParameter, EventBridge Scheduler, Budgets, Data Exports, <code>ssm:StartSession</code></th><td>Not verified</td><td>Every stack needs some of these; the first real <code>init</code> will tell.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="access" aria-labelledby="access-h">
+    <div class="head"><span class="eyebrow">How people reach Crucible</span><h2 id="access-h">Reaching Crucible</h2>
+      <p>The code's design gives the node a public domain. Our VPC has no inbound path, so that can't work here. Today the way in
+        is an SSM tunnel; a Cloudflare Tunnel is the option for later.</p></div>
+
+    <h3 class="sub" id="access-ssm">Today: an SSM port-forward</h3>
+    <p>Each person with our Identity Center access runs a Session Manager port-forward from their laptop to port 80 on the node,
+      then opens <code>http://localhost:18080</code>. The laptop and the node's SSM agent both dial out to AWS Systems Manager,
+      which joins the two, so nothing has to accept an inbound connection. Setup, the connect script and its caveats:
+      <a href="ssm-access.html">reaching the app over SSM</a>.</p>
+    <div class="cols">
+      <div><h3>The same local port for everyone</h3><p>Crucible's public URL must equal the address in the browser: the Origin
+        check refuses state changes from any other origin, and the Cognito callback URL is built from it. So everyone's tunnel
+        listens on <code>18080</code>, with <code>CRUCIBLE_PUBLIC_URL=http://localhost:18080</code> and the Cognito callback
+        <code>http://localhost:18080/auth/callback</code>. Cognito accepts plain <code>http</code> only for localhost.</p></div>
+      <div><h3>Traefik serves plain HTTP</h3><p>Today Traefik redirects port 80 to HTTPS and requests a Let's Encrypt
+        certificate. Let's Encrypt's HTTP-01 check can't reach the node, and the redirect breaks the tunnel, so Traefik must
+        serve plain HTTP on port 80. Not changed yet (<a href="#main-changes">the list</a>).</p></div>
+      <div><h3>Agents and webhooks</h3><p>A laptop agent reaches Crucible through its own laptop's tunnel, so laptop and cluster
+        labs work only while that tunnel is open. GitHub webhooks can't arrive at all, so Crucible fetches every repository
+        every 60 seconds instead.</p></div>
+      <div><h3>Who can use it</h3><p>Only people with our AWS access. The SSO login lasts hours and an idle session ends after
+        about 20 minutes, so re-running the connect script is routine.</p></div>
+    </div>
+
+    <h3 class="sub" id="access-cloudflare">Later: a Cloudflare Tunnel into the VPC</h3>
+    <p>A design only; none of it is built. <code>cloudflared</code> runs on the node and dials out to Cloudflare, so it fits the
+      SCPs: no Elastic IP, no load balancer, no internet gateway of our own. A company hostname points at Cloudflare, Cloudflare
+      Access asks for the company sign-in, and allowed requests come back down the connection <code>cloudflared</code> already
+      opened. Anyone with a company account could then use Crucible, agents would work from anywhere, and webhooks could arrive.</p>
+    <div class="figure">
+      <svg viewBox="0 0 1100 700" role="img" aria-labelledby="d8t d8d">
+        <title id="d8t">A Cloudflare Tunnel into our VPC</title>
+        <desc id="d8d">People, trainee laptops and GitHub reach crucible.company-domain at the Cloudflare edge. People pass Cloudflare Access with the company sign-in; the agent link and the git webhook bypass Access and are checked by Crucible. Inside our account's spoke VPC, cloudflared on the k3s node in spokeSubnet1 dials out through the firewall subnet, the NAT gateway and the egress internet gateway to Cloudflare, and requests come back down that connection to Traefik on port 80 and the crucible pod.</desc>
+
+        <rect class="box" x="40" y="20" width="300" height="84" rx="10"/>
+        <text class="bt" x="56" y="48">People</text>
+        <text class="bs" x="56" y="72">a browser, anywhere;</text>
+        <text class="bs" x="56" y="92">signs in with the company account</text>
+        <rect class="box" x="400" y="20" width="300" height="84" rx="10"/>
+        <text class="bt" x="416" y="48">Trainee laptop</text>
+        <text class="bs" x="416" y="72">crucible-agent, no tunnel needed</text>
+        <text class="cd" x="416" y="92">wss://…/api/agent/ws</text>
+        <rect class="box" x="760" y="20" width="300" height="84" rx="10"/>
+        <text class="bt" x="776" y="48">GitHub</text>
+        <text class="bs" x="776" y="72">push webhook</text>
+        <text class="cd" x="776" y="92">https://…/api/git/hook</text>
+
+        <rect class="zone" x="20" y="140" width="1060" height="170" rx="14"/>
+        <text class="zl" x="40" y="166">CLOUDFLARE EDGE</text>
+        <rect class="box" x="40" y="182" width="480" height="110" rx="10"/>
+        <text class="bt" x="56" y="210">Cloudflare Access</text>
+        <text class="cd" x="56" y="234">crucible.&lt;company domain&gt; · TLS ends here</text>
+        <text class="bs" x="56" y="256">company sign-in, then a session cookie;</text>
+        <text class="bs" x="56" y="276">Crucible's own Cognito sign-in follows</text>
+        <rect class="box dash" x="560" y="182" width="500" height="110" rx="10"/>
+        <text class="bt" x="576" y="210">Two paths bypass Access</text>
+        <text class="cd" x="576" y="234">/api/agent/ws · Crucible checks the pairing token</text>
+        <text class="cd" x="576" y="256">/api/git/hook · Crucible checks the secret</text>
+        <text class="bs" x="576" y="278">reachable from the internet</text>
+
+        <rect class="zone" x="20" y="350" width="1060" height="336" rx="14"/>
+        <text class="zl aws" x="36" y="376">OUR ACCOUNT 133089468093 · il-central-1</text>
+        <rect class="group" x="36" y="390" width="1028" height="282" rx="12"/>
+        <text class="zl" x="52" y="412">SPOKE VPC 10.2.128.0/22 · built by the networking team</text>
+
+        <rect class="box" x="52" y="426" width="440" height="226" rx="10"/>
+        <text class="bt" x="68" y="452">spokeSubnet1 · 10.2.129.0/24</text>
+        <text class="bs" x="68" y="472">no public IP, no inbound rules</text>
+        <rect class="box hot" x="68" y="486" width="408" height="152" rx="10"/>
+        <text class="bt" x="84" y="510">EC2 node · k3s</text>
+        <rect class="box hot dash" x="84" y="524" width="124" height="98" rx="8"/>
+        <text class="bt" x="98" y="550">cloudflared</text>
+        <text class="bs" x="98" y="572">Deployment;</text>
+        <text class="bs" x="98" y="590">token from</text>
+        <text class="bs" x="98" y="608">SSM</text>
+        <rect class="box" x="222" y="524" width="120" height="98" rx="8"/>
+        <text class="bt" x="236" y="550">Traefik :80</text>
+        <text class="bs" x="236" y="572">plain HTTP,</text>
+        <text class="bs" x="236" y="590">no certificate</text>
+        <rect class="box hot" x="356" y="524" width="108" height="98" rx="8"/>
+        <text class="bt" x="370" y="550">crucible</text>
+        <text class="bs" x="370" y="572">pod :8080</text>
+
+        <rect class="box" x="520" y="470" width="170" height="110" rx="10"/>
+        <text class="bt" x="536" y="498">Firewall subnet</text>
+        <text class="bs" x="536" y="522">GWLB endpoint into</text>
+        <text class="bs" x="536" y="542">the hub's inspection</text>
+        <text class="bs" x="536" y="562">firewall</text>
+        <rect class="box" x="710" y="470" width="160" height="110" rx="10"/>
+        <text class="bt" x="726" y="498">NAT subnet</text>
+        <text class="bs" x="726" y="522">NAT gateway,</text>
+        <text class="bs" x="726" y="542">its own Elastic IP</text>
+        <rect class="box aws" x="890" y="470" width="150" height="110" rx="10"/>
+        <text class="bt" x="906" y="498">egress-igw</text>
+        <text class="bs" x="906" y="522">internet gateway;</text>
+        <text class="bs" x="906" y="542">nothing starts</text>
+        <text class="bs" x="906" y="562">inbound</text>
+
+        <path class="ar" d="M190,104 V178" marker-end="url(#ah)"/>
+        <text class="al on1" x="198" y="128">HTTPS</text>
+        <path class="ar" d="M600,104 V178" marker-end="url(#ah)"/>
+        <path class="ar" d="M910,104 V178" marker-end="url(#ah)"/>
+
+        <path class="ar" d="M208,540 H215" marker-end="url(#ah)"/>
+        <path class="ar" d="M342,540 H352" marker-end="url(#ah)"/>
+        <path class="ar" d="M476,525 H516" marker-end="url(#ah)"/>
+        <text class="al" x="496" y="516">out</text>
+        <path class="ar" d="M690,525 H706" marker-end="url(#ah)"/>
+        <path class="ar" d="M870,525 H886" marker-end="url(#ah)"/>
+        <path class="ar" d="M965,470 V314" marker-end="url(#ah)"/>
+        <text class="al on1" x="955" y="336" text-anchor="end">cloudflared dials out on 7844 or 443, through the firewall and NAT</text>
+        <path class="ar soft" d="M1050,314 V662 H146 V626" marker-end="url(#ahm)"/>
+        <text class="al" x="600" y="666" text-anchor="middle" style="fill: var(--muted)">requests come back down that same connection</text>
+      </svg>
+    </div>
+    <div class="key">
+      <span><i class="sw hot"></i>Crucible's own programs</span>
+      <span><i class="sw dash"></i>Not built yet</span>
+      <span><i class="sw zone"></i>Cloudflare, or our account</span>
+      <span><i class="sw arrow"></i>Connection opened in this direction</span>
+    </div>
+    <div class="cols">
+      <div><h3>How it would be set up</h3><ul>
+        <li>Create the tunnel in the Cloudflare Zero Trust dashboard to get a tunnel token, and add a public hostname, <code>crucible.&lt;company domain&gt; → http://traefik.kube-system.svc:80</code>. Cloudflare creates the DNS record.</li>
+        <li><code>cloudflared</code> runs as a small Deployment in the Helm chart, two replicas, with the token in the <code>crucible-secrets</code> Secret, sourced from an SSM SecureString like the other secrets.</li>
+        <li>An Access policy lets in company emails or a group; two bypass rules leave <code>/api/agent/ws</code> and <code>/api/git/hook</code> to Crucible's own checks.</li>
+        <li>TLS ends at Cloudflare, so Traefik stays HTTP-only, exactly as for the SSM tunnel.</li>
+        <li>The public URL and the Cognito callback move to the Cloudflare hostname. The Origin check keeps working, since browsers send that hostname.</li>
+      </ul></div>
+      <div><h3>What it needs</h3><ul>
+        <li>The firewall to allow <code>*.argotunnel.com</code> and <code>*.cloudflare.com</code> on 7844 (TCP and UDP), or 443.</li>
+        <li>The company domain, or a subdomain of it, on Cloudflare.</li>
+        <li>The security team's approval: Cloudflare decrypts traffic at its edge, the tunnel is a path into a VPC built to have no ingress, and the two bypassed paths are reachable from the internet, guarded only by Crucible's checks.</li>
+        <li>Cloudflare Zero Trust is free up to 50 users; check the current plans.</li>
+      </ul></div>
+      <div><h3>What isn't built</h3><ul>
+        <li>The <code>cloudflared</code> Deployment and its token in the chart and in <code>deploy/aws/main</code>.</li>
+        <li>Optional: an Access service token for the agent, so <code>/api/agent/ws</code> needn't bypass Access. That is an agent change.</li>
+        <li>Optional: trusting Access's own token for sign-in, so people sign in once instead of twice. That is a code change. Both sign-ins can use the same identity provider, so the second is usually one click.</li>
+        <li>The <a href="#main-changes">main-stack changes</a> the SSM path needs too.</li>
+      </ul></div>
+    </div>
+
+    <h3 class="sub" id="access-ruled-out">Ruled out in this account</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Option</th><th scope="col">Why not</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">An Elastic IP and a public domain</th><td>The SCPs deny <code>ec2:AllocateAddress</code>, and the spoke subnets have no inbound path.</td></tr>
+          <tr><th scope="row">A public IP on the node</th><td>Allowed, but unreachable: return traffic only, tested.</td></tr>
+          <tr><th scope="row">An ALB or NLB, internal or internet-facing</th><td>The SCPs deny <code>CreateLoadBalancer</code>. A reachable load balancer would have to come from the networking team.</td></tr>
+          <tr><th scope="row">AWS Client VPN</th><td>The SCPs deny <code>CreateClientVpnEndpoint</code>.</td></tr>
+          <tr><th scope="row">Our own VPC endpoints, subnets or routes</th><td>The SCPs deny them.</td></tr>
+          <tr><th scope="row">Reaching it from the office or the company VPN</th><td>No Transit Gateway attachment, so no route; adding one is the networking team's call.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <section id="node" aria-labelledby="node-h">
@@ -668,6 +917,9 @@ body { margin: 0; }
       <div><h3>Why one replica</h3><p>The agent links, locks and live terminals are held in memory, so the chart pins <code>replicas: 1</code> and a <code>Recreate</code> rollout. Scaling out would need a shared hub.</p></div>
       <div><h3>AWS credentials</h3><p>Pods that call AWS take the node role's credentials from the metadata service. Lab pods are cut off from it, because that role can assume any lab's role. Who acts as which role, and why: <a href="#iam-roles">IAM roles</a>.</p></div>
     </div>
+    <div class="note ours"><p><strong>In our account.</strong>Traefik can't get a Let's Encrypt certificate here, and its redirect
+      to HTTPS breaks the SSM tunnel, so it must serve plain HTTP on port 80, where the tunnel lands. That change isn't made yet
+      (<a href="#main-changes">the list</a>). Everything else inside the node is the same.</p></div>
   </section>
 
   <section id="backups" aria-labelledby="backups-h">
@@ -716,7 +968,8 @@ body { margin: 0; }
     <p><b>Trust.</b> The lab, plan and ops roles each trust the node role only (<code>aws:PrincipalArn</code> is the node role's
       ARN), and the lab role also requires a non-empty <code>crucible:lab-id</code> request tag. Because the trust names the
       account and conditions on the node role's ARN, the node role's own policy must allow the call too, whether the lab account
-      is a second account or the same one.</p>
+      is a second account or the same one. In our account it is the same one, so the lab-account column below is our one
+      account (<a href="#our-account">our account</a>).</p>
     <p><b>No role at all.</b> The AWS Price List is a public bulk download from <code>pricing.us-east-1.amazonaws.com</code>, and
       Cognito sign-in is plain OIDC between the browser and Cognito.</p>
 
@@ -924,18 +1177,22 @@ body { margin: 0; }
       Tags plus IAM conditions give each lab its own fence inside it. The trade-off is that isolation is best effort: a trainee
       can <em>see</em> other labs' resources through <code>Describe</code> calls, though not change them. That is why a dedicated
       sandbox account is recommended.</p></div>
+    <div class="note ours"><p><strong>In our account: labs share Crucible's own account.</strong>There is no second account, so
+      the fence is all that keeps labs apart from Crucible itself. A lab session can't change the node, its role or its
+      buckets, because they carry no lab tag, but its <code>Describe</code> calls can see them, along with the networking
+      team's VPC.</p></div>
   </section>
 
   <section id="runtimes" aria-labelledby="runtimes-h">
     <div class="head"><span class="eyebrow">A lab's runtime</span><h2 id="runtimes-h">Where labs run</h2>
-      <p>Only AWS labs use Crucible's own cluster and cost money. Laptop and cluster labs run on the trainee's side, through their agent.</p></div>
+      <p>Only AWS labs use Crucible's own cluster and cost money. Laptop and cluster labs run on the trainee's side, through their agent. In our account an agent reaches Crucible only while that laptop's SSM tunnel is open (<a href="#access-ssm">today's access</a>).</p></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Runtime</th><th scope="col">Runs on</th><th scope="col">Reached through</th><th scope="col">Checks</th><th scope="col">Cost</th></tr></thead>
         <tbody>
           <tr><th scope="row">Laptop (<code>local</code>)</th><td>The trainee's Docker</td><td>Their crucible-agent</td><td>Self-reported, optional review</td><td>Free</td></tr>
           <tr><th scope="row">Cluster (<code>cluster</code>)</th><td>The trainee's own Kubernetes cluster, in the toolbox image</td><td>Their agent, with their kubeconfig (<code>crucible-agent cluster up</code> makes a kind cluster)</td><td>Run on the cluster by Crucible</td><td>Free</td></tr>
-          <tr><th scope="row">Terraform (<code>runtime: terraform</code>, <code>cloud: aws</code>)</th><td>Real resources in the lab account; the workspace and Terraform pods on the node</td><td>The browser terminal, into the workspace pod</td><td>Run server-side in the workspace</td><td class="money">Estimated, approved, metered, billed</td></tr>
+          <tr><th scope="row">Terraform (<code>runtime: terraform</code>, <code>cloud: aws</code>)</th><td>Real resources in the lab account (ours: the same account); the workspace and Terraform pods on the node</td><td>The browser terminal, into the workspace pod</td><td>Run server-side in the workspace</td><td class="money">Estimated, approved, metered, billed</td></tr>
         </tbody>
       </table>
     </div>
@@ -948,6 +1205,10 @@ body { margin: 0; }
         credentials that can only touch that one lab. Prices come from the free public AWS Price List, and spend from the lab's
         own Terraform state, then from the free billing export. If price data is missing or stale, the lab can't be requested;
         Crucible never quotes $0.</p></div>
+    <div class="note ours"><p><strong>In our account.</strong>Labs run in this same account, in <code>il-central-1</code>, where our
+      only VPC is. With no default VPC, a lab module that launches an instance has to place it in a spoke subnet; it gets no
+      public IP and reaches the internet through the firewall. Elastic IPs, NAT gateways and load balancers in a lab module are
+      denied by the SCPs as well as by the lab role. A lab like Cloud Heat below, S3 only, needs no network.</p></div>
     <div class="cols">
       <div><h3>lab.yaml (Forge 401, "Cloud Heat")</h3>
         <pre><code>id: cloud-heat
@@ -1045,6 +1306,10 @@ resource "aws_s3_bucket" "forge" {
       reads its settings from Parameter Store and runs the same deploy script; on an empty database the API restores the newest
       snapshot first. Every command, with what to expect: <a href="aws-deploy.html#deploy">deploy</a> and
       <a href="aws-deploy.html#everyday">everyday operations</a>.</p>
+    <div class="note ours"><p><strong>In our account.</strong>Shipping works the same way, since S3 and SSM are reached by
+      outbound calls through the firewall (if it allows them). Two parts differ, and neither is changed yet: the start-up script
+      must leave Traefik on plain HTTP, and <code>up</code> must check health over SSM, because it now waits for
+      <code>https://&lt;domain&gt;/healthz</code>, which doesn't exist here (<a href="#main-changes">the list</a>).</p></div>
   </section>
 
   <section id="limits" aria-labelledby="limits-h">
@@ -1059,7 +1324,7 @@ resource "aws_s3_bucket" "forge" {
         </ul></div>
       <div><h3>Good habits</h3>
         <ul>
-          <li>Use a separate sandbox account for labs, with a budget alert of its own in AWS Budgets.</li>
+          <li>Use a separate sandbox account for labs, with a budget alert of its own in AWS Budgets. We have one account, so our labs share it with Crucible; give <code>labs-init</code> a <code>--budget-email</code>.</li>
           <li>Run one Crucible per lab account: the reaper reports, but never deletes, labs it doesn't know.</li>
           <li>Keep backups of the three local state files: persistent, labs, and your <code>crucible.tfvars</code>.</li>
           <li>Try a new lab in dry-run mode on your machine first (<code>make cluster-check</code>), where a fake account stands in for AWS.</li>

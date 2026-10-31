@@ -153,6 +153,7 @@ svg .ahm { fill: var(--muted); }
       <a href="deploy-architecture.html#components">every component</a>; for generic AWS and networking ideas, the <a href="aws-primer.html">AWS primer</a>. For the full drawings, read the <a href="deploy-architecture.html">deploy architecture</a>.</p>
     <nav class="toc" aria-label="Sections">
       <a href="#overview">What you'll end up with</a>
+      <a href="#our-account">In our account</a>
       <a href="#before">Before you start</a>
       <a href="#init">One-time setup</a>
       <a href="#configure">Configure</a>
@@ -174,7 +175,7 @@ svg .ahm { fill: var(--muted); }
       <p>One EC2 server in your AWS account runs single-node Kubernetes (k3s). On it run Crucible, its Postgres database and
         Traefik, which serves HTTPS with a Let's Encrypt certificate. People sign in through an Amazon Cognito user pool. Two
         Terraform stacks build it: <b>persistent</b> (sign-in, buckets, the secret key; never destroyed) and <b>main</b> (the
-        server and everything around it). A second AWS account for AWS labs is optional.</p></div>
+        server and everything around it). A second AWS account for AWS labs is optional (in our account there is only one; see <a href="#our-account">In our account</a>).</p></div>
     <div class="figure">
       <svg viewBox="0 0 1000 430" role="img" aria-labelledby="ov-t ov-d">
         <title id="ov-t">What a deployment looks like</title>
@@ -279,7 +280,8 @@ svg .ahm { fill: var(--muted); }
       <div><h3>What it costs</h3><p>The design's estimate for <code>eu-west-1</code>, on demand: the <code>t3a.xlarge</code> node about $40 a month when it
         sleeps outside working hours (11 h × 22 days), about $119 if it runs 24/7. Add the 60 GiB disk (about $5.30), the Elastic IP
         (about $3.70) and S3 (under $1). That makes <b>about $50 a month</b> on the schedule, <b>about $130</b> around the clock, plus
-        what labs spend. Asleep, it costs about $10 a month. Check current AWS prices; <a href="deploy-architecture.html#components">Every component</a> has the table.</p></div>
+        what labs spend. Asleep, it costs about $10 a month. Check current AWS prices; <a href="deploy-architecture.html#components">Every component</a> has the table.</p>
+        <p><b>In our account:</b> no Elastic IP, so take about $3.70 a month off. The region is <code>il-central-1</code>, so prices differ from these.</p></div>
       <div><h3>The cost drivers</h3><p>The instance type and how many hours it runs. <code>t3a</code> instances also bill surplus CPU credits if they stay busy
         above their baseline (40% for <code>t3a.xlarge</code>), about $0.05 per vCPU-hour; watch the <code>CPUSurplusCreditsCharged</code> metric.
         Cognito, the scheduler, SSM and the lab account's billing export and Budget are free at this size.</p></div>
@@ -288,6 +290,40 @@ svg .ahm { fill: var(--muted); }
         (<code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>; a tag is refused). Left empty, cluster labs stay off. Laptop labs
         and AWS labs work either way. The runbook's toolbox section has the build commands.</p></div>
     </div>
+  </section>
+
+  <!-- ───────────── 1b. our account ───────────── -->
+  <section id="our-account" aria-labelledby="our-account-h">
+    <div class="head"><span class="eyebrow">Our deployment</span><h2 id="our-account-h">In our account: what's different</h2>
+      <p>The rest of this page describes a standard install: an Elastic IP, a domain, HTTPS, and a separate lab account. Ours is not that.
+        We have <b>one</b> AWS account (<code>il-central-1</code>, inside an AWS Organizations landing zone), its VPC has no inbound path,
+        and for now we reach the app over SSM. Where a step differs, a note headed "In our account" says how.</p></div>
+    <ol class="steps">
+      <li><h3>One account, for Crucible and for labs</h3>
+        <p>Run <code>crucible aws labs-init</code> with our own credentials and <b>without</b> <code>--crucible-account</code>. The labs stack then
+          trusts the node role in this same account. It also turns on S3's account-wide public-access block for it.</p></li>
+      <li><h3>No Elastic IP, no DNS record, no Let's Encrypt</h3>
+        <p>The organization's policies deny Elastic IPs, internet gateways, load balancers, VPC endpoints, subnets and routes. A public IP on an
+          instance is allowed but unreachable, and Let's Encrypt's check can't reach the node. So there is no public URL, and the
+          "point DNS" and "wait for HTTPS" steps do not apply.</p></li>
+      <li><h3>Access is a Session Manager port-forward</h3>
+        <p>Each person with our Identity Center access forwards a local port to port 80 on the node and opens <code>http://localhost:18080</code>.
+          Everyone must use the same local port, because Crucible's public URL has to match the browser's address. Setup and the connect script:
+          <a href="ssm-access.html">Reaching the app over SSM</a>; the design: <a href="deploy-architecture.html#access-ssm">access over SSM</a>.</p></li>
+      <li><h3>Later: a Cloudflare Tunnel</h3>
+        <p>A future option is an outbound-only Cloudflare Tunnel from the node, gated by Cloudflare Access. It needs security-team approval and
+          is not built. See <a href="deploy-architecture.html#access-cloudflare">the Cloudflare option</a>.</p></li>
+    </ol>
+    <div class="note warn"><p><strong>Before this works here.</strong>The stack as built cannot deploy in our account yet. These changes to
+      <code>deploy/aws/main</code> and <code>internal/awsops</code> are <b>not made</b>:</p>
+      <ul>
+        <li>take an existing VPC and subnet as variables (the workload subnet <code>spokeSubnet1</code>) instead of looking up the default VPC;</li>
+        <li>create no Elastic IP and no Route 53 record, and open no inbound security-group rules;</li>
+        <li>serve plain HTTP from Traefik: no Let's Encrypt, no redirect to HTTPS;</li>
+        <li>set the public URL and the Cognito callback to <code>http://localhost:18080</code>;</li>
+        <li>have <code>up</code> and <code>status</code> check health over SSM instead of the public URL.</li>
+      </ul>
+      <p>Until they land, the commands below are the standard ones and will fail here at the points the notes mark.</p></div>
   </section>
 
   <!-- ───────────── 2. before ───────────── -->
@@ -319,18 +355,26 @@ crucible aws status            <span class="c"># before init, this fails with "d
       <div><h3>AWS permissions</h3><p>Use administrator rights in the account. The stacks create S3 buckets, a Cognito user pool, SSM parameters,
         IAM roles and policies, an EC2 instance, a security group, an Elastic IP, EventBridge Scheduler schedules and, optionally, a
         Route 53 record. Day to day you also run SSM commands and start and stop the instance. The runbook gives no minimal policy.</p>
+        <p><b>In our account:</b> we sign in through Identity Center as <code>Workload-Admin-PS</code>. Organization policies (SCPs) deny
+          <code>ec2:AllocateAddress</code>, <code>ec2:CreateInternetGateway</code>, <code>elasticloadbalancing:CreateLoadBalancer</code>, <code>ec2:CreateVpcEndpoint</code>,
+          <code>ec2:CreateSubnet</code>, <code>ec2:CreateRoute</code> and <code>ec2:CreateClientVpnEndpoint</code>. EC2 instances in the spoke subnets, security groups and
+          IAM roles are allowed. S3, Cognito, SSM parameters, EventBridge Scheduler, Budgets, Data Exports and <code>ssm:StartSession</code> are not yet checked.</p>
         <p>These are your own role's permissions. The node and the lab roles are made by the stacks; see <a href="deploy-architecture.html#iam-roles">IAM roles</a>.</p></div>
       <div><h3>A domain you control</h3><p>Pick the final hostname now, such as <code>crucible.example.com</code>. The Cognito sign-in callback is
         built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
-        give Terraform a Route 53 hosted zone that holds the name.</p></div>
+        give Terraform a Route 53 hosted zone that holds the name.</p>
+        <p><b>In our account:</b> no domain is needed for SSM access. <code>init</code> still requires <code>--domain</code> today; see <a href="#init">init</a>.</p></div>
       <div><h3>The region</h3><p><code>init</code> takes the region, and everything in the main account follows it: the node goes where the user pool is.
         The account needs its <b>default VPC</b> in that region, because the node is placed in its first default subnet; <code>up</code>
         fails without one. Labs' regions are set separately, in the lab account.</p>
+        <p><b>In our account:</b> the organization deletes the default VPC, so this check returns <code>[]</code> and <code>create-default-vpc</code> is not an
+          option. The stack must take our VPC (<code>vpc-03aa39198d92c5a25</code>) and <code>spokeSubnet1</code> as variables; not built yet.</p>
         <div class="cmd"><pre><code>aws ec2 describe-vpcs --region eu-west-1 --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'   <span class="c"># [] means none</span>
 aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if there is none</span></code></pre></div></div>
-      <div><h3>AWS labs or not</h3><p>AWS labs create real resources, so they belong in a <b>second, standalone AWS account</b>. The runbook strongly
+      <div><h3>AWS labs or not</h3><p>AWS labs create real resources, so they belong in a <b>second, standalone AWS account</b> (we have only one; see below). The runbook strongly
         recommends one: the permission boundary limits labs to EC2 and S3, small instances and allowed regions, but isolation in a
-        shared account is best-effort. You can add labs later; Crucible works without them.</p></div>
+        shared account is best-effort. You can add labs later; Crucible works without them.</p>
+        <p><b>In our account:</b> there is no second account, so labs share this one and isolation is best-effort. See <a href="#labs">AWS labs</a>.</p></div>
     </div>
   </section>
 
@@ -338,6 +382,9 @@ aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if the
   <section id="init" aria-labelledby="init-h">
     <div class="head"><span class="eyebrow">deploy/aws/persistent · once per account</span><h2 id="init-h">One-time setup: <code>crucible aws init</code></h2>
       <p>This creates everything that must outlive the server. Nothing here is ever destroyed by Crucible.</p></div>
+    <div class="note"><p><strong>In our account.</strong><code>--domain</code> is required today and feeds the Cognito callback (<code>https://&lt;domain&gt;/auth/callback</code>). For us the
+      callback must be <code>http://localhost:18080/auth/callback</code> (Cognito accepts plain http only for localhost). <code>init</code> cannot take that yet,
+      so what to pass for <code>--domain</code> in the meantime is open.</p></div>
     <ol class="steps">
       <li><h3>Run init <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
@@ -393,6 +440,9 @@ schedule_timezone = "Europe/Bucharest"
 <span class="c"># schedule_enabled = false</span></code></pre></div>
     <p>Sign-in needs nothing here: <code>up</code> passes the Cognito issuer, client id and pool id from the persistent stack, and Terraform
       stores the client secret in SSM itself.</p>
+    <div class="note"><p><strong>In our account.</strong><code>domain</code> and <code>acme_email</code> make no sense without HTTPS; the public URL becomes <code>http://localhost:18080</code>.
+      <code>route53_zone_id</code> stays empty. The stack needs new variables for our VPC and subnet, which do not exist yet. The org's
+      after-hours automation may also stop the node, whatever <code>schedule_enabled</code> says; check with the platform team.</p></div>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Variable</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">What it means, and when to change it</th></tr></thead>
       <tbody>
@@ -432,6 +482,9 @@ schedule_timezone = "Europe/Bucharest"
     <div class="head"><span class="eyebrow">deploy/aws/main · internal/awsops</span><h2 id="up-h">Build the node: <code>crucible aws up</code></h2>
       <p>One command builds the server, waits for it, and ships the release you have checked out. <code>--var-file</code> defaults to
         <code>deploy/aws/main/crucible.tfvars</code>.</p></div>
+    <div class="note"><p><strong>In our account.</strong>as built, <code>up</code> fails at the apply: it looks up a default VPC that does not exist here, and tries to allocate an Elastic IP,
+      which an SCP denies. The "Tells you where to point DNS" and "Waits for HTTPS" steps do not apply; once the changes above are made,
+      <code>up</code> checks health over SSM instead.</p></div>
     <div class="cmd"><pre><code>crucible aws up</code></pre></div>
     <ol class="steps">
       <li><h3>Reads the persistent stack <span class="lane">your computer</span></h3>
@@ -471,6 +524,9 @@ schedule_timezone = "Europe/Bucharest"
 
     <h3>What the node does on first boot</h3>
     <p>Cloud-init runs <code>deploy/aws/main/bootstrap.sh.tftpl</code>. Everything it prints goes to <code>/var/log/crucible-bootstrap.log</code>.</p>
+    <div class="note"><p><strong>In our account.</strong>the "Configures Traefik" step must change: Traefik has to serve plain HTTP on port 80, with no Let's Encrypt request and no redirect.
+      Today it redirects to HTTPS, which breaks the tunnel. Outbound calls (S3, SSM, STS, package downloads) leave through the
+      central firewall and NAT; which hosts it allows is not verified.</p></div>
     <ol class="steps">
       <li><h3>Prepares the machine</h3><p>Sets the time zone to <code>schedule_timezone</code>, installs <code>unzip</code> and <code>curl</code>, then AWS CLI v2.</p></li>
       <li><h3>Configures Traefik</h3><p>Writes a k3s manifest so Traefik, which comes with k3s, gets a Let's Encrypt certificate by HTTP-01 on port 80 and
@@ -554,6 +610,8 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
     <div class="head"><span class="eyebrow">docs/runbooks/cognito.md · in-app Docs</span><h2 id="first-h">First sign-in and setup inside Crucible</h2>
       <p>Configuration lives in Crucible's database, not in git or Terraform. You set it up in the app as the first admin. The in-app
         Docs (<code>https://&lt;domain&gt;/docs</code>) cover each page in full.</p></div>
+    <div class="note"><p><strong>In our account.</strong>open the SSM tunnel first, then use <code>http://localhost:18080</code> wherever this section says <code>https://&lt;domain&gt;</code>.
+      GitHub webhooks cannot reach us, so skip the webhook step: Crucible fetches every 60 seconds anyway. Laptop agents reach Crucible only while a tunnel is open.</p></div>
     <ol class="steps">
       <li><h3>Invite the bootstrap admin in Cognito</h3>
         <p>You can do this any time after <code>init</code>. Use the same email as <code>bootstrap_admin</code>. Add <code>--region</code> if your AWS
@@ -627,6 +685,10 @@ smtp_password = "…"                                         <span class="c"># 
       <p>Do this after Crucible itself works. AWS labs run Terraform in the lab account with one-hour credentials scoped to one lab. Crucible
         prices them itself from the public AWS Price List, meters them from each lab's Terraform state, then replaces that with the free
         billing export. How it works, and what the permission boundary allows: <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a> and <a href="deploy-architecture.html#iam-fence">the IAM fence</a>.</p></div>
+    <div class="note"><p><strong>In our account.</strong>the lab account is our account. Run <code>labs-init</code> with our own credentials and <b>without</b>
+      <code>--crucible-account</code>. Lab instances and security groups go in the spoke subnets, get no public IPs, and leave through the same firewall.
+      Lab modules that create Elastic IPs, NAT gateways or load balancers fail, denied by the SCPs as well as by the lab role. The permission boundary is
+      the only isolation between labs and Crucible itself.</p></div>
     <ol class="steps">
       <li><h3>Run labs-init <span class="lane aws">lab account credentials</span></h3>
         <p>Runs with your own role in the lab account; it creates the lab, ops and plan roles (<a href="deploy-architecture.html#iam-roles">IAM roles</a>).</p>
@@ -706,6 +768,10 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
       </tbody>
     </table></div>
+    <div class="note"><p><strong>In our account.</strong><code>status</code> and the health check use the public URL today; until they check over SSM, test it through the tunnel with
+      <code>curl http://localhost:18080/healthz</code>. The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
+      <code>afterhours-shut-down-role</code>, <code>EC2Stop-Role</code>) probably stops instances out of hours. Not confirmed what it targets: check with the platform team.
+      "Bring it back" needs no DNS change here.</p></div>
     <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The
       nightly backup runs at <b>19:15</b>: a <code>pg_dump</code> to <code>snapshots/</code> in the data bucket (kept 30 days) and a copy to
       <code>latest/crucible-latest.dump</code>, which never expires, so a long teardown can still be restored. Your own role runs <code>snapshot</code>, <code>sleep</code> and <code>wake</code>; the node role does the backup (<a href="deploy-architecture.html#backups">backups</a>, <a href="deploy-architecture.html#iam-roles">IAM roles</a>). Trainees' uploads live under <code>uploads/</code>, with no expiry.</p>
@@ -794,6 +860,9 @@ crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
   <section id="trouble" aria-labelledby="trouble-h">
     <div class="head"><span class="eyebrow">When it doesn't work</span><h2 id="trouble-h">Troubleshooting</h2>
       <p>Every command below runs on the node, in an SSM session, unless it starts with <code>crucible</code>.</p></div>
+    <div class="note"><p><strong>In our account.</strong>the certificate and DNS entry below do not apply. If the app does not answer, check in order: the node is running (the after-hours
+      automation may have stopped it), the SSM tunnel is open on <code>18080</code>, then Traefik is serving HTTP on port 80. Sign-in errors
+      here usually mean the Cognito callback is not <code>http://localhost:18080/auth/callback</code>, or the browser uses another port.</p></div>
     <div class="trouble">
       <article id="t-cert"><h3>No certificate, or HTTPS never answers</h3><dl>
         <dt>Symptom</dt><dd><p><code>status</code> stays at <code>healthz: not answering</code>; the browser shows a certificate warning or nothing.</p></dd>

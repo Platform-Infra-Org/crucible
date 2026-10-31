@@ -207,10 +207,10 @@ func TestInitAndUp(t *testing.T) {
 	r := &recorder{output: fakeAWS}
 	root := t.TempDir()
 	o := r.ops(root)
-	if err := o.Init(context.Background(), "eu-west-1", "c.example.com"); err != nil {
+	if err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err != nil {
 		t.Fatal(err)
 	}
-	if indexOf(r.calls, "persistent apply -var region=eu-west-1 -var domain=c.example.com") < 0 {
+	if indexOf(r.calls, "persistent apply -var region=eu-west-1 -var access=public -var local_port=18080 -var domain=c.example.com") < 0 {
 		t.Fatalf("init apply missing:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
@@ -342,7 +342,7 @@ func TestDefaultOutputIncludesStderrInError(t *testing.T) {
 }
 
 func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
-	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"}}`
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"}}`
 	r := &recorder{output: func(cmd string) string {
 		if strings.Contains(cmd, "labs output -json") {
 			return labs
@@ -350,7 +350,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 		return fakeAWS(cmd)
 	}}
 	o := r.ops(t.TempDir())
-	if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333", 0, nil, nil); err != nil {
+	if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var crucible_account_id=111122223333") < 0 {
@@ -363,7 +363,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
 		"-var lab_state_bucket=crucible-444455556666-labstate", "-var lab_state_region=eu-west-1", "-var lab_regions=eu-west-1",
 		"-var lab_plan_role_arn=arn:aws:iam::444455556666:role/crucible-lab-plan", "-var lab_export_bucket=crucible-444455556666-exports",
-		"-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs"} {
+		"-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs", "-var lab_vpc_id=vpc-1", "-var lab_subnet_ids=subnet-a,subnet-b"} {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
 		}
@@ -412,7 +412,7 @@ func TestLabsInitTrustsMainsNodeRole(t *testing.T) {
 		}
 		return fakeAWS(cmd)
 	}}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "labs apply -var region=eu-west-1 -var node_role_name=forge-node") < 0 {
@@ -427,7 +427,7 @@ func TestLabsInitBeforeMainSaysWhichRoleItTrusts(t *testing.T) {
 		}
 		return nil
 	}}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "node_role_name") >= 0 {
@@ -441,14 +441,14 @@ func TestLabsInitBeforeMainSaysWhichRoleItTrusts(t *testing.T) {
 // labs-init sets the account's AWS Budget (a free backstop) when asked; without the flags the stack defaults apply.
 func TestLabsInitPassesTheBudget(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 250, []string{"ops@example.com", "fin@example.com"}, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 250, []string{"ops@example.com", "fin@example.com"}, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=250 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
 		t.Fatalf("labs-init must pass the budget:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "budget_") >= 0 {
@@ -465,14 +465,14 @@ func TestLabsInitKeepsTheBudget(t *testing.T) {
 		return fakeAWS(cmd)
 	}
 	r := &recorder{output: labs}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=250 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
 		t.Fatalf("without the flags the current budget is kept, not reset:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: labs}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 300, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 300, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var budget_monthly_usd=300 -var budget_emails=["ops@example.com","fin@example.com"]`) < 0 {
@@ -483,14 +483,14 @@ func TestLabsInitKeepsTheBudget(t *testing.T) {
 // labs-init --allowed-regions sets the regions labs may use (an HCL list); without it a new stack has only --region.
 func TestLabsInitPassesTheAllowedRegions(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1", "eu-central-1"}); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1", "eu-central-1"}, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var allowed_regions=["eu-west-1","eu-central-1"]`) < 0 {
 		t.Fatalf("labs-init must pass the allowed regions:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "allowed_regions") >= 0 {
@@ -509,21 +509,21 @@ func TestLabsInitKeepsTheAllowedRegions(t *testing.T) {
 		}
 	}
 	r := &recorder{output: labs("eu-west-1,eu-central-1")}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, nil, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var allowed_regions=["eu-west-1","eu-central-1"]`) < 0 {
 		t.Fatalf("without the flag the current regions are kept, not reset:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: labs("eu-west-1,eu-central-1")}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1"}); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-west-1"}, LabNet{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, `-var allowed_regions=["eu-west-1"]`) < 0 || indexOf(r.calls, "eu-central-1") >= 0 {
 		t.Fatalf("the flag replaces the kept regions:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: labs("eu-west-1,eu-central-1")}
-	err := r.ops(t.TempDir()).LabsInit(context.Background(), "us-east-1", "", 0, nil, nil)
+	err := r.ops(t.TempDir()).LabsInit(context.Background(), "us-east-1", "", 0, nil, nil, LabNet{})
 	if err == nil || !strings.Contains(err.Error(), "--allowed-regions") || indexOf(r.calls, "labs apply") >= 0 {
 		t.Fatalf("kept regions without the new --region must be refused before the apply: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
@@ -531,8 +531,120 @@ func TestLabsInitKeepsTheAllowedRegions(t *testing.T) {
 
 func TestLabsInitRefusesRegionsWithoutItsRegion(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-central-1"})
+	err := r.ops(t.TempDir()).LabsInit(context.Background(), "eu-west-1", "", 0, nil, []string{"eu-central-1"}, LabNet{})
 	if err == nil || !strings.Contains(err.Error(), "eu-west-1") || len(r.calls) != 0 {
 		t.Fatalf("must refuse before terraform runs: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+}
+
+// persistentOut is a persistent stack's outputs: extra is spliced in (e.g. `,"access":{"value":"ssm"}`).
+func persistentOut(extra string) func(string) string {
+	return func(cmd string) string {
+		if strings.Contains(cmd, "persistent output -json") {
+			return `{"state_bucket":{"value":"st"},"region":{"value":"il-central-1"}` + extra + `}`
+		}
+		return fakeAWS(cmd)
+	}
+}
+
+func newStack(cmd string) error { // a persistent stack with no state yet
+	if strings.Contains(cmd, "persistent output -json") {
+		return errors.New("no outputs")
+	}
+	return nil
+}
+
+func TestInitSSMTakesNoDomain(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: newStack}
+	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18080") < 0 || indexOf(r.calls, "-var domain") >= 0 {
+		t.Fatalf("ssm init:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// Review focus 1: a re-run without --access keeps ssm and its port; it never flips back to public.
+func TestInitKeepsTheCurrentAccess(t *testing.T) {
+	r := &recorder{output: persistentOut(`,"access":{"value":"ssm"},"local_port":{"value":18443},"domain":{"value":""}`)}
+	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18443") < 0 {
+		t.Fatalf("re-run must keep ssm and 18443:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestInitRefusesBadCombinations(t *testing.T) {
+	for name, in := range map[string]InitOpts{
+		"unknown access":          {Region: "il-central-1", Access: "vpn"},
+		"public without a domain": {Region: "il-central-1", Access: "public"},
+		"ssm with a domain":       {Region: "il-central-1", Access: "ssm", Domain: "c.example.com"},
+		"privileged port":         {Region: "il-central-1", Access: "ssm", LocalPort: 80},
+	} {
+		r := &recorder{output: fakeAWS, outErr: newStack}
+		if err := r.ops(t.TempDir()).Init(context.Background(), in); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		if indexOf(r.calls, "persistent apply") >= 0 {
+			t.Errorf("%s: nothing may be applied", name)
+		}
+	}
+}
+
+func TestUpPassesAccessFromThePersistentStack(t *testing.T) {
+	r := &recorder{output: persistentOut(`,"data_bucket":{"value":"bkt"},"oidc_issuer":{"value":"https://x"},"oidc_client_id":{"value":"c"},"cognito_user_pool_id":{"value":"p"},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"}`)}
+	_ = r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true)
+	for _, want := range []string{"-var access=ssm", "-var public_url=http://localhost:18080"} {
+		if indexOf(r.calls, want) < 0 {
+			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	}
+}
+
+// Review focus 2: a persistent stack made before access existed has neither output; main must stay public.
+func TestUpOnAnOldPersistentStackStaysPublic(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "-var access=") >= 0 || indexOf(r.calls, "-var public_url=") >= 0 {
+		t.Fatalf("no access or public_url without the outputs:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitPassesTheLabNetwork(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil,
+		LabNet{VPCID: "vpc-1", SubnetIDs: []string{"subnet-a", "subnet-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var lab_vpc_id=vpc-1 -var lab_subnet_ids=["subnet-a","subnet-b"]`) < 0 {
+		t.Fatalf("labs-init:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitKeepsTheLabNetwork(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "labs output -json") {
+			return `{"lab_role_arn":{"value":"arn:aws:iam::1:role/l"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"}}`
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, `-var lab_vpc_id=vpc-1 -var lab_subnet_ids=["subnet-a","subnet-b"]`) < 0 {
+		t.Fatalf("a re-run without the flags keeps the network:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitNeedsBothVPCAndSubnets(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{VPCID: "vpc-1"}); err == nil {
+		t.Fatal("a VPC without subnets must be refused")
+	}
+	if indexOf(r.calls, "labs apply") >= 0 {
+		t.Fatal("nothing may be applied")
 	}
 }

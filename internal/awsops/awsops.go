@@ -2,6 +2,7 @@
 package awsops
 
 import (
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -82,19 +83,55 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	return out, nil
 }
 
-func (o Ops) Init(ctx context.Context, region, domain string) error {
+// InitOpts are `crucible aws init`'s flags. An empty Access, Domain or LocalPort keeps the stack's current value (a
+// new stack: public, no domain, 18080), so a re-run never flips an ssm install back to public.
+type InitOpts struct {
+	Region, Domain, Access string
+	LocalPort              int
+}
+
+func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	d := o.dir("persistent")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
 	}
-	return o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "apply", "-var", "region="+region, "-var", "domain="+domain)
+	cur, _ := o.outputs(ctx, "persistent") // nil on a new stack
+	access, domain, port := cmp.Or(in.Access, cur["access"], "public"), cmp.Or(in.Domain, cur["domain"]), in.LocalPort
+	if port == 0 {
+		port, _ = strconv.Atoi(cur["local_port"])
+	}
+	if port == 0 {
+		port = 18080
+	}
+	switch {
+	case access != "public" && access != "ssm":
+		return fmt.Errorf("--access must be public or ssm, not %q", access)
+	case access == "public" && domain == "":
+		return errors.New("--access public needs --domain (Crucible's public hostname)")
+	case access == "ssm" && in.Domain != "":
+		return errors.New("--domain is only for --access public: an ssm install is reached at http://localhost:<port>")
+	case port < 1024 || port > 65535:
+		return fmt.Errorf("--local-port %d: use a port from 1024 to 65535", port)
+	}
+	args := []string{"-chdir=" + d, "apply", "-var", "region=" + in.Region, "-var", "access=" + access, "-var", "local_port=" + strconv.Itoa(port)}
+	if access == "public" {
+		args = append(args, "-var", "domain="+domain)
+	}
+	return o.Exec(ctx, o.Root, "terraform", args...)
 }
 
-// mainVars passes the persistent stack's outputs (buckets, Cognito) into the main stack.
+// mainVars passes the persistent stack's outputs (buckets, Cognito, access) into the main stack. A persistent stack
+// made before access existed has no access or public_url: main then stays public.
 func mainVars(p map[string]string) []string {
-	return []string{"-var", "region=" + p["region"], "-var", "data_bucket=" + p["data_bucket"],
+	v := []string{"-var", "region=" + p["region"], "-var", "data_bucket=" + p["data_bucket"],
 		"-var", "oidc_issuer=" + p["oidc_issuer"], "-var", "oidc_client_id=" + p["oidc_client_id"],
 		"-var", "cognito_user_pool_id=" + p["cognito_user_pool_id"]}
+	for _, k := range []string{"access", "public_url"} {
+		if p[k] != "" {
+			v = append(v, "-var", k+"="+p[k])
+		}
+	}
+	return v
 }
 
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
@@ -143,13 +180,30 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 	return o.Deploy(ctx)
 }
 
+// LabNet is where lab modules launch when the account has no default VPC (labs-init --vpc-id --subnet-ids).
+type LabNet struct {
+	VPCID     string
+	SubnetIDs []string
+}
+
+// commaList splits a comma-separated output, dropping blanks.
+func commaList(s string) []string {
+	var out []string
+	for v := range strings.SplitSeq(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // LabsInit creates the shared lab account stack (roles, permission boundary, state bucket, billing export). Run it
 // with credentials for the lab account; pass the Crucible account when that is a different one. budgetUSD (> 0) and
 // budgetEmails set the account's AWS Budget alert; each one left unset keeps the stack's current value (its outputs),
 // so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
 // allowedRegions (the regions labs may use) must include region; left empty it keeps the stack's current list, and a
-// new stack allows region alone.
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string) error {
+// new stack allows region alone. net, both fields or neither, sets the lab network; empty keeps the stack's current one.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet) error {
 	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
 		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
 	}
@@ -185,6 +239,17 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 		b, _ := json.Marshal(allowedRegions) // a JSON list is an HCL list
 		args = append(args, "-var", "allowed_regions="+string(b))
 	}
+	vpc, subnets := net.VPCID, net.SubnetIDs
+	if vpc == "" && len(subnets) == 0 { // keep the stack's lab network
+		vpc, subnets = cur["lab_vpc_id"], commaList(cur["lab_subnet_ids"])
+	}
+	if (vpc == "") != (len(subnets) == 0) {
+		return errors.New("--vpc-id and --subnet-ids go together: pass both, or neither to keep the current lab network")
+	}
+	if vpc != "" {
+		b, _ := json.Marshal(subnets) // a JSON list is an HCL list
+		args = append(args, "-var", "lab_vpc_id="+vpc, "-var", "lab_subnet_ids="+string(b))
+	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {
 		args = append(args, "-var", "node_role_name="+m["node_role_name"])
@@ -200,7 +265,8 @@ func labVars(l map[string]string) []string {
 	return []string{"-var", "lab_role_arn=" + l["lab_role_arn"], "-var", "lab_ops_role_arn=" + l["ops_role_arn"],
 		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"],
 		"-var", "lab_plan_role_arn=" + l["plan_role_arn"], "-var", "lab_export_bucket=" + l["export_bucket"],
-		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"]}
+		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"],
+		"-var", "lab_vpc_id=" + l["lab_vpc_id"], "-var", "lab_subnet_ids=" + l["lab_subnet_ids"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").

@@ -22,8 +22,8 @@ import (
 const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
-  crucible aws init --region REGION --domain HOSTNAME
-  crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]...
+  crucible aws init --region REGION (--domain HOSTNAME | --access ssm [--local-port 18080])
+  crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
   crucible aws sleep [--no-snapshot]
@@ -38,6 +38,10 @@ the database and Keycloak data). --keycloak-port defaults to $KEYCLOAK_PORT, els
 
 lint is offline: an aws lab whose resources Crucible can't price fails unless aws.prices declares their USD per
 hour (aws.usage states monthly usage, such as storage_gb, for usage-priced resources).
+init --access ssm makes an install with no way in: no domain, no Elastic IP, no Let's Encrypt; everyone reaches it at
+http://localhost:<--local-port> through ` + "`crucible aws connect`" + `. A re-run without --access, --domain or --local-port
+keeps the current ones. labs-init --vpc-id and --subnet-ids (both or neither) are where lab modules launch, for an
+account without a default VPC; a re-run without them keeps the current ones.
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
 the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.
@@ -76,6 +80,10 @@ func awsCmd(args []string) int {
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init, labs-init)")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
+	access := fs.String("access", "", "init: public (a domain, an Elastic IP, Let's Encrypt) or ssm (no way in; `crucible aws connect`); default: keep the current one, else public")
+	localPort := fs.Int("local-port", 0, "init, access ssm: the laptop port everyone opens Crucible on (default: keep the current one, else 18080)")
+	vpcID := fs.String("vpc-id", "", "labs-init: the VPC lab modules launch into (var.crucible_vpc_id), for an account without a default VPC")
+	subnetIDs := fs.String("subnet-ids", "", "labs-init: comma-separated subnets in that VPC (var.crucible_subnet_ids)")
 	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
 	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
 	yes := fs.Bool("yes", false, "confirm teardown")
@@ -102,11 +110,11 @@ func awsCmd(args []string) int {
 	var err error
 	switch args[0] {
 	case "init":
-		if *region == "" || *domain == "" {
-			fmt.Fprintln(os.Stderr, "--region and --domain are required")
+		if *region == "" {
+			fmt.Fprintln(os.Stderr, "--region is required")
 			return 2
 		}
-		err = ops.Init(ctx, *region, *domain)
+		err = ops.Init(ctx, awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, LocalPort: *localPort})
 	case "labs-init":
 		if *region == "" {
 			fmt.Fprintln(os.Stderr, "--region is required")
@@ -126,7 +134,13 @@ func awsCmd(args []string) int {
 			fmt.Fprintf(os.Stderr, "--allowed-regions must include --region %s\n", *region)
 			return 2
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions)
+		var subnets []string
+		for _, s := range strings.Split(*subnetIDs, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				subnets = append(subnets, s)
+			}
+		}
+		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets})
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs)
 	case "deploy":

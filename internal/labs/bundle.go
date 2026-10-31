@@ -51,8 +51,8 @@ func BundleWith(labDir string, extra map[string][]byte) ([]byte, error) {
 
 // ModuleBundle is an aws lab's terraform/ directory plus Crucible's provider file and this lab's variables, all at
 // the root module (/w after unpacking, where tfScript's -var-file points).
-func ModuleBundle(lab *content.Lab, inst *Instance) ([]byte, error) {
-	return moduleTgz(lab, content.LabTF, content.LabTFVars(inst.ID, inst.Team, inst.Training, lab.AWS.Region))
+func ModuleBundle(lab *content.Lab, inst *Instance, net content.LabNetwork) ([]byte, error) {
+	return moduleTgz(lab, content.LabTF, content.LabTFVars(inst.ID, inst.Team, inst.Training, lab.AWS.Region, net))
 }
 
 // planTF is LabTF without its backend: an estimate's `terraform init -backend=false` then leaves nothing
@@ -60,8 +60,8 @@ func ModuleBundle(lab *content.Lab, inst *Instance) ([]byte, error) {
 var planTF = strings.Replace(content.LabTF, "  backend \"s3\" {}\n", "", 1)
 
 // planBundle is the module an estimate plans: no backend, and placeholder lab, team and training names.
-func planBundle(lab *content.Lab) ([]byte, error) {
-	return moduleTgz(lab, planTF, content.LabTFVars("estimate", "estimate", "estimate", lab.AWS.Region))
+func planBundle(lab *content.Lab, net content.LabNetwork) ([]byte, error) {
+	return moduleTgz(lab, planTF, content.LabTFVars("estimate", "estimate", "estimate", lab.AWS.Region, net))
 }
 
 func moduleTgz(lab *content.Lab, tf string, vars []byte) ([]byte, error) {

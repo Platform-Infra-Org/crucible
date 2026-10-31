@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -156,6 +157,14 @@ func TestPreviewGuard(t *testing.T) {
 		err := previewGuard(envOf(tc.env))
 		if (err != nil) != tc.wantErr {
 			t.Errorf("%s: err=%v wantErr=%v", name, err, tc.wantErr)
+		}
+	}
+}
+
+func TestCommaList(t *testing.T) {
+	for in, want := range map[string]string{"": "[]", "subnet-a": "[subnet-a]", " subnet-a , subnet-b ,": "[subnet-a subnet-b]"} {
+		if got := fmt.Sprint(commaList(in)); got != want {
+			t.Errorf("commaList(%q) = %s, want %s", in, got, want)
 		}
 	}
 }

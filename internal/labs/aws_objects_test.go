@@ -272,7 +272,7 @@ func TestPlanModuleHasNoBackend(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(lab.Dir, "terraform", content.LabTFFile), []byte(`terraform { backend "s3" {} }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b, err := planBundle(lab)
+	b, err := planBundle(lab, content.LabNetwork{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,5 +280,27 @@ func TestPlanModuleHasNoBackend(t *testing.T) {
 	if strings.Contains(mod[content.LabTFFile], `backend "`) || !strings.Contains(mod[content.LabTFFile], `provider "aws"`) ||
 		!strings.Contains(mod[content.LabTFVarsFile], `"crucible_lab_id":"estimate"`) || !strings.Contains(mod[content.LabTFVarsFile], `"eu-west-1"`) {
 		t.Fatalf("module: %v", mod)
+	}
+}
+
+func TestModuleBundlesCarryTheLabNetwork(t *testing.T) {
+	lab := &content.Lab{Dir: t.TempDir(), AWS: &content.AWSConfig{Region: "il-central-1"}}
+	if err := os.MkdirAll(filepath.Join(lab.Dir, "terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	net := content.LabNetwork{Region: "il-central-1", VPCID: "vpc-1", SubnetIDs: []string{"subnet-a"}}
+	plan, err := planBundle(lab, net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply, err := ModuleBundle(lab, &Instance{ID: "abcdefabcdef", Team: "t", Training: "tr"}, net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string][]byte{"plan": plan, "apply": apply} {
+		vars := untar(t, b)[content.LabTFVarsFile]
+		if !strings.Contains(vars, `"crucible_subnet_ids":["subnet-a"]`) || !strings.Contains(vars, `"crucible_vpc_id":"vpc-1"`) {
+			t.Fatalf("%s module vars: %s", name, vars)
+		}
 	}
 }

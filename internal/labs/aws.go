@@ -34,6 +34,7 @@ type AWSRunner struct {
 	Cloud          awscloud.Cloud
 	StateBucket    string // deploy/aws/labs output state_bucket
 	StateRegion    string
+	Network        content.LabNetwork // labs-init --vpc-id --subnet-ids (CRUCIBLE_AWS_LAB_VPC_ID, …_SUBNET_IDS)
 	WorkspaceImage string
 	TerraformImage string
 	DryRun         *awscloud.Fake // dry-run mode: terraform pods only unpack the module; this fake stands in for AWS
@@ -231,7 +232,7 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 	if err != nil {
 		return fmt.Errorf("getting lab credentials: %w", err)
 	}
-	module, err := ModuleBundle(lab, inst)
+	module, err := ModuleBundle(lab, inst, a.Network)
 	if err != nil {
 		return err
 	}
@@ -390,7 +391,7 @@ func (a *AWSRunner) Plan(ctx context.Context, lab *content.Lab) ([]byte, error) 
 	if lab.AWS == nil {
 		return nil, errors.New("not an aws lab")
 	}
-	module, err := planBundle(lab)
+	module, err := planBundle(lab, a.Network)
 	if err != nil {
 		return nil, err
 	}

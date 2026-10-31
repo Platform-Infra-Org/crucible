@@ -612,14 +612,40 @@ func TestForge401IsAnAWSLab(t *testing.T) {
 }
 
 func TestLabTFVarsIsJSON(t *testing.T) {
-	var v map[string]string
-	if err := json.Unmarshal(LabTFVars("abcdefabcdef", `te"am`, "tr", "eu-west-1"), &v); err != nil || v["crucible_team"] != `te"am` || v["crucible_region"] != "eu-west-1" {
+	var v map[string]any
+	if err := json.Unmarshal(LabTFVars("abcdefabcdef", `te"am`, "tr", "eu-west-1", LabNetwork{}), &v); err != nil || v["crucible_team"] != `te"am` || v["crucible_region"] != "eu-west-1" {
 		t.Fatalf("tfvars must be JSON so no value escapes its string: %v %v", v, err)
 	}
-	for _, want := range []string{`backend "s3" {}`, `provider "aws"`, `"crucible:lab-id"   = var.crucible_lab_id`} {
+	for _, want := range []string{`backend "s3" {}`, `provider "aws"`, `"crucible:lab-id"   = var.crucible_lab_id`,
+		`variable "crucible_vpc_id" { type = string }`, `variable "crucible_subnet_ids" { type = list(string) }`} {
 		if !strings.Contains(LabTF, want) {
 			t.Fatalf("LabTF lacks %q", want)
 		}
+	}
+}
+
+// The lab network reaches labs in its own region only; elsewhere, and when unset, it is "" and [] (never null:
+// Terraform's length() fails on null, and the portable form calls length(var.crucible_subnet_ids)).
+func TestLabTFVarsCarryTheLabNetworkInItsRegion(t *testing.T) {
+	net := LabNetwork{Region: "il-central-1", VPCID: "vpc-1", SubnetIDs: []string{"subnet-a", "subnet-b"}}
+	decode := func(b []byte) map[string]any {
+		var v map[string]any
+		if err := json.Unmarshal(b, &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	in := decode(LabTFVars("abcdefabcdef", "t", "tr", "il-central-1", net))
+	if in["crucible_vpc_id"] != "vpc-1" || fmt.Sprint(in["crucible_subnet_ids"]) != "[subnet-a subnet-b]" {
+		t.Fatalf("same region: %v", in)
+	}
+	other := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", net))
+	if other["crucible_vpc_id"] != "" || fmt.Sprint(other["crucible_subnet_ids"]) != "[]" {
+		t.Fatalf("another region must get no network: %v", other)
+	}
+	none := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", LabNetwork{}))
+	if none["crucible_subnet_ids"] == nil || fmt.Sprint(none["crucible_subnet_ids"]) != "[]" || none["crucible_vpc_id"] != "" {
+		t.Fatalf("an unset network is \"\" and [], never null: %v", none)
 	}
 }
 

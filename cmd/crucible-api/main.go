@@ -266,6 +266,8 @@ func run(ctx context.Context) error {
 		ar := &labs.AWSRunner{Cluster: kube, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
 			WorkspaceImage: env("CRUCIBLE_AWS_WORKSPACE_IMAGE", labs.DefaultWorkspaceImage),
 			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage)}
+		ar.Network = content.LabNetwork{Region: ar.StateRegion, VPCID: os.Getenv("CRUCIBLE_AWS_LAB_VPC_ID"),
+			SubnetIDs: commaList(os.Getenv("CRUCIBLE_AWS_LAB_SUBNET_IDS"))} // the labs stack's own region
 		for r := range strings.SplitSeq(env("CRUCIBLE_AWS_LAB_REGIONS", "eu-west-1"), ",") {
 			if r = strings.TrimSpace(r); r != "" {
 				awsRegions = append(awsRegions, r)
@@ -458,4 +460,15 @@ func periodicJobs() []jobs.Periodic {
 	return []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}},
 		{Every: time.Hour, Args: labs.ReapArgs{}}, {Every: 6 * time.Hour, Args: labs.CostArgs{}},
 		{Every: 7 * 24 * time.Hour, Args: labs.PriceArgs{}}}
+}
+
+// commaList splits a comma-separated env value, dropping blanks.
+func commaList(s string) []string {
+	out := []string{}
+	for v := range strings.SplitSeq(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

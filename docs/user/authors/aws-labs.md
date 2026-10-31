@@ -32,6 +32,21 @@ The Terraform goes in `terraform/` inside the lab folder. Crucible adds the prov
 - **No `provider`, `backend` or `cloud` blocks.** Crucible writes the `aws` provider with the lab's region and tags
   every resource with `crucible:lab-id`, `crucible:team` and `crucible:training`. Use `var.crucible_region` and
   `var.crucible_lab_id` (also `var.crucible_team`, `var.crucible_training`) when you need them.
+- **Where to launch.** Some accounts have no default VPC. There Crucible gives every lab `var.crucible_vpc_id` and
+  `var.crucible_subnet_ids` (set by the operator with `crucible aws labs-init --vpc-id … --subnet-ids …`). Write the
+  network so the lab works in either kind of account:
+
+  ```hcl
+  resource "aws_security_group" "box" {
+    vpc_id = var.crucible_vpc_id != "" ? var.crucible_vpc_id : null
+  }
+  resource "aws_instance" "box" {
+    subnet_id                   = length(var.crucible_subnet_ids) > 0 ? var.crucible_subnet_ids[0] : null
+    associate_public_ip_address = false # labs reach the trainee through the workspace, not a public IP
+  }
+  ```
+
+  `null` falls back to the default VPC where there is one. Never write a real VPC or subnet id in a training repo.
 - **Local modules only** (`source = "./modules/net"`). Registry and git modules are refused; copy one into
   `terraform/` if you need it. Providers must be HashiCorp's, and `hashicorp/local` and `hashicorp/external` are
   refused.

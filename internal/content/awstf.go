@@ -24,6 +24,8 @@ variable "crucible_lab_id" { type = string }
 variable "crucible_team" { type = string }
 variable "crucible_training" { type = string }
 variable "crucible_region" { type = string }
+variable "crucible_vpc_id" { type = string }           # "" when Crucible has no lab network (the default VPC)
+variable "crucible_subnet_ids" { type = list(string) } # [] when it has none
 
 provider "aws" {
   version = "6.67.0"
@@ -38,9 +40,23 @@ provider "aws" {
 }
 `
 
-// LabTFVars fills LabTF's variables. JSON, so no value can break out of its string.
-func LabTFVars(labID, team, training, region string) []byte {
-	b, _ := json.Marshal(map[string]string{"crucible_lab_id": labID, "crucible_team": team,
-		"crucible_training": training, "crucible_region": region})
+// LabNetwork is where lab modules launch when the account has no default VPC (`crucible aws labs-init --vpc-id
+// --subnet-ids`). Region is the region those subnets are in: a lab elsewhere gets no network.
+type LabNetwork struct {
+	Region    string
+	VPCID     string
+	SubnetIDs []string
+}
+
+// LabTFVars fills LabTF's variables. JSON, so no value can break out of its string. The network is "" and [] (never
+// null) when unset or in another region, so a module's `length(var.crucible_subnet_ids) > 0 ? … : null` falls back to
+// the default VPC.
+func LabTFVars(labID, team, training, region string, net LabNetwork) []byte {
+	vpc, subnets := "", []string{}
+	if net.VPCID != "" && net.Region == region && len(net.SubnetIDs) > 0 {
+		vpc, subnets = net.VPCID, net.SubnetIDs
+	}
+	b, _ := json.Marshal(map[string]any{"crucible_lab_id": labID, "crucible_team": team,
+		"crucible_training": training, "crucible_region": region, "crucible_vpc_id": vpc, "crucible_subnet_ids": subnets})
 	return b
 }

@@ -318,7 +318,7 @@ svg .ahm { fill: var(--muted); }
       <ol>
         <li><code>crucible aws init --region il-central-1 --access ssm</code>. Add <code>--local-port</code> to change <code>18080</code>.</li>
         <li>In <code>deploy/aws/main/crucible.tfvars</code>, set <code>subnet_id = "subnet-0fa66f46aa023ab6e"</code>. Leave out <code>domain</code> and <code>acme_email</code>.</li>
-        <li><code>crucible aws up</code>. There is no DNS line. It waits for the node to register with SSM and checks health on the node.</li>
+        <li><code>crucible aws up</code>. It prints no 'point an A record' line. It waits for the node to register with SSM and checks health on the node.</li>
         <li><code>crucible aws status</code>. Its <code>egress:</code> line lists every host the firewall blocks; send those to the network team. Your git host is not in that list, so check it by hand.</li>
         <li><code>crucible aws connect</code>, then open <code>http://localhost:18080</code>.</li>
         <li><code>crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code>, then <code>crucible aws up</code> again.</li>
@@ -771,9 +771,9 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
       </tbody>
     </table></div>
-    <div class="note"><p><strong>In our account.</strong><code>crucible aws status</code> shows the instance, its address, <code>healthz:</code> (checked on the node over SSM) and <code>egress:</code>.
+    <div class="note"><p><strong>In our account.</strong><code>crucible aws status</code> shows the instance, its address, <code>healthz:</code> (checked on the node over SSM) and <code>egress:</code>, after <code>ssm:</code> (the ping status; anything but <code>Online</code> skips the checks).
       If egress lists blocked hosts, the network team must allow them. It does not check your git host. Open the app with <code>crucible aws connect</code>; Ctrl-C closes the tunnel
-      (the AWS CLI may print an exit error then; that is expected). The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
+      (it exits quietly). The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
       <code>afterhours-shut-down-role</code>, <code>EC2Stop-Role</code>) probably stops instances out of hours. Not confirmed what it targets: check with the platform team.
       "Bring it back" needs no DNS change here.</p></div>
     <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The

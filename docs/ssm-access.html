@@ -292,7 +292,7 @@ crucible aws connect --region il-central-1</code></pre>
     </div>
     <p>It finds the running instance named <code>crucible</code>, reads the port from the node's <code>crucible:public-url</code> tag, and prints
       <code>Crucible is at http://localhost:18080 while this runs; Ctrl-C closes it.</code> Then it opens the tunnel. Open that address in a browser.
-      Ctrl-C ends the tunnel; the AWS CLI may print an exit error as it closes, and that is expected.</p>
+      Ctrl-C ends the tunnel; it exits quietly.</p>
     <ul>
       <li><code>--region</code> falls back to your AWS CLI region. <code>--name</code> picks another node name, if two are running.</li>
       <li><code>--port</code> is refused unless it is the port in Crucible's address. A different port breaks sign-in and saving, so leave it out.</li>
@@ -309,7 +309,7 @@ crucible aws connect --region il-central-1</code></pre>
           <tr>
             <th scope="row">The tunnel reaches the host, not a pod</th>
             <td>It lands on a port on the EC2 instance itself. The app's Service has to be bound on the instance's host network
-              on port 80 — k3s's Traefik/ServiceLB does this for a <code>LoadBalancer</code> Service. Otherwise
+              on port 80. k3s's Traefik/ServiceLB does this for a <code>LoadBalancer</code> Service. Otherwise
               the tunnel connects to nothing.</td>
           </tr>
           <tr>
@@ -331,7 +331,7 @@ crucible aws connect --region il-central-1</code></pre>
           <tr>
             <th scope="row">The firewall must let the node out</th>
             <td>The node reaches SSM, S3, Docker and GitHub through the central firewall. <code>crucible aws status</code> tests each host from the node and lists
-              the ones it blocks under <code>egress:</code>; send that list to the network team. If the SSM hosts themselves are blocked, you see
+              the ones it blocks under <code>egress:</code>; send that list to the network team. The list includes the apt mirrors (plain HTTP), Cognito's login domain and the AWS-lab hosts (Terraform registry, IAM, EC2, tagging, CloudTrail). It first prints <code>ssm:</code>; if that is not <code>Online</code>, it skips the other checks and names the three SSM hosts. If they are blocked at <code>up</code>, you see
               <code>node not reachable over SSM</code> instead. Your git host is not tested; check it by hand.</td>
           </tr>
           <tr>

@@ -21,13 +21,15 @@ an Elastic IP, a DNS record or a certificate.
    action is denied by an SCP, stop and ask the platform team. A re-run without `--access` or `--local-port` keeps the current ones.
 2. In `deploy/aws/main/crucible.tfvars` set `subnet_id = "subnet-0fa66f46aa023ab6e"` (spokeSubnet1) and leave out `domain` and
    `acme_email`. Set `schedule_enabled = false` if EventBridge Scheduler is denied.
-3. `crucible aws up`. It prints no DNS line, waits for the node to register with SSM, and checks `/healthz` on the node. If it ends
+3. `crucible aws up`. It prints no 'point an A record' line, waits for the node to register with SSM, and checks `/healthz` on the node. If it ends
    with "node not reachable over SSM", ask the network team to allow `ssm.il-central-1.amazonaws.com`,
    `ssmmessages.il-central-1.amazonaws.com` and `ec2messages.il-central-1.amazonaws.com`.
-4. `crucible aws status`. Expect `healthz: ok` and `egress: every host the node needs is reachable`. If it lists blocked hosts, send
-   them to the network team. The git host is not tested: check it by hand.
+4. `crucible aws status`. Expect `ssm: Online`, `healthz: ok` and `egress: every host Crucible checks is reachable`. If `ssm:` is not `Online`, the checks stop
+   and it names the three SSM hosts. If egress lists blocked hosts, send them to the network team. The list covers k3s, GitHub, Docker,
+   apt (plain HTTP on port 80), the AWS CLI, Price List, S3, STS, SSM, Cognito (including its login domain), and the AWS-lab path
+   (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`). The git host is not tested: check it by hand.
 5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
-   sign in. Ctrl-C ends the tunnel; the AWS CLI may print an exit error then. A `--port` other than the one in the node's
+   sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
 6. `crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f`
    (both flags or neither; a re-run without them keeps the current ones), then `crucible aws up` again. Run one AWS lab that launches an
@@ -365,7 +367,7 @@ request "Cloud Heat", approve it, then:
       instance_type          = "t3.nano"
       vpc_security_group_ids = [aws_security_group.box.id]
       subnet_id              = length(var.crucible_subnet_ids) > 0 ? var.crucible_subnet_ids[0] : null
-      associate_public_ip_address = false
+      # in an account without a default VPC, add: associate_public_ip_address = false
       root_block_device {
         volume_type = "gp3"
         volume_size = 8

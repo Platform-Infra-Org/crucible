@@ -42,7 +42,6 @@ The Terraform goes in `terraform/` inside the lab folder. Crucible adds the prov
   }
   resource "aws_instance" "box" {
     subnet_id                   = length(var.crucible_subnet_ids) > 0 ? var.crucible_subnet_ids[0] : null
-    associate_public_ip_address = false # labs reach the trainee through the workspace, not a public IP
   }
   ```
 
@@ -72,7 +71,7 @@ up per hour. The estimate is that hourly price times the lab's time limit.
 
 | Type | Priced by |
 |---|---|
-| `aws_instance` | instance type, plus its root volume (8 GiB gp3 unless set), each `ebs_block_device` by size and type, and a public IPv4 unless `associate_public_ip_address = false` |
+| `aws_instance` | instance type, plus its root volume (8 GiB gp3 unless set), each `ebs_block_device` by size and type, and a public IPv4 unless `associate_public_ip_address = false` (set it only in an account without a default VPC; in a default VPC with no NAT, an instance without a public IP has no internet) |
 | `aws_ebs_volume` | size and type, per GB-month |
 | `aws_nat_gateway` | per hour, its public IPv4 (unless private or given an `allocation_id`), plus stated `gb_processed` |
 | `aws_eip` | the public IPv4, per hour |

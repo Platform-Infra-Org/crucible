@@ -87,11 +87,14 @@ crucible aws init --region eu-west-1 --domain crucible.example.com          # ac
   `ec2messages.<region>.amazonaws.com` through the firewall. Then it deploys and checks health **on the node over SSM**
   (`curl -fsS --max-time 5 http://localhost/healthz`), not from the laptop.
 - `status` in `ssm` mode: instance state, SSM ping status, health over SSM, and an **egress check** run on the node over
-  SSM: an HTTPS request with a 5-second timeout to each host the node needs, listing the ones that fail:
+  SSM: a request with a 5-second timeout to each host the node needs, listing the ones that fail. SSM ping status comes
+  first; if it is not `Online`, the node checks are skipped and the three SSM hosts are named. Hosts over HTTPS:
   `get.k3s.io`, `github.com`, `objects.githubusercontent.com` (k3s and sysbox releases), `get.helm.sh`,
   `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` (k3s system images, Postgres),
-  `<region>.ec2.archive.ubuntu.com`, `security.ubuntu.com`, `awscli.amazonaws.com`, `pricing.us-east-1.amazonaws.com`,
-  and in the stack's region `s3`, `sts`, `ssm`, `cognito-idp`. A failure is reported, not fatal. The git hosts of connected
+  `awscli.amazonaws.com`, `pricing.us-east-1.amazonaws.com`, Cognito's login domain (read from the persistent stack's
+  `cognito_login_url`; the API exchanges the OIDC code server-side), the AWS-lab path (`registry.terraform.io`,
+  `releases.hashicorp.com`, `iam.amazonaws.com`), and in the stack's region `s3`, `sts`, `ssm`, `cognito-idp`, `ec2`,
+  `tagging`, `cloudtrail`. Over plain HTTP (apt): `<region>.ec2.archive.ubuntu.com` and `security.ubuntu.com`. A failure is reported, not fatal. The git hosts of connected
   repositories are not in the list (awsops doesn't know them); the docs say to check those by hand.
 - `public` mode keeps today's `up`, `status` and laptop-side health probe.
 - **New `crucible aws connect [--region R] [--port P] [--name crucible]`:**
@@ -149,7 +152,7 @@ network variables into its lab config); the release pipeline (`crucible aws depl
 - **Helm (`deploy/helm/test.sh`):** `tls.enabled=false` renders an Ingress on `web` with no TLS; empty `host` renders a
   rule without `host`; the URL/TLS mismatch fails the render.
 - **Go:** awsops with the existing fakes: `init` passes `access`/`local_port`/`domain` correctly per mode and refuses
-  bad combinations; `up` in `ssm` mode waits for SSM, deploys and checks health over SSM, prints no DNS line, and stops
+  bad combinations; `up` in `ssm` mode waits for SSM, deploys and checks health over SSM, prints no 'point an A record' line, and stops
   with the firewall message when SSM never comes online; `status` reports health and the egress check over SSM;
   `connect` finds the instance by tag, enforces the port, refuses public installs, handles none/several instances and a
   missing plugin, and builds the exact `start-session` call. `content`/`labs`: `LabTFVars` with and without network

@@ -2,6 +2,9 @@ mock_provider "aws" {
   mock_data "aws_vpc" {
     defaults = { id = "vpc-123" }
   }
+  mock_data "aws_subnet" {
+    defaults = { vpc_id = "vpc-spoke" }
+  }
   mock_data "aws_subnets" {
     defaults = { ids = ["subnet-a", "subnet-b"] }
   }
@@ -338,4 +341,101 @@ run "smtp_from_rejects_a_quote" {
     smtp_from = "x'; reboot; '"
   }
   expect_failures = [var.smtp_from]
+}
+
+run "public_access_is_unchanged" {
+  command = plan
+
+  assert {
+    condition     = length(aws_eip.web) == 1 && output.url == "https://crucible.example.com" && output.access == "public"
+    error_message = "public keeps its Elastic IP and https://<domain>"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "certificatesResolvers") && strcontains(aws_instance.node.user_data, "redirections")
+    error_message = "public keeps Traefik's Let's Encrypt resolver and HTTPS redirect"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "ACCESS=public\n") && strcontains(aws_ssm_parameter.env.value, "PUBLIC_URL=https://crucible.example.com\n") && strcontains(aws_ssm_parameter.env.value, "HOST=crucible.example.com\n") && strcontains(aws_ssm_parameter.env.value, "TLS_ENABLED=true\n")
+    error_message = "the node's env carries the public URL, host and TLS"
+  }
+  assert {
+    condition     = aws_instance.node.tags["crucible:public-url"] == "https://crucible.example.com"
+    error_message = "the node is tagged with its address"
+  }
+}
+
+run "ssm_access_has_no_way_in" {
+  command = plan
+  variables {
+    access     = "ssm"
+    public_url = "http://localhost:18080"
+    subnet_id  = "subnet-0fa66f46aa023ab6e"
+    domain     = ""
+    acme_email = ""
+  }
+
+  assert {
+    condition     = length(aws_eip.web) == 0 && length(aws_route53_record.web) == 0 && output.public_ip == ""
+    error_message = "ssm creates no Elastic IP and no DNS record"
+  }
+  assert {
+    condition     = aws_security_group.web.vpc_id == "vpc-spoke"
+    error_message = "the security group lives in the given subnet's VPC (ingress is unknown at plan under the mock, so no-inbound rests on the public_ip/for_each logic)"
+  }
+  assert {
+    condition     = aws_instance.node.subnet_id == "subnet-0fa66f46aa023ab6e" && aws_instance.node.associate_public_ip_address == false
+    error_message = "the node runs in the given subnet without a public IP"
+  }
+  assert {
+    condition     = aws_instance.node.tags["crucible:public-url"] == "http://localhost:18080" && output.url == "http://localhost:18080" && output.access == "ssm"
+    error_message = "the node carries its localhost address for `crucible aws connect`"
+  }
+  assert {
+    condition     = strcontains(aws_ssm_parameter.env.value, "PUBLIC_URL=http://localhost:18080\n") && strcontains(aws_ssm_parameter.env.value, "HOST=\n") && strcontains(aws_ssm_parameter.env.value, "TLS_ENABLED=false\n")
+    error_message = "ssm: plain HTTP, any host"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "certificatesResolvers") && !strcontains(aws_instance.node.user_data, "redirections")
+    error_message = "ssm: no Let's Encrypt, no HTTPS redirect"
+  }
+}
+
+run "ssm_access_needs_a_subnet" {
+  command = plan
+  variables {
+    access     = "ssm"
+    public_url = "http://localhost:18080"
+    domain     = ""
+    acme_email = ""
+  }
+  expect_failures = [var.subnet_id]
+}
+
+run "public_access_needs_a_domain" {
+  command = plan
+  variables {
+    domain = ""
+  }
+  expect_failures = [var.domain]
+}
+
+run "public_url_defaults_to_https_domain_for_old_stacks" {
+  command = plan
+  variables {
+    public_url = ""
+  }
+
+  assert {
+    condition     = output.url == "https://crucible.example.com"
+    error_message = "a persistent stack made before access existed passes no public_url: main builds https://<domain>"
+  }
+}
+
+run "deploy_script_reads_the_url_from_env" {
+  command = plan
+
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "publicURL=\"$${PUBLIC_URL:-https://$DOMAIN}\"") && strcontains(aws_instance.node.user_data, "host=\"$${HOST-$DOMAIN}\"") && strcontains(aws_instance.node.user_data, "tls.enabled=\"$${TLS_ENABLED:-true}\"")
+    error_message = "deploy.sh takes the URL, host and TLS from /<name>/env, falling back to today's https://$DOMAIN"
+  }
 }

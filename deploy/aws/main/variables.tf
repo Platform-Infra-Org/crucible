@@ -6,7 +6,12 @@ variable "name" {
 }
 variable "domain" {
   type        = string
-  description = "Public hostname, e.g. crucible.example.com (point an A record at the public_ip output, or set route53_zone_id)"
+  default     = ""
+  description = "access = public: the public hostname, e.g. crucible.example.com (point an A record at the public_ip output, or set route53_zone_id)"
+  validation {
+    condition     = var.access != "public" || var.domain != ""
+    error_message = "access = public needs domain"
+  }
 }
 variable "route53_zone_id" {
   type    = string
@@ -14,7 +19,39 @@ variable "route53_zone_id" {
 }
 variable "acme_email" {
   type        = string
-  description = "Let's Encrypt account email"
+  default     = ""
+  description = "access = public: the Let's Encrypt account email"
+  validation {
+    condition     = var.access != "public" || var.acme_email != ""
+    error_message = "access = public needs acme_email (Let's Encrypt)"
+  }
+}
+variable "access" {
+  type        = string
+  default     = "public"
+  description = "Set by `crucible aws up` from the persistent stack: public or ssm"
+  validation {
+    condition     = contains(["public", "ssm"], var.access)
+    error_message = "access must be public or ssm"
+  }
+}
+variable "public_url" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the persistent stack. Empty (a persistent stack made before access existed): https://<domain>"
+  validation {
+    condition     = var.public_url == "" || can(regex("^https?://[^/]+$", var.public_url))
+    error_message = "public_url must be http(s)://host[:port] with no path"
+  }
+}
+variable "subnet_id" {
+  type        = string
+  default     = ""
+  description = "The subnet the node runs in. Required for access = ssm (an existing workload subnet). Empty in public mode: the default VPC's first default subnet"
+  validation {
+    condition     = (var.access != "ssm" || var.subnet_id != "") && (var.subnet_id == "" || can(regex("^subnet-[0-9a-f]+$", var.subnet_id)))
+    error_message = "access = ssm needs subnet_id (subnet-<hex>), an existing subnet the node can reach the internet from"
+  }
 }
 variable "instance_type" {
   type    = string

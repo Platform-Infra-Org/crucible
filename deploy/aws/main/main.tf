@@ -1,14 +1,34 @@
-data "aws_vpc" "default" { default = true }
+locals {
+  public     = var.access == "public"
+  public_url = var.public_url != "" ? var.public_url : "https://${var.domain}"
+  host       = local.public ? var.domain : "" # empty: the Ingress matches any Host (through the tunnel it's localhost:<port>)
+}
+
+data "aws_vpc" "default" {
+  count   = var.subnet_id == "" ? 1 : 0
+  default = true
+}
 
 data "aws_subnets" "default" {
+  count = var.subnet_id == "" ? 1 : 0
   filter {
     name   = "vpc-id"
-    values = [data.aws_vpc.default.id]
+    values = [data.aws_vpc.default[0].id]
   }
   filter {
     name   = "default-for-az"
     values = ["true"]
   }
+}
+
+data "aws_subnet" "given" {
+  count = var.subnet_id == "" ? 0 : 1
+  id    = var.subnet_id
+}
+
+locals {
+  vpc_id    = var.subnet_id == "" ? data.aws_vpc.default[0].id : data.aws_subnet.given[0].vpc_id
+  subnet_id = var.subnet_id == "" ? sort(data.aws_subnets.default[0].ids)[0] : var.subnet_id
 }
 
 data "aws_ssm_parameter" "ubuntu" {
@@ -17,22 +37,18 @@ data "aws_ssm_parameter" "ubuntu" {
 
 resource "aws_security_group" "web" {
   name   = "${var.name}-web"
-  vpc_id = data.aws_vpc.default.id
-  ingress {
-    description      = "HTTP (ACME challenge + redirect)"
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-  ingress {
-    description      = "HTTPS"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+  vpc_id = local.vpc_id
+  # access = ssm opens nothing: people arrive through a Session Manager port-forward, which needs no inbound rule.
+  dynamic "ingress" {
+    for_each = { for port, what in { "80" = "HTTP (ACME challenge + redirect)", "443" = "HTTPS" } : port => what if local.public }
+    content {
+      description      = ingress.value
+      from_port        = ingress.key
+      to_port          = ingress.key
+      protocol         = "tcp"
+      cidr_blocks      = ["0.0.0.0/0"]
+      ipv6_cidr_blocks = ["::/0"]
+    }
   }
   egress {
     from_port        = 0
@@ -83,6 +99,10 @@ resource "aws_ssm_parameter" "env" {
     NAME=${var.name}
     DATA_BUCKET=${var.data_bucket}
     DOMAIN=${var.domain}
+    ACCESS=${var.access}
+    PUBLIC_URL=${local.public_url}
+    HOST=${local.host}
+    TLS_ENABLED=${local.public}
     OIDC_ISSUER=${var.oidc_issuer}
     OIDC_CLIENT_ID=${var.oidc_client_id}
     BACKUP_CRON='${var.backup_cron}'
@@ -200,11 +220,12 @@ resource "aws_iam_instance_profile" "node" {
 
 # --- the node ---
 resource "aws_instance" "node" {
-  ami                    = data.aws_ssm_parameter.ubuntu.insecure_value
-  instance_type          = var.instance_type
-  subnet_id              = sort(data.aws_subnets.default.ids)[0]
-  vpc_security_group_ids = [aws_security_group.web.id]
-  iam_instance_profile   = aws_iam_instance_profile.node.name
+  ami                         = data.aws_ssm_parameter.ubuntu.insecure_value
+  instance_type               = var.instance_type
+  subnet_id                   = local.subnet_id
+  associate_public_ip_address = local.public ? null : false
+  vpc_security_group_ids      = [aws_security_group.web.id]
+  iam_instance_profile        = aws_iam_instance_profile.node.name
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -222,6 +243,7 @@ resource "aws_instance" "node" {
     region      = var.region
     name        = var.name
     acme_email  = var.acme_email
+    access      = var.access
     k3s_version = var.k3s_version
     timezone    = var.schedule_timezone
 
@@ -229,7 +251,7 @@ resource "aws_instance" "node" {
     sysbox_sha256_amd64 = var.sysbox_sha256_amd64
   })
 
-  tags = { Name = var.name }
+  tags = { Name = var.name, "crucible:public-url" = local.public_url } # `crucible aws connect` finds the node and its port by these
 
   depends_on = [aws_ssm_parameter.env, aws_ssm_parameter.secret, aws_ssm_parameter.smtp_password, aws_ssm_parameter.helm_values, aws_iam_role_policy.node]
 
@@ -239,15 +261,22 @@ resource "aws_instance" "node" {
 }
 
 resource "aws_eip" "web" {
+  count    = local.public ? 1 : 0
   instance = aws_instance.node.id
   domain   = "vpc"
 }
 
+# The Elastic IP became counted: keep existing public installs' address instead of replacing it.
+moved {
+  from = aws_eip.web
+  to   = aws_eip.web[0]
+}
+
 resource "aws_route53_record" "web" {
-  count   = var.route53_zone_id == "" ? 0 : 1
+  count   = local.public && var.route53_zone_id != "" ? 1 : 0
   zone_id = var.route53_zone_id
   name    = var.domain
   type    = "A"
   ttl     = 300
-  records = [aws_eip.web.public_ip]
+  records = [aws_eip.web[0].public_ip]
 }

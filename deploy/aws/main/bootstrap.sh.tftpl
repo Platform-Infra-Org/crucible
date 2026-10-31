@@ -16,8 +16,10 @@ retry curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tm
 unzip -q /tmp/awscli.zip -d /tmp
 /tmp/aws/install --update
 
-# Traefik (bundled with k3s): Let's Encrypt via HTTP-01 and an HTTP→HTTPS redirect.
 mkdir -p /var/lib/rancher/k3s/server/manifests
+%{ if access == "public" ~}
+# Traefik (bundled with k3s): Let's Encrypt via HTTP-01 and an HTTP→HTTPS redirect. access = ssm keeps k3s's
+# plain-HTTP Traefik: nothing outside the VPC can reach the node, so there is no certificate to get.
 cat > /var/lib/rancher/k3s/server/manifests/traefik-config.yaml <<'YAML'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -55,6 +57,7 @@ spec:
             scheme: https
             permanent: true
 YAML
+%{ endif ~}
 
 # Sysbox: AWS lab workspace pods run dockerd in a sysbox pod, never a privileged pod (spec §8.2, §14).
 # k3s reads config-v3.toml.tmpl (containerd 2.x) at start; the base template keeps every k3s default.
@@ -145,7 +148,8 @@ kubectl -n crucible create secret generic crucible-secrets \
   --from-literal=git-credentials="$(param git_credentials)" \
   --dry-run=client -o yaml | kubectl apply -f -
 helm upgrade --install crucible "$work/chart.tgz" -n crucible \
-  --set-string image.tag="$sha" --set host="$DOMAIN" --set publicURL="https://$DOMAIN" \
+  --set-string image.tag="$sha" --set-string host="$${HOST-$DOMAIN}" --set-string publicURL="$${PUBLIC_URL:-https://$DOMAIN}" \
+  --set tls.enabled="$${TLS_ENABLED:-true}" \
   --set oidc.issuer="$OIDC_ISSUER" --set oidc.clientId="$OIDC_CLIENT_ID" \
   --set backup.bucket="$DATA_BUCKET" --set backup.region="$REGION" \
   --set-string backup.schedule="$BACKUP_CRON" --set-string backup.timeZone="$TIMEZONE" \

@@ -1,7 +1,8 @@
 output "instance_id" { value = aws_instance.node.id }
-output "public_ip" { value = aws_eip.web.public_ip }
+output "public_ip" { value = local.public ? aws_eip.web[0].public_ip : "" }
 output "domain" { value = var.domain }
-output "url" { value = "https://${var.domain}" }
+output "url" { value = local.public_url }
+output "access" { value = var.access }
 output "region" { value = var.region }
 output "data_bucket" { value = var.data_bucket }
 # `crucible aws up` reads it to refuse turning aws labs off by accident (labs outputs unreadable).

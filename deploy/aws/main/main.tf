@@ -35,12 +35,16 @@ data "aws_ssm_parameter" "ubuntu" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 }
 
+locals {
+  # access = ssm opens nothing: people arrive through a Session Manager port-forward, which needs no inbound rule.
+  web_ingress = { for port, what in { "80" = "HTTP (ACME challenge + redirect)", "443" = "HTTPS" } : port => what if local.public }
+}
+
 resource "aws_security_group" "web" {
   name   = "${var.name}-web"
   vpc_id = local.vpc_id
-  # access = ssm opens nothing: people arrive through a Session Manager port-forward, which needs no inbound rule.
   dynamic "ingress" {
-    for_each = { for port, what in { "80" = "HTTP (ACME challenge + redirect)", "443" = "HTTPS" } : port => what if local.public }
+    for_each = local.web_ingress
     content {
       description      = ingress.value
       from_port        = ingress.key

@@ -9,3 +9,5 @@ output "data_bucket" { value = var.data_bucket }
 output "lab_role_arn" { value = var.lab_role_arn }
 # `crucible aws labs-init` reads it: the lab account's roles trust exactly this role.
 output "node_role_name" { value = aws_iam_role.node.name }
+# The ports the node's security group opens to the world (none in ssm); tests assert it.
+output "web_ingress_ports" { value = sort(keys(local.web_ingress)) }

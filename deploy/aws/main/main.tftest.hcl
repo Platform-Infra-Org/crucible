@@ -351,6 +351,10 @@ run "public_access_is_unchanged" {
     error_message = "public keeps its Elastic IP and https://<domain>"
   }
   assert {
+    condition     = join(",", output.web_ingress_ports) == "443,80"
+    error_message = "public opens exactly ports 80 and 443"
+  }
+  assert {
     condition     = strcontains(aws_instance.node.user_data, "certificatesResolvers") && strcontains(aws_instance.node.user_data, "redirections")
     error_message = "public keeps Traefik's Let's Encrypt resolver and HTTPS redirect"
   }
@@ -379,8 +383,12 @@ run "ssm_access_has_no_way_in" {
     error_message = "ssm creates no Elastic IP and no DNS record"
   }
   assert {
+    condition     = length(output.web_ingress_ports) == 0
+    error_message = "access = ssm must open no inbound port"
+  }
+  assert {
     condition     = aws_security_group.web.vpc_id == "vpc-spoke"
-    error_message = "the security group lives in the given subnet's VPC (ingress is unknown at plan under the mock, so no-inbound rests on the public_ip/for_each logic)"
+    error_message = "the security group must live in the given subnet's VPC"
   }
   assert {
     condition     = aws_instance.node.subnet_id == "subnet-0fa66f46aa023ab6e" && aws_instance.node.associate_public_ip_address == false

@@ -12,6 +12,29 @@
    The first HTTPS request may take ~1 min while Let's Encrypt issues the certificate. If `up` ends with "isn't answering yet", DNS or the certificate is still settling: wait, then run `crucible aws status` until `healthz: ok`.
 6. Invite people and add them to teams: follow [cognito.md](cognito.md).
 
+### Our account (access = ssm)
+
+One account, no default VPC, no inbound path. These steps replace 2 to 5 above; step 6 is the same. Nothing here creates
+an Elastic IP, a DNS record or a certificate.
+1. `crucible aws init --region il-central-1 --access ssm` (add `--local-port N` to change `18080`; no `--domain`). This is the
+   first contact with S3, Cognito and SSM Parameter Store in this account, none of which has been checked against the SCPs. If an
+   action is denied by an SCP, stop and ask the platform team. A re-run without `--access` or `--local-port` keeps the current ones.
+2. In `deploy/aws/main/crucible.tfvars` set `subnet_id = "subnet-0fa66f46aa023ab6e"` (spokeSubnet1) and leave out `domain` and
+   `acme_email`. Set `schedule_enabled = false` if EventBridge Scheduler is denied.
+3. `crucible aws up`. It prints no DNS line, waits for the node to register with SSM, and checks `/healthz` on the node. If it ends
+   with "node not reachable over SSM", ask the network team to allow `ssm.il-central-1.amazonaws.com`,
+   `ssmmessages.il-central-1.amazonaws.com` and `ec2messages.il-central-1.amazonaws.com`.
+4. `crucible aws status`. Expect `healthz: ok` and `egress: every host the node needs is reachable`. If it lists blocked hosts, send
+   them to the network team. The git host is not tested: check it by hand.
+5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
+   sign in. Ctrl-C ends the tunnel; the AWS CLI may print an exit error then. A `--port` other than the one in the node's
+   `crucible:public-url` tag is refused.
+6. `crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f`
+   (both flags or neither; a re-run without them keeps the current ones), then `crucible aws up` again. Run one AWS lab that launches an
+   instance (step 10 under "AWS labs").
+
+The organization's after-hours automation may stop the node whatever `schedule_enabled` says; check with the platform team.
+
 **First admin (`bootstrap_admin`).** Set `bootstrap_admin = "you@example.com"` in your tfvars. On the first start Crucible adds that email to its empty `admins` table. It grants nothing by itself: you still sign in through Cognito with that verified email, so invite it first (see `cognito.md`). It runs once per deployment: the `admin.bootstrap` audit row (actor `bootstrap`, target the email) marks it done, and every later start ignores the value, so removing every admin is never undone by a restart. To seed again after a database reset, the audit row must be gone too.
 
 **Configuration lives in Postgres.** Sign in as the first admin and set cost tiers, schedules, quotes and admins under **Administrator → Forge settings**; create teams on the team pages; register trainings, start them for teams, enroll people and give out roles under **Manage trainings**. The fail-closed rules hold: no cost tiers means labs that cost money can't be requested. Cluster labs are free and run on trainees' own clusters through their agent (set `CRUCIBLE_TOOLBOX_IMAGE`, Helm `toolboxImage`); Crucible's own cluster (`CRUCIBLE_LAB_CLUSTER=1`) runs AWS lab workspaces. Nothing about people, roles or budgets is ever written to git.
@@ -313,7 +336,6 @@ request "Cloud Heat", approve it, then:
 10. **The EC2 path.** In your sandbox content repo (not `examples/`), add this as `terraform/ec2.tf` next to Cloud
     Heat's `main.tf`, and sync:
     ```hcl
-    data "aws_vpc" "default" { default = true }
     data "aws_ami" "al2023" {
       owners      = ["amazon"]
       most_recent = true
@@ -324,11 +346,11 @@ request "Cloud Heat", approve it, then:
     }
     resource "aws_security_group" "box" {
       name_prefix = "crucible-lab-${var.crucible_lab_id}-"
-      vpc_id      = data.aws_vpc.default.id
+      vpc_id      = var.crucible_vpc_id != "" ? var.crucible_vpc_id : null
     }
     resource "aws_vpc_security_group_ingress_rule" "ssh" {
       security_group_id = aws_security_group.box.id
-      cidr_ipv4         = data.aws_vpc.default.cidr_block
+      cidr_ipv4         = "10.0.0.0/8"
       ip_protocol       = "tcp"
       from_port         = 22
       to_port           = 22
@@ -342,6 +364,8 @@ request "Cloud Heat", approve it, then:
       ami                    = data.aws_ami.al2023.id
       instance_type          = "t3.nano"
       vpc_security_group_ids = [aws_security_group.box.id]
+      subnet_id              = length(var.crucible_subnet_ids) > 0 ? var.crucible_subnet_ids[0] : null
+      associate_public_ip_address = false
       root_block_device {
         volume_type = "gp3"
         volume_size = 8
@@ -360,7 +384,7 @@ request "Cloud Heat", approve it, then:
     ```
     Request and approve the lab. Expected:
     - The request shows a non-zero estimate, and the lab page's **How this estimate was worked out** lists the
-      instance (t3.nano with its 8 GiB gp3 root and public IPv4), the data volume (1 GiB gp3), the attachment as
+      instance (t3.nano with its 8 GiB gp3 root, no public IPv4), the data volume (1 GiB gp3), the attachment as
       free, and the security group and its rules as free.
     - The lab becomes ready. While `tf-apply` runs, `k3s kubectl -n lab-<id> top pod tf-apply` stays well under its
       1 Gi limit; record the peak here.

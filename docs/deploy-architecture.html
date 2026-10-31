@@ -154,9 +154,9 @@ body { margin: 0; }
       release ships.</p>
     <p class="lede">The production drawings show what <code>deploy/aws</code> builds today: an Elastic IP, a public domain with a
       Let's Encrypt certificate, and ideally a separate lab account. Our account allows none of that, so it runs differently:
-      one account, no inbound path, and for now everyone reaches the app through an SSM tunnel. <a href="#our-account">Our
+      one account, no inbound path, and everyone reaches the app through an SSM tunnel (<code>access = ssm</code>). <a href="#our-account">Our
       account</a> and <a href="#access">Reaching Crucible</a> explain it, and each affected section has an
-      <b>In our account</b> note. Nothing of Crucible is deployed there yet.</p>
+      <b>In our account</b> note.</p>
     <p class="lede">New to AWS? The <a href="aws-primer.html">AWS and networking primer</a> explains the words used here. To build
       it, follow the <a href="aws-deploy.html">deployment walkthrough</a>, every command in order.</p>
     <nav class="toc" aria-label="Sections">
@@ -497,12 +497,11 @@ body { margin: 0; }
       its backups and uploads, and assume the three lab-account roles (<a href="#iam-roles">IAM roles</a>). To build all three
       stacks, follow <a href="aws-deploy.html#up">crucible aws up</a> in the deployment walkthrough.</p>
     <div class="note ours"><p><strong>In our account.</strong>One account holds all three stacks, so the lab-account column
-      is the same account as the main one. There is no Elastic IP, no public URL, no DNS record and no Let's Encrypt: the VPC
+      is the same account as the main one. With <code>access = ssm</code> there is no Elastic IP, no DNS record and no Let's Encrypt: the VPC
       has no inbound path, and the organization's SCPs deny Elastic IPs and load balancers. People and laptop agents reach the
-      node through an SSM tunnel instead (<a href="#access-ssm">today</a>), and the git host's webhook can't arrive, so
+      node through <code>crucible aws connect</code> instead (<a href="#access-ssm">how</a>), and the git host's webhook can't arrive, so
       Crucible fetches every 60 seconds. Outbound calls, to the git host, the Price List and AWS's own APIs, leave through
-      the networking team's firewall and NAT. <code>deploy/aws/main</code> can't deploy here until the changes listed under
-      <a href="#main-changes">the main stack</a> are made; they are not made yet. Step by step:
+      the networking team's firewall and NAT. <a href="#main-changes">The <code>access</code> setting</a> picks between the two modes. Step by step:
       <a href="aws-deploy.html#our-account">the walkthrough's own section</a>.</p></div>
   </section>
 
@@ -536,31 +535,26 @@ body { margin: 0; }
         <tbody>
           <tr><th scope="row">The node</th><td>EC2 <code>t3a.xlarge</code></td><td>4 vCPU, 16 GiB, Ubuntu 24.04. Runs k3s with Crucible, Postgres, Traefik, and the AWS lab workspaces and Terraform runs. Cluster labs run on trainees' own clusters, not here. First boot installs k3s, Helm and sysbox.</td></tr>
           <tr><th scope="row">Disk</th><td>EBS gp3, 60 GiB, encrypted</td><td>The database and everything else on the node.</td></tr>
-          <tr><th scope="row">Public address</th><td>Elastic IP</td><td>A fixed IP your domain points at. <b>Not in our account</b>: the SCPs deny <code>ec2:AllocateAddress</code>, and nothing could reach it anyway.</td></tr>
-          <tr><th scope="row">Firewall</th><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, the redirect) and 443 (HTTPS). No SSH port at all: a shell goes through SSM. <b>In our account</b>: no inbound rules at all; the SSM tunnel needs none.</td></tr>
-          <tr><th scope="row">Network</th><td>Default VPC and subnet</td><td>Already there in most accounts. No NAT gateway or load balancer, which keeps it cheap. <b>In our account</b>: there is no default VPC (the organization deletes it); the node goes into <code>spokeSubnet1</code> of the networking team's VPC, which must be passed in as variables.</td></tr>
+          <tr><th scope="row">Public address</th><td>Elastic IP</td><td>A fixed IP your domain points at. <b>Only with <code>access = public</code></b>. With <code>ssm</code> there is none: the SCPs deny <code>ec2:AllocateAddress</code>, and nothing could reach it anyway.</td></tr>
+          <tr><th scope="row">Firewall</th><td>Security group <code>crucible-web</code></td><td>Lets in only ports 80 (certificate checks, the redirect) and 443 (HTTPS). No SSH port at all: a shell goes through SSM. <b>With <code>access = ssm</code></b>: no inbound rules at all; the SSM tunnel needs none.</td></tr>
+          <tr><th scope="row">Network</th><td>Default VPC and subnet</td><td>Already there in most accounts. No NAT gateway or load balancer, which keeps it cheap. <b>With <code>access = ssm</code></b>: the node goes into the existing subnet named by <code>subnet_id</code> (ours: <code>spokeSubnet1</code> of the networking team's VPC), so no default VPC is needed.</td></tr>
           <tr><th scope="row">Node identity</th><td>IAM role <code>crucible-node</code> and its instance profile</td><td>What the node, and its pods other than lab pods, may do in AWS. See <a href="#iam-roles">IAM roles</a>.</td></tr>
           <tr><th scope="row">Metadata service</th><td>EC2 IMDSv2, hop limit 2</td><td>Hands the node role's credentials to programs on the node; a token is required, and pods can reach it, except lab pods. See <a href="#imds">IMDS</a>.</td></tr>
           <tr><th scope="row">Settings and secrets</th><td>SSM Parameter Store</td><td><code>/crucible/env</code> (node settings), the Helm values, and encrypted parameters for the sign-in client secret, the database password, the quiz secret and the git webhook secret (all made by Terraform), plus the optional <code>git_credentials</code> and <code>smtp_password</code> from your settings. Each deploy copies them, and the <code>smtp_*</code> settings that are set, into the Kubernetes Secret <code>crucible-secrets</code>, together with <code>CRUCIBLE_SECRET_KEY</code> from the persistent stack. The SSH host keys Crucible pins live in Postgres, so a pod restart keeps them.</td></tr>
           <tr><th scope="row">Wake and sleep</th><td>EventBridge Scheduler and its role <code>crucible-scheduler</code></td><td>Starts the node at 07:30 and stops it at 19:30, Monday to Friday, in your time zone (default <code>Europe/Bucharest</code>), to save money at night.</td></tr>
-          <tr><th scope="row">DNS record</th><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if the domain is in Route 53. Any other DNS provider works too. <b>Not in our account</b>: there is no public address to point at.</td></tr>
+          <tr><th scope="row">DNS record</th><td>Route 53 (optional)</td><td>Points your domain at the Elastic IP, if the domain is in Route 53. Any other DNS provider works too. <b>Only with <code>access = public</code></b>: with <code>ssm</code> there is no public address to point at.</td></tr>
         </tbody>
       </table>
     </div>
 
-    <div class="note ours" id="main-changes"><p><strong>In our account: what <code>deploy/aws/main</code> needs first.</strong>As
-      built it looks up the default VPC (<code>data "aws_vpc" "default"</code>), creates an Elastic IP (<code>aws_eip.web</code>)
-      and an optional Route 53 record, opens 80 and 443 to the internet, has Traefik request Let's Encrypt certificates, and
-      <code>crucible aws up</code> waits for <code>https://&lt;domain&gt;/healthz</code>. To deploy here it needs:</p>
+    <div class="note ours" id="main-changes"><p><strong>The <code>access</code> setting.</strong>
+      <code>crucible aws init --access public|ssm</code> stores it in the persistent stack (with <code>local_port</code>, default <code>18080</code>), and <code>crucible aws up</code> passes it to
+      <code>deploy/aws/main</code> together with one public URL. Everything that needs Crucible's address reads that one URL: the Cognito callback, the Origin check and the Helm values.</p>
       <ul>
-        <li>an existing VPC and subnet as variables (<code>spokeSubnet1</code>);</li>
-        <li>no Elastic IP and no DNS record;</li>
-        <li>no inbound security-group rules;</li>
-        <li>Traefik without TLS or the HTTPS redirect, serving plain HTTP on port 80;</li>
-        <li>the public URL and the Cognito callback on <code>http://localhost:18080</code> (<a href="#access-ssm">why</a>);</li>
-        <li><code>up</code> and <code>status</code> checking health over SSM instead of the public URL.</li>
-      </ul>
-      <p>None of these changes is made yet, so the current commands don't work here as they stand.</p></div>
+        <li><b>public</b> (the default): the default VPC's first subnet, an Elastic IP, an optional Route 53 record, ports 80 and 443 open, and Traefik gets a Let's Encrypt certificate. The URL is <code>https://&lt;domain&gt;</code>.</li>
+        <li><b>ssm</b>: an existing subnet from <code>subnet_id</code>, no Elastic IP or DNS record, no inbound security-group rules, and plain-HTTP Traefik on port 80. The URL is <code>http://localhost:&lt;local_port&gt;</code>, and the node carries it in the tag <code>crucible:public-url</code>.
+          <code>up</code> checks health on the node over SSM (<a href="#access-ssm">how people reach it</a>).</li>
+      </ul></div>
 
     <h3 class="sub">3 · labs: made once by <code>crucible aws labs-init</code>, in the lab account</h3>
     <p>The lab account can be the same as Crucible's, but a separate sandbox account is much safer. After <code>labs-init</code>,
@@ -569,8 +563,11 @@ body { margin: 0; }
     <div class="note ours"><p><strong>In our account: labs run in the same account.</strong>Run <code>crucible aws labs-init</code>
       with our own credentials and without <code>--crucible-account</code>; the labs stack then trusts the node role in this
       account. It also sets S3's account-wide public-access block for this whole account, not just for labs. Lab instances and
-      security groups go into the spoke subnets, get no public IPs and leave through the same firewall. Elastic IPs, NAT
-      gateways and load balancers in a lab module are denied by the SCPs as well as by the lab role.</p></div>
+      security groups go into the lab network you give <code>labs-init</code> (<code>--vpc-id</code> and <code>--subnet-ids</code>, both or neither, kept on a re-run), get no public IPs and leave through the same firewall. Elastic IPs, NAT
+      gateways and load balancers in a lab module are denied by the SCPs as well as by the lab role.</p>
+      <p>The lab network travels like this: <code>labs-init</code> stores it in the labs stack outputs (<code>lab_vpc_id</code>, <code>lab_subnet_ids</code>); <code>up</code> reads them and
+      passes them to Helm; the pod gets <code>CRUCIBLE_AWS_LAB_VPC_ID</code> and <code>CRUCIBLE_AWS_LAB_SUBNET_IDS</code>; a lab module reads <code>var.crucible_vpc_id</code> and
+      <code>var.crucible_subnet_ids</code>. They are filled only for a lab in the lab network's region; elsewhere they are empty.</p></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
@@ -663,27 +660,29 @@ body { margin: 0; }
 
   <section id="access" aria-labelledby="access-h">
     <div class="head"><span class="eyebrow">How people reach Crucible</span><h2 id="access-h">Reaching Crucible</h2>
-      <p>The code's design gives the node a public domain. Our VPC has no inbound path, so that can't work here. Today the way in
-        is an SSM tunnel; a Cloudflare Tunnel is the option for later.</p></div>
+      <p>With <code>access = public</code> the node has a public domain. Our VPC has no inbound path, so we use <code>access = ssm</code>: an SSM tunnel.
+        A Cloudflare Tunnel is the option for later.</p></div>
 
-    <h3 class="sub" id="access-ssm">Today: an SSM port-forward</h3>
-    <p>Each person with our Identity Center access runs a Session Manager port-forward from their laptop to port 80 on the node,
-      then opens <code>http://localhost:18080</code>. The laptop and the node's SSM agent both dial out to AWS Systems Manager,
-      which joins the two, so nothing has to accept an inbound connection. Setup, the connect script and its caveats:
+    <h3 class="sub" id="access-ssm">An SSM port-forward</h3>
+    <p>Each person with our Identity Center access runs <code>crucible aws connect</code>. It finds the node by its <code>Name</code> tag, reads the port from the node's
+      <code>crucible:public-url</code> tag, refuses a different <code>--port</code>, and opens a Session Manager port-forward from the laptop to port 80 on the node. Then they open <code>http://localhost:18080</code>.
+      The laptop and the node's SSM agent both dial out to AWS Systems Manager,
+      which joins the two, so nothing has to accept an inbound connection. On the node side, <code>up</code> checks <code>/healthz</code> there over SSM, and <code>crucible aws status</code> also tests that the node can
+      open an HTTPS connection to each host it needs, and lists the ones the firewall blocks. Setup and what <code>connect</code> needs:
       <a href="ssm-access.html">reaching the app over SSM</a>.</p>
     <div class="cols">
       <div><h3>The same local port for everyone</h3><p>Crucible's public URL must equal the address in the browser: the Origin
         check refuses state changes from any other origin, and the Cognito callback URL is built from it. So everyone's tunnel
         listens on <code>18080</code>, with <code>CRUCIBLE_PUBLIC_URL=http://localhost:18080</code> and the Cognito callback
         <code>http://localhost:18080/auth/callback</code>. Cognito accepts plain <code>http</code> only for localhost.</p></div>
-      <div><h3>Traefik serves plain HTTP</h3><p>Today Traefik redirects port 80 to HTTPS and requests a Let's Encrypt
-        certificate. Let's Encrypt's HTTP-01 check can't reach the node, and the redirect breaks the tunnel, so Traefik must
-        serve plain HTTP on port 80. Not changed yet (<a href="#main-changes">the list</a>).</p></div>
+      <div><h3>Traefik serves plain HTTP</h3><p>With <code>access = public</code> Traefik redirects port 80 to HTTPS and requests a Let's Encrypt
+        certificate. Let's Encrypt's HTTP-01 check can't reach the node, and the redirect breaks the tunnel, so with <code>ssm</code> Traefik
+        serves plain HTTP on port 80 (<a href="#main-changes">the setting</a>).</p></div>
       <div><h3>Agents and webhooks</h3><p>A laptop agent reaches Crucible through its own laptop's tunnel, so laptop and cluster
         labs work only while that tunnel is open. GitHub webhooks can't arrive at all, so Crucible fetches every repository
         every 60 seconds instead.</p></div>
       <div><h3>Who can use it</h3><p>Only people with our AWS access. The SSO login lasts hours and an idle session ends after
-        about 20 minutes, so re-running the connect script is routine.</p></div>
+        about 20 minutes, so re-running <code>crucible aws connect</code> is routine. Ctrl-C ends the tunnel.</p></div>
     </div>
 
     <h3 class="sub" id="access-cloudflare">Later: a Cloudflare Tunnel into the VPC</h3>
@@ -918,8 +917,8 @@ body { margin: 0; }
       <div><h3>AWS credentials</h3><p>Pods that call AWS take the node role's credentials from the metadata service. Lab pods are cut off from it, because that role can assume any lab's role. Who acts as which role, and why: <a href="#iam-roles">IAM roles</a>.</p></div>
     </div>
     <div class="note ours"><p><strong>In our account.</strong>Traefik can't get a Let's Encrypt certificate here, and its redirect
-      to HTTPS breaks the SSM tunnel, so it must serve plain HTTP on port 80, where the tunnel lands. That change isn't made yet
-      (<a href="#main-changes">the list</a>). Everything else inside the node is the same.</p></div>
+      to HTTPS would break the SSM tunnel, so with <code>access = ssm</code> it serves plain HTTP on port 80, where the tunnel lands
+      (<a href="#main-changes">the setting</a>). Everything else inside the node is the same.</p></div>
   </section>
 
   <section id="backups" aria-labelledby="backups-h">
@@ -1185,7 +1184,7 @@ body { margin: 0; }
 
   <section id="runtimes" aria-labelledby="runtimes-h">
     <div class="head"><span class="eyebrow">A lab's runtime</span><h2 id="runtimes-h">Where labs run</h2>
-      <p>Only AWS labs use Crucible's own cluster and cost money. Laptop and cluster labs run on the trainee's side, through their agent. In our account an agent reaches Crucible only while that laptop's SSM tunnel is open (<a href="#access-ssm">today's access</a>).</p></div>
+      <p>Only AWS labs use Crucible's own cluster and cost money. Laptop and cluster labs run on the trainee's side, through their agent. In our account an agent reaches Crucible only while that laptop's SSM tunnel is open (<a href="#access-ssm">how people reach it</a>).</p></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th scope="col">Runtime</th><th scope="col">Runs on</th><th scope="col">Reached through</th><th scope="col">Checks</th><th scope="col">Cost</th></tr></thead>
@@ -1206,7 +1205,7 @@ body { margin: 0; }
         own Terraform state, then from the free billing export. If price data is missing or stale, the lab can't be requested;
         Crucible never quotes $0.</p></div>
     <div class="note ours"><p><strong>In our account.</strong>Labs run in this same account, in <code>il-central-1</code>, where our
-      only VPC is. With no default VPC, a lab module that launches an instance has to place it in a spoke subnet; it gets no
+      only VPC is. With no default VPC, a lab module that launches an instance places it in the lab network (<code>var.crucible_subnet_ids</code>); it gets no
       public IP and reaches the internet through the firewall. Elastic IPs, NAT gateways and load balancers in a lab module are
       denied by the SCPs as well as by the lab role. A lab like Cloud Heat below, S3 only, needs no network.</p></div>
     <div class="cols">
@@ -1302,14 +1301,13 @@ resource "aws_s3_bucket" "forge" {
       <li><h3>Roll out <span class="lane aws">SSM</span> <span class="lane k8s">node</span></h3>
         <p><code>aws ssm send-command</code> runs <code>/opt/crucible/deploy.sh</code> on the node, as the node role: it reads <code>current-release</code>, imports the image into containerd, runs <code>helm upgrade --install</code> with values and secrets from SSM, then checks <code>/healthz</code>.</p></li>
     </ol>
-    <p>On first boot the node's start-up script installs sysbox, k3s, Helm and the AWS CLI, sets Traefik up for Let's Encrypt,
+    <p>On first boot the node's start-up script installs sysbox, k3s, Helm and the AWS CLI, sets Traefik up (for Let's Encrypt with <code>access = public</code>, plain HTTP with <code>ssm</code>),
       reads its settings from Parameter Store and runs the same deploy script; on an empty database the API restores the newest
       snapshot first. Every command, with what to expect: <a href="aws-deploy.html#deploy">deploy</a> and
       <a href="aws-deploy.html#everyday">everyday operations</a>.</p>
     <div class="note ours"><p><strong>In our account.</strong>Shipping works the same way, since S3 and SSM are reached by
-      outbound calls through the firewall (if it allows them). Two parts differ, and neither is changed yet: the start-up script
-      must leave Traefik on plain HTTP, and <code>up</code> must check health over SSM, because it now waits for
-      <code>https://&lt;domain&gt;/healthz</code>, which doesn't exist here (<a href="#main-changes">the list</a>).</p></div>
+      outbound calls through the firewall (if it allows them). Traefik stays on plain HTTP, and <code>up</code> checks health on the node over SSM
+      instead of waiting for a public URL (<a href="#main-changes">the setting</a>).</p></div>
   </section>
 
   <section id="limits" aria-labelledby="limits-h">

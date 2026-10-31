@@ -17,7 +17,7 @@ writes content edits back to git as a bot. Configuration and people live in Post
   - `docs/deploy-architecture.html`: how Crucible is built: the local stack, `cluster-check`, production on AWS (every
     component and its cost, the k3s node, RBAC and admission, backups), IAM roles (who acts as whom, and when), the IAM
     fence, an AWS lab's life, shipping a release, limits. Update it when `deploy/` or the AWS lab path changes.
-  - `docs/aws-deploy.html`: every `crucible aws` step in order, from `init` to the first sign-in, AWS labs, upgrades,
+  - `docs/aws-deploy.html`: every `crucible aws` step in order (including `--access ssm`, `connect` and the lab network), from `init` to the first sign-in, AWS labs, upgrades,
     teardown and troubleshooting, with how to check each one. Update it when `deploy/aws`, `internal/awsops` or
     `docs/runbooks/aws.md` changes.
   - `docs/ssm-access.html`: reaching the app over a Session Manager port-forward when the VPC has no inbound path.
@@ -48,6 +48,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Terraform (mock providers only) | `cd deploy/aws/{persistent,main,labs} && terraform test` |
 | Helm chart | `bash deploy/helm/test.sh` |
 | Content lint | `./bin/crucible lint examples/<repo>` |
+| Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |

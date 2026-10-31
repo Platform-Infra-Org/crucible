@@ -307,23 +307,23 @@ svg .ahm { fill: var(--muted); }
           instance is allowed but unreachable, and Let's Encrypt's check can't reach the node. So there is no public URL, and the
           "point DNS" and "wait for HTTPS" steps do not apply.</p></li>
       <li><h3>Access is a Session Manager port-forward</h3>
-        <p>Each person with our Identity Center access forwards a local port to port 80 on the node and opens <code>http://localhost:18080</code>.
-          Everyone must use the same local port, because Crucible's public URL has to match the browser's address. Setup and the connect script:
+        <p>Each person with our Identity Center access runs <code>crucible aws connect</code>, which forwards a local port to port 80 on the node, and opens <code>http://localhost:18080</code>.
+          Everyone must use the same local port, because Crucible's public URL has to match the browser's address; <code>connect</code> refuses another one. Setup and the command:
           <a href="ssm-access.html">Reaching the app over SSM</a>; the design: <a href="deploy-architecture.html#access-ssm">access over SSM</a>.</p></li>
       <li><h3>Later: a Cloudflare Tunnel</h3>
         <p>A future option is an outbound-only Cloudflare Tunnel from the node, gated by Cloudflare Access. It needs security-team approval and
           is not built. See <a href="deploy-architecture.html#access-cloudflare">the Cloudflare option</a>.</p></li>
     </ol>
-    <div class="note warn"><p><strong>Before this works here.</strong>The stack as built cannot deploy in our account yet. These changes to
-      <code>deploy/aws/main</code> and <code>internal/awsops</code> are <b>not made</b>:</p>
-      <ul>
-        <li>take an existing VPC and subnet as variables (the workload subnet <code>spokeSubnet1</code>) instead of looking up the default VPC;</li>
-        <li>create no Elastic IP and no Route 53 record, and open no inbound security-group rules;</li>
-        <li>serve plain HTTP from Traefik: no Let's Encrypt, no redirect to HTTPS;</li>
-        <li>set the public URL and the Cognito callback to <code>http://localhost:18080</code>;</li>
-        <li>have <code>up</code> and <code>status</code> check health over SSM instead of the public URL.</li>
-      </ul>
-      <p>Until they land, the commands below are the standard ones and will fail here at the points the notes mark.</p></div>
+    <div class="note"><p><strong>Our steps.</strong>In this order, from the repository root:</p>
+      <ol>
+        <li><code>crucible aws init --region il-central-1 --access ssm</code>. Add <code>--local-port</code> to change <code>18080</code>.</li>
+        <li>In <code>deploy/aws/main/crucible.tfvars</code>, set <code>subnet_id = "subnet-0fa66f46aa023ab6e"</code>. Leave out <code>domain</code> and <code>acme_email</code>.</li>
+        <li><code>crucible aws up</code>. There is no DNS line. It waits for the node to register with SSM and checks health on the node.</li>
+        <li><code>crucible aws status</code>. Its <code>egress:</code> line lists every host the firewall blocks; send those to the network team. Your git host is not in that list, so check it by hand.</li>
+        <li><code>crucible aws connect</code>, then open <code>http://localhost:18080</code>.</li>
+        <li><code>crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code>, then <code>crucible aws up</code> again.</li>
+      </ol>
+      <p>Each step is explained in its section below.</p></div>
   </section>
 
   <!-- ───────────── 2. before ───────────── -->
@@ -358,17 +358,17 @@ crucible aws status            <span class="c"># before init, this fails with "d
         <p><b>In our account:</b> we sign in through Identity Center as <code>Workload-Admin-PS</code>. Organization policies (SCPs) deny
           <code>ec2:AllocateAddress</code>, <code>ec2:CreateInternetGateway</code>, <code>elasticloadbalancing:CreateLoadBalancer</code>, <code>ec2:CreateVpcEndpoint</code>,
           <code>ec2:CreateSubnet</code>, <code>ec2:CreateRoute</code> and <code>ec2:CreateClientVpnEndpoint</code>. EC2 instances in the spoke subnets, security groups and
-          IAM roles are allowed. S3, Cognito, SSM parameters, EventBridge Scheduler, Budgets, Data Exports and <code>ssm:StartSession</code> are not yet checked.</p>
+          IAM roles are allowed. S3, Cognito, SSM parameters, EventBridge Scheduler, Budgets, Data Exports and <code>ssm:StartSession</code> are not yet checked. <code>init --access ssm</code> is the first contact with them; if an SCP denies one, stop and ask the platform team.</p>
         <p>These are your own role's permissions. The node and the lab roles are made by the stacks; see <a href="deploy-architecture.html#iam-roles">IAM roles</a>.</p></div>
       <div><h3>A domain you control</h3><p>Pick the final hostname now, such as <code>crucible.example.com</code>. The Cognito sign-in callback is
         built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
         give Terraform a Route 53 hosted zone that holds the name.</p>
-        <p><b>In our account:</b> no domain is needed for SSM access. <code>init</code> still requires <code>--domain</code> today; see <a href="#init">init</a>.</p></div>
+        <p><b>In our account:</b> no domain is needed. <code>init --access ssm</code> takes no <code>--domain</code>; see <a href="#init">init</a>.</p></div>
       <div><h3>The region</h3><p><code>init</code> takes the region, and everything in the main account follows it: the node goes where the user pool is.
         The account needs its <b>default VPC</b> in that region, because the node is placed in its first default subnet; <code>up</code>
         fails without one. Labs' regions are set separately, in the lab account.</p>
         <p><b>In our account:</b> the organization deletes the default VPC, so this check returns <code>[]</code> and <code>create-default-vpc</code> is not an
-          option. The stack must take our VPC (<code>vpc-03aa39198d92c5a25</code>) and <code>spokeSubnet1</code> as variables; not built yet.</p>
+          option. The main stack takes the node's subnet as <code>subnet_id</code> instead (<code>subnet-0fa66f46aa023ab6e</code>, <code>spokeSubnet1</code>), so no default VPC is needed.</p>
         <div class="cmd"><pre><code>aws ec2 describe-vpcs --region eu-west-1 --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'   <span class="c"># [] means none</span>
 aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if there is none</span></code></pre></div></div>
       <div><h3>AWS labs or not</h3><p>AWS labs create real resources, so they belong in a <b>second, standalone AWS account</b> (we have only one; see below). The runbook strongly
@@ -382,9 +382,10 @@ aws ec2 create-default-vpc --region eu-west-1      <span class="c"># only if the
   <section id="init" aria-labelledby="init-h">
     <div class="head"><span class="eyebrow">deploy/aws/persistent · once per account</span><h2 id="init-h">One-time setup: <code>crucible aws init</code></h2>
       <p>This creates everything that must outlive the server. Nothing here is ever destroyed by Crucible.</p></div>
-    <div class="note"><p><strong>In our account.</strong><code>--domain</code> is required today and feeds the Cognito callback (<code>https://&lt;domain&gt;/auth/callback</code>). For us the
-      callback must be <code>http://localhost:18080/auth/callback</code> (Cognito accepts plain http only for localhost). <code>init</code> cannot take that yet,
-      so what to pass for <code>--domain</code> in the meantime is open.</p></div>
+    <div class="note"><p><strong>In our account.</strong>Run <code>crucible aws init --region il-central-1 --access ssm</code>. <code>--access</code> is <code>public</code> (the default; needs <code>--domain</code>) or <code>ssm</code>
+      (no domain, no Elastic IP, no Let's Encrypt). With <code>ssm</code> everyone reaches Crucible at <code>http://localhost:&lt;--local-port&gt;</code> through <code>crucible aws connect</code>;
+      the port defaults to <code>18080</code> and must be 1024 to 65535. The Cognito callback is <code>http://localhost:&lt;port&gt;/auth/callback</code> (Cognito accepts plain http only for localhost).
+      <code>--domain</code> with <code>--access ssm</code> is refused. A re-run without <code>--access</code>, <code>--domain</code> or <code>--local-port</code> keeps the current ones.</p></div>
     <ol class="steps">
       <li><h3>Run init <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
@@ -440,9 +441,10 @@ schedule_timezone = "Europe/Bucharest"
 <span class="c"># schedule_enabled = false</span></code></pre></div>
     <p>Sign-in needs nothing here: <code>up</code> passes the Cognito issuer, client id and pool id from the persistent stack, and Terraform
       stores the client secret in SSM itself.</p>
-    <div class="note"><p><strong>In our account.</strong><code>domain</code> and <code>acme_email</code> make no sense without HTTPS; the public URL becomes <code>http://localhost:18080</code>.
-      <code>route53_zone_id</code> stays empty. The stack needs new variables for our VPC and subnet, which do not exist yet. The org's
-      after-hours automation may also stop the node, whatever <code>schedule_enabled</code> says; check with the platform team.</p></div>
+    <div class="note"><p><strong>In our account.</strong>Leave out <code>domain</code> and <code>acme_email</code>; set <code>subnet_id = "subnet-0fa66f46aa023ab6e"</code>
+      (required with <code>access = ssm</code>, which <code>up</code> passes in from the persistent stack along with <code>public_url</code>, <code>http://localhost:18080</code>).
+      The node gets no inbound security-group rules. <code>route53_zone_id</code> stays empty. The org's
+      after-hours automation may also stop the node, whatever <code>schedule_enabled</code> says; check with the platform team. If the Scheduler is denied, set <code>schedule_enabled = false</code>.</p></div>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Variable</th><th scope="col">Default</th><th scope="col">Required</th><th scope="col">What it means, and when to change it</th></tr></thead>
       <tbody>
@@ -482,9 +484,9 @@ schedule_timezone = "Europe/Bucharest"
     <div class="head"><span class="eyebrow">deploy/aws/main · internal/awsops</span><h2 id="up-h">Build the node: <code>crucible aws up</code></h2>
       <p>One command builds the server, waits for it, and ships the release you have checked out. <code>--var-file</code> defaults to
         <code>deploy/aws/main/crucible.tfvars</code>.</p></div>
-    <div class="note"><p><strong>In our account.</strong>as built, <code>up</code> fails at the apply: it looks up a default VPC that does not exist here, and tries to allocate an Elastic IP,
-      which an SCP denies. The "Tells you where to point DNS" and "Waits for HTTPS" steps do not apply; once the changes above are made,
-      <code>up</code> checks health over SSM instead.</p></div>
+    <div class="note"><p><strong>In our account.</strong><code>up</code> puts the node in <code>subnet_id</code>, creates no Elastic IP and no DNS record, and prints no "point DNS" line.
+      It waits for the node to register with SSM (up to ten minutes), then checks <code>/healthz</code> on the node itself instead of a public URL. It ends by telling you to run
+      <code>crucible aws connect</code>.</p></div>
     <div class="cmd"><pre><code>crucible aws up</code></pre></div>
     <ol class="steps">
       <li><h3>Reads the persistent stack <span class="lane">your computer</span></h3>
@@ -524,9 +526,8 @@ schedule_timezone = "Europe/Bucharest"
 
     <h3>What the node does on first boot</h3>
     <p>Cloud-init runs <code>deploy/aws/main/bootstrap.sh.tftpl</code>. Everything it prints goes to <code>/var/log/crucible-bootstrap.log</code>.</p>
-    <div class="note"><p><strong>In our account.</strong>the "Configures Traefik" step must change: Traefik has to serve plain HTTP on port 80, with no Let's Encrypt request and no redirect.
-      Today it redirects to HTTPS, which breaks the tunnel. Outbound calls (S3, SSM, STS, package downloads) leave through the
-      central firewall and NAT; which hosts it allows is not verified.</p></div>
+    <div class="note"><p><strong>In our account.</strong>With <code>access = ssm</code> Traefik serves plain HTTP on port 80: no Let's Encrypt request and no redirect to HTTPS.
+      Outbound calls (S3, SSM, STS, package downloads) leave through the central firewall and NAT. <code>crucible aws status</code> reports which hosts it blocks.</p></div>
     <ol class="steps">
       <li><h3>Prepares the machine</h3><p>Sets the time zone to <code>schedule_timezone</code>, installs <code>unzip</code> and <code>curl</code>, then AWS CLI v2.</p></li>
       <li><h3>Configures Traefik</h3><p>Writes a k3s manifest so Traefik, which comes with k3s, gets a Let's Encrypt certificate by HTTP-01 on port 80 and
@@ -610,7 +611,7 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
     <div class="head"><span class="eyebrow">docs/runbooks/cognito.md · in-app Docs</span><h2 id="first-h">First sign-in and setup inside Crucible</h2>
       <p>Configuration lives in Crucible's database, not in git or Terraform. You set it up in the app as the first admin. The in-app
         Docs (<code>https://&lt;domain&gt;/docs</code>) cover each page in full.</p></div>
-    <div class="note"><p><strong>In our account.</strong>open the SSM tunnel first, then use <code>http://localhost:18080</code> wherever this section says <code>https://&lt;domain&gt;</code>.
+    <div class="note"><p><strong>In our account.</strong>run <code>crucible aws connect</code> first and leave it running, then use <code>http://localhost:18080</code> wherever this section says <code>https://&lt;domain&gt;</code>.
       GitHub webhooks cannot reach us, so skip the webhook step: Crucible fetches every 60 seconds anyway. Laptop agents reach Crucible only while a tunnel is open.</p></div>
     <ol class="steps">
       <li><h3>Invite the bootstrap admin in Cognito</h3>
@@ -686,7 +687,9 @@ smtp_password = "…"                                         <span class="c"># 
         prices them itself from the public AWS Price List, meters them from each lab's Terraform state, then replaces that with the free
         billing export. How it works, and what the permission boundary allows: <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a> and <a href="deploy-architecture.html#iam-fence">the IAM fence</a>.</p></div>
     <div class="note"><p><strong>In our account.</strong>the lab account is our account. Run <code>labs-init</code> with our own credentials and <b>without</b>
-      <code>--crucible-account</code>. Lab instances and security groups go in the spoke subnets, get no public IPs, and leave through the same firewall.
+      <code>--crucible-account</code>, and add the lab network: <code>--vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code>.
+      Pass both or neither; a re-run without them keeps the current ones. Then run <code>crucible aws up</code> so the server learns them. Lab modules read them as
+      <code>var.crucible_vpc_id</code> and <code>var.crucible_subnet_ids</code>, set only in the lab network's region. Lab instances and security groups go in those subnets, get no public IPs, and leave through the same firewall.
       Lab modules that create Elastic IPs, NAT gateways or load balancers fail, denied by the SCPs as well as by the lab role. The permission boundary is
       the only isolation between labs and Crucible itself.</p></div>
     <ol class="steps">
@@ -768,8 +771,9 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
       </tbody>
     </table></div>
-    <div class="note"><p><strong>In our account.</strong><code>status</code> and the health check use the public URL today; until they check over SSM, test it through the tunnel with
-      <code>curl http://localhost:18080/healthz</code>. The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
+    <div class="note"><p><strong>In our account.</strong><code>crucible aws status</code> shows the instance, its address, <code>healthz:</code> (checked on the node over SSM) and <code>egress:</code>.
+      If egress lists blocked hosts, the network team must allow them. It does not check your git host. Open the app with <code>crucible aws connect</code>; Ctrl-C closes the tunnel
+      (the AWS CLI may print an exit error then; that is expected). The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
       <code>afterhours-shut-down-role</code>, <code>EC2Stop-Role</code>) probably stops instances out of hours. Not confirmed what it targets: check with the platform team.
       "Bring it back" needs no DNS change here.</p></div>
     <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The
@@ -861,9 +865,25 @@ crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
     <div class="head"><span class="eyebrow">When it doesn't work</span><h2 id="trouble-h">Troubleshooting</h2>
       <p>Every command below runs on the node, in an SSM session, unless it starts with <code>crucible</code>.</p></div>
     <div class="note"><p><strong>In our account.</strong>the certificate and DNS entry below do not apply. If the app does not answer, check in order: the node is running (the after-hours
-      automation may have stopped it), the SSM tunnel is open on <code>18080</code>, then Traefik is serving HTTP on port 80. Sign-in errors
+      automation may have stopped it), <code>crucible aws connect</code> is open, then <code>crucible aws status</code>. Sign-in errors
       here usually mean the Cognito callback is not <code>http://localhost:18080/auth/callback</code>, or the browser uses another port.</p></div>
     <div class="trouble">
+      <article id="t-ssm"><h3>"node not reachable over SSM"</h3><dl>
+        <dt>Symptom</dt><dd><p><code>up</code> or <code>status</code> prints <code>node not reachable over SSM after 10 minutes</code>.</p></dd>
+        <dt>Cause</dt><dd><p>The node's SSM agent can't reach Systems Manager through the firewall.</p></dd>
+        <dt>Fix</dt><dd><p>Ask the network team to allow <code>ssm.&lt;region&gt;.amazonaws.com</code>, <code>ssmmessages.&lt;region&gt;.amazonaws.com</code> and <code>ec2messages.&lt;region&gt;.amazonaws.com</code>, then run the command again.
+          Other errors, such as an expired login or <code>AccessDenied</code>, are printed as <code>ssm send-command</code> errors and are not retried.</p></dd>
+      </dl></article>
+      <article id="t-connect"><h3><code>crucible aws connect</code> refuses</h3><dl>
+        <dt>Symptom</dt><dd><p>It stops with a message instead of opening the tunnel.</p></dd>
+        <dt>Cause and fix</dt><dd><ul>
+          <li><b>Another port:</b> <code>crucible's address is http://localhost:18080: a different port … breaks sign-in and saving</code>. Use the port it names, or leave <code>--port</code> out.</li>
+          <li><b>No tag:</b> <code>… has no crucible:public-url tag</code>. The node was built before this version; run <code>crucible aws up</code>.</li>
+          <li><b>No plugin:</b> <code>the AWS Session Manager plugin isn't installed</code>. Install <code>session-manager-plugin</code>.</li>
+          <li><b>No node:</b> <code>no running instance named crucible</code>. If it sleeps, run <code>crucible aws wake</code>. With two nodes, pass <code>--name</code>.</li>
+          <li><b>No region:</b> pass <code>--region</code>, or set one with <code>aws configure set region</code>.</li>
+        </ul></dd>
+      </dl></article>
       <article id="t-cert"><h3>No certificate, or HTTPS never answers</h3><dl>
         <dt>Symptom</dt><dd><p><code>status</code> stays at <code>healthz: not answering</code>; the browser shows a certificate warning or nothing.</p></dd>
         <dt>Cause</dt><dd><p>DNS doesn't point at the Elastic IP yet, or port 80 isn't reachable, so Let's Encrypt's HTTP-01 challenge fails.</p></dd>

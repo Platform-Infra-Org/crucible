@@ -15,7 +15,7 @@ resource "aws_cognito_user_pool" "users" {
     allow_admin_create_user_only = true
     invite_message_template {
       email_subject = "You've been invited to Crucible"
-      email_message = "Welcome to the forge. Sign in at https://${var.domain} with {username} and the temporary password {####}. You'll choose your own password on first sign-in."
+      email_message = "Welcome to the forge. Sign in at ${local.public_url}${var.access == "ssm" ? " (open the tunnel first with `crucible aws connect`)" : ""} with {username} and the temporary password {####}. You'll choose your own password on first sign-in."
       sms_message   = "Crucible: {username} / {####}"
     }
   }
@@ -52,8 +52,8 @@ resource "aws_cognito_user_pool_client" "crucible" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  callback_urls                        = ["https://${var.domain}/auth/callback"]
-  logout_urls                          = ["https://${var.domain}/"]
+  callback_urls                        = ["${local.public_url}/auth/callback"]
+  logout_urls                          = ["${local.public_url}/"]
   supported_identity_providers         = ["COGNITO"]
   explicit_auth_flows                  = ["ALLOW_REFRESH_TOKEN_AUTH"]
   prevent_user_existence_errors        = "ENABLED"

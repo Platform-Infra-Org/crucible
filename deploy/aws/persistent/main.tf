@@ -19,7 +19,37 @@ variable "name" {
 }
 variable "domain" {
   type        = string
-  description = "Crucible's public hostname; used for the Cognito callback URL"
+  default     = ""
+  description = "Crucible's public hostname (access = public); used for the Cognito callback URL"
+  validation {
+    condition     = var.access != "public" || var.domain != ""
+    error_message = "access = public needs a domain: crucible aws init --domain crucible.example.com"
+  }
+}
+
+variable "access" {
+  type        = string
+  default     = "public"
+  description = "public: a domain, an Elastic IP and Let's Encrypt. ssm: no way in; people reach it with `crucible aws connect`"
+  validation {
+    condition     = contains(["public", "ssm"], var.access)
+    error_message = "access must be public or ssm"
+  }
+}
+
+variable "local_port" {
+  type        = number
+  default     = 18080
+  description = "access = ssm: the laptop port everyone opens Crucible on (the public URL is http://localhost:<port>)"
+  validation {
+    condition     = var.local_port >= 1024 && var.local_port <= 65535 && floor(var.local_port) == var.local_port
+    error_message = "local_port must be a whole number from 1024 to 65535"
+  }
+}
+
+locals {
+  # The one address people use. Cognito's callback, the main stack, the node and Helm all read it from here.
+  public_url = var.access == "ssm" ? "http://localhost:${var.local_port}" : "https://${var.domain}"
 }
 
 data "aws_caller_identity" "me" {}
@@ -119,5 +149,9 @@ resource "aws_ssm_parameter" "secret_key" {
 }
 
 output "region" { value = var.region }
+output "access" { value = var.access }
+output "local_port" { value = var.local_port }
+output "domain" { value = var.domain }
+output "public_url" { value = local.public_url }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "data_bucket" { value = aws_s3_bucket.data.bucket }

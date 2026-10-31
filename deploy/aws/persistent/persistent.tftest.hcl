@@ -67,3 +67,71 @@ run "secret_key_outlives_the_main_stack" {
     error_message = "the secret key is 48 characters with no special characters"
   }
 }
+
+run "public_access_is_unchanged" {
+  command = plan
+
+  assert {
+    condition     = output.access == "public" && output.public_url == "https://crucible.example.com" && output.domain == "crucible.example.com"
+    error_message = "public is the default and its URL is https://<domain>"
+  }
+}
+
+run "ssm_access_uses_a_localhost_url" {
+  command = plan
+  variables {
+    access = "ssm"
+    domain = ""
+  }
+
+  assert {
+    condition     = output.public_url == "http://localhost:18080" && output.local_port == 18080
+    error_message = "ssm's URL is http://localhost:18080 by default"
+  }
+  assert {
+    condition     = toset(aws_cognito_user_pool_client.crucible.callback_urls) == toset(["http://localhost:18080/auth/callback"]) && toset(aws_cognito_user_pool_client.crucible.logout_urls) == toset(["http://localhost:18080/"])
+    error_message = "Cognito's callback and logout follow the public URL"
+  }
+  assert {
+    condition     = strcontains(aws_cognito_user_pool.users.admin_create_user_config[0].invite_message_template[0].email_message, "http://localhost:18080") && strcontains(aws_cognito_user_pool.users.admin_create_user_config[0].invite_message_template[0].email_message, "crucible aws connect")
+    error_message = "the invite names the localhost address and how to open the tunnel"
+  }
+}
+
+run "ssm_access_ignores_a_domain" {
+  command = plan
+  variables {
+    access     = "ssm"
+    local_port = 18443
+  }
+
+  assert {
+    condition     = output.public_url == "http://localhost:18443"
+    error_message = "ssm ignores the domain and uses the chosen port"
+  }
+}
+
+run "public_access_needs_a_domain" {
+  command = plan
+  variables {
+    domain = ""
+  }
+  expect_failures = [var.domain]
+}
+
+run "local_port_must_be_a_user_port" {
+  command = plan
+  variables {
+    access     = "ssm"
+    local_port = 80
+  }
+  expect_failures = [var.local_port]
+}
+
+run "access_is_public_or_ssm" {
+  command = plan
+  variables {
+    access = "vpn"
+  }
+  expect_failures = [var.access]
+}

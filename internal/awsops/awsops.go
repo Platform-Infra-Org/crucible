@@ -176,7 +176,11 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(o.Log, "Point an A record %s → %s now (skip if route53_zone_id is set).\n", m["domain"], m["public_ip"])
+	if m["access"] == "ssm" {
+		fmt.Fprintln(o.Log, "access ssm: no DNS record to point; once it's deployed, reach it with `crucible aws connect`.")
+	} else {
+		fmt.Fprintf(o.Log, "Point an A record %s → %s now (skip if route53_zone_id is set).\n", m["domain"], m["public_ip"])
+	}
 	return o.Deploy(ctx)
 }
 
@@ -361,7 +365,7 @@ func (o Ops) Deploy(ctx context.Context) error {
 	if err := o.ssm(ctx, m, wait); err != nil {
 		return err
 	}
-	if err := o.waitHealthy(ctx, m["url"]); err != nil {
+	if err := o.waitLive(ctx, m); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.Log, "%s is live at %s\n", sha, m["url"])
@@ -390,6 +394,12 @@ func gzipFile(path string) error {
 
 // ssm runs a shell command on the node and waits for it (SSM's own wait gives up after ~100s).
 func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error {
+	_, err := o.ssmOut(ctx, m, command)
+	return err
+}
+
+// ssmOut is ssm, returning the command's standard output.
+func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (string, error) {
 	params, _ := json.Marshal(map[string][]string{"commands": {command}})
 	var id string
 	var err error
@@ -399,12 +409,13 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 			break
 		}
 		if !strings.Contains(err.Error(), "InvalidInstanceId") && !strings.Contains(err.Error(), "not registered") {
-			return fmt.Errorf("ssm send-command: %w", err) // AccessDenied, ExpiredToken, …: retrying won't help
+			return "", fmt.Errorf("ssm send-command: %w", err) // AccessDenied, ExpiredToken, …: retrying won't help
 		}
 		o.Sleep(15 * time.Second)
 	}
 	if err != nil {
-		return fmt.Errorf("node not reachable over SSM: %w", err)
+		return "", fmt.Errorf("node not reachable over SSM after 10 minutes: %w\nIf it is running, its SSM agent can't reach Systems Manager: "+
+			"ask the network team to allow ssm.%[2]s.amazonaws.com, ssmmessages.%[2]s.amazonaws.com and ec2messages.%[2]s.amazonaws.com through the firewall", err, m["region"])
 	}
 	deadline := time.Now().Add(45 * time.Minute)
 	for time.Now().Before(deadline) {
@@ -412,15 +423,16 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 			"--instance-id", m["instance_id"], "--query", "Status", "--output", "text")
 		switch st {
 		case "Success":
-			return nil
+			return o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
+				"--instance-id", m["instance_id"], "--query", "StandardOutputContent", "--output", "text")
 		case "Failed", "Cancelled", "TimedOut":
 			msg, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
 				"--instance-id", m["instance_id"], "--query", "StandardErrorContent", "--output", "text")
-			return fmt.Errorf("node command %s: %s", st, msg)
+			return "", fmt.Errorf("node command %s: %s", st, msg)
 		}
 		o.Sleep(5 * time.Second)
 	}
-	return errors.New("node command timed out")
+	return "", errors.New("node command timed out")
 }
 
 func (o Ops) Snapshot(ctx context.Context) error {
@@ -492,7 +504,7 @@ func (o Ops) Wake(ctx context.Context) error {
 	if err := o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-running", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
 		return err
 	}
-	return o.waitHealthy(ctx, m["url"])
+	return o.waitLive(ctx, m)
 }
 
 // healthy probes <url>/healthz once.
@@ -527,6 +539,37 @@ func (o Ops) waitHealthy(ctx context.Context, url string) error {
 	return fmt.Errorf("the node is up but %s/healthz isn't answering yet — if DNS or the certificate isn't ready, wait and run `crucible aws status`", url)
 }
 
+// nodeHealth waits for /healthz on the node itself: with access = ssm nothing outside the VPC can reach it.
+const nodeHealth = `for i in $(seq 120); do curl -fsS --max-time 5 -o /dev/null http://localhost/healthz && exit 0; sleep 5; done; ` +
+	`echo "healthz isn't answering on the node" >&2; exit 1`
+
+// waitLive waits until Crucible answers: from this laptop for a public install, on the node over SSM for access = ssm.
+func (o Ops) waitLive(ctx context.Context, m map[string]string) error {
+	if m["access"] != "ssm" {
+		return o.waitHealthy(ctx, m["url"])
+	}
+	if err := o.ssm(ctx, m, nodeHealth); err != nil {
+		return fmt.Errorf("the node is up but Crucible isn't answering on it (%w): run `crucible aws status`", err)
+	}
+	fmt.Fprintf(o.Log, "🔥 the forge is lit: open the tunnel with `crucible aws connect`, then %s\n", m["url"])
+	return nil
+}
+
+// egressHosts are what the node downloads from or calls. Behind an egress firewall each one must be allowed.
+func egressHosts(region string) []string {
+	return []string{"get.k3s.io", "github.com", "objects.githubusercontent.com", "get.helm.sh",
+		"registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com",
+		region + ".ec2.archive.ubuntu.com", "security.ubuntu.com", "awscli.amazonaws.com", "pricing.us-east-1.amazonaws.com",
+		"s3." + region + ".amazonaws.com", "sts." + region + ".amazonaws.com", "ssm." + region + ".amazonaws.com",
+		"cognito-idp." + region + ".amazonaws.com"}
+}
+
+// egressCheck prints "blocked <host>" for each host the node can't open an HTTPS connection to. Any HTTP answer,
+// even an error status, means the firewall let it through.
+func egressCheck(hosts []string) string {
+	return "for h in " + strings.Join(hosts, " ") + `; do curl -sS -o /dev/null --max-time 5 "https://$h" 2>/dev/null || echo "blocked $h"; done; true`
+}
+
 func (o Ops) Status(ctx context.Context) error {
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
@@ -536,11 +579,33 @@ func (o Ops) Status(ctx context.Context) error {
 	if err != nil {
 		st = "unknown (" + err.Error() + ")"
 	}
+	if m["access"] != "ssm" {
+		health := "ok"
+		if err := o.healthy(m["url"]); err != nil {
+			health = "not answering (" + err.Error() + ")"
+		}
+		fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\nhealthz: %s\n", m["instance_id"], st, m["url"], health)
+		return nil
+	}
+	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s (through `crucible aws connect`)\n", m["instance_id"], st, m["url"])
+	if st != "running" {
+		fmt.Fprintln(o.Log, "healthz and egress: not checked (the node isn't running)")
+		return nil
+	}
 	health := "ok"
-	if err := o.healthy(m["url"]); err != nil {
+	if _, err := o.ssmOut(ctx, m, "curl -fsS --max-time 5 -o /dev/null http://localhost/healthz"); err != nil {
 		health = "not answering (" + err.Error() + ")"
 	}
-	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\nhealthz: %s\n", m["instance_id"], st, m["url"], health)
+	fmt.Fprintf(o.Log, "healthz: %s\n", health)
+	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(m["region"])))
+	switch {
+	case err != nil:
+		fmt.Fprintf(o.Log, "egress: not checked (%v)\n", err)
+	case strings.TrimSpace(out) == "":
+		fmt.Fprintln(o.Log, "egress: every host the node needs is reachable (check your git host by hand)")
+	default:
+		fmt.Fprintf(o.Log, "egress: the firewall blocks these, ask the network team to allow them:\n%s\n", strings.TrimSpace(out))
+	}
 	return nil
 }
 

@@ -648,3 +648,89 @@ func TestLabsInitNeedsBothVPCAndSubnets(t *testing.T) {
 		t.Fatal("nothing may be applied")
 	}
 }
+
+// fakeSSM is fakeAWS for an access = ssm install in il-central-1.
+func fakeSSM(cmd string) string {
+	if strings.Contains(cmd, "output -json") {
+		return `{"instance_id":{"value":"i-123"},"region":{"value":"il-central-1"},"data_bucket":{"value":"bkt"},"domain":{"value":""},"url":{"value":"http://localhost:18080"},"public_ip":{"value":""},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.il-central-1.amazonaws.com/il-central-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"il-central-1_abc"}}`
+	}
+	return fakeAWS(cmd)
+}
+
+func TestSSMModeDeployChecksHealthOnTheNode(t *testing.T) {
+	r := &recorder{output: fakeSSM, unhealthy: true} // the laptop can't reach the node: only an on-node check can pass
+	if err := r.ops(t.TempDir()).Deploy(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "http://localhost/healthz") < 0 {
+		t.Fatalf("health must be checked on the node over SSM:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "crucible aws connect") {
+		t.Fatalf("the live message must say how to reach it:\n%s", r.log.String())
+	}
+}
+
+func TestSSMModeUpPrintsNoDNSLine(t *testing.T) {
+	r := &recorder{output: fakeSSM, unhealthy: true}
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.log.String(), "Point an A record") || !strings.Contains(r.log.String(), "no DNS record") {
+		t.Fatalf("ssm has no DNS step:\n%s", r.log.String())
+	}
+}
+
+func TestSSMModeStatusReportsBlockedHosts(t *testing.T) {
+	last := ""
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "send-command") {
+			last = cmd
+		}
+		if strings.Contains(cmd, "StandardOutputContent") && strings.Contains(last, "blocked") {
+			return "blocked get.k3s.io\nblocked github.com"
+		}
+		return fakeSSM(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"healthz: ok", "the firewall blocks these", "blocked get.k3s.io", "blocked github.com"} {
+		if !strings.Contains(r.log.String(), want) {
+			t.Fatalf("status lacks %q:\n%s", want, r.log.String())
+		}
+	}
+	for _, host := range []string{"il-central-1.ec2.archive.ubuntu.com", "ssm.il-central-1.amazonaws.com", "get.helm.sh", "production.cloudflare.docker.com"} {
+		if indexOf(r.calls, host) < 0 {
+			t.Fatalf("egress check must try %s:\n%s", host, strings.Join(r.calls, "\n"))
+		}
+	}
+}
+
+// Review focus 4: a stopped node is not retried over SSM for ten minutes.
+func TestSSMModeStatusSkipsAStoppedNode(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "describe-instances") {
+			return "stopped"
+		}
+		return fakeSSM(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "send-command") >= 0 || !strings.Contains(r.log.String(), "not checked") {
+		t.Fatalf("a stopped node gets no SSM checks:\n%s\n%s", strings.Join(r.calls, "\n"), r.log.String())
+	}
+}
+
+func TestUnregisteredNodeNamesTheFirewallHosts(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") {
+			return errors.New("exit status 254: An error occurred (InvalidInstanceId) when calling the SendCommand operation")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Snapshot(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "ssmmessages.eu-west-1.amazonaws.com") || !strings.Contains(err.Error(), "network team") {
+		t.Fatalf("got %v", err)
+	}
+}

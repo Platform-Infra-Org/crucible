@@ -354,7 +354,7 @@ run "lab_network_is_both_or_neither" {
 run "lab_subnets_must_be_in_the_vpc" {
   command = plan
   variables {
-    lab_vpc_id     = "vpc-0other"
+    lab_vpc_id     = "vpc-0def"
     lab_subnet_ids = ["subnet-01"]
   }
   expect_failures = [data.aws_subnet.lab]

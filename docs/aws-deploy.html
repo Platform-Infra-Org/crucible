@@ -411,14 +411,14 @@ aws ssm get-parameter --region eu-west-1 --name /crucible/secret_key --query Par
         <p>The outputs list <code>cognito_login_url</code>, <code>cognito_user_pool_id</code>, <code>data_bucket</code>, <code>oidc_client_id</code>,
           <code>oidc_issuer</code>, <code>region</code> and <code>state_bucket</code>. The curl prints the same issuer back. The last command prints
           <span class="out">/crucible/secret_key</span> without showing the value.</p></li>
-      <li><h3>Back up the persistent state, now</h3>
+      <li><h3>Check the state backup</h3>
         <p><code>deploy/aws/persistent/terraform.tfstate</code> is local and git-ignored. It's the only record of what init created. Lose it and
-          you have to import 14 resources by hand (see <a href="#lost-state">lost persistent state</a>). It also holds the secret key and the
-          Cognito client secret in plain text, so keep the copy private. Copy it to the state bucket or to a password manager, and do it
-          again after every <code>init</code>.</p>
-        <div class="cmd"><pre><code>aws s3 cp deploy/aws/persistent/terraform.tfstate \
-  "s3://$(terraform -chdir=deploy/aws/persistent output -raw state_bucket)/persistent.tfstate"</code></pre></div>
-        <p>A copy in the same account doesn't help if you lose the account. Keep a second copy elsewhere if that matters to you.</p></li>
+          you have to import 14 resources by hand (see <a href="#lost-state">lost persistent state</a>). So after every successful apply,
+          <code>init</code> copies it to the state bucket and prints <span class="out">state backed up to s3://crucible-&lt;account&gt;-tfstate/persistent.tfstate</span>.
+          If the copy fails, <code>init</code> stops with an error that gives the command to run by hand. The bucket is private and versioned, so
+          older copies stay too.</p>
+        <p>The file holds the secret key and the Cognito client secret in plain text. A copy in the same account doesn't help if you lose the
+          account: keep a second one in a password manager if that matters to you.</p></li>
     </ol>
     <div class="note danger"><p><strong>Never lose or rotate the secret key.</strong>Every token and deploy key sealed with it becomes unreadable, and
       each of those repositories has to be connected again. It survives <code>teardown</code> because it lives in the persistent stack.</p></div>
@@ -715,9 +715,11 @@ smtp_password = "…"                                         <span class="c"># 
           us-east-1). It also turns on account-wide S3 Block Public Access. The lab roles trust the node role by exact name. labs-init reads
           it from main's <code>node_role_name</code> output when it can. With lab-account credentials it usually can't, so it prints a note and
           trusts <code>crucible-node</code>, which is right unless you changed <code>name</code>.</p></li>
-      <li><h3>Back up the labs state</h3>
-        <p><code>deploy/aws/labs/terraform.tfstate</code> is local too. Back it up as you did the persistent state. Every later <code>up</code> must
-          run where this file is.</p></li>
+      <li><h3>Check the labs state backup</h3>
+        <p><code>deploy/aws/labs/terraform.tfstate</code> is local too. labs-init copies it to the lab state bucket after each apply and prints
+          <span class="out">state backed up to s3://crucible-&lt;account&gt;-labstate/labs-stack.tfstate</span>. Every later <code>up</code> must
+          run where this file is; on another machine, copy it back first:</p>
+        <div class="cmd"><pre><code>aws s3 cp s3://crucible-&lt;account&gt;-labstate/labs-stack.tfstate deploy/aws/labs/terraform.tfstate</code></pre></div></li>
       <li><h3>Activate the cost-allocation tag <span class="lane aws">Billing console</span></h3>
         <p>The one step by hand, and free. <b>Billing → Cost allocation tags</b>, then activate <code>crucible:lab-id</code>. Do it in the
           management (payer) account if the lab account is in an organization, otherwise in the lab account. The tag shows up there only
@@ -793,14 +795,13 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
         <p>It re-applies the persistent stack where its state lives and adds only the secret key: the plan should add
           <code>random_password.secret_key</code> and <code>aws_ssm_parameter.secret_key</code>, and change nothing else. If it wants more, stop
-          and compare. If your <code>crucible.tfvars</code> sets another <code>name</code>, copy the new parameter to <code>/&lt;name&gt;/secret_key</code>.
-          Then back up the persistent state again.</p></li>
+          and compare. If your <code>crucible.tfvars</code> sets another <code>name</code>, copy the new parameter to <code>/&lt;name&gt;/secret_key</code>.</p></li>
       <li><h3>If you use AWS labs: re-run labs-init <span class="lane aws">lab account</span></h3>
         <div class="cmd"><pre><code>crucible aws labs-init --region eu-west-1 --crucible-account 111122223333 \
   --budget-usd 200 --budget-email ops@example.com</code></pre></div>
         <p>Do this <b>before</b> <code>up</code>: main now refuses AWS labs without the plan role and the export, and says so. Pass both budget
           flags on this first re-run, because an older stack has no budget outputs to read back. Leave out <code>--crucible-account</code> if you
-          never used it. Remove <code>infracost_api_key</code> from <code>crucible.tfvars</code>; it's no longer a variable. Back up the labs state.
+          never used it. Remove <code>infracost_api_key</code> from <code>crucible.tfvars</code>; it's no longer a variable.
           Then activate the cost-allocation tag (see <a href="#labs">AWS labs</a>).</p></li>
       <li><h3>Ship it <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws up        <span class="c"># if you re-ran labs-init or changed crucible.tfvars; it ends by deploying</span>
@@ -987,8 +988,8 @@ sudo k3s kubectl -n crucible-estimates get pods</code></pre></div>
         <tr><th scope="row"><code>/crucible/smtp_password</code></th><td>SSM SecureString, main stack, only when set</td><td>Your <code>smtp_password</code></td><td>Recreated from your tfvars.</td></tr>
         <tr><th scope="row"><code>/crucible/env</code>, <code>/crucible/helm-values</code></th><td>SSM String, main stack</td><td>Terraform, from your tfvars and the labs outputs</td><td>Recreated. Not secret.</td></tr>
         <tr><th scope="row"><code>crucible-secrets</code></th><td>Kubernetes Secret, namespace <code>crucible</code></td><td><code>deploy.sh</code>, from the SSM values above, on every deploy: <code>CRUCIBLE_SECRET_KEY</code>, <code>OIDC_CLIENT_SECRET</code>, <code>CRUCIBLE_GIT_HOOK_SECRET</code>, <code>CRUCIBLE_QUIZ_SECRET</code>, <code>POSTGRES_PASSWORD</code>, <code>git-credentials</code>; the <code>CRUCIBLE_SMTP_*</code> keys whose <code>smtp_*</code> settings are set</td><td>Rebuilt on the new node from the SSM values. SMTP keys added by hand must be added again.</td></tr>
-        <tr><th scope="row">Persistent state</th><td><code>deploy/aws/persistent/terraform.tfstate</code>, local</td><td><code>init</code></td><td>Untouched. Holds the secret key and Cognito client secret in plain text: back it up, privately.</td></tr>
-        <tr><th scope="row">Labs state</th><td><code>deploy/aws/labs/terraform.tfstate</code>, local</td><td><code>labs-init</code></td><td>Untouched. Back it up.</td></tr>
+        <tr><th scope="row">Persistent state</th><td><code>deploy/aws/persistent/terraform.tfstate</code>, local</td><td><code>init</code></td><td>Untouched. <code>init</code> copies it to <code>persistent.tfstate</code> in the state bucket. Holds the secret key and Cognito client secret in plain text.</td></tr>
+        <tr><th scope="row">Labs state</th><td><code>deploy/aws/labs/terraform.tfstate</code>, local</td><td><code>labs-init</code></td><td>Untouched. <code>labs-init</code> copies it to <code>labs-stack.tfstate</code> in the lab state bucket.</td></tr>
         <tr><th scope="row">Main state</th><td><code>s3://crucible-&lt;account&gt;-tfstate/main.tfstate</code></td><td><code>up</code></td><td>Emptied by the destroy, refilled by <code>up</code>. Holds the main stack's secrets.</td></tr>
         <tr><th scope="row"><code>crucible.tfvars</code></th><td><code>deploy/aws/main/</code>, local, git-ignored</td><td>You</td><td>Untouched. May hold your git token.</td></tr>
       </tbody>

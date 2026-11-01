@@ -119,7 +119,27 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	if access == "public" {
 		args = append(args, "-var", "domain="+domain)
 	}
-	return o.Exec(ctx, o.Root, "terraform", args...)
+	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
+		return err
+	}
+	return o.backupState(ctx, "persistent", "persistent.tfstate")
+}
+
+// backupState copies a stack's local terraform.tfstate to its own state bucket (private, versioned) after an apply.
+// persistent and labs keep state on the machine that applied them, the only link to their resources; a lost file
+// means importing each resource by hand. Restore with the same `aws s3 cp`, reversed.
+func (o Ops) backupState(ctx context.Context, stack, key string) error {
+	out, err := o.outputs(ctx, stack)
+	if err != nil {
+		return err
+	}
+	src, dst := filepath.Join(o.dir(stack), "terraform.tfstate"), "s3://"+out["state_bucket"]+"/"+key
+	region := cmp.Or(out["state_region"], out["region"]) // labs names it state_region
+	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, dst, "--region", region, "--only-show-errors"); err != nil {
+		return fmt.Errorf("applied, but backing up the state failed (%w); copy it by hand: aws s3 cp %s %s --region %s", err, src, dst, region)
+	}
+	fmt.Fprintf(o.Log, "state backed up to %s\n", dst)
+	return nil
 }
 
 // mainVars passes the persistent stack's outputs (buckets, Cognito, access) into the main stack. A persistent stack
@@ -263,7 +283,10 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 		fmt.Fprintln(o.Log, "note: main's outputs are not readable here (not `up` yet, or other credentials), so the lab roles "+
 			"trust <name>-node (crucible-node by default). If crucible.tfvars sets another name, run labs-init again after `up`.")
 	}
-	return o.Exec(ctx, o.Root, "terraform", args...)
+	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
+		return err
+	}
+	return o.backupState(ctx, "labs", "labs-stack.tfstate") // outside labs/, which lab sessions and the ops role read
 }
 
 // labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.

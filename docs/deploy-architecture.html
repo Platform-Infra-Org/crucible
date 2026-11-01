@@ -525,8 +525,8 @@ body { margin: 0; }
         </tbody>
       </table>
     </div>
-    <p>This stack's own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. Back it up
-      (<a href="aws-deploy.html#init">init</a>).</p>
+    <p>This stack's own state is a local file, <code>deploy/aws/persistent/terraform.tfstate</code>, kept out of git. <code>init</code> copies it to
+      <code>persistent.tfstate</code> in the state bucket after every apply (<a href="aws-deploy.html#init">init</a>).</p>
 
     <h3 class="sub">2 · main: built by <code>crucible aws up</code>, can be torn down and rebuilt from the newest snapshot</h3>
     <div class="table-wrap">

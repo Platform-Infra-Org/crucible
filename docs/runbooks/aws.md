@@ -4,7 +4,7 @@
 1. Install: terraform >= 1.10, AWS CLI v2 (logged in) with its [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`aws ssm start-session`, a shell on the node, needs it; check with `session-manager-plugin --version`), Docker with buildx, Helm 3, Go 1.26. A fresh clone has no `.local/tools`: `make tools` installs the repo's pinned Go and Terraform there (checksum-verified), then `export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH`. Run every command from the repo root. Either `go install ./cmd/crucible` (then use `crucible aws ...`) or prefix commands with `go run ./cmd/crucible`.
    **The region needs its default VPC**: the node goes into the default VPC's first default subnet, and `up` fails without one. Check with `aws ec2 describe-vpcs --region <region> --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'` (an empty list means none); create one with `aws ec2 create-default-vpc --region <region>`.
 2. `go run ./cmd/crucible aws init --region eu-west-1 --domain crucible.example.com`. This creates the state and data buckets, the Cognito user pool and the secret key that seals repository credentials (`/<name>/secret_key`; see Secrets). None of them is ever destroyed.
-3. **Back up the persistent stack's state now.** `deploy/aws/persistent/terraform.tfstate` is local and git-ignored. Copy it somewhere safe (for example `aws s3 cp deploy/aws/persistent/terraform.tfstate s3://<state_bucket>/persistent.tfstate`, or a password manager) and repeat after every `init`.
+3. **The persistent stack's state is backed up for you.** `deploy/aws/persistent/terraform.tfstate` is local and git-ignored; after every successful apply, `init` copies it to `s3://<state_bucket>/persistent.tfstate` (private, versioned) and prints `state backed up to …`. If the copy fails, `init` exits with an error that gives the `aws s3 cp` to run by hand. The file holds the secret key and the Cognito client secret in plain text; a second copy outside the account (a password manager) protects against losing the account.
 4. `cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars` and fill it in. `domain` there must equal the `--domain` you gave `init`.
    Sign-in needs no settings here; it is wired from the Cognito user pool automatically.
 5. `go run ./cmd/crucible aws up` (`--var-file` defaults to `deploy/aws/main/crucible.tfvars` in the repo root).
@@ -161,8 +161,9 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
 
 **Setup (once).**
 1. With credentials for the lab account: `go run ./cmd/crucible aws labs-init --region eu-west-1` (add
-   `--crucible-account <id>` when the lab account is not the Crucible account). Back up
-   `deploy/aws/labs/terraform.tfstate` as you did for the persistent stack. labs-init also turns on account-wide
+   `--crucible-account <id>` when the lab account is not the Crucible account). labs-init
+   copies `deploy/aws/labs/terraform.tfstate` to `s3://<name>-<account>-labstate/labs-stack.tfstate` after each apply (outside
+   `labs/`, which lab sessions and the ops role read). labs-init also turns on account-wide
    S3 Block Public Access in that account. The lab roles trust Crucible's node role by exact name: labs-init reads it
    from main's `node_role_name` output when it can, and otherwise trusts `crucible-node` and says so. If your
    `crucible.tfvars` sets another `name`, run labs-init again after the first `up`. **Lab regions:** labs use `--region`

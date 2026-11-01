@@ -68,6 +68,8 @@ func (r *recorder) ops(root string) Ops {
 
 func fakeAWS(cmd string) string {
 	switch {
+	case strings.Contains(cmd, "labs output -json"): // a labs stack after its apply
+		return `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"}}`
 	case strings.Contains(cmd, "output -json"):
 		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"public_ip":{"value":"203.0.113.7"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
 	case strings.HasPrefix(cmd, "git rev-parse"):
@@ -556,15 +558,19 @@ func persistentOut(extra string) func(string) string {
 	}
 }
 
-func newStack(cmd string) error { // a persistent stack with no state yet
-	if strings.Contains(cmd, "persistent output -json") {
-		return errors.New("no outputs")
+// newStack is a persistent stack with no outputs until its first apply.
+func newStack(r *recorder) func(string) error {
+	return func(cmd string) error {
+		if strings.Contains(cmd, "persistent output -json") && indexOf(r.calls, "persistent apply") < 0 {
+			return errors.New("no outputs")
+		}
+		return nil
 	}
-	return nil
 }
 
 func TestInitSSMTakesNoDomain(t *testing.T) {
-	r := &recorder{output: fakeAWS, outErr: newStack}
+	r := &recorder{output: fakeAWS}
+	r.outErr = newStack(r)
 	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm"}); err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +597,8 @@ func TestInitRefusesBadCombinations(t *testing.T) {
 		"ssm with a domain":       {Region: "il-central-1", Access: "ssm", Domain: "c.example.com"},
 		"privileged port":         {Region: "il-central-1", Access: "ssm", LocalPort: 80},
 	} {
-		r := &recorder{output: fakeAWS, outErr: newStack}
+		r := &recorder{output: fakeAWS}
+		r.outErr = newStack(r)
 		if err := r.ops(t.TempDir()).Init(context.Background(), in); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
@@ -889,5 +896,59 @@ func TestConnectRegion(t *testing.T) {
 	r = &recorder{output: fakeAWS} // fakeAWS answers "configure get region" with ""
 	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Fatalf("no region anywhere: %v", err)
+	}
+}
+
+// init and labs-init keep their state on this machine only: each copies it to its stack's state bucket after a
+// successful apply, so a lost laptop doesn't mean importing every resource by hand.
+func TestInitAndLabsInitBackUpTheirState(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	root := t.TempDir()
+	if err := r.ops(root).Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	cp := "aws s3 cp " + root + "/deploy/aws/persistent/terraform.tfstate s3://st/persistent.tfstate --region eu-west-1"
+	if apply, c := indexOf(r.calls, "persistent apply"), indexOf(r.calls, cp); apply < 0 || c < apply {
+		t.Fatalf("init must back up its state after the apply:\n%s", strings.Join(r.calls, "\n"))
+	}
+
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-central-1"}}`
+	r = &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "labs output -json") {
+			return labs
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(root).LabsInit(context.Background(), "eu-central-1", "", 0, nil, nil, LabNet{}); err != nil {
+		t.Fatal(err)
+	}
+	cp = "aws s3 cp " + root + "/deploy/aws/labs/terraform.tfstate s3://crucible-444455556666-labstate/labs-stack.tfstate --region eu-central-1"
+	if apply, c := indexOf(r.calls, "labs apply"), indexOf(r.calls, cp); apply < 0 || c < apply {
+		t.Fatalf("labs-init must back up its state after the apply:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestStateBackupSkippedWhenApplyFailsAndLoudWhenItFails(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	o := r.ops(t.TempDir())
+	exec := o.Exec
+	failOn := "apply"
+	o.Exec = func(ctx context.Context, dir, name string, args ...string) error {
+		if err := exec(ctx, dir, name, args...); err != nil {
+			return err
+		}
+		if strings.Contains(name+" "+strings.Join(args, " "), failOn) {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
+	if err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err == nil || indexOf(r.calls, "s3 cp") >= 0 {
+		t.Fatalf("a failed or cancelled apply copies nothing: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+
+	r.calls, failOn = nil, "s3 cp"
+	err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"})
+	if err == nil || !strings.Contains(err.Error(), "aws s3 cp") || !strings.Contains(err.Error(), "s3://st/persistent.tfstate") {
+		t.Fatalf("a failed backup must say so, with the command to run by hand: %v", err)
 	}
 }

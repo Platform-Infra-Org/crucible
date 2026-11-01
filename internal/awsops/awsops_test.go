@@ -942,13 +942,90 @@ func TestStateBackupSkippedWhenApplyFailsAndLoudWhenItFails(t *testing.T) {
 		}
 		return nil
 	}
-	if err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err == nil || indexOf(r.calls, "s3 cp") >= 0 {
+	if err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err == nil || indexOf(r.calls, "terraform.tfstate s3://") >= 0 {
 		t.Fatalf("a failed or cancelled apply copies nothing: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 
-	r.calls, failOn = nil, "s3 cp"
+	r.calls, failOn = nil, "terraform.tfstate s3://" // the backup, not a restore
 	err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"})
 	if err == nil || !strings.Contains(err.Error(), "aws s3 cp") || !strings.Contains(err.Error(), "s3://st/persistent.tfstate") {
 		t.Fatalf("a failed backup must say so, with the command to run by hand: %v", err)
+	}
+}
+
+// A new machine has no local state: init and labs-init fetch the stack's backup (named from the caller's account)
+// before reading outputs, so they pick up the existing stack instead of creating duplicates.
+func TestInitAndLabsInitRestoreTheirStateOnANewMachine(t *testing.T) {
+	acct := func(cmd string) string {
+		if strings.Contains(cmd, "sts get-caller-identity") {
+			return "133089468093"
+		}
+		return fakeAWS(cmd)
+	}
+	r := &recorder{output: acct}
+	root := t.TempDir()
+	if err := r.ops(root).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm"}); err != nil {
+		t.Fatal(err)
+	}
+	cp := "aws s3 cp s3://crucible-133089468093-tfstate/persistent.tfstate " + root + "/deploy/aws/persistent/terraform.tfstate --region il-central-1"
+	if c, out := indexOf(r.calls, cp), indexOf(r.calls, "persistent output -json"); c < 0 || out < c {
+		t.Fatalf("init must restore the state before reading outputs:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "restored") {
+		t.Fatalf("must say it restored, got %q", r.log.String())
+	}
+
+	r = &recorder{output: acct}
+	if err := r.ops(root).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}); err != nil {
+		t.Fatal(err)
+	}
+	cp = "aws s3 cp s3://crucible-133089468093-labstate/labs-stack.tfstate " + root + "/deploy/aws/labs/terraform.tfstate --region il-central-1"
+	if c, out := indexOf(r.calls, cp), indexOf(r.calls, "labs output -json"); c < 0 || out < c {
+		t.Fatalf("labs-init must restore the state before reading outputs:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestStateRestoreLeavesLocalStateAndNewStacksAlone(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "deploy", "aws", "persistent")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(root).Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "get-caller-identity") >= 0 || indexOf(r.calls, "head-object") >= 0 {
+		t.Fatalf("a local state is never replaced:\n%s", strings.Join(r.calls, "\n"))
+	}
+
+	r = &recorder{output: fakeAWS, outErr: func(cmd string) error { // a first init in this account: no backup yet
+		if strings.Contains(cmd, "head-object") {
+			return errors.New("exit status 254: An error occurred (404) when calling the HeadObject operation: Not Found")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "s3 cp s3://") >= 0 || indexOf(r.calls, "persistent apply") < 0 {
+		t.Fatalf("no backup: nothing restored, a new stack applied as before:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// When it can't tell whether a backup exists, init stops: applying an empty state would make a second user pool.
+func TestStateRestoreStopsWhenItCannotTell(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "head-object") {
+			return errors.New("exit status 254: An error occurred (403) when calling the HeadObject operation: Forbidden")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"})
+	if err == nil || !strings.Contains(err.Error(), "403") || indexOf(r.calls, "persistent apply") >= 0 {
+		t.Fatalf("must stop before applying: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -97,6 +98,9 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
 	}
+	if err := o.restoreState(ctx, "persistent", "tfstate", "persistent.tfstate", in.Region); err != nil {
+		return err
+	}
 	cur, _ := o.outputs(ctx, "persistent") // nil on a new stack
 	access, domain, port := cmp.Or(in.Access, cur["access"], "public"), cmp.Or(in.Domain, cur["domain"]), in.LocalPort
 	if port == 0 {
@@ -123,6 +127,34 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 		return err
 	}
 	return o.backupState(ctx, "persistent", "persistent.tfstate")
+}
+
+// restoreState fetches a stack's backup (backupState) when this machine has no local state, so init and labs-init on
+// a new machine carry on the existing stack instead of creating a second one. The bucket is named as the stacks name
+// it, crucible-<caller's account>-<suffix> (neither command passes another name). No backup means a new stack; an
+// answer other than "not found" stops, because applying an empty state would duplicate the user pool and roles.
+func (o Ops) restoreState(ctx context.Context, stack, suffix, key, region string) error {
+	local := filepath.Join(o.dir(stack), "terraform.tfstate")
+	if _, err := os.Stat(local); !errors.Is(err, fs.ErrNotExist) {
+		return err // a local state (nil) is never replaced
+	}
+	account, err := o.Output(ctx, o.Root, "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text")
+	if err != nil {
+		return fmt.Errorf("no local %s state, and looking for its backup failed: %w", stack, err)
+	}
+	bucket := "crucible-" + account + "-" + suffix
+	src := "s3://" + bucket + "/" + key
+	if _, err := o.Output(ctx, o.Root, "aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", region); err != nil {
+		if strings.Contains(err.Error(), "(404)") {
+			return nil
+		}
+		return fmt.Errorf("no local %s state, and can't tell whether %s exists (%w); fix access or copy it to %s by hand", stack, src, err, local)
+	}
+	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, local, "--region", region, "--only-show-errors"); err != nil {
+		return fmt.Errorf("restoring %s: %w", src, err)
+	}
+	fmt.Fprintf(o.Log, "no local %s state: restored it from %s\n", stack, src)
+	return nil
 }
 
 // backupState copies a stack's local terraform.tfstate to its own state bucket (private, versioned) after an apply.
@@ -235,6 +267,9 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	}
 	d := o.dir("labs")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
+		return err
+	}
+	if err := o.restoreState(ctx, "labs", "labstate", "labs-stack.tfstate", region); err != nil {
 		return err
 	}
 	args := []string{"-chdir=" + d, "apply", "-var", "region=" + region}

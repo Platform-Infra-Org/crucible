@@ -718,8 +718,8 @@ smtp_password = "…"                                         <span class="c"># 
       <li><h3>Check the labs state backup</h3>
         <p><code>deploy/aws/labs/terraform.tfstate</code> is local too. labs-init copies it to the lab state bucket after each apply and prints
           <span class="out">state backed up to s3://crucible-&lt;account&gt;-labstate/labs-stack.tfstate</span>. Every later <code>up</code> must
-          run where this file is; on another machine, copy it back first:</p>
-        <div class="cmd"><pre><code>aws s3 cp s3://crucible-&lt;account&gt;-labstate/labs-stack.tfstate deploy/aws/labs/terraform.tfstate</code></pre></div></li>
+          run where this file is. On another machine, run labs-init again with the same flags first: it finds no local state, restores it
+          from that bucket (<span class="out">no local labs state: restored it from …</span>), and its plan should change nothing.</p></li>
       <li><h3>Activate the cost-allocation tag <span class="lane aws">Billing console</span></h3>
         <p>The one step by hand, and free. <b>Billing → Cost allocation tags</b>, then activate <code>crucible:lab-id</code>. Do it in the
           management (payer) account if the lab account is in an organization, otherwise in the lab account. The tag shows up there only
@@ -790,7 +790,7 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         the order its rules imply: <code>init</code> before <code>deploy</code>, and <code>labs-init</code> before <code>up</code>.</p></div>
     <ol class="steps">
       <li><h3>Check out the new version</h3><p>Pull and check out the commit you want to ship, with a clean working tree. Make sure
-        <code>deploy/aws/persistent/terraform.tfstate</code> is here (copy it back from your backup on another machine).</p></li>
+        <code>deploy/aws/persistent/terraform.tfstate</code> is here; on another machine the next step's <code>init</code> restores it from the state bucket.</p></li>
       <li><h3>Re-run init with the same region and domain <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
         <p>It re-applies the persistent stack where its state lives and adds only the secret key: the plan should add
@@ -841,12 +841,14 @@ crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
       <div><h3>What changes</h3><p>The Elastic IP, the webhook secret, the database password and the quiz secret. They're all in the main stack. A new
         quiz secret reshuffles quizzes in progress. SMTP keys you added by hand are gone; the <code>smtp_*</code> settings come back. Anything written after the teardown's snapshot is
         lost, so the snapshot must succeed (it refuses to go on otherwise).</p></div>
-      <div><h3>Second machine or fresh clone</h3><p>Copy the persistent state back first (and the labs state, if you use labs), then run
+      <div><h3>Second machine or fresh clone</h3><p>Run <code>crucible aws init</code> with the same flags first (and <code>labs-init</code>, if you use labs):
+        each finds no local state and restores it from its bucket, and its plan should change nothing. Then run
         <code>crucible aws up</code>. It's idempotent, and it sets up the S3 backend that <code>deploy</code> and the others need.</p></div>
     </div>
 
     <h3 id="lost-state">Lost persistent state</h3>
-    <p>First, restore your backup:</p>
+    <p>Run <code>crucible aws init</code> again with the same flags: with no local state it restores the backup from the state bucket and
+      says so. If it can't tell whether a backup exists (access denied), it stops before applying. By hand, the same copy:</p>
     <div class="cmd"><pre><code>aws s3 cp s3://crucible-&lt;account&gt;-tfstate/persistent.tfstate deploy/aws/persistent/terraform.tfstate</code></pre></div>
     <p>With no backup at all, run <code>terraform -chdir=deploy/aws/persistent init</code>, then <code>terraform import</code> each of the 14 resources,
       using the real ids from the console: <code>aws_s3_bucket.state</code>, <code>aws_s3_bucket_versioning.state</code>,

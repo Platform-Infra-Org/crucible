@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -55,6 +56,8 @@ func Default(root string) Ops {
 	}
 }
 
+var subnetID = regexp.MustCompile(`^subnet-[0-9a-f]+$`)
+
 func (o Ops) dir(stack string) string { return filepath.Join(o.Root, "deploy", "aws", stack) }
 
 func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, error) {
@@ -86,11 +89,11 @@ func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, erro
 	return out, nil
 }
 
-// InitOpts are `crucible aws init`'s flags. An empty Access, Domain or LocalPort keeps the stack's current value (a
-// new stack: public, no domain, 18080), so a re-run never flips an ssm install back to public.
+// InitOpts are `crucible aws init`'s flags. An empty Access, Domain, LocalPort or SubnetID keeps the stack's current
+// value (a new stack: public, no domain, 18080, no subnet), so a re-run never flips an ssm install back to public.
 type InitOpts struct {
-	Region, Domain, Access string
-	LocalPort              int
+	Region, Domain, Access, SubnetID string
+	LocalPort                        int
 }
 
 func (o Ops) Init(ctx context.Context, in InitOpts) error {
@@ -103,6 +106,7 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	}
 	cur, _ := o.outputs(ctx, "persistent") // nil on a new stack
 	access, domain, port := cmp.Or(in.Access, cur["access"], "public"), cmp.Or(in.Domain, cur["domain"]), in.LocalPort
+	subnet := cmp.Or(in.SubnetID, cur["subnet_id"])
 	if port == 0 {
 		port, _ = strconv.Atoi(cur["local_port"])
 	}
@@ -118,10 +122,24 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 		return errors.New("--domain is only for --access public: an ssm install is reached at http://localhost:<port>")
 	case port < 1024 || port > 65535:
 		return fmt.Errorf("--local-port %d: use a port from 1024 to 65535", port)
+	case access == "ssm" && subnet == "":
+		return errors.New("--access ssm needs --subnet-id: the existing subnet the node runs in, one that can reach the internet")
+	case access == "ssm" && !subnetID.MatchString(subnet):
+		return fmt.Errorf("--subnet-id %q: want subnet-<hex>", subnet)
+	case access == "public" && in.SubnetID != "":
+		return errors.New("--subnet-id is only for --access ssm: public uses the default VPC")
+	}
+	if access == "ssm" { // read-only: a typo fails here, not halfway through up
+		if _, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-subnets", "--subnet-ids", subnet, "--region", in.Region,
+			"--query", "Subnets[0].SubnetId", "--output", "text"); err != nil {
+			return fmt.Errorf("subnet %s in %s: %w", subnet, in.Region, err)
+		}
 	}
 	args := []string{"-chdir=" + d, "apply", "-var", "region=" + in.Region, "-var", "access=" + access, "-var", "local_port=" + strconv.Itoa(port)}
 	if access == "public" {
 		args = append(args, "-var", "domain="+domain)
+	} else {
+		args = append(args, "-var", "subnet_id="+subnet)
 	}
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
@@ -174,13 +192,14 @@ func (o Ops) backupState(ctx context.Context, stack, key string) error {
 	return nil
 }
 
-// mainVars passes the persistent stack's outputs (buckets, Cognito, access) into the main stack. A persistent stack
-// made before access existed has no access or public_url: main then stays public.
+// mainVars passes the persistent stack's outputs (buckets, Cognito, access, the ssm subnet) into the main stack. They
+// follow -var-file, so init's subnet wins over crucible.tfvars. A persistent stack made before access existed has no
+// access or public_url: main then stays public; one made before subnet_id existed leaves it to crucible.tfvars.
 func mainVars(p map[string]string) []string {
 	v := []string{"-var", "region=" + p["region"], "-var", "data_bucket=" + p["data_bucket"],
 		"-var", "oidc_issuer=" + p["oidc_issuer"], "-var", "oidc_client_id=" + p["oidc_client_id"],
 		"-var", "cognito_user_pool_id=" + p["cognito_user_pool_id"]}
-	for _, k := range []string{"access", "public_url"} {
+	for _, k := range []string{"access", "public_url", "subnet_id"} {
 		if p[k] != "" {
 			v = append(v, "-var", k+"="+p[k])
 		}

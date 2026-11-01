@@ -47,6 +47,16 @@ variable "local_port" {
   }
 }
 
+variable "subnet_id" {
+  type        = string
+  default     = ""
+  description = "access = ssm: the existing subnet the node runs in (crucible aws init --subnet-id); up passes it to main"
+  validation {
+    condition     = var.access == "ssm" ? can(regex("^subnet-[0-9a-f]+$", var.subnet_id)) : var.subnet_id == ""
+    error_message = "access = ssm needs subnet_id (subnet-<hex>), an existing subnet the node can reach the internet from; access = public takes none"
+  }
+}
+
 locals {
   # The one address people use. Cognito's callback, the main stack, the node and Helm all read it from here.
   public_url = var.access == "ssm" ? "http://localhost:${var.local_port}" : "https://${var.domain}"
@@ -153,5 +163,6 @@ output "access" { value = var.access }
 output "local_port" { value = var.local_port }
 output "domain" { value = var.domain }
 output "public_url" { value = local.public_url }
+output "subnet_id" { value = var.subnet_id }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "data_bucket" { value = aws_s3_bucket.data.bucket }

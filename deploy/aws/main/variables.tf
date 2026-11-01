@@ -47,7 +47,7 @@ variable "public_url" {
 variable "subnet_id" {
   type        = string
   default     = ""
-  description = "The subnet the node runs in. Required for access = ssm (an existing workload subnet). Empty in public mode: the default VPC's first default subnet"
+  description = "The subnet the node runs in. Required for access = ssm (an existing workload subnet): set by `crucible aws up` from the persistent stack (init --subnet-id), which wins over crucible.tfvars. Empty in public mode: the default VPC's first default subnet"
   validation {
     condition     = (var.access != "ssm" || var.subnet_id != "") && (var.subnet_id == "" || can(regex("^subnet-[0-9a-f]+$", var.subnet_id)))
     error_message = "access = ssm needs subnet_id (subnet-<hex>), an existing subnet the node can reach the internet from"

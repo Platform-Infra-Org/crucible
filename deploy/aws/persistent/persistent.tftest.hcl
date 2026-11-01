@@ -80,13 +80,18 @@ run "public_access_is_unchanged" {
 run "ssm_access_uses_a_localhost_url" {
   command = plan
   variables {
-    access = "ssm"
-    domain = ""
+    access    = "ssm"
+    domain    = ""
+    subnet_id = "subnet-0fa66f46aa023ab6e"
   }
 
   assert {
     condition     = output.public_url == "http://localhost:18080" && output.local_port == 18080
     error_message = "ssm's URL is http://localhost:18080 by default"
+  }
+  assert {
+    condition     = output.subnet_id == "subnet-0fa66f46aa023ab6e"
+    error_message = "the node's subnet is an output, for up to pass to main"
   }
   assert {
     condition     = toset(aws_cognito_user_pool_client.crucible.callback_urls) == toset(["http://localhost:18080/auth/callback"]) && toset(aws_cognito_user_pool_client.crucible.logout_urls) == toset(["http://localhost:18080/"])
@@ -103,6 +108,7 @@ run "ssm_access_ignores_a_domain" {
   variables {
     access     = "ssm"
     local_port = 18443
+    subnet_id  = "subnet-0fa66f46aa023ab6e"
   }
 
   assert {
@@ -124,6 +130,7 @@ run "local_port_must_be_a_user_port" {
   variables {
     access     = "ssm"
     local_port = 80
+    subnet_id  = "subnet-0fa66f46aa023ab6e"
   }
   expect_failures = [var.local_port]
 }
@@ -134,4 +141,29 @@ run "access_is_public_or_ssm" {
     access = "vpn"
   }
   expect_failures = [var.access]
+}
+
+run "ssm_access_needs_a_subnet" {
+  command = plan
+  variables {
+    access = "ssm"
+  }
+  expect_failures = [var.subnet_id]
+}
+
+run "subnet_id_must_be_a_subnet" {
+  command = plan
+  variables {
+    access    = "ssm"
+    subnet_id = "sub-1"
+  }
+  expect_failures = [var.subnet_id]
+}
+
+run "public_access_takes_no_subnet" {
+  command = plan
+  variables {
+    subnet_id = "subnet-0fa66f46aa023ab6e"
+  }
+  expect_failures = [var.subnet_id]
 }

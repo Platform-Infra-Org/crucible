@@ -569,7 +569,7 @@ kubectl -n lab-&lt;id&gt; logs tf-apply</code></pre></div>
         <div class="note"><strong>In our account</strong>There is one account, no Elastic IP and no public URL. Crucible and the labs share the account, and you reach
           the app over the Session Manager tunnel at <code>http://localhost:18080</code>, with <code>crucible aws connect</code> open for every step that uses the app or a laptop lab
           (<a href="ssm-access.html">how to open it</a>). Steps that say &ldquo;on the server&rdquo; mean an SSM session on the node.
-          The order is: <code>crucible aws init --region il-central-1 --access ssm</code>; <code>subnet_id = "subnet-0fa66f46aa023ab6e"</code> in <code>crucible.tfvars</code> (no <code>domain</code>);
+          The order is: <code>crucible aws init --region il-central-1 --access ssm --subnet-id subnet-0fa66f46aa023ab6e</code> (<code>--subnet-id subnet-0bad</code> is refused before anything is applied); <code>crucible.tfvars</code> with <code>bootstrap_admin</code> and <code>git_credentials</code> only;
           <code>crucible aws up</code>; <code>crucible aws status</code> (healthz ok, and an egress line with no blocked hosts); <code>crucible aws connect</code>; then
           <code>crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code> and <code>up</code> again.
           See <a href="aws-deploy.html#our-account">what differs in our account</a>.</div>

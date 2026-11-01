@@ -16,11 +16,13 @@
 
 One account, no default VPC, no inbound path. These steps replace 2 to 5 above; step 6 is the same. Nothing here creates
 an Elastic IP, a DNS record or a certificate.
-1. `crucible aws init --region il-central-1 --access ssm` (add `--local-port N` to change `18080`; no `--domain`). This is the
+1. `crucible aws init --region il-central-1 --access ssm --subnet-id subnet-0fa66f46aa023ab6e` (spokeSubnet1; add `--local-port N`
+   to change `18080`; no `--domain`). init checks the subnet exists (read-only `describe-subnets`) before applying. This is the
    first contact with S3, Cognito and SSM Parameter Store in this account, none of which has been checked against the SCPs. If an
-   action is denied by an SCP, stop and ask the platform team. A re-run without `--access` or `--local-port` keeps the current ones.
-2. In `deploy/aws/main/crucible.tfvars` set `subnet_id = "subnet-0fa66f46aa023ab6e"` (spokeSubnet1) and leave out `domain` and
-   `acme_email`. Set `schedule_enabled = false` if EventBridge Scheduler is denied.
+   action is denied by an SCP, stop and ask the platform team. A re-run without `--access`, `--subnet-id` or `--local-port` keeps the current ones.
+2. Write `deploy/aws/main/crucible.tfvars` from the example's ssm part: `bootstrap_admin` and `git_credentials`, no `domain`,
+   `acme_email` or `subnet_id` (`up` passes init's subnet, which wins over one set here). Set `schedule_enabled = false` if
+   EventBridge Scheduler is denied.
 3. `crucible aws up`. It prints no 'point an A record' line, waits for the node to register with SSM, and checks `/healthz` on the node. If it ends
    with "node not reachable over SSM", ask the network team to allow `ssm.il-central-1.amazonaws.com`,
    `ssmmessages.il-central-1.amazonaws.com` and `ec2messages.il-central-1.amazonaws.com`.

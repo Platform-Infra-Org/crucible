@@ -571,22 +571,40 @@ func newStack(r *recorder) func(string) error {
 func TestInitSSMTakesNoDomain(t *testing.T) {
 	r := &recorder{output: fakeAWS}
 	r.outErr = newStack(r)
-	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm"}); err != nil {
+	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm", SubnetID: "subnet-0fa66f46aa023ab6e"}); err != nil {
 		t.Fatal(err)
 	}
-	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18080") < 0 || indexOf(r.calls, "-var domain") >= 0 {
+	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18080 -var subnet_id=subnet-0fa66f46aa023ab6e") < 0 || indexOf(r.calls, "-var domain") >= 0 {
 		t.Fatalf("ssm init:\n%s", strings.Join(r.calls, "\n"))
+	}
+	// A typo fails here, read-only, not halfway through up.
+	if check, apply := indexOf(r.calls, "aws ec2 describe-subnets --subnet-ids subnet-0fa66f46aa023ab6e --region il-central-1"), indexOf(r.calls, "persistent apply"); check < 0 || apply < check {
+		t.Fatalf("init must check the subnet exists before applying:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestInitRefusesASubnetItCannotFind(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	r.outErr = func(cmd string) error {
+		if strings.Contains(cmd, "describe-subnets") {
+			return errors.New("exit status 254: An error occurred (InvalidSubnetID.NotFound) when calling the DescribeSubnets operation: The subnet ID 'subnet-0bad' does not exist")
+		}
+		return newStack(r)(cmd)
+	}
+	err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm", SubnetID: "subnet-0bad"})
+	if err == nil || !strings.Contains(err.Error(), "subnet-0bad") || indexOf(r.calls, "persistent apply") >= 0 {
+		t.Fatalf("an unknown subnet stops before applying: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 }
 
 // Review focus 1: a re-run without --access keeps ssm and its port; it never flips back to public.
 func TestInitKeepsTheCurrentAccess(t *testing.T) {
-	r := &recorder{output: persistentOut(`,"access":{"value":"ssm"},"local_port":{"value":18443},"domain":{"value":""}`)}
+	r := &recorder{output: persistentOut(`,"access":{"value":"ssm"},"local_port":{"value":18443},"domain":{"value":""},"subnet_id":{"value":"subnet-0abc"}`)}
 	if err := r.ops(t.TempDir()).Init(context.Background(), InitOpts{Region: "il-central-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18443") < 0 {
-		t.Fatalf("re-run must keep ssm and 18443:\n%s", strings.Join(r.calls, "\n"))
+	if indexOf(r.calls, "persistent apply -var region=il-central-1 -var access=ssm -var local_port=18443 -var subnet_id=subnet-0abc") < 0 {
+		t.Fatalf("re-run must keep ssm, 18443 and the subnet:\n%s", strings.Join(r.calls, "\n"))
 	}
 }
 
@@ -595,7 +613,10 @@ func TestInitRefusesBadCombinations(t *testing.T) {
 		"unknown access":          {Region: "il-central-1", Access: "vpn"},
 		"public without a domain": {Region: "il-central-1", Access: "public"},
 		"ssm with a domain":       {Region: "il-central-1", Access: "ssm", Domain: "c.example.com"},
-		"privileged port":         {Region: "il-central-1", Access: "ssm", LocalPort: 80},
+		"privileged port":         {Region: "il-central-1", Access: "ssm", LocalPort: 80, SubnetID: "subnet-0abc"},
+		"ssm without a subnet":    {Region: "il-central-1", Access: "ssm"},
+		"not a subnet id":         {Region: "il-central-1", Access: "ssm", SubnetID: "sub-1"},
+		"public with a subnet":    {Region: "il-central-1", Access: "public", Domain: "c.example.com", SubnetID: "subnet-0abc"},
 	} {
 		r := &recorder{output: fakeAWS}
 		r.outErr = newStack(r)
@@ -609,8 +630,11 @@ func TestInitRefusesBadCombinations(t *testing.T) {
 }
 
 func TestUpPassesAccessFromThePersistentStack(t *testing.T) {
-	r := &recorder{output: persistentOut(`,"data_bucket":{"value":"bkt"},"oidc_issuer":{"value":"https://x"},"oidc_client_id":{"value":"c"},"cognito_user_pool_id":{"value":"p"},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"}`)}
+	r := &recorder{output: persistentOut(`,"data_bucket":{"value":"bkt"},"oidc_issuer":{"value":"https://x"},"oidc_client_id":{"value":"c"},"cognito_user_pool_id":{"value":"p"},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"subnet_id":{"value":"subnet-0abc"}`)}
 	_ = r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true)
+	if f, v := indexOf(r.calls, "-var-file="), indexOf(r.calls, "-var subnet_id=subnet-0abc"); f < 0 || v < 0 || strings.Index(r.calls[f], "-var-file=") > strings.Index(r.calls[v], "-var subnet_id=") {
+		t.Fatalf("up passes init's subnet after the var file, so it wins over crucible.tfvars:\n%s", strings.Join(r.calls, "\n"))
+	}
 	for _, want := range []string{"-var access=ssm", "-var public_url=http://localhost:18080"} {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
@@ -964,7 +988,7 @@ func TestInitAndLabsInitRestoreTheirStateOnANewMachine(t *testing.T) {
 	}
 	r := &recorder{output: acct}
 	root := t.TempDir()
-	if err := r.ops(root).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm"}); err != nil {
+	if err := r.ops(root).Init(context.Background(), InitOpts{Region: "il-central-1", Access: "ssm", SubnetID: "subnet-0abc"}); err != nil {
 		t.Fatal(err)
 	}
 	cp := "aws s3 cp s3://crucible-133089468093-tfstate/persistent.tfstate " + root + "/deploy/aws/persistent/terraform.tfstate --region il-central-1"

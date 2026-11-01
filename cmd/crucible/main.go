@@ -22,7 +22,7 @@ import (
 const usage = `usage:
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
-  crucible aws init --region REGION (--domain HOSTNAME | --access ssm [--local-port 18080])
+  crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
   crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
@@ -83,6 +83,7 @@ func awsCmd(args []string) int {
 	region := fs.String("region", "", "AWS region (init, labs-init)")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
 	access := fs.String("access", "", "init: public (a domain, an Elastic IP, Let's Encrypt) or ssm (no way in; `crucible aws connect`); default: keep the current one, else public")
+	subnetID := fs.String("subnet-id", "", "init, access ssm: the existing subnet the node runs in (default: keep the current one)")
 	localPort := fs.Int("local-port", 0, "init, access ssm: the laptop port everyone opens Crucible on (default: keep the current one, else 18080)")
 	vpcID := fs.String("vpc-id", "", "labs-init: the VPC lab modules launch into (var.crucible_vpc_id), for an account without a default VPC")
 	subnetIDs := fs.String("subnet-ids", "", "labs-init: comma-separated subnets in that VPC (var.crucible_subnet_ids)")
@@ -118,7 +119,7 @@ func awsCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, "--region is required")
 			return 2
 		}
-		err = ops.Init(ctx, awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, LocalPort: *localPort})
+		err = ops.Init(ctx, awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, SubnetID: *subnetID, LocalPort: *localPort})
 	case "labs-init":
 		if *region == "" {
 			fmt.Fprintln(os.Stderr, "--region is required")

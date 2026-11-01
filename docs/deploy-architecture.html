@@ -1301,10 +1301,101 @@ resource "aws_s3_bucket" "forge" {
       <li><h3>Roll out <span class="lane aws">SSM</span> <span class="lane k8s">node</span></h3>
         <p><code>aws ssm send-command</code> runs <code>/opt/crucible/deploy.sh</code> on the node, as the node role: it reads <code>current-release</code>, imports the image into containerd, runs <code>helm upgrade --install</code> with values and secrets from SSM, then checks <code>/healthz</code>.</p></li>
     </ol>
-    <p>On first boot the node's start-up script installs sysbox, k3s, Helm and the AWS CLI, sets Traefik up (for Let's Encrypt with <code>access = public</code>, plain HTTP with <code>ssm</code>),
-      reads its settings from Parameter Store and runs the same deploy script; on an empty database the API restores the newest
+    <p>On first boot the node's <a href="#bootstrap">start-up script</a> sets it up and runs the same deploy script; on an empty database the API restores the newest
       snapshot first. Every command, with what to expect: <a href="aws-deploy.html#deploy">deploy</a> and
       <a href="aws-deploy.html#everyday">everyday operations</a>.</p>
+    <h3 class="sub" id="bootstrap">The node's start-up script</h3>
+    <p><code>deploy/aws/main/bootstrap.sh.tftpl</code> turns a plain Ubuntu instance into a Crucible node. Terraform fills it in with
+      <code>templatefile</code> (region, name, <code>access</code>, the k3s and sysbox versions, the time zone) and passes it as the instance's
+      <code>user_data</code>; cloud-init runs it once, as root, on first boot. Terraform ignores later changes to it
+      (<code>ignore_changes = [ami, user_data]</code>), so an edit never replaces a running node and only reaches the next new one.</p>
+    <div class="cols">
+      <div><h3>What it does, in order</h3>
+        <ol>
+          <li><strong>Sets up for failure</strong>: stops on any error, logs to <code>/var/log/crucible-bootstrap.log</code>, and touches
+            <code>/opt/crucible/.failed</code> if a step fails.</li>
+          <li><strong>Basics</strong>: the time zone, <code>unzip</code> and <code>curl</code> from apt, the AWS CLI.</li>
+          <li><strong>Traefik's settings</strong>, only with <code>access = public</code>: Let's Encrypt, where its certificates are kept, and the HTTP to HTTPS redirect.
+            With <code>ssm</code> Traefik stays on plain HTTP.</li>
+          <li><strong>Sysbox</strong>, for AWS lab workspaces (Docker inside a pod, without a privileged container): the <code>.deb</code>, checked by sha256,
+            the containerd setting that offers it to k3s, and its RuntimeClass. If it fails the boot carries on; only AWS labs are unavailable.</li>
+          <li><strong>k3s</strong> from <code>get.k3s.io</code> at the pinned <code>k3s_version</code>, then <strong>Helm</strong>.</li>
+          <li><strong>Settings</strong>: <code>/&lt;name&gt;/env</code> from Parameter Store into <code>/etc/crucible.env</code>.</li>
+          <li><strong>Writes the node's scripts</strong>: <a href="#deploy-sh"><code>deploy.sh</code></a>, and <code>snapshot.sh</code>, which runs the
+            <a href="#backups">backup</a> CronJob now and waits for it (<code>crucible aws snapshot</code>, <code>up</code>, <code>sleep</code>, <code>teardown</code>).</li>
+          <li><strong>Runs <code>deploy.sh</code> once</strong> (with no release in S3 yet it just says so), then touches <code>/opt/crucible/.ready</code>.</li>
+        </ol></div>
+      <div><h3>How you see it</h3>
+        <ul>
+          <li><code>crucible aws deploy</code> waits over SSM for <code>.ready</code> or <code>.failed</code> before it runs <code>deploy.sh</code>.</li>
+          <li>When boot failed, read <code>/var/log/crucible-bootstrap.log</code> in an SSM shell: the last lines name the step.</li>
+        </ul>
+        <h3>What it needs to reach</h3>
+        <ul>
+          <li>Everything is downloaded: the Ubuntu mirrors (plain HTTP), <code>awscli.amazonaws.com</code>, GitHub (sysbox and k3s),
+            <code>get.k3s.io</code>, <code>get.helm.sh</code>, Docker Hub (k3s's own images), and S3 and Parameter Store.</li>
+          <li>In our account each of those goes out through the firewall. A blocked host stops the boot at that step;
+            <code>crucible aws status</code> checks them.</li>
+        </ul></div>
+    </div>
+    <h3 class="sub" id="deploy-sh">The node's deploy script</h3>
+    <p><code>/opt/crucible/deploy.sh</code> installs or upgrades Crucible on the node. The start-up script
+      (<code>deploy/aws/main/bootstrap.sh.tftpl</code>) writes it on first boot, next to <code>snapshot.sh</code>. It is safe to re-run.</p>
+    <div class="cols">
+      <div><h3>What it does, in order</h3>
+        <ol>
+          <li><strong>Takes a lock</strong> (<code>flock</code> on <code>/run/crucible-deploy.lock</code>), so two deploys never overlap.</li>
+          <li><strong>Refreshes the node's settings</strong>: it fetches <code>/&lt;name&gt;/env</code> from Parameter Store into
+            <code>/etc/crucible.env</code> and loads it. That's how a <code>crucible.tfvars</code> change reaches a running node
+            without a rebuild: region, bucket, OIDC, backup schedule, git bot, <code>ACCESS</code>, <code>PUBLIC_URL</code>, <code>HOST</code>, <code>TLS_ENABLED</code>.</li>
+          <li><strong>Finds the release</strong>: it reads <code>s3://&lt;data bucket&gt;/current-release</code> (a git commit) and downloads
+            <code>releases/&lt;commit&gt;/crucible-image.tar.gz</code> and <code>chart.tgz</code>.</li>
+          <li><strong>Gets the Helm values</strong> from <code>/&lt;name&gt;/helm-values</code>: the toolbox image, the AWS labs wiring, the lab VPC and subnets.</li>
+          <li><strong>Imports the image</strong> into k3s's containerd (<code>k3s ctr images import</code>). No registry: the image comes from S3.</li>
+          <li><strong>Builds the <code>crucible-secrets</code> Secret</strong> from SecureString parameters: the OIDC client secret, the git hook
+            and quiz secrets, the database password, git credentials, and <code>CRUCIBLE_SECRET_KEY</code> and SMTP settings when set.</li>
+          <li><strong>Runs <code>helm upgrade --install crucible</code></strong> with the image tag, host, public URL and TLS setting from the env file,
+            plus OIDC, backup, git bot and bootstrap admin, and <code>-f</code> the values from step 4. <code>--wait --timeout 10m</code> waits until the pods are ready.</li>
+          <li>Prints <code>deployed &lt;commit&gt;</code>.</li>
+        </ol></div>
+      <div><h3>Who runs it</h3>
+        <ul>
+          <li><strong>First boot</strong>: the start-up script runs it once after installing k3s and Helm, then marks the node ready
+            (<code>/opt/crucible/.ready</code>). With no release in S3 yet it just says so.</li>
+          <li><strong><code>crucible aws deploy</code></strong>, and <code>up</code>, which ends with a deploy: it builds and uploads the release from your machine,
+            then runs the script with <code>aws ssm send-command</code>, which first waits for the node to finish booting. It checks health afterwards:
+            on the node over SSM with <code>access = ssm</code>, from your machine with <code>public</code>.</li>
+          <li><strong>By hand</strong>: <code>sudo /opt/crucible/deploy.sh</code> in an SSM shell.</li>
+        </ul>
+        <h3>Why it's built this way</h3>
+        <ul>
+          <li><strong>Everything is pulled.</strong> The node fetches from S3 and Parameter Store with its own role
+            (<a href="#iam-roles">IAM roles</a>), so nothing ever needs to reach in. That's what makes it work in our account.</li>
+          <li><strong>The script is fixed at first boot.</strong> Terraform ignores later <code>user_data</code> changes so the node is never replaced
+            for them. Anything that must change later lives in the parameters it re-reads every run. That's why the newer keys have fallbacks
+            (<code>${PUBLIC_URL:-https://$DOMAIN}</code>): an older node keeps working.</li>
+        </ul></div>
+    </div>
+    <h3 class="sub" id="what-deploys-what">What deploys what on the node</h3>
+    <div class="cols">
+      <div><h3>The start-up script, once</h3>
+        <ul>
+          <li>Installs <strong>k3s</strong> itself with its official installer (<code>get.k3s.io</code>, the pinned <code>k3s_version</code>), plus sysbox, Helm and the AWS CLI.</li>
+          <li>Drops manifests into <code>/var/lib/rancher/k3s/server/manifests</code>: Traefik's settings (Let's Encrypt only with <code>access = public</code>)
+            and the sysbox RuntimeClass. k3s applies whatever is in that folder by itself, along with its own Traefik, CoreDNS and ServiceLB.</li>
+        </ul></div>
+      <div><h3>deploy.sh, every release</h3>
+        <ul>
+          <li>Installs <strong>Crucible</strong> into the cluster as the Helm release <code>crucible</code> in namespace <code>crucible</code>: the API, Postgres,
+            the backup CronJob, the Ingress, and the RBAC and admission policy for lab pods.</li>
+          <li>It never installs or upgrades k3s. A new <code>k3s_version</code> only reaches a new node.</li>
+        </ul>
+        <h3>The API, at run time</h3>
+        <ul>
+          <li>Creates each AWS lab's <code>lab-&lt;id&gt;</code> namespace and its pods, and the estimate pods in <code>crucible-estimates</code>
+            (<a href="#node">inside the node</a>).</li>
+        </ul></div>
+    </div>
     <div class="note ours"><p><strong>In our account.</strong>Shipping works the same way, since S3 and SSM are reached by
       outbound calls through the firewall (if it allows them). Traefik stays on plain HTTP, and <code>up</code> checks health on the node over SSM
       instead of waiting for a public URL (<a href="#main-changes">the setting</a>).</p></div>

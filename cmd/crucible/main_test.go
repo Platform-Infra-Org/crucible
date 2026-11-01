@@ -67,3 +67,16 @@ func TestLabsInitRefusesAllowedRegionsWithoutItsRegion(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+func TestInviteNeedsOneEmail(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	for _, args := range [][]string{{"invite"}, {"invite", "--name", "Alice"}, {"invite", "a@example.com", "b@example.com"}} {
+		if code := awsCmd(args); code != 2 {
+			t.Errorf("%v: exit %d", args, code)
+		}
+	}
+	// EMAIL then --name parses (flags stop at a plain argument): it gets as far as reading the stack, which fails here.
+	if code := awsCmd([]string{"invite", "alice@example.com", "--name", "Alice Smith"}); code != 1 {
+		t.Fatalf("invite EMAIL --name: exit %d, want 1 (past argument checks)", code)
+	}
+}

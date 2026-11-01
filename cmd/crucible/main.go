@@ -27,6 +27,7 @@ const usage = `usage:
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
   crucible aws deploy | snapshot | wake | status
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
+  crucible aws invite EMAIL [--name "Full Name"]
   crucible aws sleep [--no-snapshot]
   crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
   crucible local up [--keycloak-port PORT] [--no-build]
@@ -43,6 +44,8 @@ init --access ssm makes an install with no way in: no domain, no Elastic IP, no 
 http://localhost:<--local-port> through ` + "`crucible aws connect`" + `. A re-run without --access, --domain or --local-port
 keeps the current ones. labs-init --vpc-id and --subnet-ids (both or neither) are where lab modules launch, for an
 account without a default VPC; a re-run without them keeps the current ones.
+invite adds someone to the Cognito user pool with a verified email (Crucible refuses unverified ones); run it again to
+resend an invite that has not been used yet.
 connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager plugin and your SSO login needed) and keeps it open until Ctrl-C.
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
@@ -87,7 +90,7 @@ func awsCmd(args []string) int {
 	localPort := fs.Int("local-port", 0, "init, access ssm: the laptop port everyone opens Crucible on (default: keep the current one, else 18080)")
 	vpcID := fs.String("vpc-id", "", "labs-init: the VPC lab modules launch into (var.crucible_vpc_id), for an account without a default VPC")
 	subnetIDs := fs.String("subnet-ids", "", "labs-init: comma-separated subnets in that VPC (var.crucible_subnet_ids)")
-	name := fs.String("name", "", "connect: the node's Name tag (default crucible)")
+	name := fs.String("name", "", "connect: the node's Name tag (default crucible); invite: the person's full name")
 	port := fs.Int("port", 0, "connect: the local port (default: the one in Crucible's address; another one breaks sign-in)")
 	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
 	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
@@ -101,7 +104,11 @@ func awsCmd(args []string) int {
 		budgetEmails = append(budgetEmails, v)
 		return nil
 	})
-	_ = fs.Parse(args[1:])
+	rest := args[1:]
+	if args[0] == "invite" && len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		rest = append(rest[1:], rest[0]) // invite EMAIL --name …: flags stop at the first plain argument
+	}
+	_ = fs.Parse(rest)
 	root, _ := os.Getwd()
 	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
 		root = strings.TrimSpace(string(top))
@@ -162,6 +169,12 @@ func awsCmd(args []string) int {
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot)
 	case "connect":
 		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
+	case "invite":
+		if fs.NArg() != 1 {
+			fmt.Fprintln(os.Stderr, `usage: crucible aws invite EMAIL [--name "Full Name"]`)
+			return 2
+		}
+		err = ops.Invite(ctx, fs.Arg(0), *name)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2

@@ -617,17 +617,12 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
       GitHub webhooks cannot reach us, so skip the webhook step: Crucible fetches every 60 seconds anyway. Laptop agents reach Crucible only while a tunnel is open.</p></div>
     <ol class="steps">
       <li><h3>Invite the bootstrap admin in Cognito</h3>
-        <p>You can do this any time after <code>init</code>. Use the same email as <code>bootstrap_admin</code>. Add <code>--region</code> if your AWS
-          CLI's default region is a different one.</p>
-        <div class="cmd"><pre><code>POOL=$(terraform -chdir=deploy/aws/persistent output -raw cognito_user_pool_id)
-
-aws cognito-idp admin-create-user \
-  --user-pool-id "$POOL" \
-  --username you@example.com \
-  --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true Name=name,Value="Your Name" \
-  --desired-delivery-mediums EMAIL</code></pre></div>
-        <p>You get "You've been invited to Crucible" with a temporary password, valid for 7 days. Cognito's own sender allows about 50
-          emails a day. Everyone else is invited the same way. <code>cognito.md</code> covers resending, resets, removal and MFA.</p></li>
+        <p>You can do this any time after <code>init</code>. Use the same email as <code>bootstrap_admin</code>.</p>
+        <div class="cmd"><pre><code>crucible aws invite you@example.com --name "Your Name"</code></pre></div>
+        <p>It finds the user pool and region from the persistent stack and always marks the email verified: Crucible refuses an unverified
+          one, and the console's <i>Mark email address as verified</i> box is off by default. You get "You've been invited to Crucible" with a
+          temporary password, valid for 7 days. Run it again before the first sign-in to resend; for an existing account it only marks the
+          email verified. Cognito's own sender allows about 50 emails a day. Everyone else is invited the same way. <code>cognito.md</code> covers resending, resets, removal and MFA.</p></li>
       <li><h3>Sign in</h3>
         <p>Open <code>https://&lt;domain&gt;</code>, sign in with the email and the temporary password, and choose your own (12 characters or
           more, with upper case, lower case and a number). You come back to Crucible as an admin: <b>Administrator</b> shows in the top bar.</p></li>

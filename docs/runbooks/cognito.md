@@ -74,6 +74,12 @@ Invite the `bootstrap_admin` email (see `aws.md`) first. Crucible makes that add
 
 ### Invite with the CLI
 ```bash
+crucible aws invite alice@example.com --name "Alice Smith"
+```
+It finds the pool from the persistent stack and always marks the email verified, which Crucible requires. Run it again for
+someone who hasn't signed in yet and it resends the invite with a new temporary password; for someone who already has an
+account it only marks the email verified and sends nothing. The plain AWS CLI equivalent:
+```bash
 POOL=$(terraform -chdir=deploy/aws/persistent output -raw cognito_user_pool_id)
 
 aws cognito-idp admin-create-user \
@@ -89,7 +95,7 @@ Setting `name` makes Crucible greet her by name; without it Crucible shows her e
 ### Invite in the console
 Cognito → User pools → `crucible` → **Users** → **Create user**:
 - Invitation message: *Send an email invitation*
-- Email address: `alice@example.com`, tick *Mark email address as verified*
+- Email address: `alice@example.com`, tick *Mark email address as verified*. It's off by default, and without it Crucible refuses the sign-in ("your email address is not verified"). `crucible aws invite` can't forget it.
 - Temporary password: *Generate a password*
 
 ### Then add them to a team
@@ -103,7 +109,7 @@ and enrolls her. The change applies at once.
 
 | Task | CLI | Console (User pools → `crucible` → Users) |
 |---|---|---|
-| Resend an expired invite | `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@example.com --message-action RESEND` | Select user → *Resend invitation* |
+| Resend an expired invite | `crucible aws invite alice@example.com`, or `aws cognito-idp admin-create-user --user-pool-id "$POOL" --username alice@example.com --message-action RESEND` | Select user → *Resend invitation* |
 | Reset a password | `aws cognito-idp admin-reset-user-password --user-pool-id "$POOL" --username alice@example.com` | Select user → *Reset password* |
 | Someone leaves: block sign-in | `aws cognito-idp admin-disable-user --user-pool-id "$POOL" --username alice@example.com`, then remove them from the team page | Select user → *Disable user access* |
 | Delete for good | `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username alice@example.com` | Select user → *Delete* |
@@ -170,6 +176,6 @@ output "oidc_issuer"          { value = "https://cognito-idp.eu-west-1.amazonaws
 | Crucible shows "invalid id token" after sign-in | Issuer mismatch, e.g. a pool in another region | Check `terraform -chdir=deploy/aws/persistent output oidc_issuer` matches the region; re-run `crucible aws up` |
 | Signed in, but the Hearth is empty | The email isn't enrolled in any program | Add the exact email to `team.yaml` and a `programs/*.yaml` |
 | "Your identity provider did not send an email address" | The app client lacks the `email` scope | Restore the scopes `openid email profile` (Terraform does this) |
-| Sign-in fails with "email not verified" (or Crucible rejects the account) | The user's `email_verified` attribute is false, e.g. created without `--message-action`/verification | `aws cognito-idp admin-update-user-attributes --user-pool-id "$POOL" --username <email> --user-attributes Name=email_verified,Value=true` |
+| Sign-in fails with "email not verified" (or Crucible rejects the account) | The user's `email_verified` attribute is false, e.g. created without `--message-action`/verification | `crucible aws invite <email>` (marks it verified, sends nothing to an existing account), or `aws cognito-idp admin-update-user-attributes --user-pool-id "$POOL" --username <email> --user-attributes Name=email_verified,Value=true` |
 | Invite email never arrives | Daily email limit reached, or spam filter | Resend tomorrow, check spam, or switch to SES (§8) |
 | `terraform destroy` refuses: "Instance cannot be destroyed" | Working as intended (`prevent_destroy`) | Only remove the user pool deliberately: turn off deletion protection in the console first, then edit `cognito.tf` |

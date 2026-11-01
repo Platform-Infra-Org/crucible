@@ -1053,3 +1053,80 @@ func TestStateRestoreStopsWhenItCannotTell(t *testing.T) {
 		t.Fatalf("must stop before applying: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 }
+
+// invite always sends email_verified=true: Crucible refuses an unverified email, and Cognito's console leaves it
+// unticked by default. The pool comes from the persistent stack's outputs.
+func cognito(status string, getErr error) *recorder {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "admin-get-user") {
+			return status
+		}
+		return fakeAWS(cmd)
+	}}
+	r.outErr = func(cmd string) error {
+		if getErr != nil && strings.Contains(cmd, "admin-get-user") {
+			return getErr
+		}
+		return nil
+	}
+	return r
+}
+
+var notFound = errors.New("exit status 254: An error occurred (UserNotFoundException) when calling the AdminGetUser operation: User does not exist.")
+
+func TestInviteCreatesAVerifiedUser(t *testing.T) {
+	r := cognito("", notFound)
+	if err := r.ops(t.TempDir()).Invite(context.Background(), "alice@example.com", "Alice Smith, Ops"); err != nil {
+		t.Fatal(err)
+	}
+	want := `aws cognito-idp admin-create-user --region eu-west-1 --user-pool-id eu-west-1_abc --username alice@example.com ` +
+		`--user-attributes [{"Name":"email","Value":"alice@example.com"},{"Name":"email_verified","Value":"true"},{"Name":"name","Value":"Alice Smith, Ops"}] ` +
+		`--desired-delivery-mediums EMAIL`
+	if indexOf(r.calls, want) < 0 || indexOf(r.calls, "RESEND") >= 0 {
+		t.Fatalf("want a verified user, JSON attributes (a comma in the name stays in the name):\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "invited alice@example.com") {
+		t.Fatalf("log: %q", r.log.String())
+	}
+}
+
+func TestInviteResendsAPendingInviteAndVerifiesIt(t *testing.T) {
+	r := cognito("FORCE_CHANGE_PASSWORD", nil)
+	if err := r.ops(t.TempDir()).Invite(context.Background(), "alice@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	verify, resend := indexOf(r.calls, `admin-update-user-attributes --region eu-west-1 --user-pool-id eu-west-1_abc --username alice@example.com --user-attributes [{"Name":"email_verified","Value":"true"}]`),
+		indexOf(r.calls, "admin-create-user --region eu-west-1 --user-pool-id eu-west-1_abc --username alice@example.com --message-action RESEND --desired-delivery-mediums EMAIL")
+	if verify < 0 || resend < verify {
+		t.Fatalf("a pending invite is verified, then resent:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "resent") {
+		t.Fatalf("log: %q", r.log.String())
+	}
+}
+
+func TestInviteOfAnExistingUserOnlyVerifies(t *testing.T) {
+	r := cognito("CONFIRMED", nil)
+	if err := r.ops(t.TempDir()).Invite(context.Background(), "alice@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "admin-update-user-attributes") < 0 || indexOf(r.calls, "admin-create-user") >= 0 {
+		t.Fatalf("an existing account gets no email, only the verified flag:\n%s", strings.Join(r.calls, "\n"))
+	}
+	if !strings.Contains(r.log.String(), "already has an account") {
+		t.Fatalf("log: %q", r.log.String())
+	}
+}
+
+func TestInviteRefusesBadInputAndStopsOnOtherErrors(t *testing.T) {
+	for _, email := range []string{"", "alice", "alice@example.com --x", "a'b@example.com"} {
+		r := cognito("", notFound)
+		if err := r.ops(t.TempDir()).Invite(context.Background(), email, ""); err == nil || len(r.calls) > 0 {
+			t.Errorf("%q: want an error before any call, got %v\n%s", email, err, strings.Join(r.calls, "\n"))
+		}
+	}
+	r := cognito("", errors.New("exit status 254: An error occurred (AccessDeniedException)"))
+	if err := r.ops(t.TempDir()).Invite(context.Background(), "alice@example.com", ""); err == nil || indexOf(r.calls, "admin-create-user") >= 0 {
+		t.Fatalf("only not-found means a new user: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+}

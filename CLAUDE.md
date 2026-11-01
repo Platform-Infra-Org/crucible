@@ -48,6 +48,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Terraform (mock providers only) | `cd deploy/aws/{persistent,main,labs} && terraform test` |
 | Helm chart | `bash deploy/helm/test.sh` |
 | Content lint | `./bin/crucible lint examples/<repo>` |
+| Invite someone to the AWS install's Cognito pool | `crucible aws invite EMAIL [--name "Full Name"]` (always `email_verified=true`; re-run resends an unused invite) |
 | Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |

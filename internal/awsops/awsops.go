@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type Ops struct {
@@ -737,6 +738,69 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot bool)
 	}
 	abs, _ := filepath.Abs(varFile)
 	return o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + o.dir("main"), "destroy", "-auto-approve", "-var-file=" + abs}, mainVars(p)...)...)
+}
+
+// inviteEmail is a plain address (like the main stack's bootstrap_admin), and never starts with "-", so the AWS CLI
+// can't read it as a flag.
+var inviteEmail = regexp.MustCompile(`^[A-Za-z0-9._%+][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`)
+
+// Invite adds someone to the Cognito pool with email_verified=true, which Crucible requires and the console leaves
+// unticked by default. A pending invite (no password set yet) is verified and resent; an existing account is only
+// verified, with no email. Attributes go as JSON, so a comma in a name can't add an attribute.
+func (o Ops) Invite(ctx context.Context, email, name string) error {
+	if !inviteEmail.MatchString(email) {
+		return fmt.Errorf("%q is not an email address", email)
+	}
+	if strings.ContainsFunc(name, unicode.IsControl) || len(name) > 256 {
+		return errors.New("--name must be at most 256 characters, with no control characters")
+	}
+	p, err := o.outputs(ctx, "persistent")
+	if err != nil {
+		return err
+	}
+	pool := []string{"--region", p["region"], "--user-pool-id", p["cognito_user_pool_id"], "--username", email}
+	idp := func(op string, args ...string) error {
+		return o.Exec(ctx, o.Root, "aws", append(append([]string{"cognito-idp", op}, pool...), args...)...)
+	}
+	attrs := func(kv ...string) string {
+		var a []map[string]string
+		for i := 0; i < len(kv); i += 2 {
+			a = append(a, map[string]string{"Name": kv[i], "Value": kv[i+1]})
+		}
+		b, _ := json.Marshal(a)
+		return string(b)
+	}
+	status, err := o.Output(ctx, o.Root, "aws", append(append([]string{"cognito-idp", "admin-get-user"}, pool...), "--query", "UserStatus", "--output", "text")...)
+	switch {
+	case err != nil && strings.Contains(err.Error(), "UserNotFoundException"):
+		kv := []string{"email", email, "email_verified", "true"}
+		if name != "" {
+			kv = append(kv, "name", name)
+		}
+		if err := idp("admin-create-user", "--user-attributes", attrs(kv...), "--desired-delivery-mediums", "EMAIL"); err != nil {
+			return err
+		}
+		hint := ""
+		if p["access"] == "ssm" {
+			hint = "; they open the tunnel with `crucible aws connect` to sign in"
+		}
+		fmt.Fprintf(o.Log, "invited %s: Cognito emails them a temporary password%s\n", email, hint)
+		return nil
+	case err != nil:
+		return fmt.Errorf("looking up %s in the user pool: %w", email, err)
+	}
+	if err := idp("admin-update-user-attributes", "--user-attributes", attrs("email_verified", "true")); err != nil {
+		return err
+	}
+	if status != "FORCE_CHANGE_PASSWORD" {
+		fmt.Fprintf(o.Log, "%s already has an account (%s): marked the email verified, sent nothing\n", email, status)
+		return nil
+	}
+	if err := idp("admin-create-user", "--message-action", "RESEND", "--desired-delivery-mediums", "EMAIL"); err != nil {
+		return err
+	}
+	fmt.Fprintf(o.Log, "%s had not signed in yet: marked the email verified and resent the invite with a new temporary password\n", email)
+	return nil
 }
 
 // ConnectOpts are `crucible aws connect`'s flags.

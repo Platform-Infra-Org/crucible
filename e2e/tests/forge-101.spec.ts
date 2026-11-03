@@ -51,6 +51,11 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await page.getByRole('button', { name: 'Mark as read' }).click()
   await page.getByTestId('module-01-welcome').getByRole('link', { name: 'Quiz' }).click()
 
+  // A question's title sits inside its box: the legend must not ride the fieldset's top border.
+  const q = page.locator('fieldset.question').first()
+  const [box, title] = await Promise.all([q.boundingBox(), q.locator('legend').boundingBox()])
+  expect(box && title && title.y).toBeGreaterThanOrEqual((box?.y ?? 0) + 8)
+
   await page.getByLabel('docker ps').check()
   for (const r of ['Docker Hub', 'GitHub Container Registry', 'Amazon ECR']) await page.getByLabel(r).check()
   await page.getByTestId('answer-q-port').fill('80')

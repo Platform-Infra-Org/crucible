@@ -290,7 +290,11 @@ a.button-link:hover { border-color: var(--accent); }
 .prose blockquote { border-left: 3px solid var(--accent); margin: 0; padding-left: 1rem; color: var(--muted); }
 
 .question { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; }
-.question legend { font-weight: 600; }
+/* A question's title sits inside its box: a floated, full-width legend leaves the fieldset's border alone (browsers
+   otherwise draw the legend over the top edge). The next element clears it. */
+.question > legend { float: left; width: 100%; padding: 0; margin: 0 0 0.6rem; font-weight: 600; line-height: 1.45; }
+.question > legend + * { clear: both; }
+.question > legend .muted { font-weight: 400; }
 .question.right { border-color: var(--ok); }
 .question.wrong { border-color: var(--danger); }
 .question label { display: block; margin: 0.3rem 0; }

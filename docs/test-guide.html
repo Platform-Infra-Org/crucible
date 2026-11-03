@@ -616,6 +616,32 @@ echo hi &gt; f &amp;&amp; aws s3 cp f s3://crucible-lab-$CRUCIBLE_LAB_ID/forged.
           <li class="item" data-id="aw-bill"><label><input type="checkbox" id="c-aw-bill"><span class="t">The bill arrives <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>24–48 hours later: Ledger → <b>Refresh now</b>.</p>
               <p class="expect"><b>Expect</b>the lab's <b>Billed</b> figure without <i>(so far)</i>, close to its <b>Metered</b> one, and <i>Estimate vs billed</i> counts it.</p></div></li>
+          <li class="item" data-id="aw-wsimage"><label><input type="checkbox" id="c-aw-wsimage"><span class="t">Publish the workspace image <span class="pill cost">AWS</span></span></label>
+            <div class="body"><ol class="how"><li><code>docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push -t ghcr.io/platform-infra-org/crucible-workspace:&lt;version&gt; deploy/workspace</code></li><li><code>docker buildx imagetools inspect ghcr.io/platform-infra-org/crucible-workspace:&lt;version&gt;</code> and copy the digest.</li><li>Set <code>workspace_image = "ghcr.io/platform-infra-org/crucible-workspace@sha256:&lt;digest&gt;"</code> in <code>crucible.tfvars</code>, then <code>crucible aws up</code>.</li></ol>
+              <p class="expect"><b>Expect</b><code>up</code> succeeds (a tag instead of a digest is refused); the next lab's workspace has <code>lab-ssh</code> and <code>lab-console</code> (<code>which lab-ssh lab-console</code>). Serial console access is already on in il-central-1; if <code>labs-init</code> printed a note that it is off, an account admin runs the command it shows.</p></div></li>
+          <li class="item" data-id="aw-os-ssm"><label><input type="checkbox" id="c-aw-os-ssm"><span class="t">A shell on a lab machine over Session Manager <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run Forge 402 (or any lab whose machine attaches the <code>crucible-lab-instance</code> profile). In the workspace:</p><div class="cmd"><pre><code>aws ssm start-session --target &lt;instance id&gt;
+lab-ssh &lt;instance id&gt;</code></pre></div>
+              <p class="expect"><b>Expect</b>a shell for each, with no inbound port open. A machine in another lab is refused (AccessDenied), and so is <code>aws ssm get-parameter --name /crucible/env</code> from inside the machine (the instance role denies it).</p></div></li>
+          <li class="item" data-id="aw-os-direct"><label><input type="checkbox" id="c-aw-os-direct"><span class="t">Plain SSH works, and the node stays closed <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Needs a lab with <code>aws.direct_ssh: true</code>. In its workspace:</p><div class="cmd"><pre><code>lab-ssh --direct &lt;instance id&gt;
+nc -z -w 3 &lt;the node's private IP&gt; 22; echo $?</code></pre></div>
+              <p class="expect"><b>Expect</b><code>lab-ssh --direct</code> gives a shell; <code>nc</code> prints a non-zero status after about 3 seconds (the connection times out). If <code>nc</code> succeeds, stop: the NetworkPolicy exception for the node is not enforced.</p></div></li>
+          <li class="item" data-id="aw-os-console"><label><input type="checkbox" id="c-aw-os-console"><span class="t">The serial console shows GRUB <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Start the Forge 402 rescue module. In the workspace: <code>lab-console &lt;instance id&gt;</code>, press Enter.</p>
+              <p class="expect"><b>Expect</b>the GRUB menu and, after the break, the initramfs shell. Leave with Enter then <code>~.</code>. The same screen appears in the AWS console under EC2, the instance, Connect, EC2 Serial Console. <code>aws ec2 get-console-screenshot --instance-id &lt;id&gt;</code> works too.</p></div></li>
+          <li class="item" data-id="aw-os-signin"><label><input type="checkbox" id="c-aw-os-signin"><span class="t">The AWS console button <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>On a running AWS lab press <b>AWS console</b>.</p>
+              <p class="expect"><b>Expect</b>a new tab, signed in as <code>crucible-lab-&lt;id&gt;</code>, that sees the lab's machines and is refused anything else; it lasts up to an hour. On a lab that is not running the API refuses ("only a running AWS lab has an AWS console"). An audit row <code>lab.console</code> is written.</p></div></li>
+          <li class="item" data-id="aw-os-fleet"><label><input type="checkbox" id="c-aw-os-fleet"><span class="t">Fleet Manager remote desktop on a Windows lab machine <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Start a lab with a Windows Server instance with the lab instance profile. In the AWS console (from the button): Systems Manager, Fleet Manager, the instance, Connect with Remote Desktop.</p>
+              <p class="expect"><b>Expect</b>the desktop opens. It needs the lab session's own <code>ssm:StartSession</code> and <code>ssm-guiconnect</code> permissions.</p></div></li>
+          <li class="item" data-id="aw-os-term"><label><input type="checkbox" id="c-aw-os-term"><span class="t">Terminate and resume a session <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>In the workspace: <code>aws ssm start-session --target &lt;id&gt;</code>; in a second terminal <code>aws ssm describe-sessions --state Active</code>, then <code>aws ssm terminate-session --session-id &lt;id&gt;</code>.</p>
+              <p class="expect"><b>Expect</b>the session ends, and a still-open one can be resumed. Its id starts with the lab session's user id; terminating someone else's session id is AccessDenied.</p></div></li>
+          <li class="item" data-id="aw-os-status"><label><input type="checkbox" id="c-aw-os-status"><span class="t"><code>crucible aws status</code> reports the serial endpoint <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run <code>crucible aws status</code>.</p>
+              <p class="expect"><b>Expect</b><i>egress: every host Crucible checks is reachable</i>, which includes <code>ec2-serial-console.il-central-1.api.aws</code> on TCP 22 and <code>signin.aws.amazon.com</code>. A blocked line names <code>host:22</code>; send it to the network team.</p></div></li>
         </ul>
       </section>
 

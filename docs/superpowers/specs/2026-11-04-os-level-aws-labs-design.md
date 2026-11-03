@@ -60,7 +60,7 @@ and `iam:PassRole` on the lab instance role only). Instance resources carry the 
 | Own sessions | `ssm:TerminateSession`, `ssm:ResumeSession` | `session/${aws:userid}-*` |
 | Keys | `ec2-instance-connect:SendSSHPublicKey`, `SendSerialConsoleSSHPublicKey` | own instances |
 | Screen, boot log | `ec2:GetConsoleScreenshot`, `ec2:GetConsoleOutput` | own instances |
-| Checks | `ssm:SendCommand` (`AWS-RunShellScript`, `AWS-RunPowerShellScript`), `ssm:GetCommandInvocation`, `ssm:ListCommandInvocations` | own instances |
+| Checks | `ssm:SendCommand` (`AWS-RunShellScript`, `AWS-RunPowerShellScript`), `ssm:GetCommandInvocation` | `SendCommand` on own instances; `GetCommandInvocation` on `*` (accepted deviation: IAM cannot scope it to instances; it needs the unguessable command id, and `ListCommandInvocations`/`ListCommands` are not granted) |
 | Fleet Manager | `ssm-guiconnect:StartConnection`, `GetConnection`, `CancelConnection` | — |
 | Console reads | `ssm:DescribeInstanceInformation`, `ssm:GetConnectionStatus`, `ssm:DescribeSessions`, `ec2:GetSerialConsoleAccessStatus` | read-only |
 

@@ -35,18 +35,19 @@
 
 - Spec §4.1 says lint "keeps refusing any other IAM": there is no such lint today; the permission boundary has no `iam:*` except `iam:PassRole` on the lab instance role, so any other IAM in a module fails at apply. No lint change. Cost if wrong: an author learns at apply instead of at lint.
 - Spec §4.2 asks for a 15-minute session for the console link; the plan reuses `Cloud.AssumeLab` (one hour, the lab's own session tags) rather than adding a second assume path. The sign-in link itself still expires in 15 minutes, and the console session is no stronger than the workspace's credentials. Cost if wrong: a console tab stays signed in up to an hour instead of 15 minutes.
+- Checked in our account (spec §9): serial console access is already on and managed by the account, so the labs stack does not own it (spec §3.3 changed); il-central-1's serial endpoint is `ec2-serial-console.il-central-1.api.aws` with an RSA key `ssh-keyscan` can't read, so `lab-console` looks the endpoint up and pins the fingerprint from a handshake; `AssociateIamInstanceProfile` is dropped (launching with the profile suffices; it has no dry run).
 - The existing labs test `no IAM for lab roles` contradicts spec §3.2 (PassRole). Task 2 replaces it with "the only IAM action is `iam:PassRole`, on the lab instance role, to EC2".
 
 ---
 
-### Task 1: Labs stack: lab instance role, profile, serial console, new outputs
+### Task 1: Labs stack: lab instance role, profile, new outputs
 
 **Files:**
 - Modify: `deploy/aws/labs/main.tf` (new resources after `aws_iam_role_policy.plan`; outputs at the end)
 - Modify: `deploy/aws/labs/labs.tftest.hcl`
 
 **Interfaces:**
-- Produces: outputs `lab_instance_profile` (string, the profile name, `"<name>-lab-instance"`), `lab_instance_role_arn` (string), `lab_subnet_cidrs` (comma-joined CIDRs of `var.lab_subnet_ids`, `""` when none); variable `serial_console` (bool, default true).
+- Produces: outputs `lab_instance_profile` (string, the profile name, `"<name>-lab-instance"`), `lab_instance_role_arn` (string), `lab_subnet_cidrs` (comma-joined CIDRs of `var.lab_subnet_ids`, `""` when none).
 
 - [ ] **Step 1: Write the failing tests** (append to `deploy/aws/labs/labs.tftest.hcl`)
 
@@ -75,19 +76,8 @@ run "lab_instances_get_a_minimal_ssm_role" {
     error_message = "no managed SSM policy (AmazonSSMManagedInstanceCore grants ssm:GetParameter)"
   }
   assert {
-    condition     = aws_ec2_serial_console_access.labs[0].enabled
-    error_message = "serial console access is on by default"
-  }
-}
-
-run "serial_console_can_be_left_off" {
-  command = plan
-  variables {
-    serial_console = false
-  }
-  assert {
-    condition     = length(aws_ec2_serial_console_access.labs) == 0
-    error_message = "serial_console = false leaves the account setting alone"
+    condition     = !strcontains(file("${path.module}/main.tf"), "aws_ec2_serial_console_access")
+    error_message = "the account's serial console setting is not Crucible's to manage (destroy would turn it off for everyone)"
   }
 }
 
@@ -122,12 +112,6 @@ Expected: FAIL: `Reference to undeclared resource "aws_iam_instance_profile" "la
 - [ ] **Step 3: Implement** (in `deploy/aws/labs/main.tf`)
 
 ```hcl
-variable "serial_console" {
-  type        = bool
-  default     = true
-  description = "Turn on EC2 Serial Console access in --region (account-wide, per region): labs reach a machine's GRUB menu and boot console"
-}
-
 # Every lab's instances share this role: the SSM agent's channel and Run Command, nothing else. Written out rather than
 # AmazonSSMManagedInstanceCore, which grants ssm:GetParameter(s): root on a lab instance could then read /<name>/*
 # (the secret key, database password, OIDC secret) in this account.
@@ -160,13 +144,6 @@ resource "aws_iam_instance_profile" "lab_instance" {
   role = aws_iam_role.lab_instance.name
 }
 
-# Account-wide in this region: anyone allowed SendSerialConsoleSSHPublicKey reaches any instance's serial port. The
-# lab role is tag-scoped; the Crucible node has no password user.
-resource "aws_ec2_serial_console_access" "labs" {
-  count   = var.serial_console ? 1 : 0
-  enabled = true
-}
-
 output "lab_instance_profile" { value = aws_iam_instance_profile.lab_instance.name }
 output "lab_instance_role_arn" { value = aws_iam_role.lab_instance.arn }
 output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : data.aws_subnet.lab[id].cidr_block]) }
@@ -175,12 +152,12 @@ output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : da
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `cd deploy/aws/labs && terraform fmt -check && terraform test`
-Expected: PASS, all runs (21 existing + 4 new).
+Expected: PASS, all runs (21 existing + 3 new).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat(labs-stack): a minimal shared lab instance role and profile, serial console access, subnet CIDRs
+git commit -m "feat(labs-stack): a minimal shared lab instance role and profile, subnet CIDRs
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- deploy/aws/labs/main.tf deploy/aws/labs/labs.tftest.hcl
 ```
@@ -259,8 +236,6 @@ Lab role (`aws_iam_role_policy.lab`), add to `Statement`:
 ```hcl
       { Sid = "PassLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn,
       Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } },
-      { Sid = "ProfileOnOwn", Effect = "Allow", Action = "ec2:AssociateIamInstanceProfile", Resource = "arn:aws:ec2:*:*:instance/*",
-      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
       { Sid = "SessionsToOwn", Effect = "Allow", Action = "ssm:StartSession", Resource = "arn:aws:ec2:*:*:instance/*",
       Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
       { Sid = "SessionDocuments", Effect = "Allow", Action = "ssm:StartSession",
@@ -340,7 +315,7 @@ func TestEgressCheckCoversOSLabHosts(t *testing.T) {
 			t.Errorf("missing %s", want)
 		}
 	}
-	if !strings.Contains(egressCheck(hosts, []string{"serial-console.ec2-instance-connect.il-central-1.aws:22"}), "/dev/tcp/serial-console.ec2-instance-connect.il-central-1.aws/22") {
+	if !strings.Contains(egressCheck(hosts, serialTCP("il-central-1")), "/dev/tcp/ec2-serial-console.il-central-1.api.aws/22") {
 		t.Fatal("the serial console endpoint is checked on TCP 22")
 	}
 }
@@ -379,7 +354,39 @@ func egressCheck(urls, tcp []string) string {
 }
 ```
 
-Update its caller in `Status` to pass `[]string{"serial-console.ec2-instance-connect." + region + ".aws:22"}` (where `region` is the variable already used there for `egressHosts`). Fix any other test that calls `egressCheck(x)` to `egressCheck(x, nil)`.
+Update its caller in `Status` to pass `serialTCP(region)`; fix any other caller or test of `egressCheck(x)` to `egressCheck(x, nil)`. Add to `awsops.go`:
+
+```go
+// serialConsole is AWS's EC2 Serial Console table (docs: "EC2 Serial Console endpoints and fingerprints"): the
+// endpoint's name differs by region generation, so it is looked up, never built. Keep in step with
+// deploy/workspace/serial-console-endpoints.
+var serialConsole = map[string]string{
+	"il-central-1": "ec2-serial-console.il-central-1.api.aws",
+	"eu-west-1":    "serial-console.ec2-instance-connect.eu-west-1.aws",
+	"eu-central-1": "serial-console.ec2-instance-connect.eu-central-1.aws",
+	"us-east-1":    "serial-console.ec2-instance-connect.us-east-1.aws",
+}
+
+// serialTCP is the region's serial console endpoint for the TCP egress check; none for a region not in the table.
+func serialTCP(region string) []string {
+	if h := serialConsole[region]; h != "" {
+		return []string{h + ":22"}
+	}
+	return nil
+}
+```
+
+In `LabsInit`, after the apply succeeds and before `backupState`, a read-only check:
+
+```go
+	if on, err := o.Output(ctx, o.Root, "aws", "ec2", "get-serial-console-access-status", "--region", region,
+		"--query", "SerialConsoleAccessEnabled", "--output", "text"); err == nil && on != "True" {
+		fmt.Fprintf(o.Log, "note: EC2 Serial Console access is off in %s, so labs can't reach a machine's GRUB or boot console. "+
+			"An account admin turns it on (account-wide): aws ec2 enable-serial-console-access --region %s\n", region, region)
+	}
+```
+
+Tests: in `TestEgressCheckCoversOSLabHosts`, replace the `egressCheck(...)` assertion with `strings.Contains(egressCheck(hosts, serialTCP("il-central-1")), "/dev/tcp/ec2-serial-console.il-central-1.api.aws/22")`; add a `LabsInit` test whose fake returns `False` for `get-serial-console-access-status` and asserts the log contains `enable-serial-console-access --region eu-west-1`, and one returning `True` asserting no such note.
 
 `deploy/aws/main/variables.tf`:
 
@@ -1025,19 +1032,21 @@ usage() { echo "usage: lab-console <instance-id>" >&2; exit 2; }
 id=${1:-}
 [[ $id =~ ^i-[0-9a-f]{8,17}$ ]] || usage
 region=${AWS_REGION:?AWS_REGION is not set}
-host="serial-console.ec2-instance-connect.$region.aws"
+# AWS's table: the endpoint's name differs by region, and each has a published host key fingerprint.
+read -r host want < <(awk -v r="$region" '$1 == r {print $2, $3}' /etc/crucible/serial-console-endpoints) || true
+[ -n "${host:-}" ] || { echo "no EC2 Serial Console endpoint known for $region" >&2; exit 1; }
 dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+# Record the endpoint's host key with a handshake that can't log in (no key pushed yet; ssh-keyscan gets no answer
+# from these endpoints), then refuse it unless it is AWS's published key.
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" \
+  -o ConnectTimeout=10 "$id.port0@$host" true >/dev/null 2>&1 || true
+got=$(ssh-keygen -lf "$dir/known_hosts" 2>/dev/null | awk '{print $2}')
+[ "$got" = "$want" ] || { echo "serial console host key ${got:-none} is not AWS's published $want for $region" >&2; exit 1; }
 ssh-keygen -q -t ed25519 -N '' -f "$dir/key"
 aws ec2-instance-connect send-serial-console-ssh-public-key --instance-id "$id" --serial-port 0 \
   --ssh-public-key "file://$dir/key.pub" >/dev/null
-# AWS publishes each region's serial console host key fingerprint; refuse any other key.
-want=$(awk -v r="$region" '$1 == r {print $2}' /etc/crucible/serial-console-fingerprints)
-[ -n "$want" ] || { echo "no pinned serial console fingerprint for $region" >&2; exit 1; }
-ssh-keyscan -t ed25519 "$host" 2>/dev/null >"$dir/known_hosts"
-got=$(ssh-keygen -lf "$dir/known_hosts" | awk '{print $2}')
-[ "$got" = "$want" ] || { echo "serial console host key $got does not match AWS's published $want" >&2; exit 1; }
 echo "Connected to $id's serial console. Press Enter if the screen is blank; leave with Enter then ~." >&2
-ssh -i "$dir/key" -o UserKnownHostsFile="$dir/known_hosts" "$id.port0@$host"
+ssh -i "$dir/key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$dir/known_hosts" "$id.port0@$host"
 ```
 
 `deploy/workspace/Dockerfile`:
@@ -1054,13 +1063,13 @@ RUN yum install -y openssh-clients && yum clean all
 RUN set -eu; case "$TARGETARCH" in amd64) d=linux_64bit; s=$SSM_PLUGIN_SHA256_AMD64 ;; arm64) d=linux_arm64; s=$SSM_PLUGIN_SHA256_ARM64 ;; *) exit 1 ;; esac; \
     curl -fsSL -o /tmp/ssm.rpm "https://s3.amazonaws.com/session-manager-downloads/plugin/$SSM_PLUGIN/$d/session-manager-plugin.rpm"; \
     echo "$s  /tmp/ssm.rpm" | sha256sum -c -; yum install -y /tmp/ssm.rpm; rm /tmp/ssm.rpm; yum clean all
-COPY serial-console-fingerprints /etc/crucible/serial-console-fingerprints
+COPY serial-console-endpoints /etc/crucible/serial-console-endpoints
 COPY --chmod=755 lab-ssh lab-console /usr/local/bin/
 ```
 
 Fill the two `ARG …SHA256…` defaults before committing: pick the newest version on https://docs.aws.amazon.com/systems-manager/latest/userguide/plugin-version-history.html, set `SSM_PLUGIN` to it, then run `curl -fsSL "https://s3.amazonaws.com/session-manager-downloads/plugin/<v>/linux_64bit/session-manager-plugin.rpm" | shasum -a 256` (and `linux_arm64`) and paste the hashes. A downloaded file goes in a new empty scratch directory.
 
-Create `deploy/workspace/serial-console-fingerprints` with one line per region, `<region> SHA256:<fingerprint>`, copied from AWS's "EC2 Serial Console endpoints and fingerprints" page (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-to-serial-console.html), for every region that page lists; it must include `il-central-1` and `eu-west-1`. Add a check to `test.sh`: `grep -q '^il-central-1 SHA256:' serial-console-fingerprints`.
+Create `deploy/workspace/serial-console-endpoints` with one line per region, `<region> <endpoint> SHA256:<fingerprint>`, copied from AWS's "EC2 Serial Console endpoints and fingerprints" table (https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/connect-to-serial-console.html#sc-endpoints-and-fingerprints) for every commercial region it lists (drop the backslashes the page shows before `+`). It must contain exactly `il-central-1 ec2-serial-console.il-central-1.api.aws SHA256:JR6q8v6kNNPi8+QSFQ4dj5dimNmZPTgwgsM1SNvtYyU` (verified against the live endpoint on 2026-11-04) and `eu-west-1 serial-console.ec2-instance-connect.eu-west-1.aws SHA256:h2AaGAWO4Hathhtm6ezs3Bj7udgUxi2qTrHjZAwCW6E`. Add to `test.sh`: `grep -qx 'il-central-1 ec2-serial-console.il-central-1.api.aws SHA256:JR6q8v6kNNPi8+QSFQ4dj5dimNmZPTgwgsM1SNvtYyU' serial-console-endpoints`, and a check that every endpoint in `internal/awsops/awsops.go`'s `serialConsole` map appears in the file for its region.
 
 `Makefile`: add `workspace` to `.PHONY` and
 
@@ -1162,7 +1171,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- examples/forge-402 c
 
 - [ ] **Step 1: Runbook** (`docs/runbooks/aws.md`, the AWS labs section and "Our account")
 
-Add: labs-init now creates `crucible-lab-instance` (role + profile, no `GetParameter`) and turns on serial console access in `--region` (account-wide; `--` none, it's the stack default; `serial_console = false` to skip, by running the labs apply as the budget-removal example does); the workspace image (`make workspace` per arch with `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push -t ghcr.io/platform-infra-org/crucible-workspace:<v> deploy/workspace`, then `docker buildx imagetools inspect` for the digest, then `workspace_image = "…@sha256:…"` in `crucible.tfvars` and `up`); the new egress hosts; the by-hand checks from spec §9 with exact commands.
+Add: labs-init now creates `crucible-lab-instance` (role + profile, no `GetParameter`) and reads the account's serial console setting (already on in il-central-1; labs-init only warns when it's off, with the `enable-serial-console-access` command an account admin runs); the workspace image (`make workspace` per arch with `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push -t ghcr.io/platform-infra-org/crucible-workspace:<v> deploy/workspace`, then `docker buildx imagetools inspect` for the digest, then `workspace_image = "…@sha256:…"` in `crucible.tfvars` and `up`); the new egress hosts; what spec §9 already confirmed, and the by-hand checks still open in spec §10 with exact commands.
 
 - [ ] **Step 2: HTML pages**
 

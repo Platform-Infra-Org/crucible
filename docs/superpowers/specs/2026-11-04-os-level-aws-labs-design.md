@@ -56,7 +56,6 @@ and `iam:PassRole` on the lab instance role only). Instance resources carry the 
 | Purpose | Actions | Scope |
 |---|---|---|
 | Launch with the role | `iam:PassRole` | the lab instance role; `iam:PassedToService` = `ec2.amazonaws.com` |
-| Attach later | `ec2:AssociateIamInstanceProfile` | own instances |
 | Sessions | `ssm:StartSession` | own instances (`ssm:resourceTag/crucible:lab-id`) and the documents `SSM-SessionManagerRunShell`, `AWS-StartSSHSession`, `AWS-StartPortForwardingSession` |
 | Own sessions | `ssm:TerminateSession`, `ssm:ResumeSession` | `session/${aws:userid}-*` |
 | Keys | `ec2-instance-connect:SendSSHPublicKey`, `SendSerialConsoleSSHPublicKey` | own instances |
@@ -71,10 +70,12 @@ The boundary denies `ssm:StartSession` with any other document, in particular
 
 ### 3.3 Serial console access
 
-`aws_ec2_serial_console_access { enabled = true }` in the labs stack, behind `var.serial_console` (default true).
-It is an account-wide, per-region setting, applied in `--region` only. Any principal with
-`SendSerialConsoleSSHPublicKey` could then reach any instance's serial port, the Crucible node included; the node has
-no password user, and the lab role is tag-scoped. The runbook says so.
+Serial console access is an account-wide, per-region setting. In our account it is already on in il-central-1
+(`get-serial-console-access-status`: enabled, managed by the account; checked 2026-11-04), so Crucible does not
+manage it: a Terraform resource would turn it off for everyone on destroy. `crucible aws labs-init` reads the status
+(read-only) and warns when it is off, with the command an account admin runs. Any principal with
+`SendSerialConsoleSSHPublicKey` reaches any instance's serial port, the Crucible node included; the node has no
+password user, and the lab role is tag-scoped. The runbook says so.
 
 ## 4. Crucible
 
@@ -122,20 +123,24 @@ own lab's instances (ABAC).
 
 ### 4.4 Status egress
 
-`crucible aws status` adds `signin.aws.amazon.com`, `ec2-instance-connect.<region>.amazonaws.com` and
-`serial-console.ec2-instance-connect.<region>.aws` (TCP 22) when aws labs are on.
+`crucible aws status` adds `signin.aws.amazon.com`, `ec2-instance-connect.<region>.amazonaws.com` and the region's
+serial console endpoint on TCP 22 when aws labs are on. The endpoint's name is not one pattern: older regions use
+`serial-console.ec2-instance-connect.<region>.aws`, newer ones (il-central-1 among them) `ec2-serial-console.<region>.api.aws`.
+Crucible keeps AWS's published table (region, endpoint, host key fingerprint) in one place and reads both from it.
 
 ## 5. Workspace image
 
 `deploy/workspace/Dockerfile`, from the pinned `amazon/aws-cli` digest, adds:
 
 - `openssh-clients`, and the Session Manager plugin at a pinned version, checked by sha256;
-- `/etc/ssh/ssh_known_hosts` entries for the serial console endpoints, from AWS's published fingerprints;
+- AWS's published serial console table (`region endpoint fingerprint` per line), from the "EC2 Serial Console
+  endpoints and fingerprints" page; the endpoints present RSA host keys, and `ssh-keyscan` gets no answer from them;
 - `lab-ssh [--direct] <instance-id> [user]`: with `--direct`, pushes the key and connects to the private IP (§4.3);
   without it, makes a throwaway key, sends it with `send-ssh-public-key`, runs ssh with
   `ProxyCommand aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p`;
-- `lab-console <instance-id>`: sends a serial key (`send-serial-console-ssh-public-key --serial-port 0`), runs
-  `ssh -i <key> <id>.port0@serial-console.ec2-instance-connect.$AWS_REGION.aws`.
+- `lab-console <instance-id>`: looks up the region's endpoint and fingerprint, records the endpoint's host key with an
+  unauthenticated handshake and refuses it unless its fingerprint matches, then sends a serial key
+  (`send-serial-console-ssh-public-key --serial-port 0`) and runs `ssh -i <key> <id>.port0@<endpoint>`.
 
 Built for linux/amd64 and linux/arm64 (`make workspace`) and pushed by the operator to
 `ghcr.io/platform-infra-org/crucible-workspace`. Main gets `workspace_image` (by digest, like `toolbox_image`; empty
@@ -167,7 +172,7 @@ SSH on 22; the check runs `ssh` to the private IP from the check script. Both li
 
 - Terraform (labs): the instance role has no `ssm:GetParameter*` allow and has the `/<name>/*` deny; PassRole is
   scoped to that role and EC2; StartSession allows only the three documents and the boundary denies the rest; every
-  new instance action carries the lab-id condition; serial console access is on by default and off with the variable;
+  new instance action carries the lab-id condition; the stack does not manage the account's serial console setting;
   the profile is an output.
 - Go: a `direct_ssh` lab's NetworkPolicy adds TCP 22 to the subnet CIDRs with the node's /32 excepted, and a lab
   without it gets exactly today's policy; a `direct_ssh` lab with no CIDRs or no node address refuses to start;
@@ -186,11 +191,25 @@ SSH on 22; the check runs `ssh` to the private IP from the check script. Both li
 5. A labs stack from before this change: an empty `crucible_instance_profile` must not break existing labs.
 6. A `direct_ssh` lab reaching the node: the /32 except, and failing closed without the node's address (§4.3).
 
-## 9. Verify by hand in our account (read-only or dry-run first)
+## 9. Checked in our account (2026-11-04, read-only and dry-run)
 
-- `aws ec2 get-serial-console-access-status --region il-central-1`; `aws ec2 enable-serial-console-access --dry-run`.
-- labs-init creating the instance profile and passing the role (IAM has no dry run; labs-init stops on AccessDenied).
-- Fleet Manager Remote Desktop availability in il-central-1.
-- Federated console sign-in allowed by the organization.
-- The firewall allowing TCP 22 to `serial-console.ec2-instance-connect.il-central-1.aws` from the node.
+- Serial console access: already enabled in il-central-1, managed by the account; enabling would be allowed.
+- il-central-1's serial endpoint is `ec2-serial-console.il-central-1.api.aws`; TCP 22 reachable from a laptop; its RSA
+  host key matches AWS's published `SHA256:JR6q8v6kNNPi8+QSFQ4dj5dimNmZPTgwgsM1SNvtYyU`.
+- `ec2-instance-connect`, `ssm-guiconnect` (Fleet Manager), `ssm`, `ssmmessages` and `signin.aws.amazon.com` resolve.
+- Dry run would succeed: `RunInstances` of an Ubuntu 24.04 t3.micro with an instance profile and a lab-id tag, and
+  of a Windows Server 2022 t3.small, in spokeSubnet1; `GetConsoleScreenshot`, `GetConsoleOutput`.
+- Instance profiles can be created (the main stack made `crucible-node`).
+- Session Manager works from these subnets: the node shows past `AWS-StartPortForwardingSession` sessions and
+  successful `AWS-RunShellScript` commands.
+- Lab subnets: 10.2.129.0/24 (1a), 10.2.130.0/24 (1b); the node sits in 10.2.129.0/24.
+- `SSM-SessionManagerRunShell` does not exist as an account document; a plain `start-session` still authorizes on
+  that ARN, so the allow stays.
+
+## 10. Still to verify by hand
+
+- `ec2-instance-connect:SendSSHPublicKey` and `SendSerialConsoleSSHPublicKey` under the SCPs (no dry run).
+- Fleet Manager Remote Desktop against a Windows lab instance.
+- Federated console sign-in with a lab-role session.
+- The firewall allowing TCP 22 to `ec2-serial-console.il-central-1.api.aws` from the node (lab pods leave as the node).
 - A `direct_ssh` lab: `ssh` from the workspace to a lab instance works, and to the node's private IP times out.

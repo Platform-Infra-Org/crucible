@@ -2,9 +2,11 @@ package labs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	"crucible/internal/apperr"
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
 )
@@ -40,11 +43,15 @@ type AWSRunner struct {
 	TerraformImage string
 	DryRun         *awscloud.Fake // dry-run mode: terraform pods only unpack the module; this fake stands in for AWS
 	Now            func() time.Time
+	SigninEndpoint string       // awscloud.SigninEndpoint; tests point it at httptest
+	Issuer         string       // Crucible's public URL: where an expired console session sends people back
+	HTTP           *http.Client // nil = a client with a 10 s timeout
 
-	mu      sync.Mutex
-	creds   map[string]awscloud.Credentials // lab id → its mounted credentials (empty after a restart)
-	locks   map[string]chan struct{}        // one provision/destroy per lab at a time in this process
-	cancels map[string]*context.CancelFunc  // lab id → stops its running ProvisionLab (Destroy calls it)
+	mu        sync.Mutex
+	consoleAt map[string]time.Time            // lab id → last console link (one a minute)
+	creds     map[string]awscloud.Credentials // lab id → its mounted credentials (empty after a restart)
+	locks     map[string]chan struct{}        // one provision/destroy per lab at a time in this process
+	cancels   map[string]*context.CancelFunc  // lab id → stops its running ProvisionLab (Destroy calls it)
 }
 
 var _ Runner = (*AWSRunner)(nil)
@@ -501,4 +508,44 @@ func (a *AWSRunner) reapPlans(ctx context.Context, now time.Time) error {
 		reap(x.ObjectMeta, core.ConfigMaps(estimatesNS).Delete)
 	}
 	return errors.Join(errs...)
+}
+
+var errConsoleTooSoon = apperr.Wrap(apperr.Conflict, "one console link a minute: use the one you have, or wait")
+
+// ConsoleURL mints a console sign-in link for a running lab, from a fresh session with the lab's tags (the mounted
+// Secret is never read back). The link and token are never logged.
+func (a *AWSRunner) ConsoleURL(ctx context.Context, inst *Instance, region string) (string, error) {
+	if a.DryRun != nil {
+		return "", apperr.Wrap(apperr.Unavailable, "the AWS console isn't available in dry-run mode")
+	}
+	a.mu.Lock()
+	if a.consoleAt == nil {
+		a.consoleAt = map[string]time.Time{}
+	}
+	if t, ok := a.consoleAt[inst.ID]; ok && a.now().Sub(t) < time.Minute {
+		a.mu.Unlock()
+		return "", errConsoleTooSoon
+	}
+	a.consoleAt[inst.ID] = a.now()
+	a.mu.Unlock()
+	link, err := a.consoleLink(ctx, inst, region)
+	if err != nil {
+		a.mu.Lock()
+		delete(a.consoleAt, inst.ID) // a failed attempt does not use up the minute
+		a.mu.Unlock()
+	}
+	return link, err
+}
+
+func (a *AWSRunner) consoleLink(ctx context.Context, inst *Instance, region string) (string, error) {
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
+	if err != nil {
+		return "", fmt.Errorf("getting lab credentials: %w", err)
+	}
+	hc := a.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 10 * time.Second}
+	}
+	dest := fmt.Sprintf("https://%[1]s.console.aws.amazon.com/ec2/home?region=%[1]s#Instances:tag:crucible:lab-id=%[2]s", region, inst.ID)
+	return awscloud.ConsoleURL(ctx, hc, cmp.Or(a.SigninEndpoint, awscloud.SigninEndpoint), creds, a.Issuer, dest)
 }

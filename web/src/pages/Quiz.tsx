@@ -192,7 +192,7 @@ export function QuizPage() {
   const ok = !!result && result.status === 'complete' && attemptPassed(result, data.pass_threshold)
   return (
     <section className="page">
-      <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
+      <Link className="action back" to={`/p/${team}/${training}`}>Back to the training</Link>
       <h1>Prove your temper</h1>
       <p className="muted">Pass mark: {Math.round(data.pass_threshold * 100)}%</p>
       {attempts_left !== undefined && <p className="muted" data-testid="attempts-left">Attempts left: {attempts_left}</p>}
@@ -214,7 +214,7 @@ export function QuizPage() {
       <div role="status" className={result ? `result ${ok ? 'pass' : 'fail'}` : undefined}>
         {result && (<>
           {resultMessage(result, data.pass_threshold)}{' '}
-          {result.status === 'complete' && <Link to={`/p/${team}/${training}`}>Back to the training</Link>}
+          {result.status === 'complete' && <Link className="action back" to={`/p/${team}/${training}`}>Back to the training</Link>}
         </>)}
       </div>
     </section>

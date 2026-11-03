@@ -8,7 +8,7 @@ export function ErrorBox({ error }: { error: ApiError }) {
       <div>
         <h2>The forge sputtered</h2>
         <p className="error">{msg}</p>
-        <Link to="/">Back to the Hearth</Link>
+        <Link className="action back" to="/">Back to the Hearth</Link>
       </div>
     </div>
   )

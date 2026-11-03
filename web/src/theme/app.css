@@ -2,7 +2,8 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 15px/1.6 Inter, system-ui, sans-serif; }
 h1, h2, h3 { font-family: Cinzel, Georgia, serif; letter-spacing: 0.02em; line-height: 1.25; }
-a { color: var(--accent); }
+a { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+a:hover { text-decoration-color: currentColor; }
 code, pre { font-family: 'JetBrains Mono', monospace; }
 :focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
 .muted { color: var(--muted); }
@@ -167,6 +168,17 @@ button.tag-pill:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, 
 }
 a.button-link { display: inline-block; padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); text-decoration: none; }
 a.button-link:hover { border-color: var(--accent); }
+/* Action links: a link that stands alone (back, open, register) reads as an action, not a word in a sentence: text colour,
+   an arrow, and a molten underline that grows in on hover and focus. Links inside sentences stay underlined (quietly). */
+a.action { color: var(--text); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 0.35em; padding-bottom: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)) no-repeat left bottom / 0 2px; transition: background-size 0.2s ease, color 0.15s; }
+a.action::after { content: "→" / ""; transition: transform 0.2s ease; }
+a.action.back::after { content: none; }
+a.action.back::before { content: "←" / ""; transition: transform 0.2s ease; }
+a.action:hover, a.action:focus-visible { color: var(--accent); background-size: 100% 2px; }
+a.action:hover::after { transform: translateX(3px); }
+a.action.back:hover::before { transform: translateX(-3px); }
+td.actions a.action::after { content: none; }
 
 .nav { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.6rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--border); }
 .nav a { color: var(--muted); text-decoration: none; }

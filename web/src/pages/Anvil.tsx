@@ -117,7 +117,7 @@ export function AnvilDetailPage() {
   const hintCost = data.lab?.tasks?.find((t) => t.id === s.item)?.hint_cost ?? 0
   return (
     <section className="page anvil">
-      <Link to="/anvil">← Back to the Anvil</Link>
+      <Link className="action back" to="/anvil">Back to the Anvil</Link>
       <h1>{typeLabel[s.type]} from {s.trainee_name || s.trainee} <SmithMark smith={s.trainee_smith} /></h1>
       <p className="muted">{s.trainee} · {s.training} / {s.module} · submitted {new Date(s.created_at).toLocaleString()}</p>
       <h2>Prompt</h2>

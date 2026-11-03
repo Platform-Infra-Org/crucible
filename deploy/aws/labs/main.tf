@@ -192,7 +192,12 @@ resource "aws_iam_policy" "boundary" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources"], Resource = "*" },
+      { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources", "ssm:*", "ssm-guiconnect:*", "ec2-instance-connect:*"], Resource = "*" },
+      { Sid = "PassOnlyTheLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn },
+      # A lab instance must never become a tunnel to the node or Postgres: only the shell, ssh and local port-forward.
+      { Sid = "OnlyLabSessionDocuments", Effect = "Deny", Action = "ssm:StartSession",
+        NotResource = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ssm:*::document/AWS-StartSSHSession",
+      "arn:aws:ssm:*::document/AWS-StartPortForwardingSession", "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"] },
       { Sid = "OnlyLabRegions", Effect = "Deny", NotAction = ["sts:GetCallerIdentity", "s3:ListAllMyBuckets", "s3:GetBucketLocation"],
       Resource = "*", Condition = { StringNotEquals = { "aws:RequestedRegion" = local.regions } } },
       { Sid = "SmallInstancesOnly", Effect = "Deny", Action = "ec2:RunInstances", Resource = "arn:aws:ec2:*:*:instance/*",
@@ -242,6 +247,29 @@ resource "aws_iam_role_policy" "lab" {
       Condition = { StringEquals = { "aws:RequestTag/crucible:lab-id" = local.lab }, "ForAnyValue:StringEquals" = { "aws:TagKeys" = ["crucible:lab-id"] } } },
       { Sid = "LaunchFromShared", Effect = "Allow", Action = "ec2:RunInstances",
       Resource = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:key-pair/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*"] },
+      { Sid = "PassLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn,
+      Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } },
+      { Sid = "SessionsToOwn", Effect = "Allow", Action = "ssm:StartSession", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "SessionDocuments", Effect = "Allow", Action = "ssm:StartSession",
+        Resource = ["arn:aws:ssm:*::document/AWS-StartSSHSession", "arn:aws:ssm:*::document/AWS-StartPortForwardingSession",
+      "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"] },
+      { Sid = "OwnSessionsOnly", Effect = "Allow", Action = ["ssm:TerminateSession", "ssm:ResumeSession"],
+      Resource = ["arn:aws:ssm:*:*:session/$${aws:userid}-*"] },
+      { Sid    = "KeysToOwn", Effect = "Allow", Resource = "arn:aws:ec2:*:*:instance/*",
+        Action = ["ec2-instance-connect:SendSSHPublicKey", "ec2-instance-connect:SendSerialConsoleSSHPublicKey"],
+      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
+      { Sid    = "ConsoleOfOwn", Effect = "Allow", Resource = "arn:aws:ec2:*:*:instance/*",
+        Action = ["ec2:GetConsoleScreenshot", "ec2:GetConsoleOutput"],
+      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "CommandsToOwn", Effect = "Allow", Action = "ssm:SendCommand", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "CommandDocuments", Effect = "Allow", Action = "ssm:SendCommand",
+      Resource = ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*::document/AWS-RunPowerShellScript"] },
+      { Sid = "ConsoleReads", Effect = "Allow", Resource = "*",
+        Action = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation",
+          "ssm:GetConnectionStatus", "ssm:DescribeSessions", "ec2:GetSerialConsoleAccessStatus",
+      "ssm-guiconnect:StartConnection", "ssm-guiconnect:GetConnection", "ssm-guiconnect:CancelConnection"] },
       { Sid = "CreateInShared", Effect = "Allow", Action = "ec2:CreateSecurityGroup", Resource = "arn:aws:ec2:*:*:vpc/*" },
       # Another lab's security groups and ENIs are off limits.
       { Sid      = "NotOtherLabsNetwork", Effect = "Deny", Action = ["ec2:RunInstances", "ec2:CreateNetworkInterface", "ec2:AttachNetworkInterface"],
@@ -353,7 +381,8 @@ resource "aws_iam_role_policy" "lab_instance" {
       { Sid = "RunCommandAgent", Effect = "Allow", Resource = "*",
         Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage",
       "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"] },
-      { Sid = "NeverCrucibleParameters", Effect = "Deny", Action = "ssm:GetParameter*", Resource = "arn:aws:ssm:*:*:parameter/${var.name}/*" },
+      { Sid = "NeverCrucibleParameters", Effect = "Deny", Action = "ssm:GetParameter*",
+      Resource = ["arn:aws:ssm:*:*:parameter/${var.name}", "arn:aws:ssm:*:*:parameter/${var.name}/*"] },
     ]
   })
 }

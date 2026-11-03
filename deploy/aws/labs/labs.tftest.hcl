@@ -61,8 +61,8 @@ run "lab_role_is_bounded_tagged_and_short_lived" {
     error_message = "only small instance types"
   }
   assert {
-    condition     = !anytrue([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : anytrue([for a in flatten([lookup(s, "Action", [])]) : startswith(a, "iam:")])])
-    error_message = "no IAM for lab roles"
+    condition     = toset(flatten([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : [for a in flatten([lookup(s, "Action", [])]) : a if startswith(a, "iam:")] if s.Effect == "Allow"])) == toset(["iam:PassRole"])
+    error_message = "the only IAM a lab has is passing the lab instance role"
   }
   assert {
     condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"])
@@ -375,11 +375,11 @@ run "lab_instances_get_a_minimal_ssm_role" {
     error_message = "only EC2 assumes the lab instance role"
   }
   assert {
-    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : startswith(a, "ssm:GetParameter") || a == "ssm:*"]) if s.Effect == "Allow"])
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : a == "*" || (endswith(a, "*") && startswith("ssm:GetParameter", trimsuffix(a, "*"))) || startswith(a, "ssm:GetParameter")]) if s.Effect == "Allow"])
     error_message = "lab instances must never read SSM parameters (Crucible's secrets live there)"
   }
   assert {
-    condition     = one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Effect == "Deny" && one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Resource == "arn:aws:ssm:*:*:parameter/crucible/*"
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Effect == "Deny" && one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Action == "ssm:GetParameter*" && toset(one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Resource) == toset(["arn:aws:ssm:*:*:parameter/crucible", "arn:aws:ssm:*:*:parameter/crucible/*"])
     error_message = "an explicit deny on /<name>/* parameters"
   }
   assert {
@@ -409,5 +409,30 @@ run "no_lab_subnet_cidrs_by_default" {
   assert {
     condition     = output.lab_subnet_cidrs == ""
     error_message = "no lab network, no CIDRs"
+  }
+}
+
+run "lab_sessions_keys_and_consoles_stay_on_own_instances" {
+  command = apply
+
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "PassLabInstanceRole"]).Resource == aws_iam_role.lab_instance.arn && one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "PassLabInstanceRole"]).Condition.StringEquals["iam:PassedToService"] == "ec2.amazonaws.com"
+    error_message = "PassRole: the lab instance role only, to EC2 only"
+  }
+  assert {
+    condition     = alltrue([for sid in ["SessionsToOwn", "KeysToOwn", "ConsoleOfOwn", "CommandsToOwn"] : one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == sid]).Condition.StringEquals[sid == "KeysToOwn" || sid == "ConsoleOfOwn" ? "aws:ResourceTag/crucible:lab-id" : "ssm:resourceTag/crucible:lab-id"] == "$${aws:PrincipalTag/crucible:lab-id}"])
+    error_message = "every new instance action carries the session's lab id"
+  }
+  assert {
+    condition     = toset([for r in one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "SessionDocuments"]).Resource : r]) == toset(["arn:aws:ssm:*::document/AWS-StartSSHSession", "arn:aws:ssm:*::document/AWS-StartPortForwardingSession", "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"])
+    error_message = "sessions only with the shell, ssh and local port-forward documents"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).Effect == "Deny" && contains(one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).NotResource, "arn:aws:ssm:*::document/AWS-StartSSHSession") && !contains(one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).NotResource, "arn:aws:ssm:*::document/AWS-StartPortForwardingSessionToRemoteHost")
+    error_message = "the boundary denies every other session document, ToRemoteHost included"
+  }
+  assert {
+    condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSessionsOnly"]).Resource) == toset(["arn:aws:ssm:*:*:session/$${aws:userid}-*"])
+    error_message = "terminate and resume only your own sessions"
   }
 }

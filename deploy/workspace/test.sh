@@ -41,4 +41,12 @@ console r-2 SHA256:x;      { [ "$code" != 0 ] && [ ! -e "$t/aws.calls" ]; } || {
 console r-1 SHA256:pinned; [ -e "$t/aws.calls" ] || { echo "lab-console: correct host key did not reach aws"; exit 1; }
 grep -qx 'il-central-1 ec2-serial-console.il-central-1.api.aws SHA256:JR6q8v6kNNPi8+QSFQ4dj5dimNmZPTgwgsM1SNvtYyU' serial-console-endpoints
 grep -qx 'eu-west-1 serial-console.ec2-instance-connect.eu-west-1.aws SHA256:h2AaGAWO4Hathhtm6ezs3Bj7udgUxi2qTrHjZAwCW6E' serial-console-endpoints
+# lab-ssh with a remote command, stub aws/ssh/ssh-keygen: ssh gets user@private-ip, then the command words.
+s=$(mktemp -d); trap 'rm -rf "$t" "$s"' EXIT
+printf '#!/bin/sh\nfor a; do echo "$a"; done >"%s/ssh.args"\n' "$s" >"$s/ssh"
+printf '#!/bin/sh\ncase "$*" in *describe-instances*) echo 10.0.1.5;; esac\n' >"$s/aws"
+printf '#!/bin/sh\nexit 0\n' >"$s/ssh-keygen"
+chmod +x "$s/ssh" "$s/aws" "$s/ssh-keygen"
+PATH="$s:/usr/bin:/bin" ./lab-ssh --direct i-0123456789abcdef0 ubuntu test -e /x >/dev/null 2>&1 || { echo "lab-ssh with a command failed"; exit 1; }
+tail -4 "$s/ssh.args" | tr '\n' ' ' | grep -qx 'ubuntu@10.0.1.5 test -e /x ' || { echo "lab-ssh: ssh args: $(tr '\n' ' ' <"$s/ssh.args")"; exit 1; }
 echo "workspace helpers OK"

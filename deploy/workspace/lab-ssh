@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# lab-ssh [--direct] <instance-id> [user]: ssh to one of this lab's instances with a one-minute key from EC2 Instance
-# Connect. Default: through Session Manager (no network path needed). --direct: to the private IP on TCP 22 (labs with
-# aws.direct_ssh). The key never leaves this container and is gone when the command ends.
+# lab-ssh [--direct] <instance-id> [user] [command...]: ssh to one of this lab's instances with a one-minute key from
+# EC2 Instance Connect. Default: through Session Manager (no network path needed). --direct: to the private IP on TCP 22
+# (labs with aws.direct_ssh). Words after the user run as a remote command (a command needs an explicit user). The key
+# never leaves this container and is gone when the command ends.
 set -euo pipefail
-usage() { echo "usage: lab-ssh [--direct] <instance-id> [user]   (user defaults to ubuntu)" >&2; exit 2; }
+usage() { echo "usage: lab-ssh [--direct] <instance-id> [user] [command...]   (user defaults to ubuntu)" >&2; exit 2; }
 direct=0
 if [ "${1:-}" = --direct ]; then direct=1; shift; fi
 id=${1:-}; user=${2:-ubuntu}
+shift $(( $# < 2 ? $# : 2 ))
 [[ $id =~ ^i-[0-9a-f]{8,17}$ ]] || usage
 [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || usage
 dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
@@ -15,8 +17,8 @@ aws ec2-instance-connect send-ssh-public-key --instance-id "$id" --instance-os-u
   --ssh-public-key "file://$dir/key.pub" >/dev/null
 if [ "$direct" = 1 ]; then
   ip=$(aws ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
-  ssh -i "$dir/key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" "$user@$ip"
+  ssh -i "$dir/key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" "$user@$ip" "$@"
   exit
 fi
 ssh -i "$dir/key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" \
-  -o ProxyCommand="aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p" "$user@$id"
+  -o ProxyCommand="aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p" "$user@$id" "$@"

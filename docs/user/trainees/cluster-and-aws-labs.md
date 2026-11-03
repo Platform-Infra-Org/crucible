@@ -61,7 +61,8 @@ A lab that builds machines (servers, a Windows desktop) lets you reach them with
 - In the workspace terminal, with `<id>` the machine's instance id (Terraform's output or the console list it):
   - `aws ssm start-session --target <id>` opens a shell on the machine.
   - `lab-ssh <id>` opens an SSH session; `lab-ssh --direct <id>` connects straight to the machine, for labs that
-    offer plain SSH.
+    offer plain SSH. After the id you can name the user and a command to run instead of a shell:
+    `lab-ssh --direct <id> ubuntu true`.
   - `lab-console <id>` opens the serial console, to watch a machine boot or fix one that won't. Leave with Enter,
     then `~.`.
   - `aws ec2 get-console-screenshot --instance-id <id>` takes a screenshot of the machine's screen.

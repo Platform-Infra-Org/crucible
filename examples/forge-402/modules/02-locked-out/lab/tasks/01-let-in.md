@@ -8,4 +8,4 @@ any more. It breaks itself about a minute after the lab starts. Find the instanc
 2. Look at `/etc/ssh/sshd_config.d/99-crucible.conf` and `systemctl status ssh ssh.socket`.
 3. Put sshd back on port 22. Test with `sudo sshd -t`, then restart the service.
 
-Press **Check** when `lab-ssh --direct <instance id> true` works from the workspace.
+Press **Check** when `lab-ssh --direct <instance id> ubuntu true` works from the workspace.

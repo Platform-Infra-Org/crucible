@@ -85,8 +85,9 @@ type Lab struct {
 type AWSConfig struct {
 	Region       string                        `yaml:"region"`
 	MaxHourlyUSD float64                       `yaml:"max_hourly_usd"`
-	Prices       map[string]float64            `yaml:"prices"` // resource type → USD per hour, for types Crucible can't price
-	Usage        map[string]map[string]float64 `yaml:"usage"`  // resource address → usage attribute → monthly amount
+	Prices       map[string]float64            `yaml:"prices"`     // resource type → USD per hour, for types Crucible can't price
+	Usage        map[string]map[string]float64 `yaml:"usage"`      // resource address → usage attribute → monthly amount
+	DirectSSH    bool                          `yaml:"direct_ssh"` // plain SSH from the workspace to the lab subnets on TCP 22 (never the node)
 }
 
 type Terminal struct {

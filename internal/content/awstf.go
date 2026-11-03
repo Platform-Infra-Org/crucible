@@ -26,6 +26,8 @@ variable "crucible_training" { type = string }
 variable "crucible_region" { type = string }
 variable "crucible_vpc_id" { type = string }           # "" when Crucible has no lab network (the default VPC)
 variable "crucible_subnet_ids" { type = list(string) } # [] when it has none
+variable "crucible_instance_profile" { type = string } # attach to instances for SSM sessions; "" on an older labs stack
+variable "crucible_ssh_source_cidr" { type = string }  # aws.direct_ssh: allow TCP 22 from this; "" otherwise
 
 provider "aws" {
   version = "6.67.0"
@@ -46,17 +48,26 @@ type LabNetwork struct {
 	Region    string
 	VPCID     string
 	SubnetIDs []string
+	// the labs stack's instance profile; the lab subnets' CIDRs and the node's address, for direct_ssh labs
+	InstanceProfile string
+	SubnetCIDRs     []string
+	NodeIP          string
 }
 
 // LabTFVars fills LabTF's variables. JSON, so no value can break out of its string. The network is "" and [] (never
 // null) when unset or in another region, so a module's `length(var.crucible_subnet_ids) > 0 ? … : null` falls back to
 // the default VPC.
-func LabTFVars(labID, team, training, region string, net LabNetwork) []byte {
+func LabTFVars(labID, team, training, region string, net LabNetwork, directSSH bool) []byte {
 	vpc, subnets := "", []string{}
 	if net.VPCID != "" && net.Region == region && len(net.SubnetIDs) > 0 {
 		vpc, subnets = net.VPCID, net.SubnetIDs
 	}
+	source := ""
+	if directSSH && net.NodeIP != "" {
+		source = net.NodeIP + "/32" // pod traffic leaves the node as the node's address
+	}
 	b, _ := json.Marshal(map[string]any{"crucible_lab_id": labID, "crucible_team": team,
-		"crucible_training": training, "crucible_region": region, "crucible_vpc_id": vpc, "crucible_subnet_ids": subnets})
+		"crucible_training": training, "crucible_region": region, "crucible_vpc_id": vpc, "crucible_subnet_ids": subnets,
+		"crucible_instance_profile": net.InstanceProfile, "crucible_ssh_source_cidr": source})
 	return b
 }

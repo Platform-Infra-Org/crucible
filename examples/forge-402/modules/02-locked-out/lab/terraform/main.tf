@@ -54,7 +54,7 @@ resource "aws_instance" "box" {
     cat >/etc/ssh/sshd_config.d/99-crucible.conf <<'EOF'
     Port 2222
     PasswordAuthentication no
-        EOF
+    EOF
     # Ubuntu 24.04 starts sshd from a socket on port 22; hand the port to sshd itself.
     systemctl disable --now ssh.socket || true
     systemctl enable ssh.service

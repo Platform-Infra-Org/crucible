@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** AWS labs that work on a lab EC2 machine's OS: SSM shells, opt-in plain SSH, the EC2 serial console (GRUB, Windows SAC), console screenshots, and a per-lab AWS console sign-in link.
+**Goal:** AWS labs that work on a lab EC2 machine's OS: SSM shells, opt-in plain SSH, the EC2 serial console (GRUB, Windows SAC), console screenshots, and a per-lab AWS console sign-in link (Part A); and three UI fixes: quiz question titles, action links, the Anvil's scoring view (Part B).
 
 **Architecture:** Every path is an AWS API call made with the lab's own tag-scoped session (ABAC on `crucible:lab-id`). The labs stack adds a shared, minimal lab instance role and the lab-role permissions; Crucible wires the instance profile into lab modules, opens TCP 22 in a lab's NetworkPolicy only when the lab sets `aws.direct_ssh` (never to the node), and mints console sign-in URLs. A new workspace image carries `ssh`, the Session Manager plugin and two helpers.
 
@@ -37,6 +37,8 @@
 - Spec §4.2 asks for a 15-minute session for the console link; the plan reuses `Cloud.AssumeLab` (one hour, the lab's own session tags) rather than adding a second assume path. The sign-in link itself still expires in 15 minutes, and the console session is no stronger than the workspace's credentials. Cost if wrong: a console tab stays signed in up to an hour instead of 15 minutes.
 - Checked in our account (spec §9): serial console access is already on and managed by the account, so the labs stack does not own it (spec §3.3 changed); il-central-1's serial endpoint is `ec2-serial-console.il-central-1.api.aws` with an RSA key `ssh-keyscan` can't read, so `lab-console` looks the endpoint up and pins the fingerprint from a handshake; `AssociateIamInstanceProfile` is dropped (launching with the profile suffices; it has no dry run).
 - The existing labs test `no IAM for lab roles` contradicts spec §3.2 (PassRole). Task 2 replaces it with "the only IAM action is `iam:PassRole`, on the lab instance role, to EC2".
+
+## Part A: OS-level AWS labs
 
 ---
 
@@ -1200,6 +1202,214 @@ Expected: no output from the loops; docs tests PASS.
 git commit -m "docs: OS-level AWS labs for operators: the instance role, serial console, workspace image, checks
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- docs/runbooks/aws.md docs/aws-deploy.html docs/deploy-architecture.html docs/test-guide.html docs/aws-primer.html
+```
+
+---
+
+## Part B: UI fixes (independent of Part A; may run first)
+
+Global for Part B: read `.claude/skills/crucible-ui/SKILL.md` before each task; colours from tokens only (`web/src/lib/contrast.test.ts`); check Forge, Anvil, Parchment and High Contrast, phone width and Calm forge with the dev server (`cd web && npx vite --port 5199 --strictPort` against a running local stack: `go run ./cmd/crucible local up --keycloak-port 8082`); every pattern added or changed lands in the skill file in the same commit.
+
+### Task 11: Quiz question titles sit inside their box
+
+Cause: each question is a `<fieldset class="question">` whose `<legend>` the browser draws on top of the fieldset's border, so the title cuts through the heated edge (`web/src/theme/app.css:292-293`, `web/src/pages/Quiz.tsx:17-20,122`).
+
+**Files:**
+- Modify: `web/src/theme/app.css` (the `.question` rules near line 292)
+- Modify: `e2e/tests/forge-101.spec.ts` (the quiz journey)
+- Modify: `.claude/skills/crucible-ui/SKILL.md` (Surface row: a question's title)
+
+- [ ] **Step 1: Write the failing layout check** in the forge-101 quiz test, once the quiz page shows its first question:
+
+```ts
+  // A question's title sits inside its box: the legend must not ride the fieldset's top border.
+  const q = page.locator('fieldset.question').first()
+  const [box, title] = await Promise.all([q.boundingBox(), q.locator('legend').boundingBox()])
+  expect(box && title && title.y).toBeGreaterThanOrEqual((box?.y ?? 0) + 8)
+```
+
+- [ ] **Step 2: Run it and see it fail**
+
+Run: `KEEP=1 KEYCLOAK_PORT=8082 make local-check` once, then iterate with `cd e2e && npx playwright test tests/forge-101.spec.ts` against the kept stack.
+Expected: FAIL: the legend's top is above the box's top edge plus 8px (it straddles the border).
+
+- [ ] **Step 3: Fix** (replace `.question legend { font-weight: 600; }`):
+
+```css
+/* A question's title sits inside its box: a floated, full-width legend leaves the fieldset's border alone (browsers
+   otherwise draw the legend over the top edge). The next element clears it. */
+.question > legend { float: left; width: 100%; padding: 0; margin: 0 0 0.6rem; font-weight: 600; line-height: 1.45; }
+.question > legend + * { clear: both; }
+.question > legend .muted { font-weight: 400; }
+```
+
+- [ ] **Step 4: Run it and see it pass**; screenshot a quiz in Forge, Anvil and High Contrast at desktop and 375px wide: the title is inside the box, the heated edge is unbroken, long prompts wrap inside.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "fix(web): quiz question titles sit inside their box instead of on its border
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- web/src/theme/app.css e2e/tests/forge-101.spec.ts .claude/skills/crucible-ui/SKILL.md
+```
+
+### Task 12: Action links: a stylish, fitting look for links that act like buttons
+
+Today a standalone link (*← Back to the training*, *Open*, *Register a training*, *Connect your laptop*, *Back to the Hearth*) is the browser default: accent colour plus underline (`a { color: var(--accent) }`, `app.css:5`). Links inside sentences stay links; links that stand alone become **action links**.
+
+The pattern:
+
+- `a.action` (also on `<Link className="action">`): `--text` colour, weight 600, no underline, a trailing `→` (`::after`, `content: "→" / ""` so screen readers skip it) that slides 3px on hover; a molten underline that grows from the left on hover and focus (a `background-image` gradient from `--accent` to `--accent-2`, `background-size` 0 → 100% over 0.2s, stopped by calm motion like every transition).
+- `a.action.back`: a leading `←` instead (`::before`), sliding left on hover. The `←` inside today's link text is removed.
+- In a table's action cell (`td.actions a`): the action look without the arrow.
+- Prose links (`p a`, `li a` that sit in text): keep an underline, quieter: `text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent)`, full on hover. An underline stays for links in text, because colour alone must not mark them (WCAG 1.4.1).
+
+**Files:**
+- Modify: `web/src/theme/app.css` (a new "Action links" block after `a.button-link`, line ~168; the base `a` rule)
+- Modify: every page and component with a standalone link: `pages/Lab.tsx:134,173`, `pages/Labs.tsx:28`, `pages/Team.tsx:365`, `pages/Anvil.tsx:120`, `pages/Quiz.tsx:195,217`, `pages/Training.tsx:24`, `pages/Reading.tsx:51`, `pages/Trainings.tsx:37`, `components/ErrorBox.tsx:11`, and any others the inventory in Step 1 finds
+- Create: `web/src/lib/links.test.ts`
+- Modify: `.claude/skills/crucible-ui/SKILL.md` (a new "Action link" row; Buttons row mentions it)
+
+- [ ] **Step 1: Inventory and write the failing test**
+
+List every link: `grep -rn '<Link\b\|<a ' web/src/pages web/src/components`. Classify each as **standalone** (the only content of its `p`, `td`, `li` or `div`, or a page's first child: a back link) or **in text**. `web/src/lib/links.test.ts` renders the pages that hold standalone links (with the mocks the existing page tests use) via `renderToStaticMarkup` and asserts: every back link has `class="action back"` and no `←` character in its text; Labs' *Open* and Trainings' *Open (…)* have `class="action"`; Team's *Register a training* has `class="action"`. Also assert `app.css` contains no `color: var(--accent)` on a bare `a {` rule without the quieter decoration (read the file with `fs.readFileSync` as `contrast.test.ts` does).
+
+- [ ] **Step 2: Run and see it fail**
+
+Run: `cd web && npx vitest run src/lib/links.test.ts`
+Expected: FAIL: no `action` class anywhere.
+
+- [ ] **Step 3: Implement**
+
+```css
+/* Action links: a link that stands alone (back, open, register) reads as an action, not a word in a sentence:
+   text colour, an arrow, and a molten underline that grows in on hover. Links inside sentences stay underlined. */
+a { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+a:hover { text-decoration-color: currentColor; }
+a.action { color: var(--text); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 0.35em;
+  padding-bottom: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)) no-repeat left bottom / 0 2px;
+  transition: background-size 0.2s ease, color 0.15s; }
+a.action::after { content: "→" / ""; transition: transform 0.2s ease; }
+a.action.back::after { content: none; }
+a.action.back::before { content: "←" / ""; transition: transform 0.2s ease; }
+a.action:hover, a.action:focus-visible { color: var(--accent); background-size: 100% 2px; }
+a.action:hover::after { transform: translateX(3px); }
+a.action.back:hover::before { transform: translateX(-3px); }
+td.actions a.action::after { content: none; }
+```
+
+Then put `className="action"` / `className="action back"` on each standalone link from the inventory and drop the `←` from back links' text (keep their wording: *Back to the training*). Lab.tsx:294's icon-only `←` link keeps its `aria-label` and gets `className="action back"` with empty text.
+
+Add the contrast pair `text` on `bg` (already present) and check `accent` on `surface` for hover; add pairs to `contrast.test.ts` only if a new combination appears.
+
+- [ ] **Step 4: Run and look**
+
+Run: `cd web && npm test && npx tsc -b && npm run lint && npm run build`.
+Screenshot the Hearth, a training, a lab lobby, Labs and the Anvil in Forge, Anvil, Parchment and High Contrast; hover and keyboard-focus a back link and an *Open*: the arrow slides, the molten underline grows; with Calm forge it simply appears.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add web/src/lib/links.test.ts
+git commit -m "feat(web): action links: standalone links read as actions with an arrow and a molten underline
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- web/src/theme/app.css web/src/lib/links.test.ts .claude/skills/crucible-ui/SKILL.md <every page and component changed>
+```
+
+### Task 13: The Anvil's scoring view, redesigned
+
+Today `Scoring` (`web/src/pages/Anvil.tsx:115-166`) is a flat column of `h2`s and raw text, with the score form at the very bottom after all the lab evidence. It becomes a page in the app's own patterns: a header, panels, and the decision beside the work.
+
+The layout:
+
+```
+← Back to the Anvil                                  (a.action.back, Task 12)
+Question from Dana Levi  ⚒ Journeyman               (h1)
+dana@… · forge-101 / 01-welcome · submitted 4 Nov 14:02   (dl.facts, one row on desktop)
+
+┌ Prompt ─────────────────────────────┐  ┌ Your score ────────────┐
+│ …                                   │  │ Points [  4 ] of 5      │
+└─────────────────────────────────────┘  │ Feedback [           ]  │
+┌ Answer key · only scorers see this ─┐  │ hint cost note          │
+│ rubric (accent edge, .rubric)       │  │ Scores are final…       │
+└─────────────────────────────────────┘  │ [Score]  (Return…)      │
+┌ Answer ─────────────────────────────┐  └─────────────────────────┘
+│ text, link, or files as chips       │    sticky on desktop
+└─────────────────────────────────────┘
+┌ Earlier attempts (if any) ──────────┐
+┌ Lab evidence (if a lab) ────────────┐
+┌ Admin reset (admins, questions) ────┐
+```
+
+- `.scoring-grid`: `grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem)`; the right column is `position: sticky; top: 1rem; align-self: start`. Below 900px one column, with **Your score** right after **Answer** (DOM order: header, prompt, key, answer, decision, history, evidence, reset; the grid places the decision in the right column on desktop with `grid-column: 2; grid-row: 1 / span 4`).
+- Each block is a `section.panel` with an `h2` (`aria-labelledby`). The rubric panel is titled *Answer key* with a muted *Only scorers see this* beside it, and keeps `.rubric`.
+- The decision is the **Decision** pattern: `form.stack.panel.decision` titled *Your score*, the points `input` with *of N* in one `.row`, the feedback `textarea`, the two notes as `.hint`, then `.row` with `button.primary` *Score* and `button.ghost` *Return for rework*. Enter in the points field submits *Score* (the form's submit). A decided submission shows the panel as *Scored* with who and the feedback, read-only.
+- Files: `ul.chips` of attachment chips (`a.chip` with the file name and size); a link answer is an `a.action` that opens in a new tab and says so (`title`).
+- Earlier attempts: `ol.attempts`, newest first, each with a `.badge` for its status (*Scored*, *Returned*) in words, who, when, and the feedback in `.pre`.
+- Lab evidence keeps its content, inside the panel structure.
+
+**Files:**
+- Modify: `web/src/pages/Anvil.tsx` (`Scoring` and its subcomponents)
+- Modify: `web/src/pages/Anvil.test.tsx`
+- Modify: `web/src/theme/app.css` (an "Anvil scoring" block next to `.score-form`; remove `.score-form` if unused)
+- Modify: `e2e/tests/scoring.spec.ts` (selectors only, if the redesign moves them)
+- Modify: `.claude/skills/crucible-ui/SKILL.md` (a "Scoring view" row: work on the left, the decision sticky on the right)
+
+- [ ] **Step 1: Write the failing render tests** in `Anvil.test.tsx` (same mocks as the file's existing tests), for a pending question with a rubric, a link answer, two files and one earlier attempt:
+
+```tsx
+  it('lays the scoring view out as panels with the decision beside the work', () => {
+    const html = renderScoring(pendingQuestion) // the file's existing render helper, or renderToStaticMarkup(<Scoring …/>)
+    expect(html).toContain('class="scoring-grid"')
+    for (const h of ['Prompt', 'Answer key', 'Answer', 'Your score', 'Earlier attempts']) expect(html).toContain(`>${h}</h2>`)
+    expect(html).toContain('Only scorers see this')
+    expect(html).toMatch(/<form class="stack panel decision"/)
+    expect(html.indexOf('Your score')).toBeLessThan(html.indexOf('Earlier attempts')) // decision right after the answer
+    expect(html).toContain('class="chips attachments"')
+    expect(html).toContain('class="action back"')
+  })
+  it('shows a decided submission read-only', () => {
+    const html = renderScoring({ ...pendingQuestion, status: 'scored', scored_by: 'senior@example.com', points: 4 })
+    expect(html).not.toContain('<textarea')
+    expect(html).toContain('Scored')
+    expect(html).toContain('senior@example.com')
+  })
+```
+
+- [ ] **Step 2: Run and see them fail**
+
+Run: `cd web && npx vitest run src/pages/Anvil.test.tsx`
+Expected: FAIL: no `scoring-grid`, no *Your score*.
+
+- [ ] **Step 3: Implement** the layout above in `Scoring`, keeping every existing behaviour: `validPoints`, the hint-cost note, *Scores are final*, `decide('score' | 'return')`, the history, `LabEvidenceView`, `ResetPanel`, the `data-testid`s (`rubric`, `answer`). CSS:
+
+```css
+/* Anvil scoring: the work on the left, the decision sticky on the right; one column on narrow screens. */
+.scoring-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem); gap: 1rem; align-items: start; }
+.scoring-grid > .decision { grid-column: 2; grid-row: 1 / span 4; position: sticky; top: 1rem; }
+.scoring-grid > :not(.decision) { grid-column: 1; }
+.scoring-grid .panel { margin: 0; }
+.decision .points { display: flex; align-items: baseline; gap: 0.5rem; }
+.decision .points input { width: 6rem; }
+.chips.attachments a.chip { text-decoration: none; color: var(--text); }
+ol.attempts { list-style: none; padding: 0; display: grid; gap: 0.5rem; }
+@media (max-width: 900px) {
+  .scoring-grid { grid-template-columns: minmax(0, 1fr); }
+  .scoring-grid > .decision { grid-column: 1; grid-row: auto; position: static; }
+}
+```
+
+- [ ] **Step 4: Run and look**
+
+Run: `cd web && npm test && npx tsc -b && npm run lint && npm run build`; `cd e2e && npx playwright test tests/scoring.spec.ts` against the kept local stack.
+Screenshot a pending question, a pending upload with files, a lab review with evidence and a scored item, in Forge, Anvil, Parchment and High Contrast, at desktop and 375px: nothing overflows, the decision stays in view while scrolling on desktop, and sits after the answer on a phone.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(web): the Anvil's scoring view: panels, the answer key marked, the decision sticky beside the work
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- web/src/pages/Anvil.tsx web/src/pages/Anvil.test.tsx web/src/theme/app.css e2e/tests/scoring.spec.ts .claude/skills/crucible-ui/SKILL.md
 ```
 
 ---

@@ -653,7 +653,9 @@ func egressHosts(region string, extra ...string) []string {
 		"https://registry.terraform.io", "https://releases.hashicorp.com", "https://iam.amazonaws.com",
 		"https://ec2." + region + ".amazonaws.com", "https://tagging." + region + ".amazonaws.com", "https://cloudtrail." + region + ".amazonaws.com",
 		// OS-level labs: the console link, and EC2 Instance Connect key pushes
-		"https://signin.aws.amazon.com", "https://ec2-instance-connect." + region + ".amazonaws.com"}
+		"https://signin.aws.amazon.com", "https://ec2-instance-connect." + region + ".amazonaws.com",
+		// the workspace image (ghcr.io and its blob host), pulled by the lab pod's Docker through the node
+		"https://ghcr.io", "https://pkg-containers.githubusercontent.com"}
 	for _, h := range extra {
 		hosts = append(hosts, "https://"+h)
 	}

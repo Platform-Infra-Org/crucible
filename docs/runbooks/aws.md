@@ -32,7 +32,8 @@ an Elastic IP, a DNS record or a certificate.
    (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`), plus the OS-level lab hosts:
    `signin.aws.amazon.com` (console link), `ec2-instance-connect.<region>.amazonaws.com` (key pushes) and, over **TCP 22**, the
    region's EC2 Serial Console endpoint (`ec2-serial-console.il-central-1.api.aws` here; the name differs by region generation, so
-   status looks it up in a table and checks only regions in it). A blocked `host:22` line means `lab-console` can't connect from lab pods. The git host is not tested: check it by hand.
+   status looks it up in a table and checks only regions in it). `ghcr.io` and `pkg-containers.githubusercontent.com` (the workspace image's registry and blob host; the lab pod's Docker pulls it
+   through the node). A blocked `host:22` line means `lab-console` can't connect from lab pods. The git host is not tested: check it by hand.
 5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
    sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
@@ -435,8 +436,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Docke
 docker buildx imagetools inspect ghcr.io/platform-infra-org/crucible-workspace:<version>   # note the Digest: sha256:...
 ```
 Then in `deploy/aws/main/crucible.tfvars` set `workspace_image = "ghcr.io/platform-infra-org/crucible-workspace@sha256:<digest>"`
-(a digest is required; a tag is refused) and run `crucible aws up`. Check the digest and the node can pull it: the node
-needs `ghcr.io` (and the registry's blob host) in the egress list. The serial console endpoints and host-key fingerprints are baked
+(a digest is required; a tag is refused) and run `crucible aws up`. `crucible aws status` must show no blocked host (it checks `ghcr.io` and `pkg-containers.githubusercontent.com`, which the node needs to pull the image). The serial console endpoints and host-key fingerprints are baked
 into the image from `deploy/workspace/serial-console-endpoints`; `go test ./internal/awsops` fails if that file and the table
 `crucible aws status` uses disagree.
 
@@ -444,7 +444,7 @@ into the image from `deploy/workspace/serial-console-endpoints`; `go test ./inte
 `AWS-StartSSHSession`, `ssm send-command`); plain SSH from the workspace (`lab-ssh --direct`, only for labs that set
 `aws.direct_ssh`); and the EC2 Serial Console (`lab-console`, or the console page). All use keys valid for one minute
 (`ec2-instance-connect`). The AWS console button on a running AWS lab signs the trainee in with the lab's own session (the lab
-role's permissions only, valid until the session ends, at most an hour).
+role's permissions only, a fresh lab session per press, so it lasts an hour from the click; one link a minute per lab).
 
 *What spec §9 already confirmed in our account (2026-11-04, read-only and dry run).* Serial console access is on in il-central-1;
 its endpoint resolves and answers on TCP 22 from a laptop, with the RSA host key AWS publishes; `ec2-instance-connect`, `ssm-guiconnect`,
@@ -473,8 +473,8 @@ are **not** granted, so a trainee cannot discover other labs' commands. `SendCom
    `aws ssm describe-sessions --state Active` and `aws ssm terminate-session --session-id <that id>`: it works (the id starts with
    the session's `${aws:userid}`). Terminating a session id that is not the lab's own must be denied.
 5. **Console sign-in.** Press the AWS console button on a running AWS lab: a new tab opens signed in as
-   `crucible-lab-<id>`; the account's other resources are limited by the lab role; the session ends within an hour (a role chained from
-   the node role caps at one hour). The link works once and expires in 15 minutes.
+   `crucible-lab-<id>`; the account's other resources are limited by the lab role; the console session ends an hour after the click (a role chained from
+   the node role caps at one hour; each press makes a fresh lab session). The sign-in link works once, within 15 minutes, and a second press within a minute for the same lab is refused.
 6. **Serial endpoint reachable.** `crucible aws status` must not list `ec2-serial-console.il-central-1.api.aws:22` under blocked
    hosts (egress line says every host is reachable). If it does, the firewall blocks TCP 22 to it and `lab-console` will hang.
 

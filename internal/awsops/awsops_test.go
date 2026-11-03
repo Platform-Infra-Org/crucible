@@ -402,7 +402,7 @@ func TestUpWithAnOlderLabsStack(t *testing.T) {
 
 func TestEgressCheckCoversOSLabHosts(t *testing.T) {
 	hosts := egressHosts("il-central-1")
-	for _, want := range []string{"https://signin.aws.amazon.com", "https://ec2-instance-connect.il-central-1.amazonaws.com"} {
+	for _, want := range []string{"https://signin.aws.amazon.com", "https://ec2-instance-connect.il-central-1.amazonaws.com", "https://ghcr.io", "https://pkg-containers.githubusercontent.com"} {
 		if !slices.Contains(hosts, want) {
 			t.Errorf("missing %s", want)
 		}

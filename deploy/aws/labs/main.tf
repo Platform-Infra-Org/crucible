@@ -331,6 +331,38 @@ resource "aws_iam_role_policy" "plan" {
   })
 }
 
+# Every lab's instances share this role: the SSM agent's channel and Run Command, nothing else. Written out rather than
+# AWS's managed SSM core policy, which grants ssm:GetParameter(s): root on a lab instance could then read /<name>/*
+# (the secret key, database password, OIDC secret) in this account.
+resource "aws_iam_role" "lab_instance" {
+  name = "${var.name}-lab-instance"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "lab_instance" {
+  role = aws_iam_role.lab_instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "SessionManagerAgent", Effect = "Allow", Resource = "*",
+        Action = ["ssm:UpdateInstanceInformation", "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"] },
+      { Sid = "RunCommandAgent", Effect = "Allow", Resource = "*",
+        Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"] },
+      { Sid = "NeverCrucibleParameters", Effect = "Deny", Action = "ssm:GetParameter*", Resource = "arn:aws:ssm:*:*:parameter/${var.name}/*" },
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "lab_instance" {
+  name = "${var.name}-lab-instance"
+  role = aws_iam_role.lab_instance.name
+}
+
 # Billing export (free): CUR 2.0 as daily gzip CSV, resource ids and tags included.
 resource "aws_s3_bucket" "exports" {
   bucket = "${var.name}-${local.account}-labexports"
@@ -447,3 +479,6 @@ output "regions" { value = join(",", local.regions) }
 # labs-init passes these back when re-run without --budget-usd/--budget-email, so a re-run keeps the budget.
 output "budget_monthly_usd" { value = var.budget_monthly_usd }
 output "budget_emails" { value = var.budget_emails }
+output "lab_instance_profile" { value = aws_iam_instance_profile.lab_instance.name }
+output "lab_instance_role_arn" { value = aws_iam_role.lab_instance.arn }
+output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : data.aws_subnet.lab[id].cidr_block]) }

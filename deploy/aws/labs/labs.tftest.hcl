@@ -9,7 +9,10 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:iam::444455556666:role/crucible-lab" }
   }
   mock_data "aws_subnet" {
-    defaults = { vpc_id = "vpc-0abc" }
+    defaults = { vpc_id = "vpc-0abc", cidr_block = "10.2.129.0/24" }
+  }
+  mock_resource "aws_iam_instance_profile" {
+    defaults = { arn = "arn:aws:iam::444455556666:instance-profile/crucible-lab-instance" }
   }
 }
 
@@ -358,4 +361,53 @@ run "lab_subnets_must_be_in_the_vpc" {
     lab_subnet_ids = ["subnet-01"]
   }
   expect_failures = [data.aws_subnet.lab]
+}
+
+run "lab_instances_get_a_minimal_ssm_role" {
+  command = apply
+
+  assert {
+    condition     = aws_iam_instance_profile.lab_instance.name == "crucible-lab-instance" && output.lab_instance_profile == "crucible-lab-instance"
+    error_message = "one shared instance profile, named for the stack"
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.lab_instance.assume_role_policy).Statement[0].Principal.Service == "ec2.amazonaws.com"
+    error_message = "only EC2 assumes the lab instance role"
+  }
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : startswith(a, "ssm:GetParameter") || a == "ssm:*"]) if s.Effect == "Allow"])
+    error_message = "lab instances must never read SSM parameters (Crucible's secrets live there)"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Effect == "Deny" && one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Resource == "arn:aws:ssm:*:*:parameter/crucible/*"
+    error_message = "an explicit deny on /<name>/* parameters"
+  }
+  assert {
+    condition     = !strcontains(file("${path.module}/main.tf"), "AmazonSSMManagedInstanceCore")
+    error_message = "no managed SSM policy (AmazonSSMManagedInstanceCore grants ssm:GetParameter)"
+  }
+  assert {
+    condition     = !strcontains(file("${path.module}/main.tf"), "aws_ec2_serial_console_access")
+    error_message = "the account's serial console setting is not Crucible's to manage (destroy would turn it off for everyone)"
+  }
+}
+
+run "lab_subnet_cidrs_reach_the_outputs" {
+  command = apply
+  variables {
+    lab_vpc_id     = "vpc-0abc"
+    lab_subnet_ids = ["subnet-0a", "subnet-0b"]
+  }
+  assert {
+    condition     = length(split(",", output.lab_subnet_cidrs)) == 2
+    error_message = "one CIDR per lab subnet, comma-joined"
+  }
+}
+
+run "no_lab_subnet_cidrs_by_default" {
+  command = plan
+  assert {
+    condition     = output.lab_subnet_cidrs == ""
+    error_message = "no lab network, no CIDRs"
+  }
 }

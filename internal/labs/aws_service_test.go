@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
 )
@@ -419,5 +423,66 @@ func TestStuckDestroyOfAFailedProvisionEndsFailed(t *testing.T) {
 	}
 	if st != Failed || errText != "apply: quota exceeded" {
 		t.Fatalf("state %s, error %q", st, errText)
+	}
+}
+
+func TestConsoleLinkForARunningAWSLab(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	_, cloud := f.withAWS(t)
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-401", "01-cloud-heat", StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+
+	var gotSession string
+	fed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSession = r.URL.Query().Get("Session")
+		_, _ = w.Write([]byte(`{"SigninToken":"tok123"}`))
+	}))
+	defer fed.Close()
+	// the real runner takes over the "aws" runtime once the lab is ready; its federation endpoint is the test server
+	f.s.Runners["aws"] = &AWSRunner{Cloud: cloud, SigninEndpoint: fed.URL, HTTP: fed.Client(), Issuer: "https://crucible.example.com", Now: f.clk.Now}
+
+	if _, err := f.s.Console(ctx, f.other, v.ID); err == nil || !strings.Contains(err.Error(), "lab not found") {
+		t.Fatalf("someone else's lab: %v", err)
+	}
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.u)))
+		})
+	})
+	f.s.Routes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("POST", "/api/labs/"+v.ID+"/console", strings.NewReader("{}")))
+	var out ConsoleLink
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || !strings.HasPrefix(out.URL, fed.URL) || !strings.Contains(out.URL, "SigninToken=") {
+		t.Fatalf("console: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(gotSession, "ASIAFAKE") || !strings.Contains(gotSession, "fake-token-"+v.ID) {
+		t.Fatalf("the federation endpoint got the lab's session: %q", gotSession)
+	}
+	var detail string
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*), coalesce(max(detail::text), '') FROM audit_log WHERE action = 'lab.console' AND target = $1`, v.ID).Scan(&n, &detail)
+	if n != 1 || strings.Contains(detail, "tok123") || strings.Contains(detail, "SigninToken") {
+		t.Fatalf("audit: %d %s", n, detail)
+	}
+	if _, err := f.s.Console(ctx, f.u, v.ID); err == nil || !strings.Contains(err.Error(), "one console link a minute") {
+		t.Fatalf("a second link within a minute: %v", err)
+	}
+	f.clk.Add(2 * time.Minute)
+	if _, err := f.s.Console(ctx, f.u, v.ID); err != nil {
+		t.Fatalf("a minute later: %v", err)
+	}
+	// a lab that is not running AWS has no console
+	in := f.start(t)
+	if _, err := f.s.Console(ctx, f.u, in.ID); err == nil || !strings.Contains(err.Error(), "only a running AWS lab") {
+		t.Fatalf("local lab: %v", err)
 	}
 }

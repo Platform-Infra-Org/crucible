@@ -117,6 +117,10 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Activity(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)
 	})
+	r.Post("/api/labs/{id}/console", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Console(r.Context(), user(r), p(r, "id"))
+		reply(w, v, err)
+	})
 	r.Post("/api/labs/{id}/extend", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.Extend(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)

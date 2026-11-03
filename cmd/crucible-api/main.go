@@ -265,7 +265,7 @@ func run(ctx context.Context) error {
 	case "1", "dryrun":
 		ar := &labs.AWSRunner{Cluster: kube, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
 			WorkspaceImage: env("CRUCIBLE_AWS_WORKSPACE_IMAGE", labs.DefaultWorkspaceImage),
-			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage)}
+			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage), Issuer: public}
 		ar.Network = content.LabNetwork{Region: ar.StateRegion, VPCID: os.Getenv("CRUCIBLE_AWS_LAB_VPC_ID"),
 			SubnetIDs: commaList(os.Getenv("CRUCIBLE_AWS_LAB_SUBNET_IDS"))} // the labs stack's own region
 		for r := range strings.SplitSeq(env("CRUCIBLE_AWS_LAB_REGIONS", "eu-west-1"), ",") {

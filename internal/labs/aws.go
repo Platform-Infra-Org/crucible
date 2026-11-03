@@ -506,6 +506,9 @@ var errConsoleTooSoon = apperr.Wrap(apperr.Conflict, "one console link a minute:
 // ConsoleURL mints a console sign-in link for a running lab, from a fresh session with the lab's tags (the mounted
 // Secret is never read back). The link and token are never logged.
 func (a *AWSRunner) ConsoleURL(ctx context.Context, inst *Instance, region string) (string, error) {
+	if a.DryRun != nil {
+		return "", apperr.Wrap(apperr.Unavailable, "the AWS console isn't available in dry-run mode")
+	}
 	a.mu.Lock()
 	if a.consoleAt == nil {
 		a.consoleAt = map[string]time.Time{}
@@ -516,9 +519,16 @@ func (a *AWSRunner) ConsoleURL(ctx context.Context, inst *Instance, region strin
 	}
 	a.consoleAt[inst.ID] = a.now()
 	a.mu.Unlock()
-	if a.DryRun != nil {
-		return "", apperr.Wrap(apperr.Unavailable, "the AWS console isn't available in dry-run mode")
+	link, err := a.consoleLink(ctx, inst, region)
+	if err != nil {
+		a.mu.Lock()
+		delete(a.consoleAt, inst.ID) // a failed attempt does not use up the minute
+		a.mu.Unlock()
 	}
+	return link, err
+}
+
+func (a *AWSRunner) consoleLink(ctx context.Context, inst *Instance, region string) (string, error) {
 	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
 	if err != nil {
 		return "", fmt.Errorf("getting lab credentials: %w", err)

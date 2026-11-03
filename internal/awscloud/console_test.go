@@ -35,3 +35,14 @@ func TestConsoleURL(t *testing.T) {
 		t.Fatalf("a refused token is an error that never echoes the secret: %v", err)
 	}
 }
+
+func TestConsoleURLTransportErrorNeverEchoesTheSecret(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	c := Credentials{AccessKeyID: "ASIA1", SecretAccessKey: "sk-SECRET-123", SessionToken: "st-SECRET-456"}
+	hc, ep := srv.Client(), srv.URL
+	srv.Close()
+	_, err := ConsoleURL(context.Background(), hc, ep, c, "i", "d")
+	if err == nil || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "Session") {
+		t.Fatalf("a transport error must not carry the request URL: %v", err)
+	}
+}

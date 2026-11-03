@@ -617,25 +617,28 @@ func TestSweepDeletesLeakedPlanObjects(t *testing.T) {
 	}
 }
 
-func provisionDirectSSH(t *testing.T, direct bool, nodeIP string) (*fake.Clientset, error) {
+func provisionDirectSSH(t *testing.T, direct bool, nodeIP string) (*fake.Clientset, *awscloud.Fake, error) {
 	t.Helper()
 	cs := fake.NewClientset()
 	kubelet(cs, corev1.PodSucceeded, "Apply complete!")
-	a, _, _ := testAWS(cs)
+	a, cloud, _ := testAWS(cs)
 	a.Network = content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: nodeIP}
 	lab := *cloudHeat(t)
 	aws := *lab.AWS
 	aws.DirectSSH = direct
 	lab.AWS = &aws
-	return cs, a.ProvisionLab(context.Background(), &Instance{ID: testID, Team: "forge", Training: "forge-401"}, &lab)
+	return cs, cloud, a.ProvisionLab(context.Background(), &Instance{ID: testID, Team: "forge", Training: "forge-401"}, &lab)
 }
 
 func TestAWSDirectSSHAddsTheSSHEgress(t *testing.T) {
-	cs, err := provisionDirectSSH(t, true, "10.2.129.17")
+	cs, _, err := provisionDirectSSH(t, true, "10.2.129.17")
 	if err != nil {
 		t.Fatal(err)
 	}
-	np, _ := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	np, err := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	want, _ := sshEgress(content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "10.2.129.17"})
 	if len(np.Spec.Egress) != 3 || !reflect.DeepEqual(np.Spec.Egress[2], want) {
 		t.Fatalf("dns, internet, ssh: %+v", np.Spec.Egress)
@@ -643,21 +646,27 @@ func TestAWSDirectSSHAddsTheSSHEgress(t *testing.T) {
 }
 
 func TestAWSDirectSSHWithoutNetworkFailsClosed(t *testing.T) {
-	cs, err := provisionDirectSSH(t, true, "")
+	cs, cloud, err := provisionDirectSSH(t, true, "")
 	if err == nil || !strings.Contains(err.Error(), "direct_ssh") {
 		t.Fatalf("want a direct_ssh error: %v", err)
 	}
 	if got := steps(cs, "create"); len(got) != 0 {
 		t.Fatalf("nothing may be created: %v", got)
 	}
+	if len(cloud.Assumed()) != 0 {
+		t.Fatal("a refused lab never fetches credentials")
+	}
 }
 
 func TestAWSWithoutDirectSSHKeepsTwoEgressRules(t *testing.T) {
-	cs, err := provisionDirectSSH(t, false, "")
+	cs, _, err := provisionDirectSSH(t, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	np, _ := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	np, err := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(np.Spec.Egress) != 2 {
 		t.Fatalf("today's policy: %+v", np.Spec.Egress)
 	}

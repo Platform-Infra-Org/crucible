@@ -229,6 +229,14 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 		return err
 	}
 	defer release()
+	var extra []networkingv1.NetworkPolicyEgressRule
+	if lab.AWS.DirectSSH {
+		r, err := sshEgress(a.Network)
+		if err != nil {
+			return err
+		}
+		extra = append(extra, r)
+	}
 	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
 	if err != nil {
 		return fmt.Errorf("getting lab credentials: %w", err)
@@ -240,14 +248,6 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 	bundle, err := BundleWith(lab.Dir, map[string][]byte{workspaceCompose: workspaceComposeFile(a.WorkspaceImage, lab.AWS.Region, inst.ID)})
 	if err != nil {
 		return err
-	}
-	var extra []networkingv1.NetworkPolicyEgressRule
-	if lab.AWS.DirectSSH {
-		r, err := sshEgress(a.Network)
-		if err != nil {
-			return err
-		}
-		extra = append(extra, r)
 	}
 	setup := func(ns string) error {
 		if err := a.putCreds(ctx, inst.ID, creds); err != nil {

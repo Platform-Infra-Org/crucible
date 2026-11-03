@@ -5,10 +5,11 @@ import (
 	"slices"
 	"testing"
 
-	"crucible/internal/content"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"crucible/internal/content"
 )
 
 const testID = "0123456789ab"
@@ -163,9 +164,21 @@ func TestSSHEgressExceptsTheNode(t *testing.T) {
 	}
 	for _, bad := range []content.LabNetwork{{NodeIP: "10.2.129.17"}, {SubnetCIDRs: []string{"10.2.129.0/24"}},
 		{SubnetCIDRs: []string{"not-a-cidr"}, NodeIP: "10.2.129.17"}, {SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "nope"},
-		{SubnetCIDRs: []string{"0.0.0.0/0"}, NodeIP: "10.2.129.17"}} {
+		{SubnetCIDRs: []string{"0.0.0.0/0"}, NodeIP: "10.2.129.17"},
+		{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "fd00::1"}, {SubnetCIDRs: []string{"fd00::/64"}, NodeIP: "10.2.129.17"},
+		{SubnetCIDRs: []string{"10.2.129.17/32"}, NodeIP: "10.2.129.17"}, {SubnetCIDRs: []string{"10.2.129.0/29"}, NodeIP: "10.2.129.1"}} {
 		if _, err := sshEgress(bad); err == nil {
 			t.Errorf("%+v: want an error (fail closed)", bad)
 		}
+	}
+}
+
+func TestSSHEgressCanonicalises(t *testing.T) {
+	r, err := sshEgress(content.LabNetwork{SubnetCIDRs: []string{"10.2.129.7/24"}, NodeIP: "::ffff:10.2.129.17"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.To) != 1 || r.To[0].IPBlock.CIDR != "10.2.129.0/24" || !slices.Equal(r.To[0].IPBlock.Except, []string{"10.2.129.17/32"}) {
+		t.Fatalf("masked CIDR, mapped node address unmapped and excepted: %+v", r.To)
 	}
 }

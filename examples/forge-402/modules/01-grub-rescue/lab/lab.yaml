@@ -1,0 +1,15 @@
+id: grub-rescue
+runtime: aws
+ttl: 2h
+idle_timeout: 45m
+task_order: free
+terminals:
+  - { name: workspace, service: workspace }
+tasks:
+  - id: t1-boot
+    instructions: tasks/01-boot.md
+    check: { script: checks/01-boot.sh, run_in: workspace, timeout: 120s }
+    points: 3
+aws:
+  region: eu-west-1
+  max_hourly_usd: 0.05

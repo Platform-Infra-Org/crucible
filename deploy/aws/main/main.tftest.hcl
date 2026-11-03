@@ -199,7 +199,7 @@ run "aws_labs_wiring" {
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "", instanceProfile = "", subnetCidrs = "" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
@@ -465,5 +465,52 @@ run "lab_network_reaches_helm" {
   assert {
     condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.vpcId == "vpc-0abc" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.subnetIds == "subnet-01,subnet-02"
     error_message = "the lab network reaches the Helm values"
+  }
+}
+
+run "os_lab_inputs_reach_helm" {
+  command = plan
+  variables {
+    lab_role_arn         = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn     = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket     = "crucible-444455556666-labstate"
+    lab_state_region     = "il-central-1"
+    lab_plan_role_arn    = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket    = "crucible-444455556666-exports"
+    lab_export_name      = "crucible-labs"
+    lab_instance_profile = "crucible-lab-instance"
+    lab_subnet_cidrs     = "10.2.129.0/24"
+    workspace_image      = "ghcr.io/platform-infra-org/crucible-workspace@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.instanceProfile == "crucible-lab-instance" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.subnetCidrs == "10.2.129.0/24" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.workspaceImage == var.workspace_image
+    error_message = "the lab instance profile, subnet CIDRs and workspace image reach the Helm values"
+  }
+}
+
+run "workspace_image_must_be_a_digest" {
+  command = plan
+  variables {
+    workspace_image = "ghcr.io/x/y:latest"
+  }
+  expect_failures = [var.workspace_image]
+}
+
+run "no_workspace_image_keeps_the_chart_default" {
+  command = plan
+  variables {
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "il-central-1"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_name   = "crucible-labs"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(aws_ssm_parameter.helm_values.value).awsLabs), "workspaceImage")
+    error_message = "an empty workspace_image leaves the chart's default"
   }
 }

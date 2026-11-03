@@ -186,13 +186,20 @@ resource "aws_s3_bucket_policy" "state" {
   })
 }
 
-# The ceiling for every lab session: EC2 and S3 only, allowed regions only, small instances only.
+# The ceiling for every lab session: EC2 and S3, plus SSM sessions, Instance Connect keys, Fleet Manager (ssm-guiconnect)
+# and passing the lab instance role; allowed regions only, small instances only.
 resource "aws_iam_policy" "boundary" {
   name = "${var.name}-lab-boundary"
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources"], Resource = "*" },
+      { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources", "ssm:*", "ssm-guiconnect:*", "ec2-instance-connect:*"], Resource = "*" },
+      { Sid = "PassOnlyTheLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn },
+      # Defence in depth: only the shell, ssh and local port-forward documents (ToRemoteHost is denied). The real fence against
+      # reaching the node or Postgres from a lab instance is the network (security groups).
+      { Sid = "OnlyLabSessionDocuments", Effect = "Deny", Action = "ssm:StartSession",
+        NotResource = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ssm:*::document/AWS-StartSSHSession",
+      "arn:aws:ssm:*::document/AWS-StartPortForwardingSession", "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"] },
       { Sid = "OnlyLabRegions", Effect = "Deny", NotAction = ["sts:GetCallerIdentity", "s3:ListAllMyBuckets", "s3:GetBucketLocation"],
       Resource = "*", Condition = { StringNotEquals = { "aws:RequestedRegion" = local.regions } } },
       { Sid = "SmallInstancesOnly", Effect = "Deny", Action = "ec2:RunInstances", Resource = "arn:aws:ec2:*:*:instance/*",
@@ -242,6 +249,29 @@ resource "aws_iam_role_policy" "lab" {
       Condition = { StringEquals = { "aws:RequestTag/crucible:lab-id" = local.lab }, "ForAnyValue:StringEquals" = { "aws:TagKeys" = ["crucible:lab-id"] } } },
       { Sid = "LaunchFromShared", Effect = "Allow", Action = "ec2:RunInstances",
       Resource = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:key-pair/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*:*:network-interface/*"] },
+      { Sid = "PassLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn,
+      Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } },
+      { Sid = "SessionsToOwn", Effect = "Allow", Action = "ssm:StartSession", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "SessionDocuments", Effect = "Allow", Action = "ssm:StartSession",
+        Resource = ["arn:aws:ssm:*::document/AWS-StartSSHSession", "arn:aws:ssm:*::document/AWS-StartPortForwardingSession",
+      "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"] },
+      { Sid = "OwnSessionsOnly", Effect = "Allow", Action = ["ssm:TerminateSession", "ssm:ResumeSession"],
+      Resource = ["arn:aws:ssm:*:*:session/$${aws:userid}-*"] },
+      { Sid    = "KeysToOwn", Effect = "Allow", Resource = "arn:aws:ec2:*:*:instance/*",
+        Action = ["ec2-instance-connect:SendSSHPublicKey", "ec2-instance-connect:SendSerialConsoleSSHPublicKey"],
+      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
+      { Sid    = "ConsoleOfOwn", Effect = "Allow", Resource = "arn:aws:ec2:*:*:instance/*",
+        Action = ["ec2:GetConsoleScreenshot", "ec2:GetConsoleOutput"],
+      Condition = { StringEquals = { "aws:ResourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "CommandsToOwn", Effect = "Allow", Action = "ssm:SendCommand", Resource = "arn:aws:ec2:*:*:instance/*",
+      Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
+      { Sid = "CommandDocuments", Effect = "Allow", Action = "ssm:SendCommand",
+      Resource = ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*::document/AWS-RunPowerShellScript"] },
+      { Sid = "ConsoleAndFleetManager", Effect = "Allow", Resource = "*",
+        Action = ["ssm:GetCommandInvocation", "ssm:DescribeInstanceInformation",
+          "ssm:GetConnectionStatus", "ssm:DescribeSessions", "ec2:GetSerialConsoleAccessStatus",
+      "ssm-guiconnect:StartConnection", "ssm-guiconnect:GetConnection", "ssm-guiconnect:CancelConnection"] },
       { Sid = "CreateInShared", Effect = "Allow", Action = "ec2:CreateSecurityGroup", Resource = "arn:aws:ec2:*:*:vpc/*" },
       # Another lab's security groups and ENIs are off limits.
       { Sid      = "NotOtherLabsNetwork", Effect = "Deny", Action = ["ec2:RunInstances", "ec2:CreateNetworkInterface", "ec2:AttachNetworkInterface"],
@@ -329,6 +359,39 @@ resource "aws_iam_role_policy" "plan" {
     Statement = [{ Effect = "Allow", Resource = "*",
     Action = ["ec2:Describe*", "s3:GetBucket*", "s3:ListAllMyBuckets"] }]
   })
+}
+
+# Every lab's instances share this role: the SSM agent's channel and Run Command, nothing else. Written out rather than
+# AWS's managed SSM core policy, which grants ssm:GetParameter(s): root on a lab instance could then read /<name>/*
+# (the secret key, database password, OIDC secret) in this account.
+resource "aws_iam_role" "lab_instance" {
+  name = "${var.name}-lab-instance"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "lab_instance" {
+  role = aws_iam_role.lab_instance.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Sid = "SessionManagerAgent", Effect = "Allow", Resource = "*",
+        Action = ["ssm:UpdateInstanceInformation", "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"] },
+      { Sid = "RunCommandAgent", Effect = "Allow", Resource = "*",
+        Action = ["ec2messages:AcknowledgeMessage", "ec2messages:DeleteMessage", "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint", "ec2messages:GetMessages", "ec2messages:SendReply"] },
+      { Sid = "NeverCrucibleParameters", Effect = "Deny", Action = "ssm:GetParameter*",
+      Resource = ["arn:aws:ssm:*:*:parameter/${var.name}", "arn:aws:ssm:*:*:parameter/${var.name}/*"] },
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "lab_instance" {
+  name = "${var.name}-lab-instance"
+  role = aws_iam_role.lab_instance.name
 }
 
 # Billing export (free): CUR 2.0 as daily gzip CSV, resource ids and tags included.
@@ -447,3 +510,6 @@ output "regions" { value = join(",", local.regions) }
 # labs-init passes these back when re-run without --budget-usd/--budget-email, so a re-run keeps the budget.
 output "budget_monthly_usd" { value = var.budget_monthly_usd }
 output "budget_emails" { value = var.budget_emails }
+output "lab_instance_profile" { value = aws_iam_instance_profile.lab_instance.name }
+output "lab_instance_role_arn" { value = aws_iam_role.lab_instance.arn }
+output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : data.aws_subnet.lab[id].cidr_block]) }

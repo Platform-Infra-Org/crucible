@@ -105,6 +105,10 @@ spec:
             - { name: CRUCIBLE_AWS_EXPORT_NAME, value: {{ .Values.awsLabs.exportName | quote }} }
             - { name: CRUCIBLE_AWS_LAB_VPC_ID, value: {{ .Values.awsLabs.vpcId | quote }} }
             - { name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: {{ .Values.awsLabs.subnetIds | quote }} }
+            - { name: CRUCIBLE_AWS_LAB_INSTANCE_PROFILE, value: {{ .Values.awsLabs.instanceProfile | quote }} }
+            - { name: CRUCIBLE_AWS_LAB_SUBNET_CIDRS, value: {{ .Values.awsLabs.subnetCidrs | quote }} }
+            - name: CRUCIBLE_NODE_IP   # direct_ssh labs: excepted from their TCP 22 rule
+              valueFrom: { fieldRef: { fieldPath: status.hostIP } }
             - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }   # STS regional endpoint
             {{- end }}
           readinessProbe:

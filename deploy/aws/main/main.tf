@@ -127,7 +127,7 @@ resource "aws_ssm_parameter" "helm_values" {
   type = "String"
   value = yamlencode({
     toolboxImage = var.toolbox_image # empty: cluster labs stay off
-    awsLabs = {
+    awsLabs = merge({
       enabled     = var.lab_role_arn != ""
       labRoleArn  = var.lab_role_arn
       opsRoleArn  = var.lab_ops_role_arn
@@ -142,7 +142,10 @@ resource "aws_ssm_parameter" "helm_values" {
       # where lab modules launch (var.crucible_vpc_id, var.crucible_subnet_ids); empty: the default VPC
       vpcId     = var.lab_vpc_id
       subnetIds = var.lab_subnet_ids
-    }
+      # OS-level labs: the instance profile modules may attach, and the CIDRs direct_ssh labs open TCP 22 to
+      instanceProfile = var.lab_instance_profile
+      subnetCidrs     = var.lab_subnet_cidrs
+    }, var.workspace_image == "" ? {} : { workspaceImage = var.workspace_image })
   })
 }
 

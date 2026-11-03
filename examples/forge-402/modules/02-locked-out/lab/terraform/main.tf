@@ -48,13 +48,13 @@ resource "aws_instance" "box" {
   user_data = <<-USERDATA
     #!/bin/bash
     set -eu
-    # The exercise: sshd on the wrong port, no passwords, and no EC2 Instance Connect keys.
+    # The exercise: sshd on the wrong port, no passwords.
+    mkdir -p /var/lib/crucible-lab
+    touch /var/lib/crucible-lab/broken
     cat >/etc/ssh/sshd_config.d/99-crucible.conf <<'EOF'
     Port 2222
     PasswordAuthentication no
-    AuthorizedKeysCommand /bin/false
-    AuthorizedKeysCommandUser root
-    EOF
+        EOF
     # Ubuntu 24.04 starts sshd from a socket on port 22; hand the port to sshd itself.
     systemctl disable --now ssh.socket || true
     systemctl enable ssh.service

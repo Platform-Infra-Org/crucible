@@ -46,8 +46,11 @@ resource "aws_instance" "box" {
     GRUB_TIMEOUT=10
     EOF
     update-grub
-    # The exercise: no grub.cfg. GRUB stops at `grub rescue>` / `grub>` on the next boot.
-    mv /boot/grub/grub.cfg /boot/grub/grub.cfg.lost
+    # The exercise: the default entry points at a root filesystem that does not exist. The machine stops in the
+    # initramfs emergency shell on the serial console. The marker tells the check the machine was broken on purpose.
+    mkdir -p /var/lib/crucible-lab
+    touch /var/lib/crucible-lab/broken
+    sed -i -E 's/root=(UUID|PARTUUID|LABEL)=[^ ]+/root=UUID=00000000-0000-0000-0000-000000000000/' /boot/grub/grub.cfg
     reboot
   USERDATA
 }

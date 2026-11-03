@@ -34,7 +34,7 @@ export function TrainingsPage() {
               {c.modules} {c.modules === 1 ? 'module' : 'modules'}
             </p>}
             {c.available && (c.enrolled.length > 0
-              ? c.enrolled.map((t) => <p key={t.id}><Link to={`/p/${t.id}/${c.id}`}>Open ({t.name})</Link></p>)
+              ? c.enrolled.map((t) => <p key={t.id}><Link className="action" to={`/p/${t.id}/${c.id}`}>Open ({t.name})</Link></p>)
               : <p className="muted">Ask the people who run it to make you a participant.</p>)}
           </article>
         ))}

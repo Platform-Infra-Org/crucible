@@ -131,7 +131,7 @@ export function LabPage() {
   return (
     <section className="page lobby">
       <Embers />
-      <Link to={back}>← Back to the training</Link>
+      <Link className="action back" to={back}>Back to the training</Link>
       <h1>{info.title}</h1>
       {cooled && lab && (
         <div className="cooled" role="status">
@@ -170,7 +170,7 @@ export function LabPage() {
       )}
       {!info.runtime_ready && (
         <p className="warn">
-          {info.runtime_message} {(info.runtime === 'local' || info.runtime === 'cluster') && <Link to="/connect">Connect your laptop</Link>}
+          {info.runtime_message} {(info.runtime === 'local' || info.runtime === 'cluster') && <Link className="action" to="/connect">Connect your laptop</Link>}
         </p>
       )}
       {info.blocked && <p className="warn">{info.blocked}</p>}
@@ -301,7 +301,7 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
   return (
     <div className="lab">
       <header className="lab-head">
-        <Link to={back} aria-label="Back to the training">←</Link>
+        <Link className="action back" to={back} aria-label="Back to the training"></Link>
         <h1>{title}</h1>
         <span className="badge">{lab.runtime === 'local' ? 'Your laptop' : lab.runtime}</span>
         {lab.cluster_context && <span className="muted small">on {lab.cluster_context}</span>}

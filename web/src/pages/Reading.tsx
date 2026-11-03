@@ -48,7 +48,7 @@ export function ReadingPage() {
   return (
     <article className="page">
       <ReadingProgress />
-      <Link to={`/p/${team}/${training}`}>← Back to the training</Link>
+      <Link className="action back" to={`/p/${team}/${training}`}>Back to the training</Link>
       <ReadingBody text={data.markdown} assetBase={`/api/programs/${team}/${training}/assets`} />
       {err && <p className="error" role="alert">{err}</p>}
       <button className="primary" disabled={busy} onClick={markRead}>Mark as read</button>

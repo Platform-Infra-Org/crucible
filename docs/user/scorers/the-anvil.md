@@ -26,14 +26,19 @@ Below it, **Live sign-offs** lists the demos trainees owe you in person; see
 
 ## Opening a piece of work
 
-Each one shows:
+Each one shows the work on the left and **Your score** beside it, staying in view as you scroll (on a phone it comes
+right after the answer). The work is:
 
-- the prompt the trainee answered, and the **Rubric**: what to look for;
-- the answer, or the notes, links and files the trainee sent;
+- the prompt the trainee answered, and the **Answer key** (the rubric): what to look for, which only scorers see;
+- the answer, or the notes, links and files the trainee sent (a link opens in a new tab);
 - **Earlier attempts**, with the feedback each one got;
 - for a lab: every task with its checks and their output, the hints revealed and what they cost, and the
   **Terminal transcripts**, everything the trainee's terminals printed. A transcript is saved when its terminal
   closes.
+
+In **Your score**, give the points (out of the item's maximum) and feedback, then choose **Score** (or press Enter in the
+points box). Scores are final. **Return for rework** needs feedback and lets the trainee try again. A piece someone has
+already decided shows who decided it, the points and the feedback instead.
 
 ## Who scores what
 

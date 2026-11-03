@@ -42,6 +42,7 @@ test('the other standalone links carry the class in source', () => {
   expect(src('Lab.tsx')).toMatch(/<Link className="action back" to=\{back\} aria-label="Back to the training"><\/Link>/)
   expect(src('Reading.tsx')).toMatch(/className="action back"/)
   expect(src('Quiz.tsx').match(/className="action back"/g)).toHaveLength(2)
+  expect(src('ForgeStatus.tsx')).toMatch(/<p><Link className="action" to="\/edits">/)
   for (const f of ['Lab.tsx', 'Reading.tsx', 'Quiz.tsx', 'Anvil.tsx', 'Training.tsx']) expect(src(f)).not.toContain('>← ')
 })
 
@@ -50,5 +51,7 @@ test('a bare link is accent with a quieter underline (colour alone must not mark
   const base = css.match(/^a \{[^}]*\}/m)![0]
   expect(base).toContain('color: var(--accent)')
   expect(base).toMatch(/text-decoration-color:\s*color-mix/)
-  expect(css).toContain('a.action')
+  // A plain `content` before the alt-text form, so browsers without `/ ""` still draw the arrow (the icon-only back link needs it).
+  expect(css).toMatch(/a\.action::after \{ content: "→"; content: "→" \/ "";/)
+  expect(css).toMatch(/a\.action\.back::before \{ content: "←"; content: "←" \/ "";/)
 })

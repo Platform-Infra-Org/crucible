@@ -186,7 +186,8 @@ resource "aws_s3_bucket_policy" "state" {
   })
 }
 
-# The ceiling for every lab session: EC2 and S3 only, allowed regions only, small instances only.
+# The ceiling for every lab session: EC2 and S3, plus SSM sessions, Instance Connect keys, Fleet Manager (ssm-guiconnect)
+# and passing the lab instance role; allowed regions only, small instances only.
 resource "aws_iam_policy" "boundary" {
   name = "${var.name}-lab-boundary"
   policy = jsonencode({
@@ -194,7 +195,8 @@ resource "aws_iam_policy" "boundary" {
     Statement = [
       { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources", "ssm:*", "ssm-guiconnect:*", "ec2-instance-connect:*"], Resource = "*" },
       { Sid = "PassOnlyTheLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn },
-      # A lab instance must never become a tunnel to the node or Postgres: only the shell, ssh and local port-forward.
+      # Defence in depth: only the shell, ssh and local port-forward documents (ToRemoteHost is denied). The real fence against
+      # reaching the node or Postgres from a lab instance is the network (security groups).
       { Sid = "OnlyLabSessionDocuments", Effect = "Deny", Action = "ssm:StartSession",
         NotResource = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ssm:*::document/AWS-StartSSHSession",
       "arn:aws:ssm:*::document/AWS-StartPortForwardingSession", "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"] },
@@ -266,8 +268,8 @@ resource "aws_iam_role_policy" "lab" {
       Condition = { StringEquals = { "ssm:resourceTag/crucible:lab-id" = local.lab } } },
       { Sid = "CommandDocuments", Effect = "Allow", Action = "ssm:SendCommand",
       Resource = ["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*::document/AWS-RunPowerShellScript"] },
-      { Sid = "ConsoleReads", Effect = "Allow", Resource = "*",
-        Action = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation",
+      { Sid = "ConsoleAndFleetManager", Effect = "Allow", Resource = "*",
+        Action = ["ssm:GetCommandInvocation", "ssm:DescribeInstanceInformation",
           "ssm:GetConnectionStatus", "ssm:DescribeSessions", "ec2:GetSerialConsoleAccessStatus",
       "ssm-guiconnect:StartConnection", "ssm-guiconnect:GetConnection", "ssm-guiconnect:CancelConnection"] },
       { Sid = "CreateInShared", Effect = "Allow", Action = "ec2:CreateSecurityGroup", Resource = "arn:aws:ec2:*:*:vpc/*" },

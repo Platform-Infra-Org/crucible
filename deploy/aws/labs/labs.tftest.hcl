@@ -375,7 +375,7 @@ run "lab_instances_get_a_minimal_ssm_role" {
     error_message = "only EC2 assumes the lab instance role"
   }
   assert {
-    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : a == "*" || (endswith(a, "*") && startswith("ssm:GetParameter", trimsuffix(a, "*"))) || startswith(a, "ssm:GetParameter")]) if s.Effect == "Allow"])
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : lower(a) == "*" || (endswith(a, "*") && startswith("ssm:getparameter", trimsuffix(lower(a), "*"))) || startswith(lower(a), "ssm:getparameter")]) if s.Effect == "Allow"])
     error_message = "lab instances must never read SSM parameters (Crucible's secrets live there)"
   }
   assert {
@@ -434,5 +434,24 @@ run "lab_sessions_keys_and_consoles_stay_on_own_instances" {
   assert {
     condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSessionsOnly"]).Resource) == toset(["arn:aws:ssm:*:*:session/$${aws:userid}-*"])
     error_message = "terminate and resume only your own sessions"
+  }
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : anytrue([for a in flatten([s.Action]) : lower(a) == "*" || lower(a) == "ssm:*" || lower(a) == "ssm:list*" || lower(a) == "ssm:listcommands" || lower(a) == "ssm:listcommandinvocations"]) if s.Effect == "Allow" && lookup(s, "Action", null) != null])
+    error_message = "ListCommandInvocations and ListCommands cannot be scoped to instances: they would list other labs' and Crucible's Run Command output"
+  }
+  assert {
+    condition     = alltrue([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : alltrue([for r in flatten([s.Resource]) : r == aws_iam_role.lab_instance.arn]) if s.Effect == "Allow" && lookup(s, "Action", null) != null && anytrue([for a in flatten([s.Action]) : lower(a) == "iam:passrole"])])
+    error_message = "every Allow of iam:PassRole names the lab instance role and nothing else"
+  }
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : (
+      alltrue([for r in flatten([s.Resource]) : startswith(r, "arn:aws:ssm:") && strcontains(r, ":document/")]) ||
+      (!contains(flatten([s.Resource]), "*") && strcontains(jsonencode(lookup(s, "Condition", {})), "crucible:lab-id") && strcontains(jsonencode(lookup(s, "Condition", {})), "PrincipalTag/crucible:lab-id"))
+    ) if s.Effect == "Allow" && anytrue([for a in flatten([s.Action]) : contains(["ssm:StartSession", "ssm:SendCommand", "ec2-instance-connect:SendSSHPublicKey", "ec2-instance-connect:SendSerialConsoleSSHPublicKey", "ec2:GetConsoleScreenshot", "ec2:GetConsoleOutput"], a)])])
+    error_message = "session, command, key and console actions are on documents or on instances carrying the lab-id condition, never on *"
+  }
+  assert {
+    condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "CommandDocuments"]).Resource) == toset(["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*::document/AWS-RunPowerShellScript"])
+    error_message = "Run Command only with the two AWS-owned documents"
   }
 }

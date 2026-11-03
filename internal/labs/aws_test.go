@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -613,5 +614,60 @@ func TestSweepDeletesLeakedPlanObjects(t *testing.T) {
 	_, e7 := core.Secrets(labNamespace(testID)).Get(ctx, awsSecret, metav1.GetOptions{})
 	if e4 != nil || e5 != nil || e6 != nil || e7 != nil {
 		t.Fatalf("a running plan and lab objects are left alone: %v %v %v %v", e4, e5, e6, e7)
+	}
+}
+
+func provisionDirectSSH(t *testing.T, direct bool, nodeIP string) (*fake.Clientset, *awscloud.Fake, error) {
+	t.Helper()
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodSucceeded, "Apply complete!")
+	a, cloud, _ := testAWS(cs)
+	a.Network = content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: nodeIP}
+	lab := *cloudHeat(t)
+	aws := *lab.AWS
+	aws.DirectSSH = direct
+	lab.AWS = &aws
+	return cs, cloud, a.ProvisionLab(context.Background(), &Instance{ID: testID, Team: "forge", Training: "forge-401"}, &lab)
+}
+
+func TestAWSDirectSSHAddsTheSSHEgress(t *testing.T) {
+	cs, _, err := provisionDirectSSH(t, true, "10.2.129.17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	np, err := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := sshEgress(content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "10.2.129.17"})
+	if len(np.Spec.Egress) != 3 || !reflect.DeepEqual(np.Spec.Egress[2], want) {
+		t.Fatalf("dns, internet, ssh: %+v", np.Spec.Egress)
+	}
+}
+
+func TestAWSDirectSSHWithoutNetworkFailsClosed(t *testing.T) {
+	cs, cloud, err := provisionDirectSSH(t, true, "")
+	if err == nil || !strings.Contains(err.Error(), "direct_ssh") {
+		t.Fatalf("want a direct_ssh error: %v", err)
+	}
+	if got := steps(cs, "create"); len(got) != 0 {
+		t.Fatalf("nothing may be created: %v", got)
+	}
+	if len(cloud.Assumed()) != 0 {
+		t.Fatal("a refused lab never fetches credentials")
+	}
+}
+
+func TestAWSWithoutDirectSSHKeepsTwoEgressRules(t *testing.T) {
+	cs, _, err := provisionDirectSSH(t, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	np, err := cs.NetworkingV1().NetworkPolicies(labNamespace(testID)).Get(context.Background(), "lab-default-deny", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(np.Spec.Egress) != 2 {
+		t.Fatalf("today's policy: %+v", np.Spec.Egress)
 	}
 }

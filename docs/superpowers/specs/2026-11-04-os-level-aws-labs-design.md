@@ -205,11 +205,14 @@ SSH on 22; the check runs `ssh` to the private IP from the check script. Both li
 - Lab subnets: 10.2.129.0/24 (1a), 10.2.130.0/24 (1b); the node sits in 10.2.129.0/24.
 - `SSM-SessionManagerRunShell` does not exist as an account document; a plain `start-session` still authorizes on
   that ARN, so the allow stays.
+- The SCPs allow `ec2-instance-connect:SendSSHPublicKey` and `SendSerialConsoleSSHPublicKey`: against the stopped
+  node both failed with `EC2InstanceStateInvalidException` (not running), not `AccessDenied`; no key reached it.
+- Console federation works: `getSigninToken` with an assumed-role session from this account returned a sign-in token
+  (not used or shown).
 
 ## 10. Still to verify by hand
 
-- `ec2-instance-connect:SendSSHPublicKey` and `SendSerialConsoleSSHPublicKey` under the SCPs (no dry run).
 - Fleet Manager Remote Desktop against a Windows lab instance.
-- Federated console sign-in with a lab-role session.
+- Federated console sign-in with a lab-role session (a role chained from the node role: AWS caps that console session at an hour).
 - The firewall allowing TCP 22 to `ec2-serial-console.il-central-1.api.aws` from the node (lab pods leave as the node).
 - A `direct_ssh` lab: `ssh` from the workspace to a lab instance works, and to the node's private IP times out.

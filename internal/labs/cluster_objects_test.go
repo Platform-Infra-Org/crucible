@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"crucible/internal/content"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -144,6 +145,27 @@ func TestLabPodWaitsForTheIMDSBlock(t *testing.T) {
 		}
 		if ic.Resources.Limits.Memory().Cmp(*sp.Containers[0].Resources.Limits.Memory()) >= 0 {
 			t.Fatal("the guard is smaller than dind, so the quota does not grow")
+		}
+	}
+}
+
+func TestSSHEgressExceptsTheNode(t *testing.T) {
+	r, err := sshEgress(content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24", "10.2.130.0/24"}, NodeIP: "10.2.129.17"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Ports) != 1 || r.Ports[0].Port.IntValue() != 22 || *r.Ports[0].Protocol != corev1.ProtocolTCP {
+		t.Fatalf("TCP 22 only: %+v", r.Ports)
+	}
+	if len(r.To) != 2 || r.To[0].IPBlock.CIDR != "10.2.129.0/24" || !slices.Equal(r.To[0].IPBlock.Except, []string{"10.2.129.17/32"}) ||
+		r.To[1].IPBlock.CIDR != "10.2.130.0/24" || len(r.To[1].IPBlock.Except) != 0 {
+		t.Fatalf("the node's /32 is excepted on its own subnet only: %+v", r.To)
+	}
+	for _, bad := range []content.LabNetwork{{NodeIP: "10.2.129.17"}, {SubnetCIDRs: []string{"10.2.129.0/24"}},
+		{SubnetCIDRs: []string{"not-a-cidr"}, NodeIP: "10.2.129.17"}, {SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "nope"},
+		{SubnetCIDRs: []string{"0.0.0.0/0"}, NodeIP: "10.2.129.17"}} {
+		if _, err := sshEgress(bad); err == nil {
+			t.Errorf("%+v: want an error (fail closed)", bad)
 		}
 	}
 }

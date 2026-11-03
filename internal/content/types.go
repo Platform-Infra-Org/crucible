@@ -87,7 +87,7 @@ type AWSConfig struct {
 	MaxHourlyUSD float64                       `yaml:"max_hourly_usd"`
 	Prices       map[string]float64            `yaml:"prices"`     // resource type → USD per hour, for types Crucible can't price
 	Usage        map[string]map[string]float64 `yaml:"usage"`      // resource address → usage attribute → monthly amount
-	DirectSSH    bool                          `yaml:"direct_ssh"` // plain SSH from the workspace to the lab subnets on TCP 22 (never the node)
+	DirectSSH    bool                          `yaml:"direct_ssh"` // plain SSH: the workspace may reach TCP 22 on machines in the lab subnets, never the Crucible node; the lab security group must allow 22 from var.crucible_ssh_source_cidr (the node's address, where the workspace's traffic leaves from)
 }
 
 type Terminal struct {

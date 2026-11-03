@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -240,6 +241,14 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 	if err != nil {
 		return err
 	}
+	var extra []networkingv1.NetworkPolicyEgressRule
+	if lab.AWS.DirectSSH {
+		r, err := sshEgress(a.Network)
+		if err != nil {
+			return err
+		}
+		extra = append(extra, r)
+	}
 	setup := func(ns string) error {
 		if err := a.putCreds(ctx, inst.ID, creds); err != nil {
 			return err
@@ -252,7 +261,7 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 		}
 		return err
 	}
-	if err := a.Cluster.provision(ctx, inst, bundle, workspaceCompose, setup); err != nil {
+	if err := a.Cluster.provision(ctx, inst, bundle, workspaceCompose, setup, extra); err != nil {
 		return err
 	}
 	if err := a.runTF(ctx, inst, tfApplyPod, "apply"); err != nil {

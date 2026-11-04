@@ -167,25 +167,45 @@ jobs:
         id: ver
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           release_re='^v[0-9]+\.[0-9]+\.[0-9]+$'
           # Prerelease tags (release-manual) never count as the latest release.
           describe() { git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-*' "$@" 2>/dev/null; }
 
-          # A re-run of a release that failed after its tag was pushed: main's HEAD carries the release tag (the
-          # chore(release) commit, or the merge itself when CHANGELOG did not change). Resume with that version:
-          # no new CHANGELOG commit or tag, the artifact steps run again (they overwrite what a failed run left).
+          # main's HEAD already carries a release tag. Resume it only when it is this PR's own release (HEAD is
+          # this merge, or the chore(release) commit right on top of it) and nothing was published for it yet: a
+          # re-run of a run that failed after the tag push. The artifact steps then run again and overwrite what the
+          # failed run left. Any other tagged HEAD (a green run re-run, another merge's release) does nothing.
+          # tagged=true skips the CHANGELOG and tag steps.
           for t in $(git tag --points-at HEAD); do
-            if [[ $t =~ $release_re ]]; then
-              echo "::notice::HEAD is already tagged $t; resuming that release."
-              {
-                echo "version=$t"
-                echo "release=true"
-                echo "resume=true"
-                if p="$(describe HEAD^)"; then echo "previous=$p"; fi
-              } >> "$GITHUB_OUTPUT"
+            [[ $t =~ $release_re ]] || continue
+            parent="$(git rev-parse -q --verify 'HEAD^' || true)"
+            if ! { [ "$(git rev-parse HEAD)" = "$MERGE_SHA" ] ||
+                   { [ "$parent" = "$MERGE_SHA" ] && [[ "$(git log -1 --format=%s)" == "chore(release): $t "* ]]; }; }; then
+              echo "::notice::main's HEAD is $t, another merge's release; nothing to do."
+              printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            # Fail closed: only a 404 means "not published"; any other gh error stops the run.
+            if out="$(gh api "repos/${GH_REPO}/releases/tags/$t" 2>&1 >/dev/null)"; then
+              echo "::notice::$t is already published; nothing to do."
+              printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            elif [[ $out != *"HTTP 404"* ]]; then
+              echo "::error::Could not check for a published $t: $out"
+              exit 1
+            fi
+            echo "::notice::$t was tagged by this merge's earlier run but never published; resuming it."
+            {
+              echo "version=$t"
+              echo "release=true"
+              echo "tagged=true"
+              if p="$(describe HEAD^)"; then echo "previous=$p"; fi
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           done
 
           latest="$(describe || echo 'v0.0.0')"
@@ -228,7 +248,7 @@ jobs:
           fi
 
       - name: Update CHANGELOG
-        if: steps.ver.outputs.resume != 'true'
+        if: steps.ver.outputs.tagged != 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           RELEASE: ${{ steps.ver.outputs.release }}
@@ -240,7 +260,7 @@ jobs:
           fi
 
       - name: Commit CHANGELOG and (on release) push the tag
-        if: steps.ver.outputs.resume != 'true'
+        if: steps.ver.outputs.tagged != 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           RELEASE: ${{ steps.ver.outputs.release }}

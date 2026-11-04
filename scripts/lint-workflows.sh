@@ -13,20 +13,25 @@ if awk '
   echo "pass github.event / head_ref / inputs values to run: scripts through env:, never inline" >&2; exit 1
 fi
 # No cache in a job that can write (contents/packages/id-token/…: write, or write-all, its own or the workflow's):
-# a cache saved by an unprivileged run (any PR) would otherwise run inside it. Reads the files' 2-space layout
-# (jobs at 2, a job's keys at 4).
+# a cache saved by an unprivileged run (any PR) would otherwise run inside it. Caches are actions/cache*, a `cache:`
+# input (setup-node and friends), setup-go without `cache: false` (it caches by default) and `type=gha` (buildx).
+# Reads the files' 2-space layout (jobs at 2, a job's keys at 4).
 if awk '
-  function done() { if (job != "" && cache && (jw || (!jp && tw))) { print file ": job " job " can write and uses actions/cache"; bad = 1 } }
+  function done() { if (sg && !sgoff) cache = 1; if (job != "" && cache && (jw || (!jp && tw))) { print file ": job " job " can write and restores a cache"; bad = 1 } }
   FNR == 1 { done(); job = ""; tw = 0; top = 0; injobs = 0 }
   /^permissions:/ { top = 1; if (/write/) tw = 1; next }
   /^[^[:space:]#]/ { top = 0 }
   top && /:[[:space:]]*write/ { tw = 1 }
   /^jobs:/ { injobs = 1; next }
-  injobs && /^  [A-Za-z0-9_-]+:/ { done(); job = $1; sub(/:$/, "", job); file = FILENAME; jw = 0; jp = 0; jperm = 0; cache = 0; next }
+  injobs && /^  [A-Za-z0-9_-]+:/ { done(); job = $1; sub(/:$/, "", job); file = FILENAME; jw = 0; jp = 0; jperm = 0; cache = 0; sg = 0; sgoff = 0; next }
   job != "" && /^    permissions:/ { jp = 1; jperm = 1; if (/write/) jw = 1; next }
   job != "" && /^    [^[:space:]]/ { jperm = 0 }
   jperm && /:[[:space:]]*write/ { jw = 1 }
   job != "" && /uses:[[:space:]]*actions\/cache/ { cache = 1 }
+  job != "" && /^[[:space:]]+cache:[[:space:]]*false/ { sgoff = 1 }
+  job != "" && /^[[:space:]]+cache:[[:space:]]*[^[:space:]#]/ && !/cache:[[:space:]]*false/ { cache = 1 }
+  job != "" && /uses:[[:space:]]*actions\/setup-go/ { sg = 1 }
+  job != "" && /type=gha/ { cache = 1 }
   END { done(); exit bad }
 ' .github/workflows/*.yml; then :; else
   echo "jobs that can write never restore a cache: install tools from scratch there" >&2; exit 1

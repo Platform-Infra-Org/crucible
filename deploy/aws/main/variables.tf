@@ -245,10 +245,10 @@ variable "smtp_password" {
 variable "ghcr_pull_token" {
   type        = string
   sensitive   = true
-  description = "A GitHub token with read:packages only: the node pulls Crucible's private chart and server image from GHCR"
+  description = "A classic GitHub personal access token with read:packages only (GHCR does not take fine-grained tokens): the node pulls Crucible's private chart and server image from GHCR"
   validation {
     condition     = var.ghcr_pull_token != ""
-    error_message = "ghcr_pull_token is required (a GitHub token with read:packages)"
+    error_message = "ghcr_pull_token is required (a classic GitHub personal access token with read:packages)"
   }
   validation {
     condition     = can(regex("^[A-Za-z0-9_]+$", var.ghcr_pull_token))

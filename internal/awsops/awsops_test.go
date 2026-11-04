@@ -173,7 +173,7 @@ func TestDeployBuildPushesAnImageAndAChart(t *testing.T) {
 	if err := o.Deploy(context.Background(), DeployOpts{Build: true}); err != nil {
 		t.Fatal(err)
 	}
-	v := "0.0.0-dev.abc123def456"
+	v := "0.0.0-dev.gabc123def456"
 	calls := strings.Join(r.calls, "\n")
 	order := []string{
 		"docker buildx build --platform linux/amd64 -t ghcr.io/platform-infra-org/crucible:" + v + " --push .",
@@ -217,7 +217,7 @@ func TestDeployBuildMarksADirtyTree(t *testing.T) {
 	if err := o.Deploy(context.Background(), DeployOpts{Build: true}); err != nil {
 		t.Fatal(err)
 	}
-	if indexOf(r.calls, "crucible:0.0.0-dev.abc123def456-dirty.1700000000 --push") < 0 {
+	if indexOf(r.calls, "crucible:0.0.0-dev.gabc123def456-dirty.1700000000 --push") < 0 {
 		t.Fatalf("calls:\n%s", strings.Join(r.calls, "\n"))
 	}
 }
@@ -1295,5 +1295,61 @@ func TestInviteRefusesBadInputAndStopsOnOtherErrors(t *testing.T) {
 	r := cognito("", errors.New("exit status 254: An error occurred (AccessDeniedException)"))
 	if err := r.ops(t.TempDir()).Invite(context.Background(), "alice@example.com", ""); err == nil || indexOf(r.calls, "admin-create-user") >= 0 {
 		t.Fatalf("only not-found means a new user: %v\n%s", err, strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestReleasePointerFollowsTheStackName(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "output -json") {
+			return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"name":{"value":"forge"},"instance_id"`, 1)
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "--name /forge/release --type String") < 0 {
+		t.Fatalf("calls:\n%s", strings.Join(r.calls, "\n"))
+	}
+	_ = r.ops(t.TempDir()).Status(context.Background())
+	if indexOf(r.calls, "get-parameter --region eu-west-1 --name /forge/release") < 0 {
+		t.Fatal("status must read /forge/release")
+	}
+}
+
+func TestDeployFailsClosedWhenTheProbeFails(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") {
+			return errors.New("AccessDenied")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{})
+	if err == nil || !strings.Contains(err.Error(), "couldn't check the node's deploy script") || indexOf(r.calls, "put-parameter") >= 0 {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestUpRefusesADevBinaryBeforeApplying(t *testing.T) {
+	withVersion(t, "dev")
+	r := &recorder{output: fakeAWS}
+	err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{})
+	if err == nil || !strings.Contains(err.Error(), "pass --version vX.Y.Z or --build") || indexOf(r.calls, "main apply") >= 0 {
+		t.Fatalf("err=%v calls=%v", err, r.calls)
+	}
+}
+
+func TestStatusSaysWhenNoReleaseIsChosen(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "ssm get-parameter") {
+			return errors.New("ParameterNotFound")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.log.String(), "release: none chosen (run crucible aws deploy)") {
+		t.Fatalf("status:\n%s", r.log.String())
 	}
 }

@@ -285,6 +285,14 @@ run "toolbox_image_rejects_a_short_digest" {
   expect_failures = [var.toolbox_image]
 }
 
+run "name_is_an_output" {
+  command = plan
+  assert {
+    condition     = output.name == "crucible"
+    error_message = "the name output carries var.name (the release pointer's SSM path)"
+  }
+}
+
 run "ghcr_pull_token_rejects_a_quote" {
   command = plan
   variables {

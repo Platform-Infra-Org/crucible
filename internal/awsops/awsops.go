@@ -213,6 +213,9 @@ func mainVars(p map[string]string) []string {
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
 // noLabs turns aws labs off; without it, Up refuses to drop the lab wiring main already has.
 func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, dep DeployOpts) error {
+	if _, err := releaseChoice(dep); err != nil {
+		return err // before anything is applied
+	}
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {
 		return err
@@ -402,20 +405,40 @@ type DeployOpts struct {
 	Build   bool
 }
 
-// Deploy records which GHCR release the node runs (/crucible/release) and runs the node's deploy script.
-func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
+// releaseChoice validates what to run: --version, --build (version is then set by the build), or this binary's own.
+func releaseChoice(in DeployOpts) (string, error) {
 	if in.Version != "" && in.Build {
-		return errors.New("--version and --build are exclusive")
+		return "", errors.New("--version and --build are exclusive")
 	}
-	version := in.Version
-	if version == "" && !in.Build {
-		version = buildVersion
-		if version == "dev" {
-			return errors.New("this is a dev build of crucible: pass --version vX.Y.Z or --build")
+	if in.Build {
+		return "", nil
+	}
+	v := in.Version
+	if v == "" {
+		if v = buildVersion; v == "dev" {
+			return "", errors.New("this is a dev build of crucible: pass --version vX.Y.Z or --build")
 		}
 	}
-	if !in.Build && !releaseVersion.MatchString(version) {
-		return fmt.Errorf("version %q must look like v1.2.3 (or v1.2.3-feat-x.4)", version)
+	if !releaseVersion.MatchString(v) {
+		return "", fmt.Errorf("version %q must look like v1.2.3 (or v1.2.3-feat-x.4)", v)
+	}
+	return v, nil
+}
+
+// releaseParam is the SSM parameter naming the release the node runs: /<stack name>/release.
+func releaseParam(m map[string]string) string {
+	n := m["name"]
+	if n == "" {
+		n = "crucible" // a main stack from before the name output
+	}
+	return "/" + n + "/release"
+}
+
+// Deploy records which GHCR release the node runs (/crucible/release) and runs the node's deploy script.
+func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
+	version, err := releaseChoice(in)
+	if err != nil {
+		return err
 	}
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
@@ -424,7 +447,11 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 	if err := o.requireRunning(ctx, m); err != nil {
 		return err
 	}
-	if old, _ := o.ssmOut(ctx, m, "grep -q current-release /opt/crucible/deploy.sh && echo old || echo new"); strings.TrimSpace(old) == "old" {
+	old, err := o.ssmOut(ctx, m, "grep -q current-release /opt/crucible/deploy.sh && echo old || echo new")
+	if err != nil {
+		return fmt.Errorf("couldn't check the node's deploy script: %w", err)
+	}
+	if strings.TrimSpace(old) == "old" {
 		return errors.New("this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up")
 	}
 	if in.Build {
@@ -432,7 +459,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 			return err
 		}
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", "/crucible/release",
+	if err := o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", releaseParam(m),
 		"--type", "String", "--value", version, "--overwrite"); err != nil {
 		return err
 	}
@@ -455,7 +482,7 @@ func (o Ops) buildAndPush(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	v := "0.0.0-dev." + sha
+	v := "0.0.0-dev.g" + sha // the g keeps an all-digit sha from being an invalid numeric identifier
 	if dirty, _ := o.Output(ctx, o.Root, "git", "status", "--porcelain"); dirty != "" {
 		now := time.Now
 		if o.Now != nil {
@@ -741,10 +768,10 @@ func serialTCP(region string) []string {
 }
 
 func (o Ops) printRelease(ctx context.Context, m map[string]string) {
-	rel, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", "/crucible/release",
+	rel, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
 		"--query", "Parameter.Value", "--output", "text")
 	if rel = strings.TrimSpace(rel); err != nil || rel == "" {
-		rel = "unknown"
+		rel = "none chosen (run crucible aws deploy)"
 	}
 	fmt.Fprintf(o.Log, "release: %s\n", rel)
 }

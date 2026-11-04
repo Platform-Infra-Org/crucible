@@ -2,11 +2,12 @@
 #
 #   * PR opened / updated against main -> build everything that would ship (three multi-arch images, the chart, the
 #     crucible binaries) without pushing; the binaries and the chart are uploaded as a workflow artifact.
-#   * PR merged into main              -> git-cliff bumps the version and rewrites CHANGELOG.md, the change is
-#     committed back to main and tagged; the images are pushed to GHCR with provenance and SBOMs, the chart is
-#     pinned to their digests and pushed as an OCI chart, and a GitHub Release carries the binaries and SHA256SUMS.
+#   * PR merged into main              -> git-cliff picks the next version from the conventional commits and the merge
+#     commit is tagged with it (nothing is pushed to main: protect-main refuses github-actions); the images are pushed
+#     to GHCR with provenance and SBOMs, the chart is pinned to their digests and pushed as an OCI chart, and a GitHub
+#     Release carries the binaries, SHA256SUMS and the changelog since the last release as its notes.
 #
-# Docs-only and ci-only merges refresh the changelog's Unreleased section without a release.
+# Docs-only and ci-only merges release nothing.
 name: release
 
 on:
@@ -130,31 +131,22 @@ jobs:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    # Two merges in a row release one after the other (each pushes to main).
+    # Two merges in a row release one after the other, in order, so each sees the tag before it.
     concurrency:
       group: release-main
       cancel-in-progress: false
     permissions:
-      contents: write # commit CHANGELOG, push the tag, create the release
+      contents: write # push the tag, create the release
       packages: write # push the images and the chart to GHCR
       id-token: write # OIDC for keyless provenance signing
       attestations: write # actions/attest-build-provenance
     steps:
-      # A release App is only needed once main is protected: GITHUB_TOKEN cannot be added to a branch-protection
-      # bypass list, and an App can. Skipped (not failed) while RELEASE_APP_ID is unset, so a missing key is not
-      # discovered after the PR has merged.
-      - uses: actions/create-github-app-token@v1
-        id: app-token
-        if: vars.RELEASE_APP_ID != ''
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_KEY }}
-
+      # The merge commit itself, not main's tip: a later merge may already have landed, and each release is the commit
+      # its PR produced. Nothing is pushed to main (protect-main refuses github-actions); only the tag is pushed.
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Install git-cliff
         run: |
@@ -167,7 +159,6 @@ jobs:
         id: ver
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
@@ -175,20 +166,10 @@ jobs:
           # Prerelease tags (release-manual) never count as the latest release.
           describe() { git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-*' "$@" 2>/dev/null; }
 
-          # main's HEAD already carries a release tag. Resume it only when it is this PR's own release (HEAD is
-          # this merge, or the chore(release) commit right on top of it) and nothing was published for it yet: a
-          # re-run of a run that failed after the tag push. The artifact steps then run again and overwrite what the
-          # failed run left. Any other tagged HEAD (a green run re-run, another merge's release) does nothing.
-          # tagged=true skips the CHANGELOG and tag steps.
+          # This merge commit already carries a release tag: a re-run of a run that pushed the tag and then failed.
+          # Resume it unless it was published (then a re-run does nothing). tagged=true skips the tag step.
           for t in $(git tag --points-at HEAD); do
             [[ $t =~ $release_re ]] || continue
-            parent="$(git rev-parse -q --verify 'HEAD^' || true)"
-            if ! { [ "$(git rev-parse HEAD)" = "$MERGE_SHA" ] ||
-                   { [ "$parent" = "$MERGE_SHA" ] && [[ "$(git log -1 --format=%s)" == "chore(release): $t "* ]]; }; }; then
-              echo "::notice::main has moved on: its HEAD is $t, another merge's release, so this run releases nothing. To publish this PR's version, run the manual release workflow (release-manual.yml) on its branch."
-              printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
             # Fail closed: only a 404 means "not published"; any other gh error stops the run.
             if out="$(gh api "repos/${GH_REPO}/releases/tags/$t" 2>&1 >/dev/null)"; then
               echo "::notice::$t is already published; nothing to do."
@@ -236,51 +217,32 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$latest" != "v0.0.0" ]; then echo "previous=$latest" >> "$GITHUB_OUTPUT"; fi
 
-          # Release only when a version-bumping commit landed since the last release; docs-only and ci-only merges
-          # refresh the changelog's Unreleased section (the artifacts would be byte-identical).
+          # Release only when a version-bumping commit landed since the last release; a docs-only or ci-only merge
+          # releases nothing (the artifacts would be byte-identical).
           if [ "$latest" = "v0.0.0" ]; then range="HEAD"; else range="${latest}..HEAD"; fi
           rel='^(feat|fix|perf|refactor|revert|build)(\(.+\))?!?:|^[a-z]+(\(.+\))?!:'
           if git log "$range" --format='%s' | grep -qE "$rel"; then
             echo "release=true" >> "$GITHUB_OUTPUT"
           else
             echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Only non-releasing commits since ${latest}; refreshing the changelog, no release."
+            echo "::notice::Only non-releasing commits since ${latest}; no release."
           fi
 
-      - name: Update CHANGELOG
-        if: steps.ver.outputs.tagged != 'true'
+      # Tags are not covered by protect-main, so the job's own token may push one. A tag that already exists (a later
+      # merge released first and took this number) stops the run before anything is published.
+      - name: Tag the merge commit
+        if: steps.ver.outputs.release == 'true' && steps.ver.outputs.tagged != 'true'
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          RELEASE: ${{ steps.ver.outputs.release }}
         run: |
-          if [ "$RELEASE" = "true" ]; then
-            git-cliff --config cliff.toml --tag "$VERSION" -o CHANGELOG.md
-          else
-            git-cliff --config cliff.toml -o CHANGELOG.md
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::Refusing to overwrite existing tag $VERSION"
+            exit 1
           fi
-
-      - name: Commit CHANGELOG and (on release) push the tag
-        if: steps.ver.outputs.tagged != 'true'
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-          RELEASE: ${{ steps.ver.outputs.release }}
-        run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          if [ "$RELEASE" = "true" ]; then
-            if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-              echo "::error::Refusing to overwrite existing tag $VERSION"
-              exit 1
-            fi
-            git diff --staged --quiet || git commit -m "chore(release): ${VERSION} [skip ci]"
-            git tag -a "${VERSION}" -m "Release ${VERSION}"
-            # Both or neither: a main that moved meanwhile refuses the push, and a re-run starts clean.
-            git push --atomic origin HEAD:main "${VERSION}"
-          else
-            git diff --staged --quiet || git commit -m "chore(changelog): refresh unreleased [skip ci]"
-            git push origin HEAD:main
-          fi
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "refs/tags/${VERSION}"
 
       # No actions/cache here: a cache any PR run can save must never run in a job that can write (lint-workflows.sh).
       # The commit the images are labelled with: the release commit, not the merge that triggered the run.

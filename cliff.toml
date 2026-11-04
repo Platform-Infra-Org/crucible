@@ -1,4 +1,4 @@
-# git-cliff: conventional commits -> CHANGELOG.md and the next version.
+# git-cliff: conventional commits -> each GitHub Release's notes and the next version.
 [changelog]
 header = "# Changelog\n"
 body = """

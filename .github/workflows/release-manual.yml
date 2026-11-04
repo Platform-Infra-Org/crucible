@@ -2,7 +2,7 @@
 #
 # The version is <next>-<branch>.<run number> (for example v0.3.0-feat-labs.17) unless overridden; the tag points at
 # the branch's HEAD. The same artifacts as a release are published (three images, the pinned chart, the binaries),
-# flagged as a prerelease, with no `latest` tags and no CHANGELOG commit.
+# flagged as a prerelease, with no `latest` tags.
 name: release-manual
 
 on:

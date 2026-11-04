@@ -636,8 +636,8 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
       <thead><tr><th scope="col">Workflow</th><th scope="col">When</th><th scope="col">What</th></tr></thead>
       <tbody>
         <tr><th scope="row"><code>checks</code></th><td>Every PR and every push to main</td><td>gofmt, vet, tests, Terraform tests, the Helm chart, the workspace image scripts, content lint and the web checks.</td></tr>
-        <tr><th scope="row"><code>release</code></th><td>A PR into main</td><td>Opened or updated: builds the three multi-arch images (not pushed), the chart and the binaries, and attaches them to the run. Merged: git-cliff picks the next version from the conventional commits, rewrites <code>CHANGELOG.md</code>, commits and tags it, pushes the three images (<code>crucible</code>, <code>crucible-workspace</code>, <code>crucible-toolbox</code>) to GHCR with provenance and SBOMs, pins the chart to their digests and pushes it, creates the GitHub Release with the binaries and <code>SHA256SUMS</code>, and last moves <code>latest</code> on the workspace and toolbox images. A merge that carries only docs or CI commits refreshes the changelog and releases nothing.</td></tr>
-        <tr><th scope="row"><code>release-manual</code></th><td>By hand (Actions tab), on any branch</td><td>A prerelease named <code>&lt;next&gt;-&lt;branch&gt;.&lt;run number&gt;</code> (or the version you type): the same images, chart and binaries, flagged as a prerelease, with no <code>latest</code> tags and no changelog commit.</td></tr>
+        <tr><th scope="row"><code>release</code></th><td>A PR into main</td><td>Opened or updated: builds the three multi-arch images (not pushed), the chart and the binaries, and attaches them to the run. Merged: git-cliff picks the next version from the conventional commits and tags the merge commit with it (nothing is pushed to main), pushes the three images (<code>crucible</code>, <code>crucible-workspace</code>, <code>crucible-toolbox</code>) to GHCR with provenance and SBOMs, pins the chart to their digests and pushes it, creates the GitHub Release with the binaries, <code>SHA256SUMS</code> and the changes since the last release as its notes, and last moves <code>latest</code> on the workspace and toolbox images. A merge that carries only docs or CI commits releases nothing.</td></tr>
+        <tr><th scope="row"><code>release-manual</code></th><td>By hand (Actions tab), on any branch</td><td>A prerelease named <code>&lt;next&gt;-&lt;branch&gt;.&lt;run number&gt;</code> (or the version you type): the same images, chart and binaries, flagged as a prerelease, with no <code>latest</code> tags.</td></tr>
         <tr><th scope="row"><code>e2e</code></th><td>By hand</td><td>The browser end-to-end suites. They never run on push or PR.</td></tr>
       </tbody>
     </table></div>
@@ -651,7 +651,7 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
       <li><h3>Create the pull token</h3><p>Create a <b>classic</b> GitHub personal access token with <code>read:packages</code> and nothing else (GHCR does not take fine-grained tokens), and set it as <code>ghcr_pull_token</code> in <code>crucible.tfvars</code> before <code>up</code>.
         The node keeps it as the SecureString <code>/crucible/ghcr_pull_token</code>. To change it, edit the tfvars and run <code>crucible aws up</code>.</p></li>
       <li><h3>Open the firewall</h3><p>The node must reach <code>ghcr.io</code> and <code>pkg-containers.githubusercontent.com</code> (the blob host). <code>crucible aws status</code> checks both; send any blocked line to the network team.</p></li>
-      <li><h3>Optional: restrict who may push release tags</h3><p>A tag ruleset on <code>v*</code> keeps anyone but CI from creating a release tag.</p></li>
+      <li><h3>Leave release tags unrestricted</h3><p>The release job pushes the <code>v*</code> tag as <code>github-actions</code>, which can't be on a ruleset's bypass list. A ruleset that restricts creating <code>v*</code> tags would make every release fail. <code>protect-main</code> covers only the branch, and the job never pushes to it.</p></li>
     </ol>
 
     <h3>When a release goes wrong</h3>
@@ -659,7 +659,7 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
       <li><b>A PR merged from a fork cannot release</b>: the run has no write token.</li>
       <li><b>Tagged but never published.</b> Re-run the release job. It resumes only for that PR's own tag, and only when no GitHub Release exists for it.</li>
       <li><b>A GitHub Release exists but is incomplete</b> (an asset upload or the <code>latest</code> move failed): a re-run does nothing. Fix it by hand with <code>gh release upload</code> or by re-tagging <code>latest</code>.</li>
-      <li><b>Builds are slow.</b> The multi-arch images build under QEMU on the runner: expect tens of minutes.</li>
+      <li><b>Build time.</b> The images' build stages cross-compile on the runner, and only their small final stages run under QEMU for arm64.</li>
     </ul>
   </section>
 

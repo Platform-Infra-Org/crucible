@@ -47,10 +47,10 @@ locally, unchanged apart from names.
   `bash deploy/workspace/test.sh`, `crucible lint` on the example repos, web `npm ci && npm test && npx tsc -b &&
   npm run lint && npm run build`; plus the PR-title conventional-commit gate.
 - `.github/workflows/release.yml` — on a merged PR to main (the guideline's release-pr flow): git-cliff (`cliff.toml`)
-  bumps the version and rewrites `CHANGELOG.md`, commits and tags; builds and pushes the three images (provenance +
+  bumps the version and tags the merge commit (amended 2026-11-04: nothing is pushed to main, which the `protect-main` ruleset guards; the changelog since the last release is the Release's notes, not a `CHANGELOG.md`); builds and pushes the three images (provenance +
   SBOM); packages and pushes the chart with the digests; builds `crucible` for darwin/linux × amd64/arm64 with the
   version stamped, plus `SHA256SUMS`; creates the GitHub Release with the binaries, checksums and SBOMs, and notes that
-  list the image digests and the chart version. Docs-only / ci-only merges refresh the changelog without a release. A
+  list the image digests and the chart version. Docs-only / ci-only merges release nothing. A
   PR run (not merged) builds everything without pushing.
 - `.github/workflows/release-manual.yml` — `workflow_dispatch` on any branch: version `<next>-<branch>.<run_number>`
   (or an override); same artifacts as a prerelease; no `latest` tag; the tag points at that branch's HEAD.

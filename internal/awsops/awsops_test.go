@@ -222,6 +222,67 @@ func TestDeployBuildMarksADirtyTree(t *testing.T) {
 	}
 }
 
+// failingRollout is fakeAWS whose deploy.sh run fails; prev is /crucible/release before the deploy ("" = absent).
+func failingRollout(prev string) *recorder {
+	r := &recorder{}
+	rolling := false
+	r.output = func(cmd string) string {
+		if strings.Contains(cmd, "send-command") {
+			rolling = strings.Contains(cmd, "/opt/crucible/deploy.sh\"") && strings.Contains(cmd, ".failed")
+		}
+		if strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "--name /crucible/release") {
+			return prev
+		}
+		if rolling && strings.Contains(cmd, "--query Status") {
+			return "Failed"
+		}
+		return fakeAWS(cmd)
+	}
+	r.outErr = func(cmd string) error {
+		if prev == "" && strings.Contains(cmd, "ssm get-parameter") {
+			return errors.New("exit status 254: An error occurred (ParameterNotFound) when calling the GetParameter operation")
+		}
+		return nil
+	}
+	return r
+}
+
+func TestDeployFailureRestoresThePreviousRelease(t *testing.T) {
+	r := failingRollout("v1.3.0")
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{Version: "v1.3.9"})
+	if err == nil || !strings.Contains(err.Error(), "node command Failed") {
+		t.Fatalf("the deploy's own error must come back, got %v", err)
+	}
+	set, restore := indexOf(r.calls, "--value v1.3.9 --overwrite"), indexOf(r.calls, "--name /crucible/release --type String --value v1.3.0 --overwrite")
+	if set < 0 || restore < set {
+		t.Fatalf("a failed deploy must put v1.3.0 back after recording v1.3.9:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestDeployFailureRemovesAReleaseThatWasNotThere(t *testing.T) {
+	r := failingRollout("")
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{}); err == nil {
+		t.Fatal("want the deploy's error")
+	}
+	set, del := indexOf(r.calls, "--value v1.4.0 --overwrite"), indexOf(r.calls, "ssm delete-parameter --region eu-west-1 --name /crucible/release")
+	if set < 0 || del < set {
+		t.Fatalf("a failed first deploy must delete the parameter again:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestDeployStopsWhenThePreviousReleaseCannotBeRead(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "ssm get-parameter") {
+			return errors.New("AccessDeniedException")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{})
+	if err == nil || !strings.Contains(err.Error(), "AccessDeniedException") || indexOf(r.calls, "put-parameter") >= 0 {
+		t.Fatalf("err=%v calls=%v", err, r.calls)
+	}
+}
+
 func TestDeployRefusesAnOldNode(t *testing.T) {
 	r := &recorder{}
 	probed := false

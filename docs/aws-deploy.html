@@ -594,8 +594,9 @@ crucible aws deploy --build            <span class="c"># push a dev build of thi
       <li><h3>With <code>--build</code>: pushes a dev build <span class="lane">your computer</span></h3><p>The release is named <code>0.0.0-dev.g&lt;12-char sha&gt;</code>, with <code>-dirty.&lt;unix time&gt;</code> added when the tree has uncommitted changes.
         It builds the <code>linux/amd64</code> server image with <code>docker buildx build --push</code>, packages the chart with its image pointed at that tag, and runs <code>helm push</code> to the same
         GHCR repositories a release uses. You need your own <code>docker login ghcr.io</code> and <code>helm registry login ghcr.io</code> (a token that may push packages). Only the server image is rebuilt: the workspace and toolbox images stay at the chart's defaults.</p></li>
-      <li><h3>Records the release <span class="lane aws">SSM</span></h3><p><code>aws ssm put-parameter</code> sets <code>/crucible/release</code> to the version and prints
-        <span class="out">release &lt;version&gt; recorded; rolling out…</span>.</p></li>
+      <li><h3>Records the release <span class="lane aws">SSM</span></h3><p>It reads the release <code>/crucible/release</code> names now, then <code>aws ssm put-parameter</code> sets it to the new version and prints
+        <span class="out">release &lt;version&gt; recorded; rolling out…</span>. If the rollout below fails (a mistyped but well-formed version, say), it puts the old value back,
+        or deletes the parameter when there was none, and still reports the failure.</p></li>
       <li><h3>Rolls out <span class="lane k8s">node, via SSM</span></h3><p>Your role sends the command; the node runs it with the node role. <code>aws ssm send-command</code> waits for <code>.ready</code>, then runs
         <code>/opt/crucible/deploy.sh</code>. That re-reads <code>/crucible/env</code>, reads the release and the pull token from SSM, runs <code>helm registry login ghcr.io</code> with the token,
         checks the chart exists (<code>helm show chart</code>), refreshes the <code>ghcr-pull</code> image-pull Secret and the <code>crucible-secrets</code> Secret, and runs <code>helm upgrade --install</code> from

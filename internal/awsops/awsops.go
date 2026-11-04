@@ -463,19 +463,38 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 	if strings.TrimSpace(old) == "old" {
 		return errors.New("this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up")
 	}
+	// The release the node runs now, so a failed rollout can put it back ("": none recorded yet).
+	prev, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
+		"--query", "Parameter.Value", "--output", "text")
+	if err != nil {
+		if !strings.Contains(err.Error(), "ParameterNotFound") {
+			return fmt.Errorf("couldn't read the node's current release: %w", err)
+		}
+		prev = ""
+	}
+	prev = strings.TrimSpace(prev)
 	if in.Build {
 		if version, err = o.buildAndPush(ctx); err != nil {
 			return err
 		}
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--type", "String", "--value", version, "--overwrite"); err != nil {
+	if err := o.putRelease(ctx, m, version); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.Log, "release %s recorded; rolling out…\n", version)
 	wait := `i=0; while [ ! -f /opt/crucible/.ready ] && [ ! -f /opt/crucible/.failed ]; do i=$((i+1)); [ $i -gt 240 ] && { echo "timed out waiting for node bootstrap" >&2; exit 1; }; sleep 5; done; ` +
 		`if [ -f /opt/crucible/.failed ]; then echo "node bootstrap failed - see /var/log/crucible-bootstrap.log (aws ssm start-session --target ` + m["instance_id"] + `)" >&2; exit 1; fi; /opt/crucible/deploy.sh`
 	if err := o.ssm(ctx, m, wait); err != nil {
+		// The node still runs prev: point /<name>/release back at it, so status and the next boot agree.
+		var undo error
+		if prev == "" {
+			undo = o.Exec(ctx, o.Root, "aws", "ssm", "delete-parameter", "--region", m["region"], "--name", releaseParam(m))
+		} else {
+			undo = o.putRelease(ctx, m, prev)
+		}
+		if undo != nil {
+			return fmt.Errorf("%w (and %s could not be restored: %v)", err, releaseParam(m), undo)
+		}
 		return err
 	}
 	if err := o.waitLive(ctx, m); err != nil {
@@ -483,6 +502,11 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 	}
 	fmt.Fprintf(o.Log, "%s is live at %s\n", version, m["url"])
 	return nil
+}
+
+func (o Ops) putRelease(ctx context.Context, m map[string]string, version string) error {
+	return o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", releaseParam(m),
+		"--type", "String", "--value", version, "--overwrite")
 }
 
 // buildAndPush pushes a dev build of this tree to GHCR (server image and chart) and returns its release name.

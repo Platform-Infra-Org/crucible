@@ -126,8 +126,9 @@ resource "aws_ssm_parameter" "env" {
 resource "aws_ssm_parameter" "helm_values" {
   name = "/${var.name}/helm-values"
   type = "String"
-  value = yamlencode({
-    toolboxImage = var.toolbox_image # empty: cluster labs stay off
+  # toolboxImage and workspaceImage only when set: deploy.sh applies these after the release's chart values, so an
+  # empty value here would replace the release's pinned image.
+  value = yamlencode(merge({
     awsLabs = merge({
       enabled     = var.lab_role_arn != ""
       labRoleArn  = var.lab_role_arn
@@ -147,7 +148,7 @@ resource "aws_ssm_parameter" "helm_values" {
       instanceProfile = var.lab_instance_profile
       subnetCidrs     = var.lab_subnet_cidrs
     }, var.workspace_image == "" ? {} : { workspaceImage = var.workspace_image })
-  })
+  }, var.toolbox_image == "" ? {} : { toolboxImage = var.toolbox_image }))
 }
 
 resource "aws_ssm_parameter" "secret" {

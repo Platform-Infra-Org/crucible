@@ -249,12 +249,12 @@ run "secret_key_reaches_the_api_when_init_made_it" {
   }
 }
 
-run "cluster_labs_off_without_a_toolbox_image" {
+run "no_toolbox_image_keeps_the_release_pin" {
   command = plan
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == ""
-    error_message = "no toolbox image by default: cluster labs stay off"
+    condition     = !contains(keys(yamldecode(aws_ssm_parameter.helm_values.value)), "toolboxImage")
+    error_message = "an empty toolbox_image leaves the release's pinned toolbox (chart values): it must not override it with \"\""
   }
 }
 

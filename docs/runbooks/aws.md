@@ -127,7 +127,7 @@ A setting left empty is never written, so `CRUCIBLE_SMTP_*` keys you added by ha
 
 Cloud-init installs Sysbox CE (pinned version, sha256-checked; `sysbox_version` and `sysbox_sha256_amd64` in `deploy/aws/main/variables.tf`, update both together, amd64 only) and registers the `sysbox-runc` runtime with k3s's containerd through `config-v3.toml.tmpl` (containerd 2.x, k3s >= 1.32). It also creates the `sysbox-runc` RuntimeClass, and the chart defaults to `clusterLabs.enabled: true`. This cluster runs AWS lab workspaces only (`CRUCIBLE_LAB_CLUSTER`); cluster labs run on trainees' own clusters through their agent and need none of this (they need `CRUCIBLE_TOOLBOX_IMAGE`). Lab pods run in `lab-<id>` namespaces with Pod Security `baseline`, a quota, and a NetworkPolicy that blocks `169.254.169.254` (IMDS) and every private range.
 
-**The cluster-lab toolbox image.** Trainees' laptops pull it, on arm64 (Apple silicon) and amd64 alike, so build it for both and push it to a registry their laptops can pull from (public, or one they are signed in to), then set `CRUCIBLE_TOOLBOX_IMAGE` (Helm `toolboxImage`) to the pushed digest, never a tag:
+**The cluster-lab toolbox image.** Trainees' laptops pull it, on arm64 (Apple silicon) and amd64 alike. Every release builds it for both, pushes `ghcr.io/platform-infra-org/crucible-toolbox` (public) and pins the release's chart to its digest, so an AWS install running a release has cluster labs with nothing to set. To run your own toolbox instead, build it for both architectures, push it to a registry their laptops can pull from (public, or one they are signed in to), and set `CRUCIBLE_TOOLBOX_IMAGE` (Helm `toolboxImage`) to the pushed digest, never a tag:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -f deploy/toolbox/Dockerfile -t <registry>/crucible-toolbox:<version> --push .
@@ -135,13 +135,13 @@ docker buildx imagetools inspect <registry>/crucible-toolbox:<version>   # the m
 # CRUCIBLE_TOOLBOX_IMAGE=<registry>/crucible-toolbox@sha256:<digest>
 ```
 
-On AWS, set it in `crucible.tfvars` and run `crucible aws up`; the node's Helm values carry it as `toolboxImage`:
+On AWS, set the override in `crucible.tfvars` and run `crucible aws up`; the node's Helm values carry it as `toolboxImage`:
 
 ```hcl
 toolbox_image = "<registry>/crucible-toolbox@sha256:<digest>"
 ```
 
-Terraform refuses a tag (`:latest`, `:1.2`): the value must be `<image>@sha256:<64 hex>`. Left empty (the default), cluster labs stay off; laptop and AWS labs work either way.
+Terraform refuses a tag (`:latest`, `:1.2`): the value must be `<image>@sha256:<64 hex>`. Left empty (the default), the node keeps the toolbox the release's chart pins. A chart without a toolbox (a `--build` deploy, or the in-tree chart) leaves cluster labs off; laptop and AWS labs work either way.
 
 Run one Crucible deployment per Kubernetes cluster: the orphan sweep deletes `lab-*` namespaces that are not active in its own database. Turning the lab cluster off leaves existing lab namespaces in place (their rows are marked destroyed with "cleanup skipped"); delete them by hand with `kubectl delete ns -l crucible.io/lab`.
 
@@ -441,14 +441,17 @@ tagging, tf-apply memory) in this section, and fix the code or the labs stack be
 **OS-level labs (machines the trainee works on as root, boots, breaks and repairs).**
 
 *The workspace image.* `deploy/workspace` is `amazon/aws-cli` plus ssh, the Session Manager plugin and the two helpers
-`lab-ssh` and `lab-console`. Until `workspace_image` is set, the chart keeps `amazon/aws-cli` and those commands don't exist. Publish it
+`lab-ssh` and `lab-console`. Every release pushes it (`ghcr.io/platform-infra-org/crucible-workspace`, public) and pins the
+release's chart to its digest, so an install running a release has those commands with nothing to set. Leave `workspace_image`
+empty to keep that pin; set it only to override it. The in-tree chart (a `--build` deploy without the override) keeps plain
+`amazon/aws-cli`, where those commands don't exist. To publish your own
 (`make workspace` builds one local arch for a quick look; do not use it to publish):
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push \
   -t ghcr.io/platform-infra-org/crucible-workspace:<version> deploy/workspace
 docker buildx imagetools inspect ghcr.io/platform-infra-org/crucible-workspace:<version>   # note the Digest: sha256:...
 ```
-Then in `deploy/aws/main/crucible.tfvars` set `workspace_image = "ghcr.io/platform-infra-org/crucible-workspace@sha256:<digest>"`
+Then in `deploy/aws/main/crucible.tfvars` set the override `workspace_image = "<registry>/crucible-workspace@sha256:<digest>"`
 (a digest is required; a tag is refused) and run `crucible aws up`. `crucible aws status` must show no blocked host (it checks `ghcr.io` and `pkg-containers.githubusercontent.com`, which the node needs to pull the image). The serial console endpoints and host-key fingerprints are baked
 into the image from `deploy/workspace/serial-console-endpoints`; `go test ./internal/awsops` fails if that file and the table
 `crucible aws status` uses disagree.

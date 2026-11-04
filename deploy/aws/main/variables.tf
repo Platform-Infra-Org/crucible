@@ -183,7 +183,7 @@ variable "lab_subnet_cidrs" {
 variable "workspace_image" {
   type        = string
   default     = ""
-  description = "The AWS lab workspace image by digest (deploy/workspace); empty keeps the chart's amazon/aws-cli"
+  description = "The AWS lab workspace image by digest (deploy/workspace). Empty = the release's pinned image (chart values); set = an override."
   validation {
     condition     = var.workspace_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.workspace_image))
     error_message = "workspace_image must be empty or pinned by digest: <image>@sha256:<64 hex>"
@@ -201,7 +201,7 @@ variable "bootstrap_admin" {
 variable "toolbox_image" {
   type        = string
   default     = ""
-  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = cluster labs off."
+  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = the release's pinned image (chart values); set = an override."
   validation {
     condition     = var.toolbox_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.toolbox_image))
     error_message = "toolbox_image must be empty or an image pinned by digest, e.g. ghcr.io/you/crucible-toolbox@sha256:<64 hex>: laptops pull it, so never a tag."

@@ -9,7 +9,7 @@ git_credentials    = "https://crucible-bot:TOKEN@git.example.com"   # read the t
 # acme_email       = "ops@example.com"
 # route53_zone_id  = "Z0123456789"   # optional: manage the A record
 
-# toolbox_image    = "ghcr.io/you/crucible-toolbox@sha256:<64 hex>"   # cluster labs; by digest, never a tag (runbook: the toolbox image)
+# toolbox_image    = "ghcr.io/you/crucible-toolbox@sha256:<64 hex>"   # only to override the release's pinned toolbox; by digest, never a tag
 # smtp_addr        = "email-smtp.eu-west-1.amazonaws.com:587"   # email (optional): host:port; empty = no email
 # smtp_from        = "Crucible <crucible@example.com>"
 # smtp_username    = "AKIA..."

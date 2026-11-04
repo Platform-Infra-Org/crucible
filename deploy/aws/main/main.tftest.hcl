@@ -524,6 +524,14 @@ run "node_installs_a_ghcr_release_with_the_pull_token" {
     error_message = "the GHCR pull token is a SecureString at /<name>/ghcr_pull_token"
   }
   assert {
+    condition     = strcontains(aws_instance.node.user_data, "GHCR refused the pull token: set a GitHub token with read:packages as ghcr_pull_token in crucible.tfvars and run crucible aws up") && strcontains(aws_instance.node.user_data, "cannot pull chart $version from GHCR: check the release exists and ghcr_pull_token has read:packages")
+    error_message = "a bad token or a missing chart version stops deploy.sh with an actionable message"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "--docker-password") && strcontains(aws_instance.node.user_data, "--type=kubernetes.io/dockerconfigjson") && strcontains(aws_instance.node.user_data, "helm registry logout ghcr.io >/dev/null 2>&1 || true; rm -rf")
+    error_message = "the token stays out of argv; logout runs in the EXIT trap"
+  }
+  assert {
     condition     = !strcontains(aws_instance.node.user_data, "ghp_test")
     error_message = "the token must not appear in user data"
   }
@@ -536,7 +544,7 @@ run "node_installs_a_ghcr_release_with_the_pull_token" {
     error_message = "no release tarballs in S3"
   }
   assert {
-    condition     = can(regex("(?s)helm registry login.*kubectl -n crucible create secret generic", aws_instance.node.user_data)) && !can(regex("(?s)kubectl -n crucible create secret generic.*helm registry login", aws_instance.node.user_data))
+    condition     = alltrue([for first in ["helm registry login", "helm show chart oci://ghcr.io/platform-infra-org/charts/crucible"] : can(regex("(?s)${first}.*kubectl create namespace", aws_instance.node.user_data)) && !can(regex("(?s)kubectl create namespace.*${first}", aws_instance.node.user_data))])
     error_message = "the token is checked before anything is applied"
   }
   assert {

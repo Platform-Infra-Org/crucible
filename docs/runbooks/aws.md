@@ -67,7 +67,7 @@ The server no longer ships through S3: CI publishes images and the chart to GHCR
 ## Everyday
 | Want | Command |
 |---|---|
-| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z` (a release or prerelease from GHCR; `up` takes the same flags), or `--build` (builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, plus `-dirty.<unix time>` when the tree has changes; needs your own `docker login ghcr.io` and `helm registry login ghcr.io`). A `dev` binary with neither flag refuses. |
+| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z` (a release or prerelease from GHCR; `up` takes the same flags), or `--build` (builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, plus `-dirty.<unix time>` when the tree has changes; needs your own `docker login ghcr.io` and `helm registry login ghcr.io`). `--build` rebuilds only the server image and the chart: the workspace and toolbox images come from `workspace_image` / `toolbox_image` in `crucible.tfvars` if set, otherwise the chart's in-tree defaults (`amazon/aws-cli` without `lab-ssh`/`lab-console`, and no toolbox, so cluster labs are off). A binary built from source (`dev`, or `make build`'s `git describe` such as `1044e7f` or `v0.3.0-3-gabc1234`) with neither flag refuses. |
 | Take a snapshot now | `crucible aws snapshot` |
 | Stop paying for compute tonight | `crucible aws sleep` (snapshot, then stop) |
 | Start before the schedule | `crucible aws wake` |

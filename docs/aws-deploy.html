@@ -523,7 +523,7 @@ schedule_timezone = "Europe/Bucharest"
         <p>Create that record at your DNS provider <b>while <code>up</code> carries on</b>: the build and the node's first boot give you a few
           minutes. With <code>route53_zone_id</code> set, Terraform already did it. Check it with <code>dig +short crucible.example.com</code>.</p></li>
       <li><h3>Ships the release <span class="lane">your computer</span> <span class="lane k8s">node</span></h3>
-        <p>It checks the release choice first, before anything is applied (a <code>dev</code> binary with neither <code>--version</code> nor <code>--build</code> refuses), then runs the same steps as <a href="#deploy"><code>crucible aws deploy</code></a>: record the release in SSM, then run the node's deploy script
+        <p>It checks the release choice first, before anything is applied (a binary built from source with neither <code>--version</code> nor <code>--build</code> refuses), then runs the same steps as <a href="#deploy"><code>crucible aws deploy</code></a>: record the release in SSM, then run the node's deploy script
           through SSM. That waits for the node's first boot to finish.</p></li>
       <li><h3>Waits for HTTPS</h3>
         <p>It polls <code>https://&lt;domain&gt;/healthz</code> until it answers 200. Success ends with
@@ -593,7 +593,7 @@ crucible aws deploy --build            <span class="c"># push a dev build of thi
         <code>this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up</code>. See <a href="#upgrade">Upgrading</a>.</p></li>
       <li><h3>With <code>--build</code>: pushes a dev build <span class="lane">your computer</span></h3><p>The release is named <code>0.0.0-dev.g&lt;12-char sha&gt;</code>, with <code>-dirty.&lt;unix time&gt;</code> added when the tree has uncommitted changes.
         It builds the <code>linux/amd64</code> server image with <code>docker buildx build --push</code>, stamped with <code>v0.0.0-dev.g&lt;sha&gt;</code> so the server reports that version, packages the chart with its image pointed at that tag, and runs <code>helm push</code> to the same
-        GHCR repositories a release uses. You need your own <code>docker login ghcr.io</code> and <code>helm registry login ghcr.io</code> (a token that may push packages). Only the server image is rebuilt: the workspace and toolbox images stay at the chart's defaults.</p></li>
+        GHCR repositories a release uses. You need your own <code>docker login ghcr.io</code> and <code>helm registry login ghcr.io</code> (a token that may push packages). Only the server image and the chart are rebuilt. The workspace and toolbox images come from <code>workspace_image</code> and <code>toolbox_image</code> in <code>crucible.tfvars</code> if you set them; otherwise the chart's in-tree defaults apply: plain <code>amazon/aws-cli</code> (no <code>lab-ssh</code> or <code>lab-console</code>) and no toolbox, so cluster labs are off.</p></li>
       <li><h3>Records the release <span class="lane aws">SSM</span></h3><p>It reads the release <code>/crucible/release</code> names now, then <code>aws ssm put-parameter</code> sets it to the new version and prints
         <span class="out">release &lt;version&gt; recorded; rolling out…</span>. If the rollout below fails (a mistyped but well-formed version, say), it puts the old value back,
         or deletes the parameter when there was none, and still reports the failure.</p></li>

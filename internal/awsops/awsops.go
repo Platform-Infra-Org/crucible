@@ -1,9 +1,8 @@
-// Package awsops drives the AWS deployment: terraform for infrastructure, S3 for releases, SSM for the node.
+// Package awsops drives the AWS deployment: terraform for infrastructure, GHCR for releases, SSM for the node.
 package awsops
 
 import (
 	"cmp"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +19,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"crucible/internal/docs"
 )
 
 type Ops struct {
@@ -30,6 +31,7 @@ type Ops struct {
 	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
 	Log      io.Writer
+	Now      func() time.Time // nil = time.Now
 }
 
 // Default runs real commands: Exec streams to the terminal, Output captures stdout.
@@ -210,7 +212,7 @@ func mainVars(p map[string]string) []string {
 
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
 // noLabs turns aws labs off; without it, Up refuses to drop the lab wiring main already has.
-func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) error {
+func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, dep DeployOpts) error {
 	p, err := o.outputs(ctx, "persistent")
 	if err != nil {
 		return err
@@ -255,7 +257,7 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool) er
 	} else {
 		fmt.Fprintf(o.Log, "Point an A record %s → %s now (skip if route53_zone_id is set).\n", m["domain"], m["public_ip"])
 	}
-	return o.Deploy(ctx)
+	return o.Deploy(ctx, dep)
 }
 
 // LabNet is where lab modules launch when the account has no default VPC (labs-init --vpc-id --subnet-ids).
@@ -383,8 +385,38 @@ func (o Ops) snapshotFirst(ctx context.Context, m map[string]string, noSnapshot 
 	return nil
 }
 
-// Deploy builds the image for the current commit, publishes it to S3 and rolls it out on the node.
-func (o Ops) Deploy(ctx context.Context) error {
+// buildVersion is this binary's release (set at build time); "dev" means a source build that names no release.
+var buildVersion = docs.Version
+
+const (
+	ghcrImage  = "ghcr.io/platform-infra-org/crucible"
+	ghcrCharts = "oci://ghcr.io/platform-infra-org/charts"
+)
+
+var releaseVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+
+// DeployOpts picks the release to run: Version (vX.Y.Z), Build (push a dev build of this tree), or neither (this
+// binary's own version).
+type DeployOpts struct {
+	Version string
+	Build   bool
+}
+
+// Deploy records which GHCR release the node runs (/crucible/release) and runs the node's deploy script.
+func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
+	if in.Version != "" && in.Build {
+		return errors.New("--version and --build are exclusive")
+	}
+	version := in.Version
+	if version == "" && !in.Build {
+		version = buildVersion
+		if version == "dev" {
+			return errors.New("this is a dev build of crucible: pass --version vX.Y.Z or --build")
+		}
+	}
+	if !in.Build && !releaseVersion.MatchString(version) {
+		return fmt.Errorf("version %q must look like v1.2.3 (or v1.2.3-feat-x.4)", version)
+	}
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
 		return err
@@ -392,60 +424,19 @@ func (o Ops) Deploy(ctx context.Context) error {
 	if err := o.requireRunning(ctx, m); err != nil {
 		return err
 	}
-	sha, err := o.Output(ctx, o.Root, "git", "rev-parse", "--short=12", "HEAD")
-	if err != nil {
-		return err
+	if old, _ := o.ssmOut(ctx, m, "grep -q current-release /opt/crucible/deploy.sh && echo old || echo new"); strings.TrimSpace(old) == "old" {
+		return errors.New("this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up")
 	}
-	if dirty, _ := o.Output(ctx, o.Root, "git", "status", "--porcelain"); dirty != "" {
-		sha = fmt.Sprintf("%s-dirty-%d", sha, time.Now().Unix())
-	}
-	tag := "crucible:" + sha
-	rel := filepath.Join(o.Root, ".local", "release")
-	if err := os.MkdirAll(rel, 0o755); err != nil {
-		return err
-	}
-	img, chart := filepath.Join(rel, "crucible-image.tar"), filepath.Join(rel, "chart.tgz")
-	steps := [][]string{
-		{"docker", "buildx", "build", "--platform", "linux/amd64", "-t", tag, "--load", "."},
-		{"docker", "save", "-o", img, tag},
-	}
-	for _, s := range steps {
-		if err := o.Exec(ctx, o.Root, s[0], s[1:]...); err != nil {
+	if in.Build {
+		if version, err = o.buildAndPush(ctx); err != nil {
 			return err
 		}
 	}
-	if err := gzipFile(img); err != nil {
+	if err := o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", "/crucible/release",
+		"--type", "String", "--value", version, "--overwrite"); err != nil {
 		return err
 	}
-	_ = os.Remove(chart) // never upload a stale chart under a new sha
-	for _, old := range globOrNil(filepath.Join(rel, "crucible-*.tgz")) {
-		_ = os.Remove(old)
-	}
-	if err := o.Exec(ctx, o.Root, "helm", "package", filepath.Join(o.Root, "deploy", "helm", "crucible"),
-		"-d", rel, "--app-version", sha); err != nil {
-		return err
-	}
-	pkgs, _ := filepath.Glob(filepath.Join(rel, "crucible-*.tgz"))
-	if len(pkgs) != 1 {
-		return fmt.Errorf("helm package produced %d chart archives in %s, want 1", len(pkgs), rel)
-	}
-	if err := os.Rename(pkgs[0], chart); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(rel, "current-release"), []byte(sha), 0o644); err != nil {
-		return err
-	}
-	b, r := m["data_bucket"], m["region"]
-	for _, up := range [][2]string{
-		{img + ".gz", fmt.Sprintf("s3://%s/releases/%s/crucible-image.tar.gz", b, sha)},
-		{chart, fmt.Sprintf("s3://%s/releases/%s/chart.tgz", b, sha)},
-		{filepath.Join(rel, "current-release"), fmt.Sprintf("s3://%s/current-release", b)},
-	} {
-		if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", up[0], up[1], "--region", r); err != nil {
-			return err
-		}
-	}
-	fmt.Fprintf(o.Log, "release %s published; rolling out…\n", sha)
+	fmt.Fprintf(o.Log, "release %s recorded; rolling out…\n", version)
 	wait := `i=0; while [ ! -f /opt/crucible/.ready ] && [ ! -f /opt/crucible/.failed ]; do i=$((i+1)); [ $i -gt 240 ] && { echo "timed out waiting for node bootstrap" >&2; exit 1; }; sleep 5; done; ` +
 		`if [ -f /opt/crucible/.failed ]; then echo "node bootstrap failed - see /var/log/crucible-bootstrap.log (aws ssm start-session --target ` + m["instance_id"] + `)" >&2; exit 1; fi; /opt/crucible/deploy.sh`
 	if err := o.ssm(ctx, m, wait); err != nil {
@@ -454,28 +445,86 @@ func (o Ops) Deploy(ctx context.Context) error {
 	if err := o.waitLive(ctx, m); err != nil {
 		return err
 	}
-	fmt.Fprintf(o.Log, "%s is live at %s\n", sha, m["url"])
+	fmt.Fprintf(o.Log, "%s is live at %s\n", version, m["url"])
 	return nil
 }
 
-func globOrNil(pattern string) []string { m, _ := filepath.Glob(pattern); return m }
+// buildAndPush pushes a dev build of this tree to GHCR (server image and chart) and returns its release name.
+func (o Ops) buildAndPush(ctx context.Context) (string, error) {
+	sha, err := o.Output(ctx, o.Root, "git", "rev-parse", "--short=12", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	v := "0.0.0-dev." + sha
+	if dirty, _ := o.Output(ctx, o.Root, "git", "status", "--porcelain"); dirty != "" {
+		now := time.Now
+		if o.Now != nil {
+			now = o.Now
+		}
+		v += fmt.Sprintf("-dirty.%d", now().Unix())
+	}
+	tmp, err := os.MkdirTemp("", "crucible-chart-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	chart := filepath.Join(tmp, "crucible")
+	if err := os.CopyFS(chart, os.DirFS(filepath.Join(o.Root, "deploy", "helm", "crucible"))); err != nil {
+		return "", err
+	}
+	vals := filepath.Join(chart, "values.yaml")
+	b, err := os.ReadFile(vals)
+	if err != nil {
+		return "", err
+	}
+	if b, err = pinImage(b, ghcrImage, v); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(vals, b, 0o644); err != nil {
+		return "", err
+	}
+	pkgs := filepath.Join(tmp, "pkg")
+	for _, s := range [][]string{
+		{"docker", "buildx", "build", "--platform", "linux/amd64", "-t", ghcrImage + ":" + v, "--push", "."},
+		{"helm", "package", chart, "--version", v, "--app-version", v, "-d", pkgs},
+	} {
+		if err := o.Exec(ctx, o.Root, s[0], s[1:]...); err != nil {
+			return "", err
+		}
+	}
+	tgz, _ := filepath.Glob(filepath.Join(pkgs, "*.tgz"))
+	if len(tgz) != 1 {
+		return "", fmt.Errorf("helm package produced %d chart archives, want 1", len(tgz))
+	}
+	if err := o.Exec(ctx, o.Root, "helm", "push", tgz[0], ghcrCharts); err != nil {
+		return "", err
+	}
+	return "v" + v, nil
+}
 
-func gzipFile(path string) error {
-	in, err := os.Open(path)
-	if err != nil {
-		return err
+// pinImage points values.yaml's image block at repo:tag with no digest, editing only those three lines.
+func pinImage(values []byte, repo, tag string) ([]byte, error) {
+	lines := strings.Split(string(values), "\n")
+	in, found := false, 0
+	for i, l := range lines {
+		if !strings.HasPrefix(l, " ") && strings.TrimSpace(l) != "" {
+			in = strings.HasPrefix(l, "image:")
+			continue
+		}
+		if !in {
+			continue
+		}
+		for _, k := range [][2]string{{"repository", repo}, {"tag", tag}, {"digest", ""}} {
+			if strings.HasPrefix(l, "  "+k[0]+":") {
+				lines[i] = fmt.Sprintf("  %s: %q", k[0], k[1])
+				found++
+			}
+		}
 	}
-	defer in.Close()
-	out, err := os.Create(path + ".gz")
-	if err != nil {
-		return err
+	if found != 3 {
+		return nil, errors.New("deploy/helm/crucible/values.yaml: image.repository, tag and digest not all found")
 	}
-	defer out.Close()
-	zw := gzip.NewWriter(out)
-	if _, err := io.Copy(zw, in); err != nil {
-		return err
-	}
-	return zw.Close()
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 // ssm runs a shell command on the node and waits for it (SSM's own wait gives up after ~100s).
@@ -691,6 +740,15 @@ func serialTCP(region string) []string {
 	return nil
 }
 
+func (o Ops) printRelease(ctx context.Context, m map[string]string) {
+	rel, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", "/crucible/release",
+		"--query", "Parameter.Value", "--output", "text")
+	if rel = strings.TrimSpace(rel); err != nil || rel == "" {
+		rel = "unknown"
+	}
+	fmt.Fprintf(o.Log, "release: %s\n", rel)
+}
+
 func (o Ops) Status(ctx context.Context) error {
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
@@ -707,9 +765,11 @@ func (o Ops) Status(ctx context.Context) error {
 			health = "not answering (" + err.Error() + ")"
 		}
 		fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s\nhealthz: %s\n", m["instance_id"], st, m["url"], health)
+		o.printRelease(ctx, m)
 		return nil
 	}
 	fmt.Fprintf(o.Log, "instance %s: %s\nurl: %s (through `crucible aws connect`)\n", m["instance_id"], st, m["url"])
+	o.printRelease(ctx, m)
 	if stateErr != nil {
 		fmt.Fprintf(o.Log, "healthz and egress: not checked (instance state unknown: %v)\n", stateErr)
 		return nil

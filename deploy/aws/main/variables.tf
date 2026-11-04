@@ -250,4 +250,8 @@ variable "ghcr_pull_token" {
     condition     = var.ghcr_pull_token != ""
     error_message = "ghcr_pull_token is required (a GitHub token with read:packages)"
   }
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_]+$", var.ghcr_pull_token))
+    error_message = "ghcr_pull_token must be a GitHub token: letters, digits and _ only"
+  }
 }

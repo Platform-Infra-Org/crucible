@@ -80,3 +80,10 @@ func TestInviteNeedsOneEmail(t *testing.T) {
 		t.Fatalf("invite EMAIL --name: exit %d, want 1 (past argument checks)", code)
 	}
 }
+
+func TestDeployVersionAndBuildAreExclusive(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	if code := awsCmd([]string{"deploy", "--version", "v1.0.0", "--build"}); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+}

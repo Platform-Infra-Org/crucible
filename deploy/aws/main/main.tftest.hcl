@@ -285,6 +285,14 @@ run "toolbox_image_rejects_a_short_digest" {
   expect_failures = [var.toolbox_image]
 }
 
+run "ghcr_pull_token_rejects_a_quote" {
+  command = plan
+  variables {
+    ghcr_pull_token = "ghp_te'st"
+  }
+  expect_failures = [var.ghcr_pull_token]
+}
+
 run "smtp_off_by_default_keeps_hand_added_keys" {
   command = plan
 

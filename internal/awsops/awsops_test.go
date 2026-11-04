@@ -17,7 +17,6 @@ type recorder struct {
 	calls     []string
 	output    func(cmd string) string
 	outErr    func(cmd string) error // optional: make an Output call fail
-	noPackage bool                   // helm package produces nothing
 	log       bytes.Buffer
 	unhealthy bool // /healthz never answers
 	noPlugin  bool // session-manager-plugin is not installed
@@ -28,15 +27,9 @@ func (r *recorder) ops(root string) Ops {
 		Root: root,
 		Exec: func(_ context.Context, _ string, name string, args ...string) error {
 			r.calls = append(r.calls, name+" "+strings.Join(args, " "))
-			switch {
-			case name == "docker" && args[0] == "save":
-				return os.WriteFile(args[2], []byte("tar"), 0o644)
-			case name == "helm" && !r.noPackage:
-				for i, a := range args {
-					if a == "-d" {
-						return os.WriteFile(filepath.Join(args[i+1], "crucible-9.9.9.tgz"), []byte("chart"), 0o644)
-					}
-				}
+			if name == "helm" && args[0] == "package" { // the chart archive lands in -d
+				_ = os.MkdirAll(args[len(args)-1], 0o755)
+				return os.WriteFile(filepath.Join(args[len(args)-1], "crucible-0.0.0.tgz"), []byte("chart"), 0o644)
 			}
 			return nil
 		},
@@ -98,18 +91,21 @@ func indexOf(calls []string, sub string) int {
 	return -1
 }
 
-func TestDeployPublishesReleaseThenRollsOut(t *testing.T) {
-	root := t.TempDir()
+func init() { buildVersion = "v1.4.0" } // every test deploys a release build unless it says otherwise
+
+func withVersion(t *testing.T, v string) {
+	old := buildVersion
+	buildVersion = v
+	t.Cleanup(func() { buildVersion = old })
+}
+
+func TestDeployRecordsItsOwnReleaseThenRollsOut(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(root).Deploy(context.Background()); err != nil {
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
-	rel := root + "/.local/release"
 	order := []string{
-		"buildx build --platform linux/amd64 -t crucible:abc123def456",
-		"s3 cp " + rel + "/crucible-image.tar.gz s3://bkt/releases/abc123def456/crucible-image.tar.gz",
-		"s3 cp " + rel + "/chart.tgz s3://bkt/releases/abc123def456/chart.tgz",
-		"s3://bkt/current-release",
+		"--name /crucible/release --type String --value v1.4.0 --overwrite",
 		"/opt/crucible/.failed",
 	}
 	last := -1
@@ -120,9 +116,142 @@ func TestDeployPublishesReleaseThenRollsOut(t *testing.T) {
 		}
 		last = i
 	}
+	for _, bad := range []string{"docker", "helm", "s3 cp"} {
+		if indexOf(r.calls, bad) >= 0 {
+			t.Fatalf("%s must not run for a released version:\n%s", bad, strings.Join(r.calls, "\n"))
+		}
+	}
 	c := r.calls[indexOf(r.calls, "/opt/crucible/.failed")]
 	if !strings.Contains(c, "bootstrap failed") || strings.LastIndex(c, "/opt/crucible/deploy.sh") < strings.Index(c, ".failed") {
 		t.Fatal("wait command must report bootstrap failure, then run deploy.sh")
+	}
+}
+
+func TestDeployNeedsAReleaseWhenThisIsADevBuild(t *testing.T) {
+	withVersion(t, "dev")
+	r := &recorder{output: fakeAWS}
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{})
+	if err == nil || !strings.Contains(err.Error(), "pass --version vX.Y.Z or --build") || indexOf(r.calls, "put-parameter") >= 0 {
+		t.Fatalf("err=%v calls=%v", err, r.calls)
+	}
+}
+
+func TestDeployVersionFlag(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{Version: "v1.5.0-feat-x.12"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "--value v1.5.0-feat-x.12 --overwrite") < 0 {
+		t.Fatalf("calls:\n%s", strings.Join(r.calls, "\n"))
+	}
+	for _, bad := range []string{"1.5", "v1.5", "v1.5.0;rm", "latest"} {
+		r := &recorder{output: fakeAWS}
+		if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{Version: bad}); err == nil || indexOf(r.calls, "put-parameter") >= 0 {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
+
+func TestDeployBuildPushesAnImageAndAChart(t *testing.T) {
+	withVersion(t, "dev")
+	repo := t.TempDir()
+	chart := filepath.Join(repo, "deploy", "helm", "crucible")
+	_ = os.MkdirAll(chart, 0o755)
+	vals := "image:\n  repository: docker.io/library/crucible\n  tag: dev\n  digest: \"\"   # pin\nother: 1\n"
+	_ = os.WriteFile(filepath.Join(chart, "values.yaml"), []byte(vals), 0o644)
+	var packaged string
+	r := &recorder{output: fakeAWS}
+	o := r.ops(repo)
+	exec := o.Exec
+	o.Exec = func(ctx context.Context, dir, name string, args ...string) error {
+		if name == "helm" && args[0] == "package" {
+			b, _ := os.ReadFile(filepath.Join(args[1], "values.yaml"))
+			packaged = string(b)
+		}
+		return exec(ctx, dir, name, args...)
+	}
+	if err := o.Deploy(context.Background(), DeployOpts{Build: true}); err != nil {
+		t.Fatal(err)
+	}
+	v := "0.0.0-dev.abc123def456"
+	calls := strings.Join(r.calls, "\n")
+	order := []string{
+		"docker buildx build --platform linux/amd64 -t ghcr.io/platform-infra-org/crucible:" + v + " --push .",
+		"helm package ",
+		"--version " + v + " --app-version " + v,
+		"helm push ",
+		"oci://ghcr.io/platform-infra-org/charts",
+		"--value v" + v + " --overwrite",
+	}
+	last := -1
+	for _, step := range order {
+		i := indexOf(r.calls, step)
+		if i < last || i < 0 {
+			t.Fatalf("step %q missing or out of order in:\n%s", step, calls)
+		}
+		last = i
+	}
+	if !strings.Contains(packaged, `repository: "ghcr.io/platform-infra-org/crucible"`) || !strings.Contains(packaged, `tag: "`+v+`"`) ||
+		!strings.Contains(packaged, `digest: ""`) || !strings.Contains(packaged, "other: 1") {
+		t.Fatalf("packaged values:\n%s", packaged)
+	}
+	if b, _ := os.ReadFile(filepath.Join(chart, "values.yaml")); string(b) != vals {
+		t.Fatalf("the repo's chart was modified:\n%s", b)
+	}
+}
+
+func TestDeployBuildMarksADirtyTree(t *testing.T) {
+	withVersion(t, "dev")
+	r := &recorder{output: func(cmd string) string {
+		if strings.HasPrefix(cmd, "git status") {
+			return " M x.go"
+		}
+		return fakeAWS(cmd)
+	}}
+	repo := t.TempDir()
+	chart := filepath.Join(repo, "deploy", "helm", "crucible")
+	_ = os.MkdirAll(chart, 0o755)
+	_ = os.WriteFile(filepath.Join(chart, "values.yaml"), []byte("image:\n  repository: x\n  tag: dev\n  digest: \"\"\n"), 0o644)
+	o := r.ops(repo)
+	o.Now = func() time.Time { return time.Unix(1700000000, 0) }
+	if err := o.Deploy(context.Background(), DeployOpts{Build: true}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "crucible:0.0.0-dev.abc123def456-dirty.1700000000 --push") < 0 {
+		t.Fatalf("calls:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestDeployRefusesAnOldNode(t *testing.T) {
+	r := &recorder{}
+	probed := false
+	r.output = func(cmd string) string {
+		if strings.Contains(cmd, "send-command") {
+			probed = strings.Contains(cmd, "grep -q current-release /opt/crucible/deploy.sh")
+		}
+		if probed && strings.Contains(cmd, "StandardOutputContent") {
+			return "old"
+		}
+		return fakeAWS(cmd)
+	}
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{})
+	if err == nil || !strings.Contains(err.Error(), "run crucible aws teardown --yes, then crucible aws up") || indexOf(r.calls, "put-parameter") >= 0 {
+		t.Fatalf("err=%v calls=%v", err, r.calls)
+	}
+}
+
+func TestStatusShowsTheRelease(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "--name /crucible/release") {
+			return "v1.4.0"
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.log.String(), "release: v1.4.0") {
+		t.Fatalf("status:\n%s", r.log.String())
 	}
 }
 
@@ -165,23 +294,9 @@ func stateAWS(state string) func(string) string {
 	}
 }
 
-func TestDeployRejectsStaleChart(t *testing.T) {
-	root := t.TempDir()
-	rel := filepath.Join(root, ".local", "release")
-	_ = os.MkdirAll(rel, 0o755)
-	_ = os.WriteFile(filepath.Join(rel, "chart.tgz"), []byte("stale"), 0o644)
-	r := &recorder{output: fakeAWS, noPackage: true}
-	if err := r.ops(root).Deploy(context.Background()); err == nil {
-		t.Fatal("deploy must fail when helm package produced nothing")
-	}
-	if indexOf(r.calls, "chart.tgz s3://") >= 0 {
-		t.Fatal("stale chart uploaded")
-	}
-}
-
 func TestDeployAndSnapshotRefuseStoppedNode(t *testing.T) {
 	r := &recorder{output: stateAWS("stopped")}
-	if err := r.ops(t.TempDir()).Deploy(context.Background()); err == nil || !strings.Contains(err.Error(), "wake") {
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{}); err == nil || !strings.Contains(err.Error(), "wake") {
 		t.Fatalf("deploy: %v", err)
 	}
 	if err := r.ops(t.TempDir()).Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "wake") {
@@ -226,7 +341,7 @@ func TestInitAndUp(t *testing.T) {
 		t.Fatalf("init apply missing:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
-	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); snap < 0 || apply < snap {
@@ -259,7 +374,7 @@ func TestUpFirstTimeSkipsSnapshot(t *testing.T) {
 		}
 		return exec(ctx, dir, name, args...)
 	}
-	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if snap, apply := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "main apply"); apply < 0 || (snap >= 0 && snap < apply) {
@@ -278,7 +393,7 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
 		t.Fatalf("main: %v", err)
 	}
-	if err := o.Up(context.Background(), "x.tfvars", false, false); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
+	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
 		t.Fatalf("persistent: %v", err)
 	}
 }
@@ -329,7 +444,7 @@ func TestSSMRetriesOnlyWhileUnregistered(t *testing.T) {
 
 func TestUnhealthyMessagesPointAtStatus(t *testing.T) {
 	r := &recorder{output: fakeAWS, unhealthy: true}
-	err := r.ops(t.TempDir()).Deploy(context.Background())
+	err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{})
 	if err == nil || !strings.Contains(err.Error(), "https://c.example.com/healthz isn't answering yet") || !strings.Contains(err.Error(), "crucible aws status") {
 		t.Fatalf("got %v", err)
 	}
@@ -369,7 +484,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 		t.Fatalf("labs-init apply:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r.calls = nil
-	if err := o.Up(context.Background(), "x.tfvars", false, false); err != nil {
+	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
@@ -392,7 +507,7 @@ func TestUpWithAnOlderLabsStack(t *testing.T) {
 		}
 		return fakeAWS(cmd)
 	}}
-	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, false); err != nil {
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, false, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "-var lab_instance_profile= -var lab_subnet_cidrs=") < 0 {
@@ -448,13 +563,13 @@ func TestUpRefusesToDropLabsItCannotRead(t *testing.T) {
 		return nil
 	}
 	r := &recorder{output: wiredMain, outErr: labsGone}
-	err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false)
+	err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false, DeployOpts{})
 	if err == nil || !strings.Contains(err.Error(), "--no-labs") || !strings.Contains(err.Error(), "crucible-lab") || indexOf(r.calls, "main apply") >= 0 {
 		t.Fatalf("up must refuse before applying: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 
 	r = &recorder{output: wiredMain, outErr: labsGone}
-	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, true); err != nil {
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, true, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "main apply") < 0 || indexOf(r.calls, "-var lab_role_arn") >= 0 || !strings.Contains(r.log.String(), "--no-labs") {
@@ -462,7 +577,7 @@ func TestUpRefusesToDropLabsItCannotRead(t *testing.T) {
 	}
 
 	r = &recorder{output: fakeAWS, outErr: labsGone} // never wired: labs stay off without a flag
-	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false); err != nil || indexOf(r.calls, "main apply") < 0 {
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err != nil || indexOf(r.calls, "main apply") < 0 {
 		t.Fatalf("no labs before, none now: %v", err)
 	}
 }
@@ -683,7 +798,7 @@ func TestInitRefusesBadCombinations(t *testing.T) {
 
 func TestUpPassesAccessFromThePersistentStack(t *testing.T) {
 	r := &recorder{output: persistentOut(`,"data_bucket":{"value":"bkt"},"oidc_issuer":{"value":"https://x"},"oidc_client_id":{"value":"c"},"cognito_user_pool_id":{"value":"p"},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"subnet_id":{"value":"subnet-0abc"}`)}
-	_ = r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true)
+	_ = r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{})
 	if f, v := indexOf(r.calls, "-var-file="), indexOf(r.calls, "-var subnet_id=subnet-0abc"); f < 0 || v < 0 || strings.Index(r.calls[f], "-var-file=") > strings.Index(r.calls[v], "-var subnet_id=") {
 		t.Fatalf("up passes init's subnet after the var file, so it wins over crucible.tfvars:\n%s", strings.Join(r.calls, "\n"))
 	}
@@ -697,7 +812,7 @@ func TestUpPassesAccessFromThePersistentStack(t *testing.T) {
 // Review focus 2: a persistent stack made before access existed has neither output; main must stay public.
 func TestUpOnAnOldPersistentStackStaysPublic(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true); err != nil {
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "-var access=") >= 0 || indexOf(r.calls, "-var public_url=") >= 0 {
@@ -751,7 +866,7 @@ func fakeSSM(cmd string) string {
 
 func TestSSMModeDeployChecksHealthOnTheNode(t *testing.T) {
 	r := &recorder{output: fakeSSM, unhealthy: true} // the laptop can't reach the node: only an on-node check can pass
-	if err := r.ops(t.TempDir()).Deploy(context.Background()); err != nil {
+	if err := r.ops(t.TempDir()).Deploy(context.Background(), DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "http://localhost/healthz") < 0 {
@@ -764,7 +879,7 @@ func TestSSMModeDeployChecksHealthOnTheNode(t *testing.T) {
 
 func TestSSMModeUpPrintsNoDNSLine(t *testing.T) {
 	r := &recorder{output: fakeSSM, unhealthy: true}
-	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true); err != nil {
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(r.log.String(), "Point an A record") || !strings.Contains(r.log.String(), "no DNS record") {

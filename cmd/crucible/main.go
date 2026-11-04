@@ -24,8 +24,9 @@ const usage = `usage:
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
   crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
-  crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs]
-  crucible aws deploy | snapshot | wake | status
+  crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
+  crucible aws deploy [--version vX.Y.Z | --build]
+  crucible aws snapshot | wake | status
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws invite EMAIL [--name "Full Name"]
   crucible aws sleep [--no-snapshot]
@@ -99,6 +100,8 @@ func awsCmd(args []string) int {
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
 	allowed := fs.String("allowed-regions", "", "labs-init: comma-separated regions labs may use, including --region (default: keep the current list, or --region alone)")
+	version := fs.String("version", "", "up/deploy: the GHCR release to run (default: this binary's own version)")
+	build := fs.Bool("build", false, "up/deploy: build this tree, push it to GHCR as a dev release and run it")
 	var budgetEmails []string
 	fs.Func("budget-email", "labs-init: who the AWS Budget alerts (repeat for more)", func(v string) error {
 		budgetEmails = append(budgetEmails, v)
@@ -116,6 +119,11 @@ func awsCmd(args []string) int {
 	if *varFile == "" {
 		*varFile = filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars")
 	}
+	if *version != "" && *build {
+		fmt.Fprintln(os.Stderr, "--version and --build are exclusive")
+		return 2
+	}
+	dep := awsops.DeployOpts{Version: *version, Build: *build}
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -154,9 +162,9 @@ func awsCmd(args []string) int {
 		}
 		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets})
 	case "up":
-		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs)
+		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs, dep)
 	case "deploy":
-		err = ops.Deploy(ctx)
+		err = ops.Deploy(ctx, dep)
 	case "snapshot":
 		err = ops.Snapshot(ctx)
 	case "sleep":

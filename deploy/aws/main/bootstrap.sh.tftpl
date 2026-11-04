@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cloud-init user data: installs k3s + helm + aws cli, writes Crucible's node scripts, deploys the current release.
+# Cloud-init user data: installs k3s + helm + aws cli, writes Crucible's node scripts, deploys the chosen release from GHCR.
 # Writes /opt/crucible/.ready when done, or /opt/crucible/.failed if any step fails.
 set -euxo pipefail
 exec > >(tee -a /var/log/crucible-bootstrap.log) 2>&1
@@ -102,7 +102,7 @@ retry aws ssm get-parameter --region '${region}' --name '/${name}/env' --query P
 
 cat > /opt/crucible/deploy.sh <<'SH'
 #!/bin/bash
-# Imports the current release image into k3s and (re)installs the Helm release. Safe to re-run.
+# Installs the chosen release (/$NAME/release) from GHCR and (re)installs the Helm release. Safe to re-run.
 set -euo pipefail
 export HOME=/root
 exec 9>/run/crucible-deploy.lock
@@ -113,16 +113,17 @@ source /etc/crucible.env
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml AWS_REGION=$REGION
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-sha=$(aws s3 cp "s3://$DATA_BUCKET/current-release" - 2>"$work/err") || {
-  if grep -qE 'NoSuchKey|404|Not Found' "$work/err"; then echo "no release published yet"; else cat "$work/err" >&2; fi
+version=$(aws ssm get-parameter --region "$REGION" --name "/$NAME/release" --query Parameter.Value --output text 2>"$work/err") || {
+  if grep -q ParameterNotFound "$work/err"; then echo "no release chosen: run crucible aws deploy" >&2; else cat "$work/err" >&2; fi
   exit 1
 }
-aws s3 cp "s3://$DATA_BUCKET/releases/$sha/crucible-image.tar.gz" "$work/image.tar.gz"
-aws s3 cp "s3://$DATA_BUCKET/releases/$sha/chart.tgz" "$work/chart.tgz"
+token=$(aws ssm get-parameter --with-decryption --region "$REGION" --name "/$NAME/ghcr_pull_token" --query Parameter.Value --output text) || {
+  echo "no GHCR pull token: set ghcr_pull_token in crucible.tfvars and run crucible aws up" >&2; exit 1; }
+printf '%s' "$token" | helm registry login ghcr.io --username crucible --password-stdin
 aws ssm get-parameter --region "$REGION" --name "/$NAME/helm-values" --query Parameter.Value --output text > "$work/values.yaml"
-gunzip -c "$work/image.tar.gz" | k3s ctr images import -
 param() { aws ssm get-parameter --with-decryption --name "/$NAME/$1" --query Parameter.Value --output text; }
 kubectl create namespace crucible --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n crucible create secret docker-registry ghcr-pull --docker-server=ghcr.io --docker-username=crucible --docker-password="$token" --dry-run=client -o yaml | kubectl apply -f -
 # CRUCIBLE_SECRET_KEY (seals repository credentials) comes from the persistent stack, so it outlives teardown. An
 # install made before `crucible aws init` created it has none: deploy without it, as before, and say so.
 secret_key=()
@@ -147,8 +148,8 @@ kubectl -n crucible create secret generic crucible-secrets \
   --from-literal=POSTGRES_PASSWORD="$(param db_password)" \
   --from-literal=git-credentials="$(param git_credentials)" \
   --dry-run=client -o yaml | kubectl apply -f -
-helm upgrade --install crucible "$work/chart.tgz" -n crucible \
-  --set-string image.tag="$sha" --set-string host="$${HOST-$DOMAIN}" --set-string publicURL="$${PUBLIC_URL:-https://$DOMAIN}" \
+helm upgrade --install crucible oci://ghcr.io/platform-infra-org/charts/crucible --version "$${version#v}" -n crucible \
+  --set-string image.pullSecret=ghcr-pull --set-string host="$${HOST-$DOMAIN}" --set-string publicURL="$${PUBLIC_URL:-https://$DOMAIN}" \
   --set tls.enabled="$${TLS_ENABLED:-true}" \
   --set oidc.issuer="$OIDC_ISSUER" --set oidc.clientId="$OIDC_CLIENT_ID" \
   --set backup.bucket="$DATA_BUCKET" --set backup.region="$REGION" \
@@ -157,7 +158,8 @@ helm upgrade --install crucible "$work/chart.tgz" -n crucible \
   --set-string bootstrapAdmin="$BOOTSTRAP_ADMIN" \
   -f "$work/values.yaml" \
   --wait --timeout 10m
-echo "deployed $sha"
+helm registry logout ghcr.io || true
+echo "deployed $version"
 SH
 
 cat > /opt/crucible/snapshot.sh <<'SH'

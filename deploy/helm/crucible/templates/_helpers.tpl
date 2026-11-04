@@ -1,1 +1,1 @@
-{{- define "crucible.image" -}}{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}{{- end -}}
+{{- define "crucible.image" -}}{{ if and .Values.image.digest (not (hasPrefix "sha256:" .Values.image.digest)) }}{{ fail "image.digest must be sha256:<64 hex>" }}{{ end }}{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}{{- end -}}

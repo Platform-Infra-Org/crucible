@@ -138,6 +138,7 @@ dg=sha256:$(printf 'a%.0s' $(seq 64))
 dig=$(helm template t "$chart" $base --set image.repository=ghcr.io/platform-infra-org/crucible --set image.tag=1.2.3 --set image.digest=$dg)
 grep -q "ghcr.io/platform-infra-org/crucible@$dg" <<<"$dig" || { echo "digest not rendered"; exit 1; }
 if grep -q 'crucible:1.2.3' <<<"$dig"; then echo "tag must not render when a digest is set"; exit 1; fi
+if helm template t "$chart" $base --set image.digest=$(printf 'a%.0s' $(seq 64)) >/dev/null 2>&1; then echo "a bare-hex digest must fail"; exit 1; fi
 ps=$(helm template t "$chart" $base --set image.pullSecret=ghcr-pull)
 want=$(grep -c 'image: "docker.io/library/crucible' <<<"$ps")
 got=$(grep -c -- '- name: ghcr-pull' <<<"$ps")

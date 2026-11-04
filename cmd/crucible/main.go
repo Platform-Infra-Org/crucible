@@ -17,9 +17,12 @@ import (
 	"crucible/internal/awsops"
 	"crucible/internal/config"
 	"crucible/internal/content"
+	"crucible/internal/docs"
 )
 
 const usage = `usage:
+  crucible serve
+  crucible version
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
@@ -33,6 +36,8 @@ const usage = `usage:
   crucible local up [--keycloak-port PORT] [--no-build]
   crucible local down [--wipe]
   crucible local status
+
+serve runs the server; it is configured by environment variables only. version prints the build version.
 
 local runs the local stack (Postgres, Keycloak, Crucible) with Docker Compose from the repo root: up builds, seeds
 the example training repos and starts it at http://localhost:8080; down stops it and keeps its data (--wipe deletes
@@ -53,27 +58,34 @@ the regions labs may use; a re-run without it keeps the current list, and a new 
 --var-file defaults to deploy/aws/main/crucible.tfvars in the repo root.
 --no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+func main() { os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr)) }
+
+func runMain(args []string, out, errw io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(errw, usage)
+		return 2
 	}
-	switch os.Args[1] {
+	switch args[0] {
+	case "serve":
+		return serve(args[1:])
+	case "version":
+		fmt.Fprintln(out, docs.Version)
+		return 0
 	case "lint":
-		if len(os.Args) != 3 {
-			fmt.Fprintln(os.Stderr, usage)
-			os.Exit(2)
+		if len(args) != 2 {
+			fmt.Fprintln(errw, usage)
+			return 2
 		}
-		os.Exit(lint(os.Args[2], os.Stdout))
+		return lint(args[1], out)
 	case "preview":
-		os.Exit(preview(os.Args[2:]))
+		return preview(args[1:])
 	case "aws":
-		os.Exit(awsCmd(os.Args[2:]))
+		return awsCmd(args[1:])
 	case "local":
-		os.Exit(localCmd(os.Args[2:]))
+		return localCmd(args[1:])
 	default:
-		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+		fmt.Fprintln(errw, usage)
+		return 2
 	}
 }
 

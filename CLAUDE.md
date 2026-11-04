@@ -41,7 +41,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 
 | What | Command |
 |---|---|
-| Build binaries (`bin/crucible`, `crucible-api`, `crucible-agent`) | `make build` |
+| Build binaries (`bin/crucible`, `crucible-agent`) | `make build` |
 | Go checks | `gofmt -l cmd internal`, `go vet ./...`, `go test -race ./...` |
 | Cluster integration test (build tag) | `go vet -tags cluster ./internal/labs` |
 | Web | `cd web && npm test && npx tsc -b && npm run build && npm run lint` |
@@ -60,7 +60,7 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 ## Layout
 
-- `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
+- `cmd/crucible` the CLI and the server (`serve`, `version`, `lint`, `preview`, `aws …`, `local …`); `cmd/crucible-agent` laptop lab agent
 - `internal/` — one package per domain: `labs` (runners: local/cluster/aws — `runtime: terraform` + `cloud: aws`,
   alias `runtime: aws`, keyed "aws" inside — terraform estimates, metering from lab state, approvals, budgets, sweep,
   reaper, ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,

@@ -543,7 +543,7 @@ AWS`, "AWS", aws, 1)
 	}
 }
 
-// The lint runs inside crucible-api on every git sync: an author's push must not crash it (stack overflow on deep
+// The lint runs inside crucible serve on every git sync: an author's push must not crash it (stack overflow on deep
 // nesting) or burn minutes of CPU (evaluating expressions). Each input must fail fast with a problem.
 func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
 	nest := func(open, close string, n int) string { return strings.Repeat(open, n) + strings.Repeat(close, n) }

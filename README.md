@@ -18,7 +18,7 @@ printed `./bin/crucible-agent …` command in a terminal.
 
 ## Configuration notes
 
-`crucible-api` reads `CRUCIBLE_QUIZ_SECRET`, a stable secret mixed into the per-learner quiz choice ids so the
+`crucible serve` reads `CRUCIBLE_QUIZ_SECRET`, a stable secret mixed into the per-learner quiz choice ids so the
 browser cannot infer answers from them. Set it to a random value in every real deployment and keep it stable across
 restarts (changing it only reshuffles quizzes that are open at that moment). If it is unset the API logs a warning and
 uses a fixed development value; the local compose stack sets a dev value.
@@ -64,7 +64,7 @@ Things that catch authors out:
 - **`crucible preview` runs the repo's scripts.** Local-lab compose files and setup scripts run on your Docker. Read
   a repo you did not write before previewing it (see below).
 
-### Running `crucible-api` outside the image
+### Running `crucible serve` outside the image
 
 The image sets `CRUCIBLE_GIT_CONFIG` and the local compose stack sets `CRUCIBLE_GIT_ALLOW_FILE`; a developer running
 the API directly from a shell sets them by hand:

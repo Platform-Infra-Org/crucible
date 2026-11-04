@@ -206,7 +206,7 @@ body { margin: 0; }
     <div class="figure">
       <svg viewBox="0 0 1000 470" role="img" aria-labelledby="d1t d1d">
         <title id="d1t">Local stack</title>
-        <desc id="d1d">A laptop running Docker Compose with crucible-api, Keycloak, Postgres and mounted git repos, connected as file:// repositories, plus the crucible-agent that runs labs in Docker or on your own cluster.</desc>
+        <desc id="d1d">A laptop running Docker Compose with crucible serve, Keycloak, Postgres and mounted git repos, connected as file:// repositories, plus the crucible-agent that runs labs in Docker or on your own cluster.</desc>
         <rect class="zone" x="10" y="10" width="980" height="450" rx="14"/>
         <text class="zl" x="30" y="38">YOUR LAPTOP · DOCKER DESKTOP</text>
 
@@ -219,7 +219,7 @@ body { margin: 0; }
         <text class="zl" x="280" y="82">DOCKER COMPOSE</text>
 
         <rect class="box hot" x="280" y="96" width="430" height="108" rx="10"/>
-        <text class="bt" x="298" y="124">crucible-api</text>
+        <text class="bt" x="298" y="124">crucible serve</text>
         <text class="bs" x="298" y="148">One Go process: the API and the React app on port 8080</text>
         <text class="bs" x="298" y="168">Imports examples/platform into an empty database</text>
         <text class="bs" x="298" y="188">Fetches training content from git every 10 s</text>
@@ -288,7 +288,7 @@ body { margin: 0; }
     <div class="figure">
       <svg viewBox="0 0 1000 560" role="img" aria-labelledby="d2t d2d">
         <title id="d2t">cluster-check</title>
-        <desc id="d2d">Playwright drives the Compose stack; crucible-api, running in dry-run AWS mode, creates lab pods in the kind cluster crucible-m4 as the crucible service account; the agent runs the Forge 101 cluster lab on the same kind cluster.</desc>
+        <desc id="d2d">Playwright drives the Compose stack; crucible serve, running in dry-run AWS mode, creates lab pods in the kind cluster crucible-m4 as the crucible service account; the agent runs the Forge 101 cluster lab on the same kind cluster.</desc>
         <rect class="zone" x="10" y="10" width="980" height="540" rx="14"/>
         <text class="zl" x="30" y="38">YOUR LAPTOP · make cluster-check</text>
 
@@ -300,7 +300,7 @@ body { margin: 0; }
         <rect class="group" x="252" y="50" width="300" height="252" rx="12"/>
         <text class="zl" x="268" y="74">COMPOSE + cluster.yml</text>
         <rect class="box hot" x="268" y="86" width="268" height="112" rx="10"/>
-        <text class="bt" x="284" y="112">crucible-api</text>
+        <text class="bt" x="284" y="112">crucible serve</text>
         <text class="cd" x="284" y="134">CRUCIBLE_AWS_LABS=dryrun</text>
         <text class="bs" x="284" y="156">a fake lab account, never AWS</text>
         <text class="bs" x="284" y="176">kubeconfig: SA crucible</text>

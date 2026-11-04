@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"crucible/internal/docs"
 )
 
 func TestLintExamplesPass(t *testing.T) {
@@ -78,5 +81,19 @@ func TestInviteNeedsOneEmail(t *testing.T) {
 	// EMAIL then --name parses (flags stop at a plain argument): it gets as far as reading the stack, which fails here.
 	if code := awsCmd([]string{"invite", "alice@example.com", "--name", "Alice Smith"}); code != 1 {
 		t.Fatalf("invite EMAIL --name: exit %d, want 1 (past argument checks)", code)
+	}
+}
+
+func TestVersionPrintsTheStampedVersion(t *testing.T) {
+	var out bytes.Buffer
+	if code := runMain([]string{"version"}, &out, io.Discard); code != 0 || strings.TrimSpace(out.String()) != docs.Version {
+		t.Fatalf("version: exit %d, %q", code, out.String())
+	}
+}
+
+func TestUnknownCommandShowsUsage(t *testing.T) {
+	var errw bytes.Buffer
+	if code := runMain([]string{"nope"}, io.Discard, &errw); code != 2 || !strings.Contains(errw.String(), "crucible serve") {
+		t.Fatalf("exit %d, usage %q", code, errw.String())
 	}
 }

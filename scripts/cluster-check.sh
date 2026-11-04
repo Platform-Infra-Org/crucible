@@ -2,7 +2,7 @@
 # M4 acceptance: Forge 101's cluster lab on a local kind cluster standing in for k3s. Docker Desktop cannot run
 # sysbox, so lab pods are privileged dind here (CRUCIBLE_CLUSTER_PRIVILEGED=1, dev only). Everything else is real:
 # namespaces, quotas, NetworkPolicy (kindnet), exec terminals, and the chart's RBAC + admission policy, because
-# both the integration test and crucible-api authenticate as the crucible service account.
+# both the integration test and crucible serve authenticate as the crucible service account.
 # KEEP=1 leaves kind (and the compose stack) running. Never touches AWS.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)

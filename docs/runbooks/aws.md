@@ -230,7 +230,7 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    `table_configurations`, record it here and fix the stack before the next labs-init.
 
 **Server settings.** `crucible aws up` sets these from the labs stack's outputs; set them yourself only on another
-host. With `CRUCIBLE_AWS_LABS=1`, crucible-api refuses to start without `CRUCIBLE_AWS_PLAN_ROLE_ARN`,
+host. With `CRUCIBLE_AWS_LABS=1`, crucible serve refuses to start without `CRUCIBLE_AWS_PLAN_ROLE_ARN`,
 `CRUCIBLE_AWS_EXPORT_BUCKET` and `CRUCIBLE_AWS_EXPORT_NAME` (outputs `plan_role_arn`, `export_bucket`, `export_name`).
 `CRUCIBLE_AWS_EXPORT_PREFIX` defaults to `cur`. `INFRACOST_API_KEY` and `CRUCIBLE_INFRACOST` are gone and ignored.
 
@@ -500,7 +500,7 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
 - **Lab bucket names are global.** OwnBuckets matches `crucible-lab-<id>*` by name, with no `s3:ResourceAccount`
   pin. A bucket of that name in another account is reachable only if that account's bucket policy allows it, so
   this is harmless, but a dedicated lab account is still the safer setup.
-- If crucible-api restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
+- If crucible serve restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
   the lab up as stuck after **70 minutes** and destroys it again (the hourly cost cap limits what that can cost).
 - `CRUCIBLE_AWS_LABS=dryrun` (Helm `awsLabs.dryRun`) prices aws labs from `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds
   fixture list prices on every start, so metering works without AWS. Fixture prices never price a real lab: a

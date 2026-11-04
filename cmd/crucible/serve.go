@@ -45,14 +45,21 @@ import (
 	"crucible/internal/secrets"
 )
 
-func main() {
+// serve runs the Crucible server (formerly the crucible-api binary).
+func serve(args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: crucible serve (configured by environment variables only)")
+		return 2
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		slog.Error("crucible-api failed", "err", err)
-		os.Exit(1)
+		slog.Error("crucible serve failed", "err", err)
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
 	}
+	return 0
 }
 
 // previewGuard fails closed: preview mode (an admin login by token, OIDC off) starts only when CRUCIBLE_PUBLIC_URL is
@@ -393,7 +400,7 @@ func run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	slog.Info("crucible-api listening. The forge is lit", "addr", srv.Addr, "public_url", public)
+	slog.Info("crucible serve listening. The forge is lit", "addr", srv.Addr, "public_url", public)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

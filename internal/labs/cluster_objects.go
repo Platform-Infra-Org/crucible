@@ -35,7 +35,7 @@ var (
 )
 
 // blockedEgress can never be reached from a lab: link-local (cloud metadata, IMDS at 169.254.169.254) and every
-// private range, which covers the node, the Kubernetes API, Postgres, crucible-api and other labs. There is no IPv6
+// private range, which covers the node, the Kubernetes API, Postgres, crucible serve and other labs. There is no IPv6
 // allow rule, so IPv6 (including the IPv6 IMDS endpoint) is denied as well.
 var blockedEgress = []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
 

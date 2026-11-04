@@ -886,7 +886,8 @@ crucible aws deploy --version vX.Y.Z    <span class="c"># otherwise</span></code
       before sysbox (M4) has none, and one built before M6 has an older <code>deploy.sh</code>. Rebuild either with
       <code>crucible aws teardown --yes</code>, then <code>crucible aws up</code>. The data comes back from the latest snapshot.</p></div>
     <div class="note warn"><p><strong>Migrating to releases from GHCR.</strong>A node created before this change keeps its old <code>deploy.sh</code>, and <code>deploy</code> refuses it. Add <code>ghcr_pull_token</code> to
-      <code>crucible.tfvars</code>, run <code>crucible aws teardown --yes</code>, then <code>crucible aws up --version vX.Y.Z</code> (the snapshot restores the data). The old <code>releases/</code> objects in the data bucket
+      <code>crucible.tfvars</code>, and remove <code>toolbox_image</code> and <code>workspace_image</code> unless you override them on purpose: the release pins both,
+      and an old pinned toolbox lacks <code>crucible ready</code>. Then run <code>crucible aws teardown --yes</code>, then <code>crucible aws up --version vX.Y.Z</code> (the snapshot restores the data). The old <code>releases/</code> objects in the data bucket
       are no longer used; delete them by hand when you like.</p></div>
   </section>
 

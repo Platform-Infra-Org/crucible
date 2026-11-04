@@ -217,6 +217,7 @@ jobs:
           name: sboms
           path: sbom-*.cdx.json
           if-no-files-found: error
+          overwrite: true
 
   binaries:
     needs: version
@@ -242,6 +243,7 @@ jobs:
           name: binaries
           path: dist/
           if-no-files-found: error
+          overwrite: true
 
   publish:
     needs: [version, images, binaries]
@@ -303,6 +305,12 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          # A re-run after the tag was pushed finds it on this commit already; a tag on any other commit stops the run.
+          if at="$(git rev-parse -q --verify "refs/tags/${VERSION}^{commit}")"; then
+            [ "$at" = "$(git rev-parse HEAD)" ] && exit 0
+            echo "::error::Tag $VERSION already points at $at, not this commit"
+            exit 1
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "${VERSION}" -m "Prerelease ${VERSION}"

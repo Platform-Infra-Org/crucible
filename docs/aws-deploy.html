@@ -657,8 +657,8 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
     <h3>When a release goes wrong</h3>
     <ul class="muted">
       <li><b>A PR merged from a fork cannot release</b>: the run has no write token.</li>
-      <li><b>Tagged but never published.</b> Re-run the failed jobs of that release run (Actions → the run → Re-run failed jobs). It resumes only for that PR's own tag, and only when no GitHub Release exists for it.</li>
-      <li><b>A GitHub Release exists but is incomplete</b> (an asset upload or the <code>latest</code> move failed): a re-run does nothing. Fix it by hand with <code>gh release upload</code> or by re-tagging <code>latest</code>.</li>
+      <li><b>A release run failed part-way.</b> Open the run and choose <b>Re-run failed jobs</b>. It picks up from the job that failed, with the version the run already chose, including a Release whose upload or <code>latest</code> move failed. <b>Re-run all jobs</b> is different: it resumes only a tag on this merge that has no GitHub Release yet, and does nothing once one exists.</li>
+      <li><b>An older run re-run after a newer release.</b> It publishes the older version but leaves <code>latest</code> and GitHub's <i>Latest</i> mark on the newer one.</li>
       <li><b>Build time.</b> The images' build stages cross-compile on the runner, and only their small final stages run under QEMU for arm64.</li>
     </ul>
   </section>

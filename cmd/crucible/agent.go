@@ -1,5 +1,4 @@
 // This file is `crucible agent`: it runs laptop labs (Docker compose) and cluster labs (Helm on a cluster of your kubeconfig).
-
 package main
 
 import (
@@ -23,29 +22,33 @@ import (
 )
 
 // agentCmd is `crucible agent`.
-func agentCmd(args []string) int {
+func agentCmd(args []string, out, errw io.Writer) int {
 	if len(args) > 0 && args[0] == "cluster" {
-		return clusterCmd(args[1:], agent.NewKind(), os.Stdout, os.Stderr)
+		return clusterCmd(args[1:], agent.NewKind(), out, errw)
 	}
 	home, _ := os.UserHomeDir()
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
+	fs.SetOutput(errw)
 	server := fs.String("server", os.Getenv("CRUCIBLE_SERVER"), "Crucible URL, e.g. https://crucible.example.com")
 	token := fs.String("token", os.Getenv("CRUCIBLE_TOKEN"), "pairing token (prefer the CRUCIBLE_TOKEN env var: flags are visible to other local users)")
 	labs := fs.String("labs-dir", filepath.Join(home, ".crucible", "labs"), "where lab files are unpacked")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig for cluster labs (default: $KUBECONFIG, else ~/.kube/config)")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *server == "" || *token == "" {
-		fmt.Fprintln(os.Stderr, "usage: CRUCIBLE_TOKEN=TOKEN crucible agent --server URL")
+		fmt.Fprintln(errw, "usage: CRUCIBLE_TOKEN=TOKEN crucible agent --server URL")
 		return 2
 	}
 	if err := checkServer(*server); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(errw, err)
 		return 2
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		fmt.Fprintln(os.Stderr, "crucible agent needs Docker with the compose plugin on your PATH")
+		fmt.Fprintln(errw, "crucible agent needs Docker with the compose plugin on your PATH")
 		return 1
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -99,10 +99,26 @@ func TestUnknownCommandShowsUsage(t *testing.T) {
 }
 
 func TestAgentAndReadyAreSubcommands(t *testing.T) {
-	for _, args := range [][]string{{"agent", "cluster"}, {"ready"}} {
+	for _, k := range []string{"CRUCIBLE_SERVER", "CRUCIBLE_TOKEN", "LAB_NAMESPACE"} {
+		t.Setenv(k, "")
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"agent", "cluster"}, "crucible agent cluster up|down"},
+		{[]string{"ready"}, "crucible ready [--json]"},
+		{[]string{"agent"}, "crucible agent --server"},
+	} {
 		var errw bytes.Buffer
-		if code := runMain(args, io.Discard, &errw); code != 2 {
-			t.Errorf("%v: exit %d (want usage, 2): %s", args, code, errw.String())
+		code := runMain(c.args, io.Discard, &errw)
+		if code != 2 || !strings.Contains(errw.String(), c.want) || strings.Contains(errw.String(), "crucible serve") {
+			t.Errorf("%v: exit %d, stderr %q (want 2 and %q)", c.args, code, errw.String(), c.want)
+		}
+	}
+	for _, args := range [][]string{{"agent", "-h"}, {"ready", "-h"}} {
+		if code := runMain(args, io.Discard, io.Discard); code != 0 {
+			t.Errorf("%v: exit %d, want 0", args, code)
 		}
 	}
 }

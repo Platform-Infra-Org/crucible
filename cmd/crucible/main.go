@@ -75,9 +75,9 @@ func runMain(args []string, out, errw io.Writer) int {
 		fmt.Fprintln(out, docs.Version)
 		return 0
 	case "agent":
-		return agentCmd(args[1:])
+		return agentCmd(args[1:], out, errw)
 	case "ready":
-		return readyCmd(args[1:])
+		return readyCmd(args[1:], out, errw)
 	case "lint":
 		if len(args) != 2 {
 			fmt.Fprintln(errw, usage)

@@ -6,13 +6,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, edited, synchronize, reopened]
 
 permissions:
   contents: read
 
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -21,9 +27,13 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-            web/node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('go.sum', 'web/package-lock.json') }}
           restore-keys: deps-${{ runner.os }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
 
       # The repo brings its own pinned Go and Terraform (the runner's are not the pins).
       - name: Install pinned tools
@@ -35,6 +45,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - uses: azure/setup-helm@v4
         with:
@@ -45,6 +57,9 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      - name: go vet (cluster tag)
+        run: go vet -tags cluster ./internal/labs
 
       - name: go test
         run: go test -race ./...
@@ -65,7 +80,7 @@ jobs:
       - name: Content lint
         run: |
           make build
-          for r in examples/forge-*; do ./bin/crucible lint "$r"; done
+          for r in examples/platform examples/forge-*; do ./bin/crucible lint "$r"; done
 
       - name: Web
         working-directory: web
@@ -81,6 +96,7 @@ jobs:
   pr-title:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pull-requests: read
     steps:

@@ -90,7 +90,7 @@ three ways, and you set up the lab for them in Terraform.
   ```
 
   (The same works as an inline `ingress { from_port = 22, to_port = 22, cidr_blocks = [var.crucible_ssh_source_cidr] }`.)
-  `aws.direct_ssh` lets the workspace reach TCP 22 on machines in the lab subnets, but never the Crucible node itself. The lab's security group must allow TCP 22 from `var.crucible_ssh_source_cidr`, the Crucible node's address, because the workspace's traffic leaves from it. Without `direct_ssh` the variable is empty.
+  `aws.direct_ssh` lets the workspace reach TCP 22 on machines in the lab subnets, but never the Crucible node itself. It needs the install's lab network (`crucible aws labs-init --vpc-id --subnet-ids`) in the lab's region; without it the lab refuses to start. The lab's security group must allow TCP 22 from `var.crucible_ssh_source_cidr`, the Crucible node's address, because the workspace's traffic leaves from it. Without `direct_ssh` the variable is empty.
 - **The console.** For a machine that won't boot or has no network, the trainee uses `aws ec2 get-console-screenshot`
   and the serial console. `lab-ssh` and `lab-console` come with the workspace image an operator sets
   (`workspace_image`).

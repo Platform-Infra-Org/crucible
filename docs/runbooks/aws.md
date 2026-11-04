@@ -427,8 +427,8 @@ tagging, tf-apply memory) in this section, and fix the code or the labs stack be
 
 **OS-level labs (machines the trainee works on as root, boots, breaks and repairs).**
 
-*The workspace image.* `lab-ssh` and `lab-console` (and the AWS CLI, Terraform and kubectl the workspace needs) come from
-`deploy/workspace`. Until `workspace_image` is set, the chart keeps `amazon/aws-cli` and those commands don't exist. Publish it
+*The workspace image.* `deploy/workspace` is `amazon/aws-cli` plus ssh, the Session Manager plugin and the two helpers
+`lab-ssh` and `lab-console`. Until `workspace_image` is set, the chart keeps `amazon/aws-cli` and those commands don't exist. Publish it
 (`make workspace` builds one local arch for a quick look; do not use it to publish):
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push \
@@ -477,6 +477,8 @@ are **not** granted, so a trainee cannot discover other labs' commands. `SendCom
    the node role caps at one hour; each press makes a fresh lab session). The sign-in link works once, within 15 minutes, and a second press within a minute for the same lab is refused.
 6. **Serial endpoint reachable.** `crucible aws status` must not list `ec2-serial-console.il-central-1.api.aws:22` under blocked
    hosts (egress line says every host is reachable). If it does, the firewall blocks TCP 22 to it and `lab-console` will hang.
+7. **Run Command stays in the lab.** From a lab workspace, `aws ssm send-command --targets Key=tag:crucible:lab-id,Values=<another lab id>
+   --document-name AWS-RunShellScript --parameters commands=true` is denied or reaches no instance.
 
 **What trainees can see.** A lab session can read and write its own terraform state
 (`s3://<labstate bucket>/labs/<id>.tfstate`), and the workspace has those credentials. **Content authors must not

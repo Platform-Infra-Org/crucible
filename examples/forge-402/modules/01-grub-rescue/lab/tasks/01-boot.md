@@ -9,7 +9,7 @@ for this one. Find the instance id in the lab's outputs, or with
    page and pick EC2 serial console. `aws ec2 get-console-screenshot` shows what the machine last drew.
 2. Reboot from there, or wait for the GRUB menu (10 seconds). Press `e` on the default entry and fix `root=`: use
    `blkid` from the emergency shell to find the right one, or `root=LABEL=cloudimg-rootfs`. Press Ctrl-X to boot.
-3. Once you are logged in, make it stick: `sudo update-grub`.
+3. Once it boots, log in with `aws ssm start-session --target <instance id>` and make it stick: `sudo update-grub`.
 
 The other way in: stop the instance, attach its root volume to a second instance, fix `/boot/grub/grub.cfg` there, and
 put the volume back. Press **Check** when the machine boots on its own.

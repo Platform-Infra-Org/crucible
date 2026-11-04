@@ -204,6 +204,11 @@ func TestStartGuards(t *testing.T) {
 	if n != 0 {
 		t.Fatal("no lab row may be created when the runtime is unavailable")
 	}
+	// The lobby says it once; the page adds the "Connect your laptop" link after it.
+	f.run.unavailable = errAgentOffline
+	if m, err := f.s.ModuleLab(context.Background(), f.u, "forge", "forge-101", "02-first-lab"); err != nil || m.RuntimeReady || m.RuntimeMessage != "Your laptop agent is not connected." {
+		t.Fatalf("offline agent in the lobby: %+v %v", m, err)
+	}
 }
 
 func TestFullLabFlow(t *testing.T) {

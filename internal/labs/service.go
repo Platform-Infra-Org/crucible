@@ -516,7 +516,9 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 	}
 	if r := s.Runners[m.Lab.Runtime]; r == nil {
 		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
-	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
+	} else if err := r.Available(&Instance{UserID: u.ID}); errors.Is(err, errAgentOffline) {
+		out.RuntimeReady, out.RuntimeMessage = false, "Your laptop agent is not connected." // the page adds the Connect link
+	} else if err != nil {
 		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 	}
 	if q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab); err != nil {

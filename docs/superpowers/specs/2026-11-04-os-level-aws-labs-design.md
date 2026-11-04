@@ -90,8 +90,8 @@ password user, and the lab role is tag-scoped. The runbook says so.
 `POST /api/labs/{id}/console` (JSON body, same-origin as every state change):
 
 - Allowed for the lab's own trainee while the lab is running on the aws runner; anyone else gets 404.
-- Crucible assumes the lab role afresh with the lab's session tags (`labSession(inst)`), 15-minute duration; it never
-  reads the workspace Secret back.
+- Crucible assumes the lab role afresh with the lab's session tags (`labSession(inst)`, `Cloud.AssumeLab`): a fresh
+  one-hour lab session per press, as ruled in the plan; it never reads the workspace Secret back.
 - Calls `https://signin.aws.amazon.com/federation?Action=getSigninToken` with those credentials, then returns
   `https://signin.aws.amazon.com/federation?Action=login&Issuer=Crucible&Destination=<EC2 instances in the lab's
   region, filtered by tag crucible:lab-id>&SigninToken=…`.
@@ -126,7 +126,9 @@ own lab's instances (ABAC).
 `crucible aws status` adds `signin.aws.amazon.com`, `ec2-instance-connect.<region>.amazonaws.com` and the region's
 serial console endpoint on TCP 22 when aws labs are on. The endpoint's name is not one pattern: older regions use
 `serial-console.ec2-instance-connect.<region>.aws`, newer ones (il-central-1 among them) `ec2-serial-console.<region>.api.aws`.
-Crucible keeps AWS's published table (region, endpoint, host key fingerprint) in one place and reads both from it.
+AWS's published table (region, endpoint, host key fingerprint) lives in two places kept in step: the Go map `status`
+reads, and `deploy/workspace/serial-console-endpoints` in the workspace image; `internal/awsops/serial_endpoints_test.go`
+fails when they disagree.
 
 ## 5. Workspace image
 
@@ -180,7 +182,8 @@ SSH on 22; the check runs `ssh` to the private IP from the check script. Both li
   the module variable reaches tfvars and `crucible.tf`; lint accepts the instance profile and refuses other IAM;
   the console endpoint answers only the lab's trainee, audits without the URL, rate-limits, and builds the URL against
   an `httptest` federation endpoint; the workspace compose uses the configured image; status lists the new hosts.
-- Web: the Console button shows only on a running AWS lab and opens the returned URL.
+- Web: the Console button renders only on a running AWS lab. Opening the returned URL in a new tab is covered by the
+  code, not a test.
 
 ## 8. Review focus
 

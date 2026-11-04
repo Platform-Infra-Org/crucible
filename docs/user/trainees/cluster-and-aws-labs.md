@@ -55,7 +55,7 @@ A lab that builds machines (servers, a Windows desktop) lets you reach them with
 
 - **AWS console** in the lab's toolbar, while the lab is running, opens the AWS console in a new tab, signed in for
   this lab only. The sign-in lasts up to an hour (press the button again for a fresh one, at most once a minute) and
-  shows only your lab's resources. For a machine that won't boot, open the instance's **EC2 serial console** page
+  lets you change only your lab's resources; you can still see other resources in the account. For a machine that won't boot, open the instance's **EC2 serial console** page
   there; for a Windows desktop, use **Fleet Manager**. If the button says it can't open the console, the message
   tells you why, such as the lab not running yet.
 - In the workspace terminal, with `<id>` the machine's instance id (Terraform's output or the console list it):

@@ -10,6 +10,10 @@ spec:
     spec:
       serviceAccountName: crucible
       automountServiceAccountToken: {{ .Values.clusterLabs.enabled }}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
       initContainers:
         - name: restore
           image: {{ .Values.postgres.image }}
@@ -42,7 +46,7 @@ spec:
             - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }
       containers:
         - name: api
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "crucible.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { cpu: 250m, memory: 512Mi } } # Guaranteed QoS
           ports: [{ containerPort: 8080 }]

@@ -11,7 +11,9 @@ need "to_regclass('public.users')"                       # restore only into an 
 need 'router.tls.certresolver: le'
 need 'router.entrypoints: websecure'
 need 'host: crucible.example.com'
-need 'imagePullPolicy: Never'
+need 'imagePullPolicy: IfNotPresent'
+need 'image: "docker.io/library/crucible:dev"'
+if grep -q imagePullSecrets <<<"$out"; then echo "default render must have no imagePullSecrets"; exit 1; fi
 need 'type: Recreate'
 need 'CRUCIBLE_QUIZ_SECRET'
 need 'list-objects-v2'
@@ -131,3 +133,12 @@ if grep -qE "crucible-estimates|kind: Role$|kind: Namespace$" <<<"$rbac"; then e
 if helm template t "$chart" $aws --set clusterLabs.enabled=false >/dev/null 2>&1; then echo "aws labs need cluster labs"; exit 1; fi
 if helm template t "$chart" $base --set awsLabs.enabled=true >/dev/null 2>&1; then echo "aws labs need the lab account's role ARNs"; exit 1; fi
 echo "helm chart OK"
+# Images: a digest wins over the tag; the pull secret lands on every pod that runs the server image.
+dg=sha256:$(printf 'a%.0s' $(seq 64))
+dig=$(helm template t "$chart" $base --set image.repository=ghcr.io/platform-infra-org/crucible --set image.tag=1.2.3 --set image.digest=$dg)
+grep -q "ghcr.io/platform-infra-org/crucible@$dg" <<<"$dig" || { echo "digest not rendered"; exit 1; }
+if grep -q 'crucible:1.2.3' <<<"$dig"; then echo "tag must not render when a digest is set"; exit 1; fi
+ps=$(helm template t "$chart" $base --set image.pullSecret=ghcr-pull)
+want=$(grep -c 'image: "docker.io/library/crucible' <<<"$ps")
+got=$(grep -c -- '- name: ghcr-pull' <<<"$ps")
+[ "$want" -ge 1 ] && [ "$want" = "$got" ] || { echo "pull secret: $got of $want server-image pods"; exit 1; }

@@ -78,6 +78,9 @@ jobs:
       - name: Workspace image scripts
         run: bash deploy/workspace/test.sh
 
+      - name: Toolbox shim
+        run: bash deploy/toolbox/test.sh
+
       # The Go stages only (no push, no full image): catches a COPY the build needs and lacks.
       - name: Image build stages
         run: |

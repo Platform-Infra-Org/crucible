@@ -22,6 +22,8 @@ RUN apk add --no-cache bash curl jq ca-certificates \
  && chmod +x /usr/local/bin/kubectl /usr/local/bin/helm /usr/local/bin/k9s \
  && rm -rf /tmp/linux-*
 COPY --from=ready /crucible /usr/local/bin/crucible
+# Authored lab content may still call the old crucible-ready command; it is `crucible ready` now.
+RUN printf '#!/bin/sh\nexec crucible ready "$@"\n' > /usr/local/bin/crucible-ready && chmod +x /usr/local/bin/crucible-ready
 # Login shells (the agent's terminals) get PS1 reset by /etc/profile, so set it again after it.
 RUN printf '%s\n' "PS1='\\[\\e[33m\\]\$CRUCIBLE_CONTEXT\\[\\e[0m\\]:\$LAB_NAMESPACE \\w \\\$ '" > /etc/profile.d/crucible-prompt.sh
 ENV HOME=/tmp PS1='\[\e[33m\]$CRUCIBLE_CONTEXT\[\e[0m\]:$LAB_NAMESPACE \w \$ '

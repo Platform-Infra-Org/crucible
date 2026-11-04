@@ -241,3 +241,17 @@ variable "smtp_password" {
   sensitive   = true
   description = "Stored as the SecureString /<name>/smtp_password; deploy.sh copies it into crucible-secrets"
 }
+
+variable "ghcr_pull_token" {
+  type        = string
+  sensitive   = true
+  description = "A GitHub token with read:packages only: the node pulls Crucible's private chart and server image from GHCR"
+  validation {
+    condition     = var.ghcr_pull_token != ""
+    error_message = "ghcr_pull_token is required (a GitHub token with read:packages)"
+  }
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_]+$", var.ghcr_pull_token))
+    error_message = "ghcr_pull_token must be a GitHub token: letters, digits and _ only"
+  }
+}

@@ -91,6 +91,7 @@ locals {
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
     quiz_secret        = random_password.quiz.result
+    ghcr_pull_token    = var.ghcr_pull_token
   }
 }
 
@@ -150,7 +151,7 @@ resource "aws_ssm_parameter" "helm_values" {
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "ghcr_pull_token"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]

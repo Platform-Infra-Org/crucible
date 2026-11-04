@@ -54,7 +54,7 @@ Second machine or fresh clone: run `crucible aws init` with the same flags (it r
 ## Everyday
 | Want | Command |
 |---|---|
-| Ship the current commit | `crucible aws deploy` |
+| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z`, or `--build` (builds this tree and pushes a dev release to GHCR, named `v0.0.0-dev.g<sha>`) |
 | Take a snapshot now | `crucible aws snapshot` |
 | Stop paying for compute tonight | `crucible aws sleep` (snapshot, then stop) |
 | Start before the schedule | `crucible aws wake` |

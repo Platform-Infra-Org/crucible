@@ -122,3 +122,10 @@ func TestAgentAndReadyAreSubcommands(t *testing.T) {
 		}
 	}
 }
+
+func TestDeployVersionAndBuildAreExclusive(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	if code := awsCmd([]string{"deploy", "--version", "v1.0.0", "--build"}); code != 2 {
+		t.Fatalf("exit %d", code)
+	}
+}

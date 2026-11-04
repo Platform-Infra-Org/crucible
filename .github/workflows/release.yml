@@ -185,7 +185,7 @@ jobs:
             parent="$(git rev-parse -q --verify 'HEAD^' || true)"
             if ! { [ "$(git rev-parse HEAD)" = "$MERGE_SHA" ] ||
                    { [ "$parent" = "$MERGE_SHA" ] && [[ "$(git log -1 --format=%s)" == "chore(release): $t "* ]]; }; }; then
-              echo "::notice::main's HEAD is $t, another merge's release; nothing to do."
+              echo "::notice::main has moved on: its HEAD is $t, another merge's release, so this run releases nothing. To publish this PR's version, run the manual release workflow (release-manual.yml) on its branch."
               printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
               exit 0
             fi

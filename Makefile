@@ -20,3 +20,7 @@ toolbox:
 WORKSPACE_TAG ?= dev
 workspace:
 	docker build -f deploy/workspace/Dockerfile -t crucible-workspace:$(WORKSPACE_TAG) deploy/workspace
+
+.PHONY: release-binaries
+release-binaries: # crucible for darwin/linux x amd64/arm64 + SHA256SUMS into dist/: make release-binaries VERSION=vX.Y.Z
+	./scripts/release-binaries.sh "$(VERSION)" dist

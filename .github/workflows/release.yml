@@ -1,0 +1,487 @@
+# Releases from main, driven by pull requests.
+#
+#   * PR opened / updated against main -> build everything that would ship (three multi-arch images, the chart, the
+#     crucible binaries) without pushing; the binaries and the chart are uploaded as a workflow artifact.
+#   * PR merged into main              -> git-cliff bumps the version and rewrites CHANGELOG.md, the change is
+#     committed back to main and tagged; the images are pushed to GHCR with provenance and SBOMs, the chart is
+#     pinned to their digests and pushed as an OCI chart, and a GitHub Release carries the binaries and SHA256SUMS.
+#
+# Docs-only and ci-only merges refresh the changelog's Unreleased section without a release.
+name: release
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+# One run per PR; a new push cancels the in-flight test build (the closed run is the PR's last event).
+concurrency:
+  group: release-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GIT_CLIFF_VERSION: "2.13.1"
+  # The release's published git-cliff-2.13.1-x86_64-unknown-linux-gnu.tar.gz.sha512 asset.
+  GIT_CLIFF_SHA512: e716cce3a07dda41b1e370d6afbd7a59eb3d4739509fb7856aeec8da2be28c0396584e29e106141c1a1c535c1827dbc1f60417524f5cfb1da9e11f700bd00f30
+  HELM_VERSION: v3.18.4
+  # Fixed names (GHCR wants lowercase; the org's name is not derived from github.repository).
+  SERVER_IMAGE: ghcr.io/platform-infra-org/crucible
+  WORKSPACE_IMAGE: ghcr.io/platform-infra-org/crucible-workspace
+  TOOLBOX_IMAGE: ghcr.io/platform-infra-org/crucible-toolbox
+  CHART_REPO: oci://ghcr.io/platform-infra-org/charts
+
+jobs:
+  # ------------------------------------------------------------------ open / update
+  test-build:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags so git-cliff sees them
+
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install git-cliff
+        run: |
+          f="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$f"
+          echo "${GIT_CLIFF_SHA512}  $RUNNER_TEMP/$f" | sha512sum -c -
+          tar xzf "$RUNNER_TEMP/$f" --strip-components=1 -C /usr/local/bin "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+
+      - name: Compute the next (bumped) version
+        id: ver
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # The -pr.<n> marker keeps a test build from colliding with a real release.
+          base="$(git-cliff --config cliff.toml --bumped-version)"
+          version="v${base#v}-pr.${PR_NUMBER}"
+          if ! [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+-pr\.[0-9]+$ ]]; then
+            echo "::error::Not a test-build version: $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only: nothing is pushed from a PR.
+      - name: Build the server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: CRUCIBLE_VERSION=${{ steps.ver.outputs.version }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ steps.ver.outputs.version }}
+
+      - name: Build the workspace image
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/workspace
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ${{ env.WORKSPACE_IMAGE }}:${{ steps.ver.outputs.version }}
+
+      - name: Build the toolbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/toolbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ${{ env.TOOLBOX_IMAGE }}:${{ steps.ver.outputs.version }}
+
+      - name: Package the chart and build the binaries
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          helm package deploy/helm/crucible --version "${VERSION#v}" --app-version "$VERSION" -d dist
+          scripts/release-binaries.sh "$VERSION" dist
+
+      - name: Upload what would ship
+        uses: actions/upload-artifact@v4
+        with:
+          name: crucible-${{ steps.ver.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------ merge
+  release:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Two merges in a row release one after the other (each pushes to main).
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    permissions:
+      contents: write # commit CHANGELOG, push the tag, create the release
+      packages: write # push the images and the chart to GHCR
+      id-token: write # OIDC for keyless provenance signing
+      attestations: write # actions/attest-build-provenance
+    steps:
+      # A release App is only needed once main is protected: GITHUB_TOKEN cannot be added to a branch-protection
+      # bypass list, and an App can. Skipped (not failed) while RELEASE_APP_ID is unset, so a missing key is not
+      # discovered after the PR has merged.
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        if: vars.RELEASE_APP_ID != ''
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+
+      - name: Install git-cliff
+        run: |
+          f="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$f"
+          echo "${GIT_CLIFF_SHA512}  $RUNNER_TEMP/$f" | sha512sum -c -
+          tar xzf "$RUNNER_TEMP/$f" --strip-components=1 -C /usr/local/bin "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+
+      - name: Compute the release version
+        id: ver
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          release_re='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          # Prerelease tags (release-manual) never count as the latest release.
+          describe() { git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v*-*' "$@" 2>/dev/null; }
+
+          # main's HEAD already carries a release tag. Resume it only when it is this PR's own release (HEAD is
+          # this merge, or the chore(release) commit right on top of it) and nothing was published for it yet: a
+          # re-run of a run that failed after the tag push. The artifact steps then run again and overwrite what the
+          # failed run left. Any other tagged HEAD (a green run re-run, another merge's release) does nothing.
+          # tagged=true skips the CHANGELOG and tag steps.
+          for t in $(git tag --points-at HEAD); do
+            [[ $t =~ $release_re ]] || continue
+            parent="$(git rev-parse -q --verify 'HEAD^' || true)"
+            if ! { [ "$(git rev-parse HEAD)" = "$MERGE_SHA" ] ||
+                   { [ "$parent" = "$MERGE_SHA" ] && [[ "$(git log -1 --format=%s)" == "chore(release): $t "* ]]; }; }; then
+              echo "::notice::main's HEAD is $t, another merge's release; nothing to do."
+              printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Fail closed: only a 404 means "not published"; any other gh error stops the run.
+            if out="$(gh api "repos/${GH_REPO}/releases/tags/$t" 2>&1 >/dev/null)"; then
+              echo "::notice::$t is already published; nothing to do."
+              printf 'tagged=true\nrelease=false\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            elif [[ $out != *"HTTP 404"* ]]; then
+              echo "::error::Could not check for a published $t: $out"
+              exit 1
+            fi
+            echo "::notice::$t was tagged by this merge's earlier run but never published; resuming it."
+            {
+              echo "version=$t"
+              echo "release=true"
+              echo "tagged=true"
+              if p="$(describe HEAD^)"; then echo "previous=$p"; fi
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          done
+
+          latest="$(describe || echo 'v0.0.0')"
+          version="$(git-cliff --config cliff.toml --bumped-version)"
+          version="v${version#v}"
+
+          # With merge commits, git-cliff can see a releasing change but skip every candidate while bumping, and
+          # return the existing tag. Then the bump comes from the PR title (checks.yml enforces it as a
+          # conventional commit). Before 1.0.0 a breaking change bumps the minor (cliff.toml's [bump]).
+          if [ "$version" = "$latest" ] || git rev-parse -q --verify "refs/tags/$version" >/dev/null; then
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            breaking='^[a-z]+(\([^)]*\))?!:'
+            feature='^feat(\([^)]*\))?:'
+            if [[ $PR_TITLE =~ $breaking ]]; then
+              if [ "$major" -eq 0 ]; then minor=$((minor + 1)); patch=0; else major=$((major + 1)); minor=0; patch=0; fi
+            elif [[ $PR_TITLE =~ $feature ]]; then
+              minor=$((minor + 1)); patch=0
+            else
+              patch=$((patch + 1))
+            fi
+            version="v${major}.${minor}.${patch}"
+            echo "::notice::git-cliff returned no bump; derived ${version} from the PR title."
+          fi
+          if ! [[ $version =~ $release_re ]]; then
+            echo "::error::Refusing to release an invalid version: $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$latest" != "v0.0.0" ]; then echo "previous=$latest" >> "$GITHUB_OUTPUT"; fi
+
+          # Release only when a version-bumping commit landed since the last release; docs-only and ci-only merges
+          # refresh the changelog's Unreleased section (the artifacts would be byte-identical).
+          if [ "$latest" = "v0.0.0" ]; then range="HEAD"; else range="${latest}..HEAD"; fi
+          rel='^(feat|fix|perf|refactor|revert|build)(\(.+\))?!?:|^[a-z]+(\(.+\))?!:'
+          if git log "$range" --format='%s' | grep -qE "$rel"; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Only non-releasing commits since ${latest}; refreshing the changelog, no release."
+          fi
+
+      - name: Update CHANGELOG
+        if: steps.ver.outputs.tagged != 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE: ${{ steps.ver.outputs.release }}
+        run: |
+          if [ "$RELEASE" = "true" ]; then
+            git-cliff --config cliff.toml --tag "$VERSION" -o CHANGELOG.md
+          else
+            git-cliff --config cliff.toml -o CHANGELOG.md
+          fi
+
+      - name: Commit CHANGELOG and (on release) push the tag
+        if: steps.ver.outputs.tagged != 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE: ${{ steps.ver.outputs.release }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if [ "$RELEASE" = "true" ]; then
+            if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+              echo "::error::Refusing to overwrite existing tag $VERSION"
+              exit 1
+            fi
+            git diff --staged --quiet || git commit -m "chore(release): ${VERSION} [skip ci]"
+            git tag -a "${VERSION}" -m "Release ${VERSION}"
+            # Both or neither: a main that moved meanwhile refuses the push, and a re-run starts clean.
+            git push --atomic origin HEAD:main "${VERSION}"
+          else
+            git diff --staged --quiet || git commit -m "chore(changelog): refresh unreleased [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      # No actions/cache here: a cache any PR run can save must never run in a job that can write (lint-workflows.sh).
+      # The commit the images are labelled with: the release commit, not the merge that triggered the run.
+      - name: Record the commit being built
+        if: steps.ver.outputs.release == 'true'
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned tools
+        if: steps.ver.outputs.release == 'true'
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - uses: azure/setup-helm@v4
+        if: steps.ver.outputs.release == 'true'
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.ver.outputs.release == 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.ver.outputs.release == 'true'
+
+      - name: Log in to GHCR
+        if: steps.ver.outputs.release == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the server image
+        if: steps.ver.outputs.release == 'true'
+        id: server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: CRUCIBLE_VERSION=${{ steps.ver.outputs.version }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ steps.ver.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+
+      - name: Build and push the workspace image
+        if: steps.ver.outputs.release == 'true'
+        id: workspace
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/workspace
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.WORKSPACE_IMAGE }}:${{ steps.ver.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+
+      - name: Build and push the toolbox image
+        if: steps.ver.outputs.release == 'true'
+        id: toolbox
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/toolbox/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.TOOLBOX_IMAGE }}:${{ steps.ver.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+
+      - name: SBOM of the server image
+        if: steps.ver.outputs.release == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-crucible.cdx.json
+          upload-artifact: false
+
+      - name: SBOM of the workspace image
+        if: steps.ver.outputs.release == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-crucible-workspace.cdx.json
+          upload-artifact: false
+
+      - name: SBOM of the toolbox image
+        if: steps.ver.outputs.release == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom-crucible-toolbox.cdx.json
+          upload-artifact: false
+
+      - name: Attest the server image
+        if: steps.ver.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.SERVER_IMAGE }}
+          subject-digest: ${{ steps.server.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the workspace image
+        if: steps.ver.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.WORKSPACE_IMAGE }}
+          subject-digest: ${{ steps.workspace.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the toolbox image
+        if: steps.ver.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.TOOLBOX_IMAGE }}
+          subject-digest: ${{ steps.toolbox.outputs.digest }}
+          push-to-registry: true
+
+      # The chart in the registry installs exactly these images (values.yaml is edited in the runner only).
+      - name: Pin the chart to the digests and push it
+        if: steps.ver.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go run ./scripts/chartpin -values deploy/helm/crucible/values.yaml \
+            -server "$SERVER_REF" -workspace "$WORKSPACE_REF" -toolbox "$TOOLBOX_REF"
+          helm package deploy/helm/crucible --version "${VERSION#v}" --app-version "$VERSION"
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          helm push "crucible-${VERSION#v}.tgz" "$CHART_REPO"
+
+      - name: Build the binaries
+        if: steps.ver.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: scripts/release-binaries.sh "$VERSION" dist
+
+      - name: Write this release's notes
+        if: steps.ver.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PREVIOUS: ${{ steps.ver.outputs.previous }}
+          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+        run: |
+          # A range, not --latest: --latest would stop at a prerelease tag merged into main.
+          if [ -n "$PREVIOUS" ]; then
+            git-cliff --config cliff.toml --strip all -o RELEASE_NOTES.md "${PREVIOUS}..HEAD"
+          else
+            git-cliff --config cliff.toml --latest --strip all -o RELEASE_NOTES.md
+          fi
+          {
+            echo
+            echo "### Images"
+            echo
+            echo '```'
+            echo "$SERVER_REF"
+            echo "$WORKSPACE_REF"
+            echo "$TOOLBOX_REF"
+            echo '```'
+            echo
+            echo "### Chart"
+            echo
+            echo '```'
+            echo "helm install crucible ${CHART_REPO}/crucible --version ${VERSION#v}"
+            echo "crucible aws deploy --version ${VERSION}"
+            echo '```'
+          } >> RELEASE_NOTES.md
+
+      - name: Create the GitHub Release
+        if: steps.ver.outputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: ${{ steps.ver.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/*
+            sbom-*.cdx.json
+
+      # Last, so `latest` only ever names images a published chart and release pin.
+      - name: Move the latest tags
+        if: steps.ver.outputs.release == 'true'
+        env:
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+        run: |
+          docker buildx imagetools create -t "${WORKSPACE_IMAGE}:latest" "$WORKSPACE_REF"
+          docker buildx imagetools create -t "${TOOLBOX_IMAGE}:latest" "$TOOLBOX_REF"

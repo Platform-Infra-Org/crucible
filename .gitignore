@@ -17,3 +17,4 @@ deploy/aws/main/*.tfvars
 
 # downloaded installers (e.g. the Session Manager plugin)
 *.pkg
+/dist/

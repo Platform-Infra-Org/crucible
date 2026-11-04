@@ -1,13 +1,15 @@
 # The cluster lab toolbox: what a trainee's terminals and a lab's scripts use against their cluster. The server pins it
 # by digest (CRUCIBLE_TOOLBOX_IMAGE); bump these versions deliberately.
-FROM golang:1.26-alpine AS ready
+# Cross-compiled on the builder's platform (no emulated Go compile in a multi-arch build).
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS ready
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd cmd
 COPY internal internal
 COPY docs/user docs/user
-RUN CGO_ENABLED=0 go build -o /crucible ./cmd/crucible
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /crucible ./cmd/crucible
 
 FROM alpine:3.22
 ARG TARGETARCH

@@ -3,6 +3,7 @@
 # wired automatically from the persistent stack (crucible aws init).
 bootstrap_admin    = "you@example.com"                        # first start: the one admin who configures the rest in the UI
 git_credentials    = "https://crucible-bot:TOKEN@git.example.com"   # read the training repos, push merged content edits
+ghcr_pull_token    = "ghp_…"   # required: a classic GitHub PAT with read:packages only (pulls the release from GHCR); never commit it
 
 # access = public (init --domain): uncomment and set both, domain equal to init's --domain. Leave them out with ssm.
 # domain           = "crucible.example.com"

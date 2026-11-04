@@ -9,7 +9,7 @@ import (
 )
 
 func TestLintExamplesPass(t *testing.T) {
-	for _, dir := range []string{"../../examples/forge-101", "../../examples/platform"} {
+	for _, dir := range []string{"../../examples/forge-101", "../../examples/forge-402", "../../examples/platform"} {
 		var out bytes.Buffer
 		if code := lint(dir, &out); code != 0 {
 			t.Fatalf("%s: exit %d\n%s", dir, code, out.String())

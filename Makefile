@@ -1,4 +1,4 @@
-.PHONY: test build web local-check cluster-check toolbox tools
+.PHONY: test build web local-check cluster-check toolbox tools workspace
 test:
 	go test ./...
 build:
@@ -16,3 +16,7 @@ tools: # pinned Go, Terraform and kind into .local/tools, checksum-verified (scr
 TOOLBOX_TAG ?= dev
 toolbox:
 	docker build -f deploy/toolbox/Dockerfile -t crucible-toolbox:$(TOOLBOX_TAG) .
+
+WORKSPACE_TAG ?= dev
+workspace:
+	docker build -f deploy/workspace/Dockerfile -t crucible-workspace:$(WORKSPACE_TAG) deploy/workspace

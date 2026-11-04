@@ -71,3 +71,27 @@ test('an aws lab is estimated, approved, provisioned, checked, destroyed and swe
   expect(metered).toBeGreaterThanOrEqual(0) // nth(-1) would silently check the last column
   await expect(row.getByRole('cell').nth(metered)).toHaveText(/^\$\d+\.\d{2}$/)
 })
+
+test('forge 402: the GRUB rescue lab is priced; Locked out refuses to start without the lab network', async ({ browser }) => {
+  const leader = await login(browser, 'leader')
+  await addParticipant(leader, 'forge-402', 'trainee@crucible.local')
+
+  // Priced from the dry run's rates ($0.03/h × 2 h). The dry run cannot boot a machine, so this test starts neither lab
+  // for real.
+  const trainee = await login(browser, 'trainee')
+  await expect(trainee.getByRole('link', { name: /Forge 402/ })).toBeVisible({ timeout: 60_000 })
+  await trainee.goto('/p/forge/forge-402/m/01-grub-rescue/lab')
+  await expect(trainee.getByRole('button', { name: 'Request approval ($0.06)' })).toBeEnabled()
+
+  // Locked out sets aws.direct_ssh, and cluster-check's install has no lab network (no labs-init): approved, it fails
+  // before anything is created, and the page says what to run.
+  await trainee.goto('/p/forge/forge-402/m/02-locked-out/lab')
+  await trainee.getByRole('button', { name: 'Request approval ($0.06)' }).click()
+  await expect(trainee.getByTestId('request-status')).toContainText('Waiting for approval')
+  await leader.getByRole('link', { name: 'Approvals' }).click()
+  const card = leader.getByRole('listitem', { name: 'Request from trainee@crucible.local' }).filter({ hasText: 'forge / forge-402' })
+  await card.getByRole('button', { name: 'Approve' }).click()
+  const failed = trainee.getByText(/^The lab failed to start: direct_ssh needs this install's lab network in eu-west-1/)
+  await expect(failed).toBeVisible({ timeout: 5 * 60_000 })
+  await expect(failed).toContainText('crucible aws labs-init --vpc-id --subnet-ids')
+})

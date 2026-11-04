@@ -1,13 +1,14 @@
 import { beforeEach, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import { LabPage } from './Lab'
-import type { ModuleLab } from '../types'
+import { LabPage, LabWorkspace } from './Lab'
+import type { LabView, ModuleLab } from '../types'
 
 const clusterInfo = { title: 'Cluster heat', runtime: 'cluster', runtime_ready: false, runtime_message: 'Your laptop agent is offline.', lab: null, contexts: [] } as unknown as ModuleLab
 let info: ModuleLab
 beforeEach(() => { info = clusterInfo })
 vi.mock('../useFetch', () => ({ useFetch: () => ({ data: info, error: undefined }) }))
+vi.mock('../lib/alerts', () => ({ toast: () => {}, askNotifications: () => {}, notificationsUndecided: () => false }))
 
 const page = () => renderToStaticMarkup(<MemoryRouter><LabPage /></MemoryRouter>)
 
@@ -37,4 +38,16 @@ test('an aws lab shows how its estimate was worked out, resource by resource', (
   expect(h).toContain('usage not stated')
   expect(h).toContain('<td>free</td>')
   expect(h).toContain('$0.0753')
+})
+
+const workspace = (runtime: string, state: string) => renderToStaticMarkup(
+  <MemoryRouter><LabWorkspace lab={{
+    id: 'l1', state, runtime, log: [], ends_at: new Date(Date.now() + 3600e3).toISOString(),
+    tasks: [{ id: 't1', status: 'open', title: 'T', body: '' }], terminals: [{ name: 'main' }],
+  } as unknown as LabView} setLab={() => {}} title="Heat" back="/" /></MemoryRouter>)
+
+test('only a ready aws lab has an AWS console button', () => {
+  expect(workspace('aws', 'ready')).toContain('AWS console')
+  expect(workspace('cluster', 'ready')).not.toContain('AWS console')
+  expect(workspace('aws', 'destroying')).not.toContain('AWS console')
 })

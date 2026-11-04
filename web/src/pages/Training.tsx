@@ -21,7 +21,7 @@ export function TrainingPage() {
   const base = `/p/${team}/${training}/m`
   return (
     <section className="page">
-      <Link to="/">← Hearth</Link>
+      <Link className="action back" to="/">Hearth</Link>
       <h1>{data.title}</h1>
       <p className="lede">{data.description}</p>
       {sword && <p className="sword-line">Your sword: <strong>{sword.rank}</strong> · {sword.percent}% · {sword.next ? `next ${sword.next.name} at ${sword.next.at}%` : 'finished'}</p>}

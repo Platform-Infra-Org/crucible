@@ -170,6 +170,25 @@ variable "lab_subnet_ids" {
   default     = ""
   description = "Set by `crucible aws up` from the labs stack: comma-separated subnets lab modules launch into"
 }
+variable "lab_instance_profile" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: the instance profile lab modules may attach (var.crucible_instance_profile)"
+}
+variable "lab_subnet_cidrs" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: comma-separated CIDRs of the lab subnets (direct_ssh labs)"
+}
+variable "workspace_image" {
+  type        = string
+  default     = ""
+  description = "The AWS lab workspace image by digest (deploy/workspace); empty keeps the chart's amazon/aws-cli"
+  validation {
+    condition     = var.workspace_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.workspace_image))
+    error_message = "workspace_image must be empty or pinned by digest: <image>@sha256:<64 hex>"
+  }
+}
 variable "bootstrap_admin" {
   type        = string
   default     = ""

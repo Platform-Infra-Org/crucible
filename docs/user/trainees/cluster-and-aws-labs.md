@@ -49,6 +49,26 @@ An AWS lab builds real cloud resources in a shared AWS account, so it costs mone
   is waiting for. **Withdraw request** cancels it.
 - Once it is approved, the lab starts on its own. If it was rejected, the page says who rejected it and why.
 
+## Working on the machine itself
+
+A lab that builds machines (servers, a Windows desktop) lets you reach them without leaving the page.
+
+- **AWS console** in the lab's toolbar, while the lab is running, opens the AWS console in a new tab, signed in for
+  this lab only. The sign-in lasts up to an hour (press the button again for a fresh one, at most once a minute) and
+  lets you change only your lab's resources; you can still see other resources in the account. For a machine that won't boot, open the instance's **EC2 serial console** page
+  there; for a Windows desktop, use **Fleet Manager**. If the button says it can't open the console, the message
+  tells you why, such as the lab not running yet.
+- In the workspace terminal, with `<id>` the machine's instance id (Terraform's output or the console list it):
+  - `aws ssm start-session --target <id>` opens a shell on the machine.
+  - `lab-ssh <id>` opens an SSH session; `lab-ssh --direct <id>` connects straight to the machine, for labs that
+    offer plain SSH. After the id you can name the user and a command to run instead of a shell:
+    `lab-ssh --direct <id> ubuntu true`.
+  - `lab-console <id>` opens the serial console, to watch a machine boot or fix one that won't. Leave with Enter,
+    then `~.`.
+  - `aws ec2 get-console-screenshot --instance-id <id>` takes a screenshot of the machine's screen.
+
+  `lab-ssh` and `lab-console` are there when your install uses Crucible's workspace image.
+
 ## When you can't start a lab
 
 The lab page says why: labs are paused by an admin, the training only runs labs in certain hours (it tells you when

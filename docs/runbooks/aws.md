@@ -29,7 +29,11 @@ an Elastic IP, a DNS record or a certificate.
 4. `crucible aws status`. Expect `ssm: Online`, `healthz: ok` and `egress: every host Crucible checks is reachable`. If `ssm:` is not `Online`, the checks stop
    and it names the three SSM hosts. If egress lists blocked hosts, send them to the network team. The list covers k3s, GitHub, Docker,
    apt (plain HTTP on port 80), the AWS CLI, Price List, S3, STS, SSM, Cognito (including its login domain), and the AWS-lab path
-   (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`). The git host is not tested: check it by hand.
+   (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`), plus the OS-level lab hosts:
+   `signin.aws.amazon.com` (console link), `ec2-instance-connect.<region>.amazonaws.com` (key pushes) and, over **TCP 22**, the
+   region's EC2 Serial Console endpoint (`ec2-serial-console.il-central-1.api.aws` here; the name differs by region generation, so
+   status looks it up in a table and checks only regions in it). `ghcr.io` and `pkg-containers.githubusercontent.com` (the workspace image's registry and blob host; the lab pod's Docker pulls it
+   through the node). A blocked `host:22` line means `lab-console` can't connect from lab pods. The git host is not tested: check it by hand.
 5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
    sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
@@ -179,6 +183,10 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    - the **export bucket** (`<name>-<account>-labexports`) and a **CUR 2.0 export** into it (`<name>-labs`, prefix `cur`,
      daily, gzip CSV, overwritten in place, with `resource_tags` so each line carries its `crucible:lab-id`). Data
      Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`;
+   - the **lab instance role and profile** `crucible-lab-instance` (labs may attach the profile to their machines): the SSM agent's
+     channel and Run Command only, written out instead of AWS's managed SSM core policy because that grants `ssm:GetParameter(s)`,
+     and root on a lab machine could then read `/<name>/*` (secret key, database password, OIDC secret). It carries an explicit
+     deny of `ssm:GetParameter*` on `/<name>` and `/<name>/*` as well;
    - an alert-only **AWS Budget** (`<name>-labs-monthly`) that emails at 80 % and 100 % of the month's actual spend,
      independent of Crucible. Set it with `--budget-usd 200 --budget-email ops@example.com` (repeat `--budget-email`,
      at most 10). On the first run, without `--budget-usd` the amount is $100 and without any `--budget-email` no
@@ -195,6 +203,10 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
      ```
      The plan should destroy only `aws_budgets_budget.labs[0]`; if it shows anything else, a value differs from
      what labs-init passed: stop and compare.
+   labs-init also reads the account's EC2 Serial Console setting (`aws ec2 get-serial-console-access-status`). It is already on in
+   il-central-1 (managed by the account). When it is off, labs-init only prints a note with the command an account admin runs
+   (it is account-wide per region): `aws ec2 enable-serial-console-access --region <region>`. It never turns it on itself.
+   `labs-init` and `up` also hand the node the lab subnets' CIDRs and its own address, which `aws.direct_ssh` labs need.
 2. **Activate the cost-allocation tag (the one manual step, free).** In Billing → Cost allocation tags (in the
    **management (payer) account** if the lab account is in an organization, else in the lab account), activate
    `crucible:lab-id`. It shows up there only after a tagged resource has existed, which can take up to 24 h, and
@@ -412,6 +424,61 @@ request "Cloud Heat", approve it, then:
 
 Record anything that differed (IAM condition keys, CloudTrail field names, tag propagation to root volumes, rule
 tagging, tf-apply memory) in this section, and fix the code or the labs stack before the release.
+
+**OS-level labs (machines the trainee works on as root, boots, breaks and repairs).**
+
+*The workspace image.* `deploy/workspace` is `amazon/aws-cli` plus ssh, the Session Manager plugin and the two helpers
+`lab-ssh` and `lab-console`. Until `workspace_image` is set, the chart keeps `amazon/aws-cli` and those commands don't exist. Publish it
+(`make workspace` builds one local arch for a quick look; do not use it to publish):
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push \
+  -t ghcr.io/platform-infra-org/crucible-workspace:<version> deploy/workspace
+docker buildx imagetools inspect ghcr.io/platform-infra-org/crucible-workspace:<version>   # note the Digest: sha256:...
+```
+Then in `deploy/aws/main/crucible.tfvars` set `workspace_image = "ghcr.io/platform-infra-org/crucible-workspace@sha256:<digest>"`
+(a digest is required; a tag is refused) and run `crucible aws up`. `crucible aws status` must show no blocked host (it checks `ghcr.io` and `pkg-containers.githubusercontent.com`, which the node needs to pull the image). The serial console endpoints and host-key fingerprints are baked
+into the image from `deploy/workspace/serial-console-endpoints`; `go test ./internal/awsops` fails if that file and the table
+`crucible aws status` uses disagree.
+
+*Three ways in, none needing an inbound path.* Session Manager (`aws ssm start-session`, `lab-ssh` through
+`AWS-StartSSHSession`, `ssm send-command`); plain SSH from the workspace (`lab-ssh --direct`, only for labs that set
+`aws.direct_ssh`); and the EC2 Serial Console (`lab-console`, or the console page). All use keys valid for one minute
+(`ec2-instance-connect`). The AWS console button on a running AWS lab signs the trainee in with the lab's own session (the lab
+role's permissions only, a fresh lab session per press, so it lasts an hour from the click; one link a minute per lab).
+
+*What spec §9 already confirmed in our account (2026-11-04, read-only and dry run).* Serial console access is on in il-central-1;
+its endpoint resolves and answers on TCP 22 from a laptop, with the RSA host key AWS publishes; `ec2-instance-connect`, `ssm-guiconnect`,
+`ssm`, `ssmmessages` and `signin.aws.amazon.com` resolve; `RunInstances` dry runs (Ubuntu 24.04 t3.micro with a profile and a lab-id tag, Windows
+Server 2022 t3.small) succeed in spokeSubnet1, as do `GetConsoleScreenshot` and `GetConsoleOutput`; instance profiles can be created; Session
+Manager works from these subnets; the SCPs let `SendSSHPublicKey` and `SendSerialConsoleSSHPublicKey` through (both failed only with
+"instance not running" on the stopped node); `getSigninToken` with an assumed-role session returned a token.
+
+*Accepted deviation from spec §3.2.* The lab role allows `ssm:GetCommandInvocation` on `*`: IAM cannot scope it to instances. A
+session needs the command id (an unguessable UUID) to read an invocation, and `ssm:ListCommandInvocations` and `ssm:ListCommands`
+are **not** granted, so a trainee cannot discover other labs' commands. `SendCommand` itself is scoped to instances tagged with the lab's id.
+
+*Still to verify by hand (spec §10), each with a real lab; record any difference here.* Use a lab whose module attaches the
+`crucible-lab-instance` profile (Forge 402 uses it; `examples/forge-402`).
+1. **Plain SSH wall.** Needs a `direct_ssh` lab. From its workspace terminal:
+   `nc -z -w 3 <the node's private IP> 22; echo $?` must print a non-zero status after about 3 s (the lab pod's NetworkPolicy
+   excepts the node's /32; k3s must enforce that, including for a pod's traffic to its own node). Then
+   `lab-ssh --direct <lab instance id>` must give a shell. If `nc` succeeds, stop: the node's sshd is exposed to labs.
+2. **GRUB rescue on the serial console.** Start the Forge 402 rescue module. In the workspace: `lab-console <instance id>`; press
+   Enter. Expect the GRUB menu (and the initramfs shell after the break). Leave with Enter then `~.`. Then, in the AWS console
+   button's session, EC2 → the instance → Connect → EC2 Serial Console shows the same.
+3. **Fleet Manager remote desktop.** Start a lab with a Windows Server instance with the `crucible-lab-instance` profile. In
+   the AWS console (button), Systems Manager → Fleet Manager → the instance → Connect with Remote Desktop. It must open; it needs the
+   session's own `ssm:StartSession` and `ssm-guiconnect:*`, both in the lab role. If it fails, note the denied action in CloudTrail.
+4. **Terminate and resume.** In the workspace: `aws ssm start-session --target <id>`, then in a second terminal
+   `aws ssm describe-sessions --state Active` and `aws ssm terminate-session --session-id <that id>`: it works (the id starts with
+   the session's `${aws:userid}`). Terminating a session id that is not the lab's own must be denied.
+5. **Console sign-in.** Press the AWS console button on a running AWS lab: a new tab opens signed in as
+   `crucible-lab-<id>`; the account's other resources are limited by the lab role; the console session ends an hour after the click (a role chained from
+   the node role caps at one hour; each press makes a fresh lab session). The sign-in link works once, within 15 minutes, and a second press within a minute for the same lab is refused.
+6. **Serial endpoint reachable.** `crucible aws status` must not list `ec2-serial-console.il-central-1.api.aws:22` under blocked
+   hosts (egress line says every host is reachable). If it does, the firewall blocks TCP 22 to it and `lab-console` will hang.
+7. **Run Command stays in the lab.** From a lab workspace, `aws ssm send-command --targets Key=tag:crucible:lab-id,Values=<another lab id>
+   --document-name AWS-RunShellScript --parameters commands=true` is denied or reaches no instance.
 
 **What trainees can see.** A lab session can read and write its own terraform state
 (`s3://<labstate bucket>/labs/<id>.tfstate`), and the workspace has those credentials. **Content authors must not

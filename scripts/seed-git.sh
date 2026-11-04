@@ -12,7 +12,7 @@ if [ -d "$out" ] && ! rm -rf "$out" 2>/dev/null; then
   rm -rf "$out"
 fi
 mkdir -p "$out"
-for name in forge-101 forge-102 forge-201 forge-301 forge-401 forge-103 forge-001; do
+for name in forge-101 forge-102 forge-201 forge-301 forge-401 forge-402 forge-103 forge-001; do
   work=$(mktemp -d)
   cp -R "$root/examples/$name/." "$work/"
   git -C "$work" init -q -b main

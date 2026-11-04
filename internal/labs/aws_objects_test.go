@@ -128,7 +128,7 @@ func TestProvisionCreatesAWSObjectsBeforeThePod(t *testing.T) {
 		_, err := cs.CoreV1().Secrets(ns).Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: awsSecret, Namespace: ns}}, metav1.CreateOptions{})
 		return err
 	}
-	if err := r.provision(ctx, &Instance{ID: testID}, []byte("tgz"), "crucible-workspace.yaml", setup); err != nil {
+	if err := r.provision(ctx, &Instance{ID: testID}, []byte("tgz"), "crucible-workspace.yaml", setup, nil); err != nil {
 		t.Fatal(err)
 	}
 	var order []string

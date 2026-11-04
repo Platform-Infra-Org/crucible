@@ -81,6 +81,7 @@ var Fields = map[string]Field{
 	"AWSConfig.max_hourly_usd": {Required: true, Min: num(0), Description: "The most the lab's resources may cost per hour, in US dollars; above 0."},
 	"AWSConfig.prices":         {Description: "Resource type → USD per hour, for resource types Crucible can't price from AWS list prices. A type that is neither priced nor declared here is refused."},
 	"AWSConfig.usage":          {Description: "Resource address → usage attribute → monthly amount (e.g. aws_s3_bucket.data: {storage_gb: 10}), for usage-priced resources. Amounts are 0 or more."},
+	"AWSConfig.direct_ssh":     {Description: "Lets the workspace reach TCP 22 on machines in the lab subnets, never the Crucible node. Needs the install's lab network in the lab's region, or the lab refuses to start."},
 
 	"Terminal.name":    {Required: true, Description: "The terminal tab's label; unique within the lab."},
 	"Terminal.service": {Description: "The compose service (workspace for aws labs) the terminal opens in. Cluster labs: leave it out; terminals open in the toolbox."},

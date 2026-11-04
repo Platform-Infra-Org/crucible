@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,7 +354,7 @@ func TestDefaultOutputIncludesStderrInError(t *testing.T) {
 }
 
 func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
-	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"}}`
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"},"lab_instance_profile":{"value":"crucible-lab-instance"},"lab_subnet_cidrs":{"value":"10.2.129.0/24,10.2.130.0/24"}}`
 	r := &recorder{output: func(cmd string) string {
 		if strings.Contains(cmd, "labs output -json") {
 			return labs
@@ -374,9 +375,60 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
 		"-var lab_state_bucket=crucible-444455556666-labstate", "-var lab_state_region=eu-west-1", "-var lab_regions=eu-west-1",
 		"-var lab_plan_role_arn=arn:aws:iam::444455556666:role/crucible-lab-plan", "-var lab_export_bucket=crucible-444455556666-exports",
-		"-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs", "-var lab_vpc_id=vpc-1", "-var lab_subnet_ids=subnet-a,subnet-b"} {
+		"-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs", "-var lab_vpc_id=vpc-1", "-var lab_subnet_ids=subnet-a,subnet-b",
+		"-var lab_instance_profile=crucible-lab-instance", "-var lab_subnet_cidrs=10.2.129.0/24,10.2.130.0/24"} {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	}
+}
+
+// A labs stack from before OS-level labs has neither output: up still applies, passing empty values.
+func TestUpWithAnOlderLabsStack(t *testing.T) {
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"state_bucket":{"value":"b"},"state_region":{"value":"eu-west-1"}}`
+	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "labs output -json") {
+			return labs
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "-var lab_instance_profile= -var lab_subnet_cidrs=") < 0 {
+		t.Fatalf("an older labs stack passes an empty profile:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestEgressCheckCoversOSLabHosts(t *testing.T) {
+	hosts := egressHosts("il-central-1")
+	for _, want := range []string{"https://signin.aws.amazon.com", "https://ec2-instance-connect.il-central-1.amazonaws.com", "https://ghcr.io", "https://pkg-containers.githubusercontent.com"} {
+		if !slices.Contains(hosts, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if !strings.Contains(egressCheck(hosts, serialTCP("il-central-1")), "/dev/tcp/ec2-serial-console.il-central-1.api.aws/22") {
+		t.Fatal("the serial console endpoint is checked on TCP 22")
+	}
+}
+
+func TestLabsInitNotesSerialConsoleOff(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		note   bool
+	}{{"False", true}, {"True", false}} {
+		r := &recorder{output: func(cmd string) string {
+			if strings.Contains(cmd, "get-serial-console-access-status") {
+				return tc.status
+			}
+			return fakeAWS(cmd)
+		}}
+		o := r.ops(t.TempDir())
+		if err := o.LabsInit(context.Background(), "eu-west-1", "111122223333", 0, nil, nil, LabNet{}); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(r.log.String(), "enable-serial-console-access --region eu-west-1"); got != tc.note {
+			t.Fatalf("status %s: note=%v, log:\n%s", tc.status, got, r.log.String())
 		}
 	}
 }

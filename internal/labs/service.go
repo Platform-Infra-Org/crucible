@@ -24,6 +24,7 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
+	"crucible/internal/audit"
 	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
@@ -515,7 +516,9 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 	}
 	if r := s.Runners[m.Lab.Runtime]; r == nil {
 		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
-	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
+	} else if err := r.Available(&Instance{UserID: u.ID}); errors.Is(err, errAgentOffline) {
+		out.RuntimeReady, out.RuntimeMessage = false, "Your laptop agent is not connected." // the page adds the Connect link
+	} else if err != nil {
 		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 	}
 	if q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab); err != nil {
@@ -1744,4 +1747,32 @@ func (s *Service) health(ctx context.Context, labID string) *ready.Report {
 	}
 	rep = rep.Lists()
 	return &rep
+}
+
+type ConsoleLink struct {
+	URL string `json:"url"`
+}
+
+// Console gives the lab's own trainee an AWS console sign-in link for their running AWS lab (spec 2026-11-04 §4.2).
+func (s *Service) Console(ctx context.Context, u *auth.User, labID string) (*ConsoleLink, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	ar, ok := s.Runners["aws"].(*AWSRunner)
+	if !ok || inst.Runtime != "aws" || inst.State != Ready {
+		return nil, apperr.Wrap(apperr.Conflict, "only a running AWS lab has an AWS console")
+	}
+	lab, _, err := s.labContent(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	link, err := ar.ConsoleURL(ctx, inst, lab.AWS.Region)
+	if err != nil {
+		return nil, err
+	}
+	if err := audit.Log(ctx, s.DB, u.Email, "lab.console", inst.ID, map[string]any{"team": inst.Team, "training": inst.Training}, ""); err != nil {
+		return nil, err
+	}
+	return &ConsoleLink{URL: link}, nil
 }

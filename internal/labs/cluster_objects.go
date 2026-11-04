@@ -1,6 +1,9 @@
 package labs
 
 import (
+	"errors"
+	"fmt"
+	"net/netip"
 	"regexp"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,6 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+
+	"crucible/internal/content"
 )
 
 const (
@@ -147,4 +152,30 @@ func clusterObjects(id, compose string, privileged bool) labObjects {
 		}},
 		Pod: pod,
 	}
+}
+
+// sshEgress is a direct_ssh lab's extra egress: TCP 22 to the lab subnets, except the Crucible node itself (a pod's
+// traffic to its own node never crosses a security group, so this except is the only wall in front of the node's
+// sshd). Kubernetes rejects an except outside its CIDR, so the node's /32 goes only on the subnet that contains it.
+// Fails closed: no CIDRs, no node address, or a CIDR that isn't a private subnet.
+func sshEgress(net content.LabNetwork) (networkingv1.NetworkPolicyEgressRule, error) {
+	node, err := netip.ParseAddr(net.NodeIP)
+	node = node.Unmap() // an IPv4-mapped address never matches an IPv4 prefix
+	if err != nil || !node.Is4() || len(net.SubnetCIDRs) == 0 {
+		return networkingv1.NetworkPolicyEgressRule{}, errors.New("direct_ssh needs the lab subnets' CIDRs and the node's address (CRUCIBLE_AWS_LAB_SUBNET_CIDRS, CRUCIBLE_NODE_IP): run `crucible aws labs-init` and `up` with this version")
+	}
+	r := networkingv1.NetworkPolicyEgressRule{Ports: []networkingv1.NetworkPolicyPort{{Protocol: ptr.To(corev1.ProtocolTCP), Port: ptr.To(intstr.FromInt32(22))}}}
+	for _, c := range net.SubnetCIDRs {
+		p, err := netip.ParsePrefix(c)
+		if err != nil || !p.Addr().Is4() || !p.Addr().IsPrivate() || p.Bits() < 16 || p.Bits() > 28 { // AWS subnets are /16 to /28
+			return networkingv1.NetworkPolicyEgressRule{}, fmt.Errorf("direct_ssh: %q is not a private lab subnet CIDR", c)
+		}
+		p = p.Masked()
+		b := &networkingv1.IPBlock{CIDR: p.String()}
+		if p.Contains(node) {
+			b.Except = []string{node.String() + "/32"}
+		}
+		r.To = append(r.To, networkingv1.NetworkPolicyPeer{IPBlock: b})
+	}
+	return r, nil
 }

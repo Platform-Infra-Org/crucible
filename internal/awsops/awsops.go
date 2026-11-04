@@ -341,6 +341,11 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
 	}
+	if on, err := o.Output(ctx, o.Root, "aws", "ec2", "get-serial-console-access-status", "--region", region,
+		"--query", "SerialConsoleAccessEnabled", "--output", "text"); err == nil && strings.TrimSpace(on) != "True" {
+		fmt.Fprintf(o.Log, "note: EC2 Serial Console access is off in %s, so labs can't reach a machine's GRUB or boot console. "+
+			"An account admin turns it on (account-wide): aws ec2 enable-serial-console-access --region %s\n", region, region)
+	}
 	return o.backupState(ctx, "labs", "labs-stack.tfstate") // outside labs/, which lab sessions and the ops role read
 }
 
@@ -350,7 +355,8 @@ func labVars(l map[string]string) []string {
 		"-var", "lab_state_bucket=" + l["state_bucket"], "-var", "lab_state_region=" + l["state_region"], "-var", "lab_regions=" + l["regions"],
 		"-var", "lab_plan_role_arn=" + l["plan_role_arn"], "-var", "lab_export_bucket=" + l["export_bucket"],
 		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"],
-		"-var", "lab_vpc_id=" + l["lab_vpc_id"], "-var", "lab_subnet_ids=" + l["lab_subnet_ids"]}
+		"-var", "lab_vpc_id=" + l["lab_vpc_id"], "-var", "lab_subnet_ids=" + l["lab_subnet_ids"],
+		"-var", "lab_instance_profile=" + l["lab_instance_profile"], "-var", "lab_subnet_cidrs=" + l["lab_subnet_cidrs"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").
@@ -645,17 +651,44 @@ func egressHosts(region string, extra ...string) []string {
 		"https://cognito-idp." + region + ".amazonaws.com",
 		// the AWS-lab path
 		"https://registry.terraform.io", "https://releases.hashicorp.com", "https://iam.amazonaws.com",
-		"https://ec2." + region + ".amazonaws.com", "https://tagging." + region + ".amazonaws.com", "https://cloudtrail." + region + ".amazonaws.com"}
+		"https://ec2." + region + ".amazonaws.com", "https://tagging." + region + ".amazonaws.com", "https://cloudtrail." + region + ".amazonaws.com",
+		// OS-level labs: the console link, and EC2 Instance Connect key pushes
+		"https://signin.aws.amazon.com", "https://ec2-instance-connect." + region + ".amazonaws.com",
+		// the workspace image (ghcr.io and its blob host), pulled by the lab pod's Docker through the node
+		"https://ghcr.io", "https://pkg-containers.githubusercontent.com"}
 	for _, h := range extra {
 		hosts = append(hosts, "https://"+h)
 	}
 	return hosts
 }
 
-// egressCheck prints "blocked <url>" for each URL the node can't open. Any HTTP answer, even an error status, means
-// the firewall let it through.
-func egressCheck(urls []string) string {
-	return "for u in " + strings.Join(urls, " ") + `; do curl -sS -o /dev/null --max-time 5 "$u" 2>/dev/null || echo "blocked $u"; done; true`
+// egressCheck prints "blocked <url>" for each URL the node can't open, and for each host:port it can't connect to over
+// TCP (the serial console speaks SSH, not HTTP). Any HTTP answer, even an error status, means the firewall let it through.
+func egressCheck(urls, tcp []string) string {
+	s := "for u in " + strings.Join(urls, " ") + `; do curl -sS -o /dev/null --max-time 5 "$u" 2>/dev/null || echo "blocked $u"; done; `
+	for _, hp := range tcp {
+		host, port, _ := strings.Cut(hp, ":")
+		s += fmt.Sprintf(`timeout 5 bash -c '</dev/tcp/%s/%s' 2>/dev/null || echo "blocked %s"; `, host, port, hp)
+	}
+	return s + "true"
+}
+
+// serialConsole is AWS's EC2 Serial Console table (docs: "EC2 Serial Console endpoints and fingerprints"): the
+// endpoint's name differs by region generation, so it is looked up, never built. Keep in step with
+// deploy/workspace/serial-console-endpoints.
+var serialConsole = map[string]string{
+	"il-central-1": "ec2-serial-console.il-central-1.api.aws",
+	"eu-west-1":    "serial-console.ec2-instance-connect.eu-west-1.aws",
+	"eu-central-1": "serial-console.ec2-instance-connect.eu-central-1.aws",
+	"us-east-1":    "serial-console.ec2-instance-connect.us-east-1.aws",
+}
+
+// serialTCP is the region's serial console endpoint for the TCP egress check; none for a region not in the table.
+func serialTCP(region string) []string {
+	if h := serialConsole[region]; h != "" {
+		return []string{h + ":22"}
+	}
+	return nil
 }
 
 func (o Ops) Status(ctx context.Context) error {
@@ -709,7 +742,7 @@ func (o Ops) Status(ctx context.Context) error {
 	} else {
 		note = ", but not the Cognito login domain (couldn't read it)"
 	}
-	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(r, extra...)))
+	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(r, extra...), serialTCP(r)))
 	switch {
 	case err != nil:
 		fmt.Fprintf(o.Log, "egress: not checked (%v)\n", err)

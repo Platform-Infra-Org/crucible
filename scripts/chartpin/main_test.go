@@ -45,7 +45,10 @@ func TestPins(t *testing.T) {
 	if err := run([]string{"-values", path, "-server", srv, "-workspace", ws, "-toolbox", tb}); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := os.ReadFile(path)
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, want := decode(t, after), decode(t, before)
 
 	img := got["image"].(map[string]any)
@@ -88,7 +91,11 @@ func TestRefusesNonDigestRefs(t *testing.T) {
 			if err == nil {
 				t.Errorf("%s %q: accepted", flag, bad)
 			}
-			if after, _ := os.ReadFile(path); string(after) != string(before) {
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
 				t.Errorf("%s %q: file changed on a refusal", flag, bad)
 			}
 		}
@@ -97,7 +104,9 @@ func TestRefusesNonDigestRefs(t *testing.T) {
 
 func TestRefusesMissingKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "values.yaml")
-	os.WriteFile(path, []byte("image:\n  repository: x\n"), 0o644)
+	if err := os.WriteFile(path, []byte("image:\n  repository: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := run([]string{"-values", path, "-server", srv, "-workspace", ws, "-toolbox", tb}); err == nil {
 		t.Error("a values file without the pinned keys was accepted")
 	}

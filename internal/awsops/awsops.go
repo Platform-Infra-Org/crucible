@@ -545,7 +545,7 @@ func (o Ops) buildAndPush(ctx context.Context) (string, error) {
 	}
 	pkgs := filepath.Join(tmp, "pkg")
 	for _, s := range [][]string{
-		{"docker", "buildx", "build", "--platform", "linux/amd64", "-t", ghcrImage + ":" + v, "--push", "."},
+		{"docker", "buildx", "build", "--platform", "linux/amd64", "--build-arg", "CRUCIBLE_VERSION=v" + v, "-t", ghcrImage + ":" + v, "--push", "."},
 		{"helm", "package", chart, "--version", v, "--app-version", v, "-d", pkgs},
 	} {
 		if err := o.Exec(ctx, o.Root, s[0], s[1:]...); err != nil {

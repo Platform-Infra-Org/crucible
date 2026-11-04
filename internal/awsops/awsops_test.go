@@ -176,7 +176,7 @@ func TestDeployBuildPushesAnImageAndAChart(t *testing.T) {
 	v := "0.0.0-dev.gabc123def456"
 	calls := strings.Join(r.calls, "\n")
 	order := []string{
-		"docker buildx build --platform linux/amd64 -t ghcr.io/platform-infra-org/crucible:" + v + " --push .",
+		"docker buildx build --platform linux/amd64 --build-arg CRUCIBLE_VERSION=v" + v + " -t ghcr.io/platform-infra-org/crucible:" + v + " --push .",
 		"helm package ",
 		"--version " + v + " --app-version " + v,
 		"helm push ",

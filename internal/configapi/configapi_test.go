@@ -83,7 +83,8 @@ func setup(t *testing.T) *fx {
 	dir := copyDir(t, "../../examples/platform", map[string]string{
 		"trainings.yaml": "trainings:\n  forge-101: {repo: " + content + "}\n  forge-201: {repo: " + content + "}\n  forge-103: {repo: " + content + "}\n",
 		// trainings this test does not serve
-		"teams/forge/programs/forge-102.yaml": "", "teams/forge/programs/forge-301.yaml": "", "teams/forge/programs/forge-401.yaml": ""})
+		"teams/forge/programs/forge-102.yaml": "", "teams/forge/programs/forge-301.yaml": "", "teams/forge/programs/forge-401.yaml": "",
+		"teams/forge/programs/forge-402.yaml": ""})
 	syncer := gitsync.New(t.TempDir(), func(context.Context) (*config.Platform, error) { return config.Load(dir) }, slog.Default())
 	if err := syncer.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)

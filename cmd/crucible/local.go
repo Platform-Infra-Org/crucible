@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// localCompose is the local stack (Postgres, Keycloak, crucible-api) as the repo defines it. Its compose project is
+// localCompose is the local stack (Postgres, Keycloak, crucible serve) as the repo defines it. Its compose project is
 // crucible-local, so down never touches another project's containers or volumes.
 const localCompose = "deploy/compose/docker-compose.yml"
 

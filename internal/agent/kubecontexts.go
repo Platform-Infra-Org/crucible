@@ -16,7 +16,7 @@ import (
 )
 
 // LoadingRules finds the kubeconfig as kubectl does: the explicit file (only), else $KUBECONFIG or ~/.kube/config,
-// then ~/.crucible/kubeconfig (where `crucible-agent cluster up` writes), which loses to the former on a name clash.
+// then ~/.crucible/kubeconfig (where `crucible agent cluster up` writes), which loses to the former on a name clash.
 func LoadingRules(explicit string) *clientcmd.ClientConfigLoadingRules {
 	r := clientcmd.NewDefaultClientConfigLoadingRules()
 	r.ExplicitPath = explicit

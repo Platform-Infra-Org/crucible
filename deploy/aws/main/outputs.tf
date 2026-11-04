@@ -4,6 +4,7 @@ output "domain" { value = var.domain }
 output "url" { value = local.public_url }
 output "access" { value = var.access }
 output "region" { value = var.region }
+output "name" { value = var.name }
 output "data_bucket" { value = var.data_bucket }
 # `crucible aws up` reads it to refuse turning aws labs off by accident (labs outputs unreadable).
 output "lab_role_arn" { value = var.lab_role_arn }

@@ -1,7 +1,9 @@
 image:
-  repository: docker.io/library/crucible   # imported into containerd from the S3 release tarball
+  repository: docker.io/library/crucible   # local default; releases use ghcr.io/<org>/crucible
   tag: dev
-  pullPolicy: Never
+  digest: ""            # releases pin sha256:<64 hex>; when set it wins over tag (repo@digest)
+  pullPolicy: IfNotPresent   # a locally loaded image (kind, imported tarball) is used as is; a digest pull happens once
+  pullSecret: ""        # name of a docker-registry Secret for a private registry (the node uses ghcr-pull)
 host: crucible.example.com   # empty: the Ingress matches any Host (access = ssm, reached through a tunnel)
 publicURL: https://crucible.example.com
 syncInterval: 60s            # how often training content is fetched from git; configuration lives in Postgres

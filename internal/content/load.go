@@ -522,7 +522,7 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 }
 
 func (l *loader) script(dir, lf, what string, s *Script, services map[string]bool, def time.Duration) {
-	if s.Script == "" && len(s.Ready) > 0 { // a ready check: Crucible runs crucible-ready (readyCheck checked the names)
+	if s.Script == "" && len(s.Ready) > 0 { // a ready check: Crucible runs crucible ready (readyCheck checked the names)
 		if s.Timeout == 0 {
 			s.Timeout = yamlx.Duration(def)
 		}
@@ -818,7 +818,7 @@ var (
 // Crucible runs as-is after adding its own provider, backend and variables, so the module must not declare provider,
 // backend, cloud or import blocks nor ship tfvars or state; providers must be HashiCorp's; module sources must be local
 // so terraform never fetches code from the network. Every .tf and .tf.json is parsed
-// with HCL: a regex cannot be made sound for this. This runs inside crucible-api on an author's push, so sizes are
+// with HCL: a regex cannot be made sound for this. This runs inside crucible serve on an author's push, so sizes are
 // capped before anything is parsed, nesting depth is capped before the (recursive) parser runs, and no expression is
 // ever evaluated: the values lint cares about must be literal strings. hashicorp/local and hashicorp/external (host
 // file reads, arbitrary commands) are rejected outright; anything else the module does at plan/apply time (local-exec)

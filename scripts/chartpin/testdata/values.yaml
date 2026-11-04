@@ -1,0 +1,53 @@
+image:
+  repository: docker.io/library/crucible   # local default; releases use ghcr.io/<org>/crucible
+  tag: dev
+  digest: ""            # releases pin sha256:<64 hex>; when set it wins over tag (repo@digest)
+  pullPolicy: IfNotPresent   # a locally loaded image (kind, imported tarball) is used as is; a digest pull happens once
+  pullSecret: ""        # name of a docker-registry Secret for a private registry (the node uses ghcr-pull)
+host: crucible.example.com   # empty: the Ingress matches any Host (access = ssm, reached through a tunnel)
+publicURL: https://crucible.example.com
+syncInterval: 60s            # how often training content is fetched from git; configuration lives in Postgres
+bootstrapAdmin: ""            # first start only: seeds the first admin into an empty admins table. The only thing a fresh install needs (spec §5.1)
+gitBot:                       # author of the content-edit merges the UI pushes to training repos; use an address your git host accepts
+  name: Crucible Bot
+  email: crucible-bot@example.com
+oidc:
+  issuer: ""
+  clientId: crucible
+secretName: crucible-secrets
+tls:
+  enabled: true              # false: plain HTTP on Traefik's web entrypoint (access = ssm); must match publicURL's scheme
+  certResolver: le
+postgres:
+  image: postgres:18-alpine
+  storage: 10Gi
+backup:
+  bucket: ""
+  region: ""
+  schedule: "15 19 * * *"
+  timeZone: Europe/Bucharest
+toolboxImage: ""  # cluster labs: the toolbox image by digest (deploy/toolbox); empty disables them
+clusterLabs:
+  enabled: true            # Crucible's own cluster (CRUCIBLE_LAB_CLUSTER): aws lab workspaces. Cluster labs run on trainees' clusters; nodes need the sysbox-runc RuntimeClass (docs/runbooks/aws.md)
+  unsafePrivileged: false  # dev clusters without sysbox only (kind): privileged lab pods. Never in production
+  iUnderstandPrivilegedLabsAreUnsafe: false  # must also be true to render unsafePrivileged
+awsLabs:
+  enabled: false            # runtime: aws labs; needs clusterLabs.enabled and the deploy/aws/labs stack (docs/runbooks/aws.md)
+  dryRun: false             # CRUCIBLE_AWS_LABS=dryrun: no AWS, a fake lab account, role ARNs not needed. Development only
+  labRoleArn: ""            # deploy/aws/labs outputs; `crucible aws up` fills these in
+  opsRoleArn: ""
+  stateBucket: ""
+  stateRegion: ""           # default: backup.region
+  planRoleArn: ""           # read-only role cost estimates run terraform plan with
+  exportBucket: ""          # billing export (CUR 2.0) bucket: billed spend
+  exportPrefix: cur
+  exportName: ""
+  vpcId: ""                 # where lab modules launch (labs-init --vpc-id); empty: the default VPC
+  subnetIds: ""             # comma-separated (labs-init --subnet-ids)
+  instanceProfile: ""       # labs stack output lab_instance_profile (var.crucible_instance_profile)
+  subnetCidrs: ""           # comma-separated lab subnet CIDRs (direct_ssh labs reach TCP 22 there, never the node)
+  regions: eu-west-1        # comma-separated; must match the labs stack's allowed_regions
+  # Pinned by digest (multi-arch index): these pods hold lab credentials. Bump deliberately, with
+  # `docker buildx imagetools inspect <image>:<tag>`; keep in step with internal/labs (DefaultTerraformImage).
+  workspaceImage: amazon/aws-cli:2.27.0@sha256:e3e329e1d2894b7b4bbb0aacacd0a155262159b2e7a3b4275eb1f24046d3e06c
+  terraformImage: hashicorp/terraform:1.16.5@sha256:c7926feace05d0f7e73542842bf3945924e955a1f782cf000ccbb8d18fa42d77

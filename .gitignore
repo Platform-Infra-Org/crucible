@@ -20,3 +20,4 @@ deploy/aws/main/*.tfvars
 
 # git worktrees for parallel work
 .worktrees/
+/dist/

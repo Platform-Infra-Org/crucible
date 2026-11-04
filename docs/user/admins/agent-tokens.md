@@ -6,7 +6,7 @@ order: 20
 ---
 # Revoking laptop agents
 
-Trainees pair their laptops with Crucible through `crucible-agent` and a pairing token. When someone leaves, or a
+Trainees pair their laptops with Crucible through `crucible agent` and a pairing token. When someone leaves, or a
 laptop goes missing, revoke their pairing.
 
 ## How

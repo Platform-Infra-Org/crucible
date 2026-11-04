@@ -183,11 +183,10 @@ Every one of these was ruled on in a milestone ledger (`.superpowers/sdd/*/progr
   (`gitOnlyWhy` in `internal/content/blocks/catalog.go`) still gives the file-types reason, which is wrong for a new
   training (that is a new repo).
 - Draft previews have no asset base, so images in a reading don't show in the editor preview.
-- Docker images don't set `CRUCIBLE_VERSION` (no build passes the build arg), so deployed builds show the docs
-  version as `dev`.
+- Release images set `CRUCIBLE_VERSION` through the build arg; source builds and `make` images still report `dev`.
 
 **Platform**
-- **No container registry.** Releases are S3 tarballs imported into containerd. When more nodes are added (M4 upgrade path), switch to ECR with the kubelet credential provider.
+- **Releases come from GHCR (2026-11-04).** One `crucible` binary (`serve`, `agent`, `ready`, `version`); CI (`release`, `release-manual`) publishes the server, workspace and toolbox images and an OCI chart to ghcr.io/platform-infra-org, and the node pulls them with a `read:packages` token (`ghcr_pull_token`); `crucible aws deploy --version vX.Y.Z | --build` replaces S3 tarballs. A node older than this is torn down and brought up again. Revisit with ECR and the kubelet credential provider when more nodes are added.
 - **Identity provider.** AWS uses an invite-only Amazon Cognito user pool, created by M2's persistent stack (guide: `docs/runbooks/cognito.md`). Local development uses Keycloak. Crucible only speaks standard OIDC, so a company identity provider (Entra, Okta, IAM Identity Center) can later be federated into Cognito without code changes.
 - **AWS lab account guardrails.** Standalone `CreateNetworkInterface` is denied (a detached ENI gap is documented); S3 permissions have no `s3:ResourceAccount` pin because bucket names are global. A restart in the middle of a destroy is picked up by the sweep after about 70 minutes. The provider is pinned through the deprecated provider-block `version`. Terraform pods do not use `hostUsers: false` yet (kind and Docker Desktop lack user namespaces).
 - **Egress by hostname** for lab and runner pods needs Cilium/Calico or a proxy.

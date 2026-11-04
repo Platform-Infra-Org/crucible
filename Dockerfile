@@ -13,10 +13,10 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 COPY docs/user/ docs/user/
 ARG CRUCIBLE_VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags "-X crucible/internal/docs.Version=${CRUCIBLE_VERSION}" -o /out/crucible-api ./cmd/crucible-api && CGO_ENABLED=0 go build -o /out/crucible ./cmd/crucible
+RUN CGO_ENABLED=0 go build -ldflags "-X crucible/internal/docs.Version=${CRUCIBLE_VERSION}" -o /out/crucible ./cmd/crucible
 
 FROM alpine:3.22
-# crucible-api runs git with only this config (no system or global config): see gitsync.git.
+# crucible serve runs git with only this config (no system or global config): see gitsync.git.
 RUN apk add --no-cache git tar ca-certificates openssh-client \
  && mkdir -p /etc/crucible \
  && git config --file /etc/crucible/gitconfig --add safe.directory '*' \
@@ -27,4 +27,4 @@ COPY --from=web /src/web/dist /app/web
 USER crucible
 ENV CRUCIBLE_GIT_CONFIG=/etc/crucible/gitconfig CRUCIBLE_WEB_DIR=/app/web CRUCIBLE_DATA_DIR=/data
 EXPOSE 8080
-ENTRYPOINT ["crucible-api"]
+ENTRYPOINT ["crucible","serve"]

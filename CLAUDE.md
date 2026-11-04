@@ -41,13 +41,16 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 
 | What | Command |
 |---|---|
-| Build binaries (`bin/crucible`, `crucible-api`, `crucible-agent`) | `make build` |
+| Build binaries (`bin/crucible`, the only program) | `make build` |
 | Go checks | `gofmt -l cmd internal`, `go vet ./...`, `go test -race ./...` |
 | Cluster integration test (build tag) | `go vet -tags cluster ./internal/labs` |
 | Web | `cd web && npm test && npx tsc -b && npm run build && npm run lint` |
 | Terraform (mock providers only) | `cd deploy/aws/{persistent,main,labs} && terraform test` |
 | Helm chart | `bash deploy/helm/test.sh` |
 | Content lint | `./bin/crucible lint examples/<repo>` |
+| Run the server / print the version | `crucible serve` (environment variables only) · `crucible version` |
+| Deploy a release to the AWS node | `crucible aws deploy --version vX.Y.Z` (a release or prerelease from GHCR) or `--build` (pushes `0.0.0-dev.g<sha>` from this tree; needs `docker login ghcr.io` and `helm registry login ghcr.io`); a `dev` binary with neither flag refuses. `crucible aws status` shows `release:` |
+| CI (`.github/workflows`) | `checks` (every PR and main), `release` (PR build; on merge: changelog, tag, images, chart, GitHub Release), `release-manual` (prerelease from any branch), `e2e` (manual); `bash scripts/lint-workflows.sh` |
 | Invite someone to the AWS install's Cognito pool | `crucible aws invite EMAIL [--name "Full Name"]` (always `email_verified=true`; re-run resends an unused invite) |
 | Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
@@ -60,7 +63,7 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 
 ## Layout
 
-- `cmd/crucible-api` server; `cmd/crucible` CLI (`lint`, `preview`, `aws …`); `cmd/crucible-agent` laptop lab agent
+- `cmd/crucible` the only program: serve, version, agent (laptop lab agent), ready (the toolbox check), lint, preview, aws …, local …
 - `internal/` — one package per domain: `labs` (runners: local/cluster/aws — `runtime: terraform` + `cloud: aws`,
   alias `runtime: aws`, keyed "aws" inside — terraform estimates, metering from lab state, approvals, budgets, sweep,
   reaper, ledger), `learn` (progress, quizzes, ranks), `scoring` (submissions, Anvil), `edits` + `gitsync` (git mirror,

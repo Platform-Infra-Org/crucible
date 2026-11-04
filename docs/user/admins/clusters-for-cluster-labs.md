@@ -9,7 +9,7 @@ A cluster lab runs as whoever the trainee's chosen kubeconfig context logs in as
 its own: the laptop agent passes the trainee's own credentials through, and the lab can do exactly what that identity
 can do, nothing more. This page is for whoever gives trainees a cluster to use.
 
-The simplest answer is a cluster each: `crucible-agent cluster up` makes one on the trainee's laptop with Docker, and
+The simplest answer is a cluster each: `crucible agent cluster up` makes one on the trainee's laptop with Docker, and
 they are its administrator, so every lab works. Read on if trainees share a cluster.
 
 ## What the kubeconfig needs

@@ -399,7 +399,7 @@ const (
 var releaseVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
 // gitDescribed matches what make build stamps past a tag (git describe: v0.3.0-3-gabc1234).
-var gitDescribed = regexp.MustCompile(`-\d+-g[0-9a-f]+`)
+var gitDescribed = regexp.MustCompile(`-\d+-g[0-9a-f]{7,}(-dirty)?$`)
 
 // sourceBuild says a binary's version names no release: "dev", or make build's git describe --always --dirty
 // (a bare sha, commits past a tag, a dirty tree).

@@ -1412,6 +1412,7 @@ func TestReleaseChoiceRefusesSourceBuilds(t *testing.T) {
 		"v0.3.0-dirty":             false, // a tag with local changes
 		"v1.2.3":                   true,
 		"v0.4.0-mybranch.12":       true,
+		"v0.4.0-fix-2-gabc.7":      true, // a release-manual prerelease from branch fix-2-gabc
 		"v0.0.0-dev.gabc123def456": true,
 	} {
 		withVersion(t, v)

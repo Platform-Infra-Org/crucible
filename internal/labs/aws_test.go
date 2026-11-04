@@ -619,14 +619,21 @@ func TestSweepDeletesLeakedPlanObjects(t *testing.T) {
 
 func provisionDirectSSH(t *testing.T, direct bool, nodeIP string) (*fake.Clientset, *awscloud.Fake, error) {
 	t.Helper()
+	return provisionDirectSSHIn(t, direct, func(lab *content.AWSConfig) content.LabNetwork {
+		return content.LabNetwork{Region: lab.Region, VPCID: "vpc-0abc", SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: nodeIP}
+	})
+}
+
+func provisionDirectSSHIn(t *testing.T, direct bool, network func(*content.AWSConfig) content.LabNetwork) (*fake.Clientset, *awscloud.Fake, error) {
+	t.Helper()
 	cs := fake.NewClientset()
 	kubelet(cs, corev1.PodSucceeded, "Apply complete!")
 	a, cloud, _ := testAWS(cs)
-	a.Network = content.LabNetwork{SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: nodeIP}
 	lab := *cloudHeat(t)
 	aws := *lab.AWS
 	aws.DirectSSH = direct
 	lab.AWS = &aws
+	a.Network = network(&aws)
 	return cs, cloud, a.ProvisionLab(context.Background(), &Instance{ID: testID, Team: "forge", Training: "forge-401"}, &lab)
 }
 
@@ -655,6 +662,37 @@ func TestAWSDirectSSHWithoutNetworkFailsClosed(t *testing.T) {
 	}
 	if len(cloud.Assumed()) != 0 {
 		t.Fatal("a refused lab never fetches credentials")
+	}
+}
+
+// The lab network belongs to one region; a direct_ssh lab elsewhere, or an install with no lab network, is refused
+// before anything is created or assumed.
+func TestAWSDirectSSHOutsideTheLabNetworkFailsClosed(t *testing.T) {
+	for name, network := range map[string]func(*content.AWSConfig) content.LabNetwork{
+		"other region": func(*content.AWSConfig) content.LabNetwork {
+			return content.LabNetwork{Region: "il-central-1", VPCID: "vpc-0abc", SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "10.2.129.17"}
+		},
+		"no vpc": func(lab *content.AWSConfig) content.LabNetwork {
+			return content.LabNetwork{Region: lab.Region, SubnetCIDRs: []string{"10.2.129.0/24"}, NodeIP: "10.2.129.17"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cs, cloud, err := provisionDirectSSHIn(t, true, func(lab *content.AWSConfig) content.LabNetwork {
+				if lab.Region == "il-central-1" {
+					t.Fatal("the lab must be outside the network's region")
+				}
+				return network(lab)
+			})
+			if err == nil || !strings.Contains(err.Error(), "crucible aws labs-init --vpc-id") || !strings.Contains(err.Error(), "crucible aws up") {
+				t.Fatalf("want a labs-init error: %v", err)
+			}
+			if got := steps(cs, "create"); len(got) != 0 {
+				t.Fatalf("nothing may be created: %v", got)
+			}
+			if len(cloud.Assumed()) != 0 {
+				t.Fatal("a refused lab never fetches credentials")
+			}
+		})
 	}
 }
 

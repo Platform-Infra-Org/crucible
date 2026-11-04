@@ -238,6 +238,9 @@ func (a *AWSRunner) ProvisionLab(ctx context.Context, inst *Instance, lab *conte
 	defer release()
 	var extra []networkingv1.NetworkPolicyEgressRule
 	if lab.AWS.DirectSSH {
+		if a.Network.VPCID == "" || a.Network.Region != lab.AWS.Region {
+			return fmt.Errorf("direct_ssh needs this install's lab network in %s: run `crucible aws labs-init --vpc-id --subnet-ids` for that region, then `crucible aws up`", lab.AWS.Region)
+		}
 		r, err := sshEgress(a.Network)
 		if err != nil {
 			return err

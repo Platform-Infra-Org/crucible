@@ -13,7 +13,8 @@ permissions:
 
 concurrency:
   group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  # A PR's new push cancels its old run; runs on main all finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -53,7 +54,7 @@ jobs:
           version: v3.18.4
 
       - name: gofmt
-        run: test -z "$(gofmt -l cmd internal)"
+        run: test -z "$(gofmt -l cmd internal scripts)"
 
       - name: go vet
         run: go vet ./...

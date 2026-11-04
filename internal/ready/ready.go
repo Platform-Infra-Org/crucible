@@ -1,5 +1,5 @@
 // Package ready judges whether a Helm release's resources are ready, the way kubectl rollout status would, once and
-// without waiting. crucible-ready runs it in a cluster lab's toolbox; the server shows its Report as release health.
+// without waiting. crucible ready runs it in a cluster lab's toolbox; the server shows its Report as release health.
 package ready
 
 import (

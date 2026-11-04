@@ -9,7 +9,7 @@ import (
 	"crucible/internal/apperr"
 )
 
-// LocalRunner runs labs on the trainee's laptop through crucible-agent.
+// LocalRunner runs labs on the trainee's laptop through crucible agent.
 type LocalRunner struct{ Hub *agenthub.Hub }
 
 var errAgentOffline = apperr.Wrap(apperr.Unavailable, "your laptop agent is not connected. Open “Connect your laptop”")

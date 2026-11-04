@@ -388,7 +388,7 @@ func TestClusterLabHealthAfterProvisionAndChecks(t *testing.T) {
 	if v.Health == nil || v.Health.Releases[0].Status != "progressing" || !v.SelfReported {
 		t.Fatalf("health after provision: %+v self-reported %v", v.Health, v.SelfReported)
 	}
-	if !slices.ContainsFunc(scripts, func(s string) bool { return strings.Contains(s, "crucible-ready --json all") }) {
+	if !slices.ContainsFunc(scripts, func(s string) bool { return strings.Contains(s, "crucible ready --json all") }) {
 		t.Fatalf("no health run: %q", scripts)
 	}
 }

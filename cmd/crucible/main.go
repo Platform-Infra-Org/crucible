@@ -23,6 +23,8 @@ import (
 const usage = `usage:
   crucible serve
   crucible version
+  crucible agent --server URL (CRUCIBLE_TOKEN=TOKEN) | crucible agent cluster up|down [--name crucible]
+  crucible ready [--json] <release>... | all
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
@@ -37,7 +39,8 @@ const usage = `usage:
   crucible local down [--wipe]
   crucible local status
 
-serve runs the server; it is configured by environment variables only. version prints the build version.
+serve runs the server; it is configured by environment variables only. version prints the build version. agent runs laptop and cluster labs for a paired trainee; ready judges a cluster
+lab's Helm releases (it runs in the lab's toolbox).
 
 local runs the local stack (Postgres, Keycloak, Crucible) with Docker Compose from the repo root: up builds, seeds
 the example training repos and starts it at http://localhost:8080; down stops it and keeps its data (--wipe deletes
@@ -71,6 +74,10 @@ func runMain(args []string, out, errw io.Writer) int {
 	case "version":
 		fmt.Fprintln(out, docs.Version)
 		return 0
+	case "agent":
+		return agentCmd(args[1:])
+	case "ready":
+		return readyCmd(args[1:])
 	case "lint":
 		if len(args) != 2 {
 			fmt.Fprintln(errw, usage)

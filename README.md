@@ -14,7 +14,7 @@ KEYCLOAK_PORT=8082 make local-check   # if host port 8081 (Keycloak) is already 
 
 Local users (username = password): `trainee`, `senior`, `leader`, `admin`.
 To try a lab by hand: log in as `trainee`, open **Connect your laptop**, generate a token and run the
-printed `./bin/crucible-agent …` command in a terminal.
+printed `./bin/crucible agent …` command in a terminal.
 
 ## Configuration notes
 

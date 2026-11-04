@@ -56,7 +56,6 @@ func serve(args []string) int {
 	defer stop()
 	if err := run(ctx); err != nil {
 		slog.Error("crucible serve failed", "err", err)
-		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
 	return 0

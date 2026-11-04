@@ -522,7 +522,7 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 }
 
 func (l *loader) script(dir, lf, what string, s *Script, services map[string]bool, def time.Duration) {
-	if s.Script == "" && len(s.Ready) > 0 { // a ready check: Crucible runs crucible-ready (readyCheck checked the names)
+	if s.Script == "" && len(s.Ready) > 0 { // a ready check: Crucible runs crucible ready (readyCheck checked the names)
 		if s.Timeout == 0 {
 			s.Timeout = yamlx.Duration(def)
 		}

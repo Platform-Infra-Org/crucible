@@ -97,3 +97,12 @@ func TestUnknownCommandShowsUsage(t *testing.T) {
 		t.Fatalf("exit %d, usage %q", code, errw.String())
 	}
 }
+
+func TestAgentAndReadyAreSubcommands(t *testing.T) {
+	for _, args := range [][]string{{"agent", "cluster"}, {"ready"}} {
+		var errw bytes.Buffer
+		if code := runMain(args, io.Discard, &errw); code != 2 {
+			t.Errorf("%v: exit %d (want usage, 2): %s", args, code, errw.String())
+		}
+	}
+}

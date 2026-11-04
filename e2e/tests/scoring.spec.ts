@@ -91,7 +91,7 @@ test('a scorer grades a free-text answer and a lab submission; the trainee sees 
   await trainee.getByRole('link', { name: 'Connect your laptop' }).click()
   await trainee.getByRole('button', { name: 'Generate pairing token' }).click()
   const token = (await trainee.getByTestId('pairing-token').textContent())!.trim()
-  agent = spawn(process.env.CRUCIBLE_AGENT!, ['--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
+  agent = spawn(process.env.CRUCIBLE_AGENT!, ['agent', '--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
   await expect(trainee.getByRole('status').filter({ hasText: /Agent connected/ })).toBeVisible({ timeout: 30_000 })
   await trainee.goto('/p/forge/forge-301/m/02-review-lab/lab')
   await trainee.getByRole('button', { name: 'Ignite the forge' }).click()

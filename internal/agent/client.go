@@ -18,8 +18,8 @@ import (
 	ap "crucible/internal/agentproto"
 )
 
-// ErrReplaced means another crucible-agent connected with the same account (one laptop agent per user).
-var ErrReplaced = errors.New("another crucible-agent connected with your account; this one stops (run one agent per user)")
+// ErrReplaced means another crucible agent connected with the same account (one laptop agent per user).
+var ErrReplaced = errors.New("another crucible agent connected with your account; this one stops (run one agent per user)")
 
 // ErrRevoked means the pairing token was revoked (by the user or an admin); the agent stops.
 var ErrRevoked = errors.New("this pairing token was revoked; generate a new one on the Connect page to start the agent again")

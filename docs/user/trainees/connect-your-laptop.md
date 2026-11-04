@@ -6,12 +6,12 @@ order: 40
 ---
 # Connect your laptop
 
-Laptop labs run through `crucible-agent`, a small program you start on your own machine. It needs Docker with the
+Laptop labs run through `crucible agent`, a small program you start on your own machine. It needs Docker with the
 compose plugin, on macOS, Linux, or Windows with WSL2.
 
 ## Pairing
 
-1. Get `crucible-agent` for your platform from your admin.
+1. Get `crucible` for your platform from your admin.
 2. Open **Connect your laptop** in the top bar and choose **Generate pairing token**.
 3. Copy the command Crucible shows and run it in a terminal. Leave it running while you do labs.
 
@@ -36,6 +36,6 @@ pairing too.
 The agent also reads your kubeconfig (`--kubeconfig`, else `KUBECONFIG`, else `~/.kube/config`) and tells Crucible
 the names of its contexts and their servers, never your credentials. A cluster lab connects through the agent, so
 your cloud logins (`aws`, `gcloud`) work as they do for `kubectl`. The agent also reads `~/.crucible/kubeconfig`.
-No cluster yet? Run `crucible-agent cluster up` to make a Kubernetes cluster called `crucible` on this laptop (it
+No cluster yet? Run `crucible agent cluster up` to make a Kubernetes cluster called `crucible` on this laptop (it
 needs Docker). It shows up as `kind-crucible` within a few seconds, and it never touches `~/.kube/config`.
-`crucible-agent cluster down` removes it. `--name` picks another name.
+`crucible agent cluster down` removes it. `--name` picks another name.

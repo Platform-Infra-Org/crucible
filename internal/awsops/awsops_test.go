@@ -1331,11 +1331,39 @@ func TestDeployFailsClosedWhenTheProbeFails(t *testing.T) {
 }
 
 func TestUpRefusesADevBinaryBeforeApplying(t *testing.T) {
-	withVersion(t, "dev")
-	r := &recorder{output: fakeAWS}
-	err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{})
-	if err == nil || !strings.Contains(err.Error(), "pass --version vX.Y.Z or --build") || indexOf(r.calls, "main apply") >= 0 {
-		t.Fatalf("err=%v calls=%v", err, r.calls)
+	for _, v := range []string{"dev", "1044e7f", "v0.3.0-3-gabc1234", "v0.3.0-dirty"} {
+		withVersion(t, v)
+		r := &recorder{output: fakeAWS}
+		err := r.ops(t.TempDir()).Up(context.Background(), "x.tfvars", true, true, DeployOpts{})
+		if err == nil || !strings.Contains(err.Error(), "pass --version vX.Y.Z or --build") || indexOf(r.calls, "main apply") >= 0 {
+			t.Fatalf("%s: err=%v calls=%v", v, err, r.calls)
+		}
+	}
+}
+
+// A binary from make build (git describe --always --dirty) names no release, so it may not pick one.
+func TestReleaseChoiceRefusesSourceBuilds(t *testing.T) {
+	for v, release := range map[string]bool{
+		"dev":                      false,
+		"1044e7f":                  false, // no tag reachable: a bare sha
+		"v0.3.0-3-gabc1234":        false, // commits past a tag
+		"v0.3.0-3-gabc1234-dirty":  false,
+		"v0.3.0-dirty":             false, // a tag with local changes
+		"v1.2.3":                   true,
+		"v0.4.0-mybranch.12":       true,
+		"v0.0.0-dev.gabc123def456": true,
+	} {
+		withVersion(t, v)
+		got, err := releaseChoice(DeployOpts{})
+		if release && (err != nil || got != v) {
+			t.Errorf("%s: a release must be accepted, got %q, %v", v, got, err)
+		}
+		if !release && (err == nil || !strings.Contains(err.Error(), "pass --version vX.Y.Z or --build")) {
+			t.Errorf("%s: a source build must be refused, got %q, %v", v, got, err)
+		}
+		if got, err := releaseChoice(DeployOpts{Version: "v1.5.0"}); err != nil || got != "v1.5.0" {
+			t.Errorf("%s binary: --version must still work, got %q, %v", v, got, err)
+		}
 	}
 }
 

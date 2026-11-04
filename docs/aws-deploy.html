@@ -585,7 +585,9 @@ crucible aws deploy --version v0.4.0   <span class="c"># a release or a prerelea
 crucible aws deploy --build            <span class="c"># push a dev build of this tree, then run it</span></code></pre></div>
     <ol class="steps">
       <li><h3>Names the release <span class="lane">your computer</span></h3><p>With no flag it is the version baked into the <code>crucible</code> you run (<code>crucible version</code>). A binary built from
-        source reports <code>dev</code> and refuses: <code>this is a dev build of crucible: pass --version vX.Y.Z or --build</code>. <code>--version</code> takes
+        source reports <code>dev</code>, or with <code>make build</code> its <code>git describe</code> (a bare commit like <code>1044e7f</code>, commits past a tag like
+        <code>v0.3.0-3-gabc1234</code>, or a <code>-dirty</code> tree), and refuses:
+        <code>this crucible (&lt;version&gt;) was built from source and names no release: pass --version vX.Y.Z or --build</code>. <code>--version</code> takes
         <code>vX.Y.Z</code> or a prerelease like <code>vX.Y.Z-feat-x.4</code>; <code>--version</code> and <code>--build</code> together are refused.</p></li>
       <li><h3>Refuses an old node</h3><p>It looks at the node's <code>deploy.sh</code> over SSM. A node built before releases came from GHCR still has the old script, and <code>deploy</code> stops with
         <code>this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up</code>. See <a href="#upgrade">Upgrading</a>.</p></li>

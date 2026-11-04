@@ -398,6 +398,15 @@ const (
 
 var releaseVersion = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
+// gitDescribed matches what make build stamps past a tag (git describe: v0.3.0-3-gabc1234).
+var gitDescribed = regexp.MustCompile(`-\d+-g[0-9a-f]+`)
+
+// sourceBuild says a binary's version names no release: "dev", or make build's git describe --always --dirty
+// (a bare sha, commits past a tag, a dirty tree).
+func sourceBuild(v string) bool {
+	return v == "dev" || !strings.HasPrefix(v, "v") || gitDescribed.MatchString(v) || strings.HasSuffix(v, "-dirty")
+}
+
 // DeployOpts picks the release to run: Version (vX.Y.Z), Build (push a dev build of this tree), or neither (this
 // binary's own version).
 type DeployOpts struct {
@@ -415,8 +424,8 @@ func releaseChoice(in DeployOpts) (string, error) {
 	}
 	v := in.Version
 	if v == "" {
-		if v = buildVersion; v == "dev" {
-			return "", errors.New("this is a dev build of crucible: pass --version vX.Y.Z or --build")
+		if v = buildVersion; sourceBuild(v) {
+			return "", fmt.Errorf("this crucible (%s) was built from source and names no release: pass --version vX.Y.Z or --build", v)
 		}
 	}
 	if !releaseVersion.MatchString(v) {

@@ -1,13 +1,16 @@
 # Releases from main, driven by pull requests.
 #
 #   * PR opened / updated against main -> build everything that would ship (three multi-arch images, the chart, the
-#     crucible binaries) without pushing; the binaries and the chart are uploaded as a workflow artifact.
+#     crucible binaries) without pushing; the binaries and the chart are uploaded as workflow artifacts.
 #   * PR merged into main              -> git-cliff picks the next version from the conventional commits and the merge
 #     commit is tagged with it (nothing is pushed to main: protect-main refuses github-actions); the images are pushed
 #     to GHCR with provenance and SBOMs, the chart is pinned to their digests and pushed as an OCI chart, and a GitHub
 #     Release carries the binaries, SHA256SUMS and the changelog since the last release as its notes.
 #
 # Docs-only and ci-only merges release nothing.
+#
+# The binaries build on their own runner while the images build (go build already uses every core, so they gain nothing
+# from sharing one); a small version job goes first so both stamp the same version.
 name: release
 
 on:
@@ -15,10 +18,11 @@ on:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
 
-# One run per PR; a new push cancels the in-flight test build (the closed run is the PR's last event).
+# A PR's runs share a group, and a new push cancels its in-flight test build. Merges share one group instead, and are
+# never cancelled: two merges in a row release one after the other, in order, so each sees the tag before it.
 concurrency:
-  group: release-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ (github.event.action == 'closed' && github.event.pull_request.merged) && 'release-main' || format('release-pr-{0}', github.event.pull_request.number) }}
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
 
 permissions:
   contents: read
@@ -36,29 +40,16 @@ env:
 
 jobs:
   # ------------------------------------------------------------------ open / update
-  test-build:
+  test-version:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history + tags so git-cliff sees them
-
-      - uses: actions/cache@v4
-        with:
-          path: .local/tools
-          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
-
-      - name: Install pinned tools
-        run: |
-          make tools
-          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
-          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
-
-      - uses: azure/setup-helm@v4
-        with:
-          version: ${{ env.HELM_VERSION }}
 
       - name: Install git-cliff
         run: |
@@ -81,65 +72,117 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+  test-build:
+    needs: test-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
       # Build only: nothing is pushed from a PR.
       - name: Build the server image
+        id: server
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
-          build-args: CRUCIBLE_VERSION=${{ steps.ver.outputs.version }}
-          tags: ${{ env.SERVER_IMAGE }}:${{ steps.ver.outputs.version }}
+          build-args: CRUCIBLE_VERSION=${{ needs.test-version.outputs.version }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ needs.test-version.outputs.version }}
 
       - name: Build the workspace image
+        id: workspace
         uses: docker/build-push-action@v6
         with:
           context: deploy/workspace
           platforms: linux/amd64,linux/arm64
           push: false
-          tags: ${{ env.WORKSPACE_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.WORKSPACE_IMAGE }}:${{ needs.test-version.outputs.version }}
 
       - name: Build the toolbox image
+        id: toolbox
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/toolbox/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: false
-          tags: ${{ env.TOOLBOX_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.TOOLBOX_IMAGE }}:${{ needs.test-version.outputs.version }}
 
-      - name: Package the chart and build the binaries
+      - name: Package the chart
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          helm package deploy/helm/crucible --version "${VERSION#v}" --app-version "$VERSION" -d dist
-          scripts/release-binaries.sh "$VERSION" dist
+          VERSION: ${{ needs.test-version.outputs.version }}
+        run: helm package deploy/helm/crucible --version "${VERSION#v}" --app-version "$VERSION" -d dist
 
-      - name: Upload what would ship
+      - name: Upload the chart
         uses: actions/upload-artifact@v4
         with:
-          name: crucible-${{ steps.ver.outputs.version }}
+          name: crucible-${{ needs.test-version.outputs.version }}-chart
+          path: dist/
+          if-no-files-found: error
+
+  test-binaries:
+    needs: test-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - name: Build the binaries
+        env:
+          VERSION: ${{ needs.test-version.outputs.version }}
+        run: scripts/release-binaries.sh "$VERSION" dist
+
+      - name: Upload the binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: crucible-${{ needs.test-version.outputs.version }}-binaries
           path: dist/
           if-no-files-found: error
 
   # ------------------------------------------------------------------ merge
-  release:
+  # No actions/cache in any merge job: a cache any PR run can save must never reach a job that can write, nor a job
+  # whose output is published (lint-workflows.sh).
+  version:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    # Two merges in a row release one after the other, in order, so each sees the tag before it.
-    concurrency:
-      group: release-main
-      cancel-in-progress: false
+    timeout-minutes: 10
     permissions:
-      contents: write # push the tag, create the release
-      packages: write # push the images and the chart to GHCR
-      id-token: write # OIDC for keyless provenance signing
-      attestations: write # actions/attest-build-provenance
+      contents: write # push the tag
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      previous: ${{ steps.ver.outputs.previous }}
+      release: ${{ steps.ver.outputs.release }}
     steps:
       # The merge commit itself, not main's tip: a later merge may already have landed, and each release is the commit
       # its PR produced. Nothing is pushed to main (protect-main refuses github-actions); only the tag is pushed.
@@ -244,32 +287,39 @@ jobs:
           git tag -a "${VERSION}" -m "Release ${VERSION}"
           git push origin "refs/tags/${VERSION}"
 
-      # No actions/cache here: a cache any PR run can save must never run in a job that can write (lint-workflows.sh).
-      # The commit the images are labelled with: the release commit, not the merge that triggered the run.
-      - name: Record the commit being built
-        if: steps.ver.outputs.release == 'true'
-        id: head
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  images:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write # push the images and the chart to GHCR
+      id-token: write # OIDC for keyless provenance signing
+      attestations: write # actions/attest-build-provenance
+    outputs:
+      server: ${{ steps.server.outputs.digest }}
+      workspace: ${{ steps.workspace.outputs.digest }}
+      toolbox: ${{ steps.toolbox.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Install pinned tools
-        if: steps.ver.outputs.release == 'true'
         run: |
           make tools
           echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
           echo "$PWD/.local/tools" >> "$GITHUB_PATH"
 
       - uses: azure/setup-helm@v4
-        if: steps.ver.outputs.release == 'true'
         with:
           version: ${{ env.HELM_VERSION }}
 
       - uses: docker/setup-qemu-action@v3
-        if: steps.ver.outputs.release == 'true'
       - uses: docker/setup-buildx-action@v3
-        if: steps.ver.outputs.release == 'true'
 
       - name: Log in to GHCR
-        if: steps.ver.outputs.release == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -277,7 +327,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push the server image
-        if: steps.ver.outputs.release == 'true'
         id: server
         uses: docker/build-push-action@v6
         with:
@@ -285,29 +334,27 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: CRUCIBLE_VERSION=${{ steps.ver.outputs.version }}
-          tags: ${{ env.SERVER_IMAGE }}:${{ steps.ver.outputs.version }}
+          build-args: CRUCIBLE_VERSION=${{ needs.version.outputs.version }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Build and push the workspace image
-        if: steps.ver.outputs.release == 'true'
         id: workspace
         uses: docker/build-push-action@v6
         with:
           context: deploy/workspace
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.WORKSPACE_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.WORKSPACE_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
 
       - name: Build and push the toolbox image
-        if: steps.ver.outputs.release == 'true'
         id: toolbox
         uses: docker/build-push-action@v6
         with:
@@ -315,14 +362,13 @@ jobs:
           file: deploy/toolbox/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.TOOLBOX_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.TOOLBOX_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.head.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.merge_commit_sha }}
 
       - name: SBOM of the server image
-        if: steps.ver.outputs.release == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
@@ -331,7 +377,6 @@ jobs:
           upload-artifact: false
 
       - name: SBOM of the workspace image
-        if: steps.ver.outputs.release == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
@@ -340,7 +385,6 @@ jobs:
           upload-artifact: false
 
       - name: SBOM of the toolbox image
-        if: steps.ver.outputs.release == 'true'
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
@@ -349,7 +393,6 @@ jobs:
           upload-artifact: false
 
       - name: Attest the server image
-        if: steps.ver.outputs.release == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.SERVER_IMAGE }}
@@ -357,7 +400,6 @@ jobs:
           push-to-registry: true
 
       - name: Attest the workspace image
-        if: steps.ver.outputs.release == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.WORKSPACE_IMAGE }}
@@ -365,7 +407,6 @@ jobs:
           push-to-registry: true
 
       - name: Attest the toolbox image
-        if: steps.ver.outputs.release == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.TOOLBOX_IMAGE }}
@@ -374,9 +415,8 @@ jobs:
 
       # The chart in the registry installs exactly these images (values.yaml is edited in the runner only).
       - name: Pin the chart to the digests and push it
-        if: steps.ver.outputs.release == 'true'
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
           SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
           WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
           TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
@@ -388,20 +428,77 @@ jobs:
           echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           helm push "crucible-${VERSION#v}.tgz" "$CHART_REPO"
 
+      - name: Upload the SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+
+  binaries:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
       - name: Build the binaries
-        if: steps.ver.outputs.release == 'true'
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: scripts/release-binaries.sh "$VERSION" dist
 
+      - name: Upload the binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [version, images, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the release
+      packages: write # move the latest tags
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        run: |
+          f="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$f"
+          echo "${GIT_CLIFF_SHA512}  $RUNNER_TEMP/$f" | sha512sum -c -
+          tar xzf "$RUNNER_TEMP/$f" --strip-components=1 -C /usr/local/bin "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sboms
+
       - name: Write this release's notes
-        if: steps.ver.outputs.release == 'true'
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
-          PREVIOUS: ${{ steps.ver.outputs.previous }}
-          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
-          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
-          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PREVIOUS: ${{ needs.version.outputs.previous }}
+          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ needs.images.outputs.server }}
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ needs.images.outputs.workspace }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ needs.images.outputs.toolbox }}
         run: |
           # A range, not --latest: --latest would stop at a prerelease tag merged into main.
           if [ -n "$PREVIOUS" ]; then
@@ -428,22 +525,29 @@ jobs:
           } >> RELEASE_NOTES.md
 
       - name: Create the GitHub Release
-        if: steps.ver.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: ${{ steps.ver.outputs.version }}
+          tag_name: ${{ needs.version.outputs.version }}
+          name: ${{ needs.version.outputs.version }}
           body_path: RELEASE_NOTES.md
           files: |
             dist/*
             sbom-*.cdx.json
 
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       # Last, so `latest` only ever names images a published chart and release pin.
       - name: Move the latest tags
-        if: steps.ver.outputs.release == 'true'
         env:
-          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
-          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ needs.images.outputs.workspace }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ needs.images.outputs.toolbox }}
         run: |
           docker buildx imagetools create -t "${WORKSPACE_IMAGE}:latest" "$WORKSPACE_REF"
           docker buildx imagetools create -t "${TOOLBOX_IMAGE}:latest" "$TOOLBOX_REF"

@@ -2,7 +2,8 @@
 #
 # The version is <next>-<branch>.<run number> (for example v0.3.0-feat-labs.17) unless overridden; the tag points at
 # the branch's HEAD. The same artifacts as a release are published (three images, the pinned chart, the binaries),
-# flagged as a prerelease, with no `latest` tags.
+# flagged as a prerelease, with no `latest` tags. The binaries build on their own runner while the images build; a small
+# version job goes first so both stamp the same version. Every job checks out github.sha, the commit the run started on.
 name: release-manual
 
 on:
@@ -27,16 +28,12 @@ env:
   CHART_REPO: oci://ghcr.io/platform-infra-org/charts
 
 jobs:
-  release:
+  version:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      contents: write # push the tag, create the release
-      packages: write # push the images and the chart to GHCR
-      id-token: write # OIDC for keyless provenance signing
-      attestations: write # actions/attest-build-provenance
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
-      # The dispatched branch at the commit the run was started on (github.sha), not a later push.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -74,10 +71,24 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Generate the release notes (unreleased commits on this branch)
-        run: git-cliff --config cliff.toml --unreleased --strip all -o RELEASE_NOTES.md
+  # No actions/cache in any job here: a cache any PR run can save must never reach a job that can write, nor a job
+  # whose output is published (lint-workflows.sh).
+  images:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write # push the images and the chart to GHCR
+      id-token: write # OIDC for keyless provenance signing
+      attestations: write # actions/attest-build-provenance
+    outputs:
+      server: ${{ steps.server.outputs.digest }}
+      workspace: ${{ steps.workspace.outputs.digest }}
+      toolbox: ${{ steps.toolbox.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
 
-      # No actions/cache here: a cache any PR run can save must never run in a job that can write (lint-workflows.sh).
       - name: Install pinned tools
         run: |
           make tools
@@ -107,11 +118,11 @@ jobs:
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          build-args: CRUCIBLE_VERSION=${{ steps.ver.outputs.version }}
-          tags: ${{ env.SERVER_IMAGE }}:${{ steps.ver.outputs.version }}
+          build-args: CRUCIBLE_VERSION=${{ needs.version.outputs.version }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build and push the workspace image
@@ -121,10 +132,10 @@ jobs:
           context: deploy/workspace
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.WORKSPACE_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.WORKSPACE_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build and push the toolbox image
@@ -135,10 +146,10 @@ jobs:
           file: deploy/toolbox/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.TOOLBOX_IMAGE }}:${{ steps.ver.outputs.version }}
+          tags: ${{ env.TOOLBOX_IMAGE }}:${{ needs.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: SBOM of the server image
@@ -188,7 +199,7 @@ jobs:
 
       - name: Pin the chart to the digests and push it
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
           SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
           WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
           TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
@@ -200,17 +211,74 @@ jobs:
           echo "$GHCR_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           helm push "crucible-${VERSION#v}.tgz" "$CHART_REPO"
 
+      - name: Upload the SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms
+          path: sbom-*.cdx.json
+          if-no-files-found: error
+
+  binaries:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
       - name: Build the binaries
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: scripts/release-binaries.sh "$VERSION" dist
+
+      - name: Upload the binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [version, images, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # push the tag, create the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        run: |
+          f="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$f"
+          echo "${GIT_CLIFF_SHA512}  $RUNNER_TEMP/$f" | sha512sum -c -
+          tar xzf "$RUNNER_TEMP/$f" --strip-components=1 -C /usr/local/bin "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sboms
+
+      - name: Generate the release notes (unreleased commits on this branch)
+        run: git-cliff --config cliff.toml --unreleased --strip all -o RELEASE_NOTES.md
 
       - name: Add the images and the chart to the notes
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
-          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ steps.server.outputs.digest }}
-          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ steps.workspace.outputs.digest }}
-          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ steps.toolbox.outputs.digest }}
+          VERSION: ${{ needs.version.outputs.version }}
+          SERVER_REF: ${{ env.SERVER_IMAGE }}@${{ needs.images.outputs.server }}
+          WORKSPACE_REF: ${{ env.WORKSPACE_IMAGE }}@${{ needs.images.outputs.workspace }}
+          TOOLBOX_REF: ${{ env.TOOLBOX_IMAGE }}@${{ needs.images.outputs.toolbox }}
         run: |
           {
             echo
@@ -233,7 +301,7 @@ jobs:
       # Tagged last, so a re-run after a failed build or push is not refused by an existing tag.
       - name: Tag the branch HEAD
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -243,8 +311,8 @@ jobs:
       - name: Create the GitHub prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: ${{ steps.ver.outputs.version }}
+          tag_name: ${{ needs.version.outputs.version }}
+          name: ${{ needs.version.outputs.version }}
           body_path: RELEASE_NOTES.md
           prerelease: true
           files: |

@@ -651,13 +651,13 @@ sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
       <li><h3>Create the pull token</h3><p>Create a <b>classic</b> GitHub personal access token with <code>read:packages</code> and nothing else (GHCR does not take fine-grained tokens), and set it as <code>ghcr_pull_token</code> in <code>crucible.tfvars</code> before <code>up</code>.
         The node keeps it as the SecureString <code>/crucible/ghcr_pull_token</code>. To change it, edit the tfvars and run <code>crucible aws up</code>.</p></li>
       <li><h3>Open the firewall</h3><p>The node must reach <code>ghcr.io</code> and <code>pkg-containers.githubusercontent.com</code> (the blob host). <code>crucible aws status</code> checks both; send any blocked line to the network team.</p></li>
-      <li><h3>Leave release tags unrestricted</h3><p>The release job pushes the <code>v*</code> tag as <code>github-actions</code>, which can't be on a ruleset's bypass list. A ruleset that restricts creating <code>v*</code> tags would make every release fail. <code>protect-main</code> covers only the branch, and the job never pushes to it.</p></li>
+      <li><h3>Leave release tags unrestricted</h3><p>The release workflow pushes the <code>v*</code> tag as <code>github-actions</code>, which can't be on a ruleset's bypass list. A ruleset that restricts creating <code>v*</code> tags would make every release fail. <code>protect-main</code> covers only the branch, and the job never pushes to it.</p></li>
     </ol>
 
     <h3>When a release goes wrong</h3>
     <ul class="muted">
       <li><b>A PR merged from a fork cannot release</b>: the run has no write token.</li>
-      <li><b>Tagged but never published.</b> Re-run the release job. It resumes only for that PR's own tag, and only when no GitHub Release exists for it.</li>
+      <li><b>Tagged but never published.</b> Re-run the failed jobs of that release run (Actions → the run → Re-run failed jobs). It resumes only for that PR's own tag, and only when no GitHub Release exists for it.</li>
       <li><b>A GitHub Release exists but is incomplete</b> (an asset upload or the <code>latest</code> move failed): a re-run does nothing. Fix it by hand with <code>gh release upload</code> or by re-tagging <code>latest</code>.</li>
       <li><b>Build time.</b> The images' build stages cross-compile on the runner, and only their small final stages run under QEMU for arm64.</li>
     </ul>

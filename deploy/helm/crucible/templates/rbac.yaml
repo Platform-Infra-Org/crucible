@@ -76,13 +76,13 @@ spec:
         (request.operation == 'CREATE' && object.metadata.name == 'crucible-estimates' && has(object.metadata.labels) &&
          'crucible.io/lab' in object.metadata.labels && object.metadata.labels['crucible.io/lab'] == 'estimates')
         {{- end }}
-      message: crucible-api may only create and delete lab-<id> namespaces{{ if .Values.awsLabs.enabled }} (and create crucible-estimates){{ end }}
+      message: crucible serve may only create and delete lab-<id> namespaces{{ if .Values.awsLabs.enabled }} (and create crucible-estimates){{ end }}
     - expression: >-
         request.resource.resource == 'namespaces' ||
         (namespaceObject != null &&
          (namespaceObject.metadata.name.startsWith('lab-'){{ if .Values.awsLabs.enabled }} || namespaceObject.metadata.name == 'crucible-estimates'{{ end }}) &&
          has(namespaceObject.metadata.labels) && 'crucible.io/lab' in namespaceObject.metadata.labels)
-      message: crucible-api may only create lab pods, policies and terminals inside lab namespaces{{ if .Values.awsLabs.enabled }} (and run estimates in crucible-estimates){{ end }}
+      message: crucible serve may only create lab pods, policies and terminals inside lab namespaces{{ if .Values.awsLabs.enabled }} (and run estimates in crucible-estimates){{ end }}
     {{- if not .Values.clusterLabs.unsafePrivileged }}
     - expression: >-
         request.resource.resource != 'namespaces' || request.operation != 'CREATE' ||

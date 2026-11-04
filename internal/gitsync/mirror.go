@@ -20,7 +20,7 @@ import (
 type Mirror struct{ URL, Dir string }
 
 // AllowFileTransport lets remotes use the file transport (local paths, file://): local stacks mount seeded repos at
-// /git. It is off by default, so a repo URL can't read the server's own disk (other clones, mirrors). crucible-api sets
+// /git. It is off by default, so a repo URL can't read the server's own disk (other clones, mirrors). crucible serve sets
 // it from CRUCIBLE_GIT_ALLOW_FILE (AllowFileFromEnv); tests that use local bare repos as remotes set it in TestMain.
 var AllowFileTransport bool
 

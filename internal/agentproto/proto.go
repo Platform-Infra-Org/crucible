@@ -1,4 +1,4 @@
-// Package agentproto is the JSON message format between crucible-api and crucible-agent.
+// Package agentproto is the JSON message format between crucible serve and crucible agent.
 package agentproto
 
 import (

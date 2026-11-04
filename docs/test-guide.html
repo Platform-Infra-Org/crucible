@@ -211,7 +211,7 @@ body.hide-done .item.done { display: none; }
 
         <div class="runtimes">
           <div class="rt"><h3>Laptop labs</h3><span class="tag">runtime: local</span>
-            <p>The trainee runs <code>crucible-agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
+            <p>The trainee runs <code>crucible agent</code>. It holds an outbound connection to Crucible and runs the lab's Docker Compose file on the laptop. Free, so never needs approval. Checks run on the trainee's machine, so results are <i>self-reported</i>; a program can ask a scorer to review them.</p></div>
           <div class="rt cluster"><h3>Cluster labs</h3><span class="tag">runtime: cluster</span>
             <p>The trainee's agent installs the lab's Helm charts into their own namespace on a cluster they pick from their kubeconfig (kind on the laptop, or a remote one). Terminals and scripts run in a toolbox container. Free, and results are self-reported.</p></div>
           <div class="rt aws"><h3>AWS labs</h3><span class="tag">runtime: terraform · cloud: aws</span>
@@ -485,7 +485,7 @@ $DC exec api rm -f /data/ssh/known_hosts</code></pre></div>
         <ul class="items">
           <li class="item" data-id="lo-pair"><label><input type="checkbox" id="c-lo-pair"><span class="t">Pair the agent</span></label>
             <div class="body"><p>As trainee: <b>Connect your laptop</b> → <b>Generate pairing token</b>, then run the command it shows from the repo root:</p>
-              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; ./bin/crucible-agent --server http://localhost:8080</code></pre></div>
+              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; ./bin/crucible agent --server http://localhost:8080</code></pre></div>
               <p class="expect"><b>Expect</b><i>Agent connected. Your forge is lit.</i> A new token voids the old one.</p></div></li>
           <li class="item" data-id="lo-ignite"><label><input type="checkbox" id="c-lo-ignite"><span class="t">Run Forge 101's first lab</span></label>
             <div class="body"><p>Forge 101 → <i>First Heat</i> → Lab → <b>Ignite the forge</b>.</p>
@@ -518,9 +518,9 @@ $DC exec api rm -f /data/ssh/known_hosts</code></pre></div>
               <p class="expect"><b>Expect</b>it ends with <i>Cluster check passed. The crucible holds.</i> and leaves the stack running with AWS dry run on (used in 9a).</p></div></li>
           <li class="item" data-id="cl-kind"><label><input type="checkbox" id="c-cl-kind"><span class="t">Make a throwaway cluster</span></label>
             <div class="body"><p>The agent makes one itself; it needs only Docker.</p>
-              <div class="cmd"><pre><code>crucible-agent cluster up --name crucible-try</code></pre></div>
+              <div class="cmd"><pre><code>crucible agent cluster up --name crucible-try</code></pre></div>
               <p>Then run the agent, with the token from <b>Connect your laptop</b>. No <code>--kubeconfig</code> is needed: it also reads <code>~/.crucible/kubeconfig</code>, where the cluster's kubeconfig went.</p>
-              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; crucible-agent --server http://localhost:8080</code></pre></div>
+              <div class="cmd"><pre><code>CRUCIBLE_TOKEN=&lt;token&gt; crucible agent --server http://localhost:8080</code></pre></div>
               <p class="expect"><b>Expect</b><i>Ready. Your agent sees it as kind-crucible-try</i>; <code>~/.kube/config</code> is unchanged; the Connect page lists the context <code>kind-crucible-try</code> without any credentials. Running <code>cluster up</code> again says the cluster already exists.</p></div></li>
           <li class="item" data-id="cl-pick"><label><input type="checkbox" id="c-cl-pick"><span class="t">Pick the cluster</span></label>
             <div class="body"><p>As trainee open Forge 101 → <i>Into the Crucible</i>. Under <b>Run it on</b> choose <code>kind-crucible-try</code>, then <b>Ignite the forge</b>.</p>
@@ -533,7 +533,7 @@ $DC exec api rm -f /data/ssh/known_hosts</code></pre></div>
               <div class="cmd"><pre><code>kubectl --kubeconfig ~/.crucible/kubeconfig --context kind-crucible-try get ns</code></pre></div>
               <p class="expect"><b>Expect</b>no <code>lab-&lt;id&gt;</code> namespace is left.</p></div></li>
           <li class="item" data-id="cl-clean"><label><input type="checkbox" id="c-cl-clean"><span class="t">Clean up</span></label>
-            <div class="body"><div class="cmd"><pre><code>crucible-agent cluster down --name crucible-try
+            <div class="body"><div class="cmd"><pre><code>crucible agent cluster down --name crucible-try
 kind delete cluster --name crucible-m4</code></pre></div>
               <p class="expect"><b>Expect</b><i>Removed the cluster crucible-try from this laptop.</i>, and <code>~/.crucible/kubeconfig</code> is gone if it held nothing else. Only those two clusters are removed. Leave any other kind cluster (such as <code>platform</code>) alone; a second <code>cluster down</code> says there is no such cluster.</p></div></li>
         </ul>

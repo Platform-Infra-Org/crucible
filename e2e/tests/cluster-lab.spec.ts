@@ -33,7 +33,7 @@ test('Forge 101 cluster lab: Helm on your own kind cluster through the agent', a
   const res = await page.request.post('/api/agent/tokens', { data: {}, headers: { Origin: 'http://localhost:8080' } })
   expect(res.ok()).toBe(true)
   const { token } = await res.json()
-  agent = spawn(process.env.CRUCIBLE_AGENT!, ['--server', 'http://localhost:8080', '--kubeconfig', process.env.CRUCIBLE_E2E_KUBECONFIG!],
+  agent = spawn(process.env.CRUCIBLE_AGENT!, ['agent', '--server', 'http://localhost:8080', '--kubeconfig', process.env.CRUCIBLE_E2E_KUBECONFIG!],
     { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
 
   await page.getByRole('link', { name: /Forge 101/ }).click()

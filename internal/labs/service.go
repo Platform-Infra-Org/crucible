@@ -1696,15 +1696,15 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 // selfReported: results come from the trainee's machine (laptop labs, and cluster labs through the agent).
 func selfReported(runtime string) bool { return runtime == "local" || runtime == "cluster" }
 
-// scriptBody is what a script step runs: a ready: check runs crucible-ready in the toolbox, anything else its file.
+// scriptBody is what a script step runs: a ready: check runs crucible ready in the toolbox, anything else its file.
 func scriptBody(lab *content.Lab, sc *content.Script) ([]byte, error) {
 	if len(sc.Ready) > 0 {
-		return []byte("exec crucible-ready " + strings.Join(sc.Ready, " ") + "\n"), nil
+		return []byte("exec crucible ready " + strings.Join(sc.Ready, " ") + "\n"), nil
 	}
 	return os.ReadFile(filepath.Join(lab.Dir, sc.Script))
 }
 
-// parseHealth reads crucible-ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
+// parseHealth reads crucible ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
 func parseHealth(out string) (ready.Report, bool) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -1718,13 +1718,13 @@ func parseHealth(out string) (ready.Report, bool) {
 	return rep.Lists(), err == nil
 }
 
-// recordHealth runs crucible-ready over every release and keeps the report as the lab's latest health event.
+// recordHealth runs crucible ready over every release and keeps the report as the lab's latest health event.
 func (s *Service) recordHealth(ctx context.Context, inst *Instance) {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
 		return
 	}
-	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible-ready --json all\n"), Timeout: 30 * time.Second})
+	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible ready --json all\n"), Timeout: 30 * time.Second})
 	if err != nil {
 		return
 	}

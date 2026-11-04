@@ -124,7 +124,7 @@ for want in 'namespace: crucible-estimates' 'kind: Role, name: crucible-estimate
   grep -q -- "$want" <<<"$rb" || { echo "estimates RoleBinding: missing $want"; exit 1; }
 done
 vap=$(docof ValidatingAdmissionPolicy)
-grep -q "object.metadata.name == 'crucible-estimates'" <<<"$vap" || { echo "admission: crucible-api may create crucible-estimates"; exit 1; }
+grep -q "object.metadata.name == 'crucible-estimates'" <<<"$vap" || { echo "admission: crucible serve may create crucible-estimates"; exit 1; }
 grep -q "namespaceObject.metadata.name.startsWith('lab-') || namespaceObject.metadata.name == 'crucible-estimates'" <<<"$vap" ||
   { echo "admission: writes only in lab-* and crucible-estimates"; exit 1; }
 if grep -qE "crucible-estimates|kind: Role$|kind: Namespace$" <<<"$rbac"; then echo "estimates RBAC only with aws labs"; exit 1; fi

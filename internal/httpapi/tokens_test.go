@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,5 +92,22 @@ func TestRevokeAgentTokensRoutes(t *testing.T) {
 	var actor, target string
 	if err := st.DB.QueryRow(ctx, `SELECT actor, target FROM audit_log WHERE action = 'agent.token.revoke' AND target = 'other@x'`).Scan(&actor, &target); err != nil || actor != "admin@x" {
 		t.Fatalf("audit: %q %v", actor, err)
+	}
+}
+
+func TestPairingCommandIsCrucibleAgent(t *testing.T) {
+	ctx := context.Background()
+	st := auth.Store{DB: dbtest.New(t)}
+	r := NewRouter(Deps{Auth: st, Learn: &learn.Service{}, Labs: &labs.Service{}, Hub: agenthub.New(), PublicURL: "https://c.example.com"})
+	u, _ := st.UpsertUser(ctx, "s9", "u@x", "U")
+	sess, _ := st.CreateSession(ctx, u.ID, time.Hour)
+	req := httptest.NewRequest("POST", "/api/agent/tokens", strings.NewReader("{}"))
+	req.Header.Set("Origin", "https://c.example.com")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookie, Value: sess})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), " crucible agent --server https://c.example.com") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }

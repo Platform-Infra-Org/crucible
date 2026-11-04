@@ -78,6 +78,12 @@ jobs:
       - name: Workspace image scripts
         run: bash deploy/workspace/test.sh
 
+      # The Go stages only (no push, no full image): catches a COPY the build needs and lacks.
+      - name: Image build stages
+        run: |
+          docker build --target go -f Dockerfile .
+          docker build --target ready -f deploy/toolbox/Dockerfile .
+
       - name: Content lint
         run: |
           make build

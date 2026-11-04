@@ -6,6 +6,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd cmd
 COPY internal internal
+COPY docs/user docs/user
 RUN CGO_ENABLED=0 go build -o /crucible ./cmd/crucible
 
 FROM alpine:3.22

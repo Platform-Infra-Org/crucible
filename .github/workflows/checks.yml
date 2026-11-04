@@ -1,0 +1,89 @@
+# Fast checks on every push and PR. Releasing lives in the release-* workflows;
+# the browser end-to-end suites are manual (e2e.yml).
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            web/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('go.sum', 'web/package-lock.json') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      # The repo brings its own pinned Go and Terraform (the runner's are not the pins).
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      # Mock providers only: no AWS is called.
+      - name: Terraform tests
+        run: |
+          for s in persistent main labs; do
+            (cd "deploy/aws/$s" && terraform init -backend=false -input=false >/dev/null && terraform test)
+          done
+
+      - name: Helm chart
+        run: bash deploy/helm/test.sh
+
+      - name: Workspace image scripts
+        run: bash deploy/workspace/test.sh
+
+      - name: Content lint
+        run: |
+          make build
+          for r in examples/forge-*; do ./bin/crucible lint "$r"; done
+
+      - name: Web
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+          npx tsc -b
+          npm run lint
+          npm run build
+
+  # Conventional-commit gate: with squash-merge the PR *title* is the commit
+  # git-cliff parses, so it must be a valid conventional-commit subject.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

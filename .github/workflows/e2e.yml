@@ -1,0 +1,40 @@
+# Browser end-to-end suites, run by hand (Actions tab -> e2e -> Run workflow).
+# They are heavy (Docker, Keycloak, kind), so they never run on push or PR.
+name: e2e
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+      - run: KEYCLOAK_PORT=8082 make local-check
+
+  # After local, so the two never share the runner's Docker.
+  cluster:
+    needs: local
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+      - run: KEYCLOAK_PORT=8082 make cluster-check

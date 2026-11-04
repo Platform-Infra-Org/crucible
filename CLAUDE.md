@@ -48,6 +48,9 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Terraform (mock providers only) | `cd deploy/aws/{persistent,main,labs} && terraform test` |
 | Helm chart | `bash deploy/helm/test.sh` |
 | Content lint | `./bin/crucible lint examples/<repo>` |
+| Run the server / print the version | `crucible serve` (environment variables only) · `crucible version` |
+| Deploy a release to the AWS node | `crucible aws deploy --version vX.Y.Z` (a release or prerelease from GHCR) or `--build` (pushes `0.0.0-dev.g<sha>` from this tree; needs `docker login ghcr.io` and `helm registry login ghcr.io`); a `dev` binary with neither flag refuses. `crucible aws status` shows `release:` |
+| CI (`.github/workflows`) | `checks` (every PR and main), `release` (PR build; on merge: changelog, tag, images, chart, GitHub Release), `release-manual` (prerelease from any branch), `e2e` (manual); `bash scripts/lint-workflows.sh` |
 | Invite someone to the AWS install's Cognito pool | `crucible aws invite EMAIL [--name "Full Name"]` (always `email_verified=true`; re-run resends an unused invite) |
 | Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |

@@ -6,6 +6,7 @@
 2. `go run ./cmd/crucible aws init --region eu-west-1 --domain crucible.example.com`. This creates the state and data buckets, the Cognito user pool and the secret key that seals repository credentials (`/<name>/secret_key`; see Secrets). None of them is ever destroyed.
 3. **The persistent stack's state is backed up for you.** `deploy/aws/persistent/terraform.tfstate` is local and git-ignored; after every successful apply, `init` copies it to `s3://<state_bucket>/persistent.tfstate` (private, versioned) and prints `state backed up to …`. If the copy fails, `init` exits with an error that gives the `aws s3 cp` to run by hand. On a machine without the file, `init` restores it from there first (it finds the bucket from your account: `crucible-<account>-tfstate`); with no backup it's a new stack, and if it can't tell (access denied) it stops before applying. The file holds the secret key and the Cognito client secret in plain text; a second copy outside the account (a password manager) protects against losing the account.
 4. `cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars` and fill it in. `domain` there must equal the `--domain` you gave `init`.
+   **Set `ghcr_pull_token`** (required): a GitHub token with `read:packages` only, which the node uses to pull the private chart and server image from GHCR. It is stored as the SecureString `/<name>/ghcr_pull_token`. A wrong token stops `deploy.sh` before anything is applied, with a message that says what to fix (`GHCR refused the pull token …`).
    Sign-in needs no settings here; it is wired from the Cognito user pool automatically.
 5. `go run ./cmd/crucible aws up` (`--var-file` defaults to `deploy/aws/main/crucible.tfvars` in the repo root).
    Right after the apply it prints `Point an A record <domain> → <ip>`: create that DNS record **while `up` waits** for the node (skip if `route53_zone_id` is set).
@@ -51,14 +52,26 @@ The organization's after-hours automation may stop the node whatever `schedule_e
 
 Second machine or fresh clone: run `crucible aws init` with the same flags (it restores the persistent state from the state bucket; its plan should change nothing), then `crucible aws up` (it is idempotent) to initialise the S3 backend before using `deploy`. With aws labs on, run `labs-init` with lab-account credentials first too: it restores the labs state the same way.
 
+## Releases and GHCR
+
+The server no longer ships through S3: CI publishes images and the chart to GHCR and the node pulls them. Nothing about a release lives in the data bucket.
+
+- **Images:** `ghcr.io/platform-infra-org/crucible` (server, private), `crucible-workspace` and `crucible-toolbox` (public). **Chart:** `oci://ghcr.io/platform-infra-org/charts/crucible` (private); its version is the release version without the `v`.
+- **One-time:** after the first release, make the `crucible-workspace` and `crucible-toolbox` packages public (Package settings → Change visibility). Set `ghcr_pull_token` (step 4) before `up`.
+- **Firewall egress:** `ghcr.io` and `pkg-containers.githubusercontent.com`. `crucible aws status` checks both.
+- **Workflows** (`.github/workflows`): `checks` runs on every PR and push to main. `release` builds everything without pushing when a PR is opened or updated; when it merges, git-cliff picks the version and rewrites `CHANGELOG.md`, the commit is tagged, the three images go to GHCR with provenance and SBOMs, the chart is pinned to their digests and pushed, the GitHub Release carries the binaries and `SHA256SUMS`, and `latest` moves last on the workspace and toolbox images. Docs-only and ci-only merges refresh the changelog without a release. `release-manual` (Actions tab, any branch) publishes a prerelease named `<next>-<branch>.<run>`, with no `latest` tags. `e2e` is manual.
+- **Choosing a release:** `--version` takes releases and prereleases. `crucible aws status` shows `release:`.
+- **Caveats:** a PR merged from a fork cannot release (no write token). A release that was tagged but never published is resumed by re-running the release job, but only for that PR's own tag and only when no GitHub Release exists for it. If a GitHub Release exists but is incomplete (an asset upload or the `latest` move failed), a re-run does nothing: fix it by hand with `gh release upload` or by re-tagging `latest`. Restrict who may push `v*` tags with a tag ruleset. Multi-arch builds run under QEMU and are slow (tens of minutes).
+- **Migration:** a node created before this change keeps its old `deploy.sh`, and `deploy` refuses it. Run `crucible aws teardown --yes`, then `crucible aws up` (the snapshot restores the data). Old `releases/` objects in the data bucket can be deleted by hand.
+
 ## Everyday
 | Want | Command |
 |---|---|
-| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z`, or `--build` (builds this tree and pushes a dev release to GHCR, named `v0.0.0-dev.g<sha>`) |
+| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z` (a release or prerelease from GHCR; `up` takes the same flags), or `--build` (builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, plus `-dirty.<unix time>` when the tree has changes; needs your own `docker login ghcr.io` and `helm registry login ghcr.io`). A `dev` binary with neither flag refuses. |
 | Take a snapshot now | `crucible aws snapshot` |
 | Stop paying for compute tonight | `crucible aws sleep` (snapshot, then stop) |
 | Start before the schedule | `crucible aws wake` |
-| Is it up? | `crucible aws status` |
+| Is it up? / which release? | `crucible aws status` (shows `release:`) |
 | Shell on the node | `aws ssm start-session --target <instance_id>` |
 | Invite / remove a person | [cognito.md](cognito.md) |
 

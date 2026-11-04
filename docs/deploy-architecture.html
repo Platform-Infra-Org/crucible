@@ -394,9 +394,8 @@ body { margin: 0; }
         <text class="bs" x="298" y="160">OIDC sign-in</text>
         <rect class="box" x="450" y="88" width="184" height="102" rx="10"/>
         <text class="bt" x="466" y="116">S3 data bucket</text>
-        <text class="cd" x="466" y="138">releases/ current-release</text>
-        <text class="cd" x="466" y="158">snapshots/ latest/</text>
-        <text class="cd" x="466" y="178">uploads/</text>
+        <text class="cd" x="466" y="138">snapshots/ latest/</text>
+        <text class="cd" x="466" y="158">uploads/</text>
         <rect class="box" x="646" y="88" width="136" height="102" rx="10"/>
         <text class="bt" x="662" y="116">S3 state</text>
         <text class="bs" x="662" y="140">Terraform state</text>
@@ -517,7 +516,7 @@ body { margin: 0; }
         <thead><tr><th scope="col">Component</th><th scope="col">AWS service</th><th scope="col">What it is for</th></tr></thead>
         <tbody>
           <tr><th scope="row">State bucket</th><td>S3, versioned, private</td><td>Terraform's memory of the main stack. Versioning keeps every older state.</td></tr>
-          <tr><th scope="row">Data bucket</th><td>S3, versioned, encrypted, private, lifecycle rule</td><td>Release tarballs under <code>releases/</code> and the <code>current-release</code> pointer, nightly snapshots under <code>snapshots/</code> and the always-kept <code>latest/</code> (<a href="#backups">Backups</a>), trainees' uploads and terminal transcripts under <code>uploads/</code>.</td></tr>
+          <tr><th scope="row">Data bucket</th><td>S3, versioned, encrypted, private, lifecycle rule</td><td>Nightly snapshots under <code>snapshots/</code> and the always-kept <code>latest/</code> (<a href="#backups">Backups</a>), trainees' uploads and terminal transcripts under <code>uploads/</code>.</td></tr>
           <tr><th scope="row">User pool</th><td>Cognito</td><td>Everyone's sign-in account. Email is the identity Crucible trusts.</td></tr>
           <tr><th scope="row">Login domain and branding</th><td>Cognito managed login</td><td>The hosted sign-in page people see.</td></tr>
           <tr><th scope="row">App client</th><td>Cognito</td><td>Lets Crucible sign people in with the pool, over OpenID Connect.</td></tr>
@@ -956,7 +955,7 @@ body { margin: 0; }
         <thead><tr><th scope="col">Identity</th><th scope="col">Where it lives</th><th scope="col">Who uses it, and when</th><th scope="col">What it may do</th></tr></thead>
         <tbody>
           <tr><th scope="row">The operator</th><td>Their own Identity Center role, on their laptop after <code>aws login</code></td><td><code>crucible aws init</code>, <code>labs-init</code>, <code>up</code>, <code>deploy</code>, <code>snapshot</code>, <code>sleep</code>, <code>teardown</code></td><td>Runs Terraform, which creates every other role on this page; uploads releases to S3; <code>ssm send-command</code> to the node</td></tr>
-          <tr><th scope="row">Node role <code>crucible-node</code></th><td>Main stack; on the EC2 node through the instance profile</td><td>The boot and deploy scripts on the host (<code>aws ssm get-parameter</code> for <code>/crucible/env</code>, <code>/crucible/helm-values</code> and the secrets; <code>aws s3 cp</code> of <code>current-release</code> and <code>releases/&lt;sha&gt;/…</code>). The SSM agent (managed policy <code>AmazonSSMManagedInstanceCore</code>: shell, send-command). The backup CronJob and the restore init container. The Crucible API pod: uploads and transcripts under <code>uploads/</code>, and the starting point for assuming the lab-account roles</td><td>Data bucket: <code>ListBucket</code> and <code>GetObject</code> on everything; <code>PutObject</code> only on <code>snapshots/*</code>, <code>latest/crucible-latest.dump</code> and <code>uploads/*</code>. <code>ssm:GetParameter(s)</code> on <code>/crucible/*</code>. <code>sts:AssumeRole</code> and <code>sts:TagSession</code> on the lab and ops roles, <code>sts:AssumeRole</code> on the plan role, only once AWS labs are wired in</td></tr>
+          <tr><th scope="row">Node role <code>crucible-node</code></th><td>Main stack; on the EC2 node through the instance profile</td><td>The boot and deploy scripts on the host (<code>aws ssm get-parameter</code> for <code>/crucible/env</code>, <code>/crucible/helm-values</code> and the secrets; the release name in <code>/crucible/release</code> and the GHCR pull token in <code>/crucible/ghcr_pull_token</code>). The SSM agent (managed policy <code>AmazonSSMManagedInstanceCore</code>: shell, send-command). The backup CronJob and the restore init container. The Crucible API pod: uploads and transcripts under <code>uploads/</code>, and the starting point for assuming the lab-account roles</td><td>Data bucket: <code>ListBucket</code> and <code>GetObject</code> on everything; <code>PutObject</code> only on <code>snapshots/*</code>, <code>latest/crucible-latest.dump</code> and <code>uploads/*</code>. <code>ssm:GetParameter(s)</code> on <code>/crucible/*</code>. <code>sts:AssumeRole</code> and <code>sts:TagSession</code> on the lab and ops roles, <code>sts:AssumeRole</code> on the plan role, only once AWS labs are wired in</td></tr>
           <tr><th scope="row">Scheduler role <code>crucible-scheduler</code></th><td>Main stack; trusted by EventBridge Scheduler</td><td>The weekday wake at 07:30 and sleep at 19:30</td><td><code>ec2:StartInstances</code> and <code>ec2:StopInstances</code></td></tr>
           <tr><th scope="row">Lab role <code>crucible-lab</code></th><td>Labs stack, in the lab account (or the same account)</td><td>Assumed by the API once per AWS lab with the session tag <code>crucible:lab-id=&lt;id&gt;</code> (plus team and training), for at most an hour. Used by the Terraform apply and destroy pods, the trainee's workspace terminal, the sweep, and the reaper's deletes</td><td>EC2 and S3 inside the permission boundary <code>crucible-lab-boundary</code>. Creates must carry its own lab tag; it may change or delete only resources carrying it; its own state file <code>labs/&lt;id&gt;.tfstate</code></td></tr>
           <tr><th scope="row">Lab role, OS-level rows</th><td>Labs stack (part of <code>crucible-lab</code>'s policy)</td><td>The trainee's workspace and the AWS console button, for labs whose machines they log in to</td><td>Pass <code>crucible-lab-instance</code> to EC2 only; <code>ssm:StartSession</code> on instances tagged with the lab's id and on the SSH, port-forward and shell documents; <code>ssm:SendCommand</code> on own instances with the two run-script documents; <code>ssm:TerminateSession</code> and <code>ResumeSession</code> on sessions starting with the caller's <code>${aws:userid}</code>; <code>ec2-instance-connect:SendSSHPublicKey</code> and <code>SendSerialConsoleSSHPublicKey</code>, <code>ec2:GetConsoleScreenshot</code> and <code>GetConsoleOutput</code> on own instances; <code>ssm-guiconnect:*Connection</code> (Fleet Manager) and read-only session and instance lookups. <b>Accepted deviation:</b> <code>ssm:GetCommandInvocation</code> is allowed on <code>*</code>, because IAM cannot scope it to instances. It needs the command id, an unguessable UUID, and <code>ssm:ListCommandInvocations</code> and <code>ListCommands</code> are not granted, so a lab cannot find another lab's commands</td></tr>
@@ -1083,7 +1082,7 @@ body { margin: 0; }
       <li><h3>It gets credentials <span class="lane aws">IMDS · node role</span></h3>
         <p><code>aws s3 cp</code> finds no keys, so it asks IMDS with an IMDSv2 token. IMDS returns the node role's temporary credentials.</p></li>
       <li><h3>S3 checks the node role's policy <span class="lane aws">data bucket</span></h3>
-        <p><code>PutObject</code> on <code>snapshots/crucible-&lt;UTC&gt;.dump</code> and <code>latest/crucible-latest.dump</code> is allowed. <code>PutObject</code> on <code>releases/*</code> would be denied, so a backup pod can't replace a release.</p></li>
+        <p><code>PutObject</code> on <code>snapshots/crucible-&lt;UTC&gt;.dump</code> and <code>latest/crucible-latest.dump</code> is allowed. <code>PutObject</code> anywhere else in the bucket would be denied, so a backup pod can't overwrite uploads.</p></li>
       <li><h3>On demand <span class="lane">operator</span> <span class="lane aws">SSM agent · node role</span></h3>
         <p><code>crucible aws snapshot</code> runs with the operator's role and calls <code>ssm send-command</code>. The SSM agent, as the node role, runs <code>/opt/crucible/snapshot.sh</code>, which creates a Job from the CronJob and waits up to 15 minutes. <code>up</code>, <code>sleep</code> and <code>teardown</code> do this first unless <code>--no-snapshot</code>.</p></li>
       <li><h3>Restore <span class="lane k8s">API init container</span> <span class="lane aws">node role</span></h3>
@@ -1268,32 +1267,32 @@ resource "aws_s3_bucket" "forge" {
 
   <section id="ship" aria-labelledby="ship-h">
     <div class="head"><span class="eyebrow">internal/awsops · bootstrap.sh.tftpl</span><h2 id="ship-h">Shipping a release</h2>
-      <p>There is no container registry. Releases travel through S3: a release is a tarball in the data bucket that the node
-        imports into containerd.</p></div>
+      <p>CI publishes every release to GitHub's container registry (GHCR); the node pulls it. Nothing about a release goes through S3.
+        A release is the server image plus a Helm chart, both named by one version.</p></div>
     <div class="figure small">
       <svg viewBox="0 0 1000 250" role="img" aria-labelledby="d5t d5d">
         <title id="d5t">Shipping a release</title>
-        <desc id="d5d">crucible aws deploy builds the image and the chart, uploads them to the data bucket under releases/sha with a current-release pointer, then sends an SSM command; the node pulls the release, imports the image and runs helm upgrade.</desc>
+        <desc id="d5d">CI builds the images and the chart and pushes them to GHCR. crucible aws deploy records the chosen version in an SSM parameter and sends an SSM command; the node logs in to GHCR with a read-only token, pulls the chart and runs helm upgrade, and the cluster pulls the server image.</desc>
         <rect class="box hot" x="20" y="40" width="250" height="132" rx="10"/>
         <text class="bt" x="36" y="68">Your machine</text>
         <text class="cd" x="36" y="92">crucible aws deploy</text>
-        <text class="bs" x="36" y="116">docker buildx, linux/amd64</text>
-        <text class="bs" x="36" y="136">helm package</text>
-        <text class="bs" x="36" y="156">at the current git commit</text>
+        <text class="bs" x="36" y="116">--version vX.Y.Z</text>
+        <text class="bs" x="36" y="136">records it in SSM, or with</text>
+        <text class="bs" x="36" y="156">--build pushes a dev build</text>
         <rect class="box" x="350" y="40" width="270" height="132" rx="10"/>
-        <text class="bt" x="366" y="68">S3 data bucket</text>
-        <text class="cd" x="366" y="92">releases/&lt;sha&gt;/</text>
-        <text class="cd" x="366" y="112">  crucible-image.tar.gz</text>
-        <text class="cd" x="366" y="132">  chart.tgz</text>
-        <text class="cd" x="366" y="152">current-release</text>
+        <text class="bt" x="366" y="68">GHCR</text>
+        <text class="cd" x="366" y="92">crucible (server, private)</text>
+        <text class="cd" x="366" y="112">charts/crucible (private)</text>
+        <text class="cd" x="366" y="132">crucible-workspace, -toolbox</text>
+        <text class="bs" x="366" y="152">(public), pushed by CI</text>
         <rect class="box hot" x="700" y="40" width="280" height="132" rx="10"/>
         <text class="bt" x="716" y="68">EC2 node</text>
-        <text class="bs" x="716" y="92">reads current-release</text>
-        <text class="bs" x="716" y="112">imports the image into containerd</text>
+        <text class="bs" x="716" y="92">reads /crucible/release</text>
+        <text class="bs" x="716" y="112">helm registry login, read:packages</text>
         <text class="bs" x="716" y="132">helm upgrade --install, with</text>
         <text class="bs" x="716" y="152">values and secrets from SSM</text>
         <path class="ar" d="M270,90 H346" marker-end="url(#ah)"/>
-        <text class="al on1" x="280" y="82">upload</text>
+        <text class="al on1" x="280" y="82">--build</text>
         <path class="ar" d="M620,90 H696" marker-start="url(#ah)"/>
         <text class="al on1" x="630" y="82">node pulls</text>
         <path class="ar" d="M145,172 V214 H840 V176" marker-end="url(#ah)"/>
@@ -1301,12 +1300,12 @@ resource "aws_s3_bucket" "forge" {
       </svg>
     </div>
     <ol class="steps">
-      <li><h3>Build <span class="lane">your machine</span></h3>
-        <p><code>crucible aws deploy</code> builds a Linux image of the current git commit with <code>docker buildx</code> (<code>linux/amd64</code>), saves and compresses it, and packages the Helm chart.</p></li>
-      <li><h3>Upload <span class="lane aws">data bucket</span></h3>
-        <p>Both go under <code>releases/&lt;commit&gt;/</code>, then <code>current-release</code> is pointed at them.</p></li>
+      <li><h3>Publish <span class="lane">CI</span></h3>
+        <p>Merging a pull request into main runs the <code>release</code> workflow: the next version from the conventional commits, a tag, three multi-arch images and the chart (pinned to their digests) pushed to GHCR, and a GitHub Release with the binaries. <code>release-manual</code> does the same for a prerelease from any branch. The image names, the one-time package setup and what to do when a release fails are in <a href="aws-deploy.html#releases">Releases and GHCR</a>.</p></li>
+      <li><h3>Choose <span class="lane">your machine</span> <span class="lane aws">SSM</span></h3>
+        <p><code>crucible aws deploy</code> (this binary's own version, <code>--version vX.Y.Z</code>, or <code>--build</code>, which pushes <code>0.0.0-dev.g&lt;sha&gt;</code> from your tree) writes the version to the String parameter <code>/crucible/release</code>. A <code>dev</code> binary with no flag refuses. A node whose <code>deploy.sh</code> predates GHCR releases is refused: <code>teardown</code>, then <code>up</code>.</p></li>
       <li><h3>Roll out <span class="lane aws">SSM</span> <span class="lane k8s">node</span></h3>
-        <p><code>aws ssm send-command</code> runs <code>/opt/crucible/deploy.sh</code> on the node, as the node role: it reads <code>current-release</code>, imports the image into containerd, runs <code>helm upgrade --install</code> with values and secrets from SSM, then checks <code>/healthz</code>.</p></li>
+        <p><code>aws ssm send-command</code> runs <code>/opt/crucible/deploy.sh</code> on the node, as the node role: it reads the release and the pull token, logs in to GHCR, checks the chart is there, refreshes the <code>ghcr-pull</code> Secret (so the cluster can pull the private server image), runs <code>helm upgrade --install</code> from the OCI chart with values and secrets from SSM, then checks <code>/healthz</code>. The pull token is the SecureString <code>/crucible/ghcr_pull_token</code> (<code>ghcr_pull_token</code> in <code>crucible.tfvars</code>, a GitHub token with <code>read:packages</code> only).</p></li>
     </ol>
     <p>On first boot the node's <a href="#bootstrap">start-up script</a> sets it up and runs the same deploy script; on an empty database the API restores the newest
       snapshot first. Every command, with what to expect: <a href="aws-deploy.html#deploy">deploy</a> and
@@ -1330,7 +1329,7 @@ resource "aws_s3_bucket" "forge" {
           <li><strong>Settings</strong>: <code>/&lt;name&gt;/env</code> from Parameter Store into <code>/etc/crucible.env</code>.</li>
           <li><strong>Writes the node's scripts</strong>: <a href="#deploy-sh"><code>deploy.sh</code></a>, and <code>snapshot.sh</code>, which runs the
             <a href="#backups">backup</a> CronJob now and waits for it (<code>crucible aws snapshot</code>, <code>up</code>, <code>sleep</code>, <code>teardown</code>).</li>
-          <li><strong>Runs <code>deploy.sh</code> once</strong> (with no release in S3 yet it just says so), then touches <code>/opt/crucible/.ready</code>.</li>
+          <li><strong>Runs <code>deploy.sh</code> once</strong> (with no release chosen yet it just says so), then touches <code>/opt/crucible/.ready</code>.</li>
         </ol></div>
       <div><h3>How you see it</h3>
         <ul>
@@ -1340,7 +1339,7 @@ resource "aws_s3_bucket" "forge" {
         <h3>What it needs to reach</h3>
         <ul>
           <li>Everything is downloaded: the Ubuntu mirrors (plain HTTP), <code>awscli.amazonaws.com</code>, GitHub (sysbox and k3s),
-            <code>get.k3s.io</code>, <code>get.helm.sh</code>, Docker Hub (k3s's own images), and S3 and Parameter Store.</li>
+            <code>get.k3s.io</code>, <code>get.helm.sh</code>, Docker Hub (k3s's own images), <code>ghcr.io</code> and <code>pkg-containers.githubusercontent.com</code> (the release's chart and images), and S3 and Parameter Store.</li>
           <li>In our account each of those goes out through the firewall. A blocked host stops the boot at that step;
             <code>crucible aws status</code> checks them.</li>
         </ul></div>
@@ -1355,28 +1354,28 @@ resource "aws_s3_bucket" "forge" {
           <li><strong>Refreshes the node's settings</strong>: it fetches <code>/&lt;name&gt;/env</code> from Parameter Store into
             <code>/etc/crucible.env</code> and loads it. That's how a <code>crucible.tfvars</code> change reaches a running node
             without a rebuild: region, bucket, OIDC, backup schedule, git bot, <code>ACCESS</code>, <code>PUBLIC_URL</code>, <code>HOST</code>, <code>TLS_ENABLED</code>.</li>
-          <li><strong>Finds the release</strong>: it reads <code>s3://&lt;data bucket&gt;/current-release</code> (a git commit) and downloads
-            <code>releases/&lt;commit&gt;/crucible-image.tar.gz</code> and <code>chart.tgz</code>.</li>
+          <li><strong>Finds the release</strong>: it reads <code>/&lt;name&gt;/release</code> (a version such as <code>v0.4.0</code>) and the SecureString
+            <code>/&lt;name&gt;/ghcr_pull_token</code>, then runs <code>helm registry login ghcr.io</code> with the token. A refused token stops the script here, before anything is applied, and the message says to set a <code>read:packages</code> token and run <code>up</code>. <code>helm show chart</code> confirms the chart exists.</li>
           <li><strong>Gets the Helm values</strong> from <code>/&lt;name&gt;/helm-values</code>: the toolbox image, the AWS labs wiring, the lab VPC and subnets.</li>
-          <li><strong>Imports the image</strong> into k3s's containerd (<code>k3s ctr images import</code>). No registry: the image comes from S3.</li>
+          <li><strong>Lets the cluster pull the image</strong>: it writes the token into the <code>ghcr-pull</code> image-pull Secret in the <code>crucible</code> namespace, from a file, never a command line. The registry login is removed when the script exits.</li>
           <li><strong>Builds the <code>crucible-secrets</code> Secret</strong> from SecureString parameters: the OIDC client secret, the git hook
             and quiz secrets, the database password, git credentials, and <code>CRUCIBLE_SECRET_KEY</code> and SMTP settings when set.</li>
-          <li><strong>Runs <code>helm upgrade --install crucible</code></strong> with the image tag, host, public URL and TLS setting from the env file,
+          <li><strong>Runs <code>helm upgrade --install crucible</code></strong> from <code>oci://ghcr.io/platform-infra-org/charts/crucible</code> at the release's chart version, with <code>image.pullSecret=ghcr-pull</code>, host, public URL and TLS setting from the env file,
             plus OIDC, backup, git bot and bootstrap admin, and <code>-f</code> the values from step 4. <code>--wait --timeout 10m</code> waits until the pods are ready.</li>
-          <li>Prints <code>deployed &lt;commit&gt;</code>.</li>
+          <li>Prints <code>deployed &lt;version&gt;</code>.</li>
         </ol></div>
       <div><h3>Who runs it</h3>
         <ul>
           <li><strong>First boot</strong>: the start-up script runs it once after installing k3s and Helm, then marks the node ready
-            (<code>/opt/crucible/.ready</code>). With no release in S3 yet it just says so.</li>
-          <li><strong><code>crucible aws deploy</code></strong>, and <code>up</code>, which ends with a deploy: it builds and uploads the release from your machine,
+            (<code>/opt/crucible/.ready</code>). With no release chosen yet it just says so.</li>
+          <li><strong><code>crucible aws deploy</code></strong>, and <code>up</code>, which ends with a deploy: it records the chosen release in SSM (for <code>--build</code>, after pushing a dev build to GHCR),
             then runs the script with <code>aws ssm send-command</code>, which first waits for the node to finish booting. It checks health afterwards:
             on the node over SSM with <code>access = ssm</code>, from your machine with <code>public</code>.</li>
           <li><strong>By hand</strong>: <code>sudo /opt/crucible/deploy.sh</code> in an SSM shell.</li>
         </ul>
         <h3>Why it's built this way</h3>
         <ul>
-          <li><strong>Everything is pulled.</strong> The node fetches from S3 and Parameter Store with its own role
+          <li><strong>Everything is pulled.</strong> The node fetches from GHCR (with the read-only pull token) and from Parameter Store with its own role
             (<a href="#iam-roles">IAM roles</a>), so nothing ever needs to reach in. That's what makes it work in our account.</li>
           <li><strong>The script is fixed at first boot.</strong> Terraform ignores later <code>user_data</code> changes so the node is never replaced
             for them. Anything that must change later lives in the parameters it re-reads every run. That's why the newer keys have fallbacks

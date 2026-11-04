@@ -63,6 +63,10 @@ jobs:
         run: go vet -tags cluster ./internal/labs
 
       - name: go test
+        env:
+          # The packages' test binaries share one ryuk reaper; when its handshake drops, ryuk removes the shared Postgres
+          # mid-run (connection refused everywhere after). The runner is thrown away, so nothing needs reaping.
+          TESTCONTAINERS_RYUK_DISABLED: "true"
         run: go test -race ./...
 
       # Mock providers only: no AWS is called.

@@ -123,7 +123,9 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
   their agent and are free; aws labs are priced by Crucible from the free AWS Price List (a fresh price refresh is
   required; stale prices fail closed). Dry run (`CRUCIBLE_AWS_LABS=dryrun`) prices aws labs from
   `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds fixture list prices so metering works; fixture prices never price a real lab.
-- AWS labs sleep with the platform (`platform_bedtime`, states `asleep`/`waking`; the server's sweep carries out a bedtime, `Morning()` ends it at start); teardown ends every lab first and the server clears only a kill switch set by `crucible aws teardown`.
+- AWS labs sleep with the platform (`platform_bedtime`, states `asleep`/`waking`; the server's sweep carries out a
+  bedtime, `Morning()` ends it at start); teardown ends every lab first and the server clears only a kill switch set by
+  `crucible aws teardown`.
 - Final scores are final; an admin reset exists (`/api/admin/quiz-reset`, Anvil reset). Ranks only ever rise.
 - One API replica (in-memory agent hub and locks); Helm pins `replicas: 1` and `Recreate`.
 - Every state-changing request needs a same-origin Origin/Referer and a JSON or multipart body; only

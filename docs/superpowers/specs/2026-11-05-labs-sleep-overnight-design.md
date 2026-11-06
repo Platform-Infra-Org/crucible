@@ -23,7 +23,8 @@ Local and cluster labs (on trainees' own machines) are not affected.
 ```
 ready --bedtime--> asleep --Wake it--> waking --machines running, workspace back--> ready
 asleep --ends_at passed / user ends / kill switch--> destroying
-waking --start failed--> asleep (error shown; Wake it again)
+waking --start failed--> asleep (machines put back to sleep; error shown; Wake it again)
+waking --no answer for 20 minutes--> asleep (through the runner's sleep; past ends_at: destroying)
 ```
 
 Every hard-coded "alive" list includes both new states: the reaper's active set and its "ended" exclusion
@@ -39,11 +40,11 @@ A single database row `platform_bedtime (requested_at, phase, by)` is the signal
 - **Nightly:** a Helm CronJob `crucible-bedtime` at `labs.sleepSchedule` with `timeZone` (as the backup CronJob)
   runs `crucible labs bedtime` in the server image with the server's database env: it inserts or refreshes the row and
   exits. Main stack variable `labs_sleep_cron` (5-field cron, default 30 minutes before `sleep_cron`, same days; the
-  repo's tfvars: `0 19 * * 0-4`), passed to Helm like `backup_cron`. With `schedule_enabled = false` no CronJob is
+  default and repo's tfvars: `0 19 * * 1-5`, Mon–Fri, as 0 is Sunday), passed to Helm like `backup_cron`. With `schedule_enabled = false` no CronJob is
   rendered.
 - **By hand:** `crucible aws sleep` runs, over SSM, `kubectl -n crucible exec deploy/crucible -- crucible labs bedtime
   --wait 20m` before its snapshot. `--wait` polls the row and lab states and exits 0 when the phase is `asleep`, else 1
-  listing labs not asleep; `aws sleep` then stops before the snapshot and says so. `--keep-labs` skips the step with a
+  listing labs not asleep (a row gone mid-wait, after a restart, is never done); `aws sleep` then stops before the snapshot and says so. `--keep-labs` skips the step with a
   warning ("labs keep running and billing while the node sleeps").
 - **The server's 15-second sweep** drives the phases:
   1. `closed` (on seeing the row): new lab requests and approvals that would start a lab are refused with
@@ -52,7 +53,8 @@ A single database row `platform_bedtime (requested_at, phase, by)` is the signal
      a lab still `provisioning` is destroyed with `end_reason = 'bedtime'` (*"Crucible went to sleep before your lab
      was ready. Start it again in the morning."*).
   3. `asleep`: every `ready` AWS lab is put to sleep (§3). The phase is `asleep` when no AWS lab is `ready`,
-     `provisioning`, `waking` or mid-sleep.
+     `provisioning`, `waking` or mid-sleep. An `asleep` bedtime requested more than 3 hours ago means the node did not
+     stop: the server deletes the row, so labs may start again.
 - **Waking:** at start, the server deletes the bedtime row (labs may start again). Sleeping labs stay asleep. The
   default `backup_cron` (19:15) runs after a 19:00 bedtime, so the nightly snapshot records labs asleep.
 
@@ -93,8 +95,8 @@ public IPv4 is released on stop, Elastic IPs are denied in labs). Committed spen
 - **Guards:** every 5 minutes the server measures each live or asleep workspace (`du -sx` through the pod, or through a
   short-lived pod on the PVC when asleep); over 20 GiB it warns once on the lab page, and over 20 GiB at the next
   measure the lab is ended (`end_reason = 'workspace_full'`, *"Your workspace grew past 20 GiB, so the lab was put
-  out."*). A new AWS lab is refused while the node's free disk (local-path's directory, read through a read-only
-  hostPath mount in the server pod) is under 15 GiB (*"The forge's disk is nearly full: try again later, or ask an
+  out."*). A new AWS lab is refused while the node's free disk (an empty `.crucible-free` directory in local-path's,
+  read through a read-only hostPath mount in the server pod) is under 15 GiB (*"The forge's disk is nearly full: try again later, or ask an
   admin."*). `crucible aws status` reports the free space and the number of labs asleep.
 - Main stack `disk_gb` default becomes 100.
 

@@ -580,7 +580,7 @@ run "ghcr_pull_token_is_required" {
 run "labs_sleep_cron_reaches_helm" {
   command = plan
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).labs.sleepSchedule == "0 19 * * *"
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).labs.sleepSchedule == "0 19 * * 1-5"
     error_message = "the nightly bedtime reaches the chart"
   }
   assert {

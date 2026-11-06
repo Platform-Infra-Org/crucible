@@ -98,11 +98,11 @@ variable "backup_cron" {
 }
 variable "labs_sleep_cron" {
   type        = string
-  default     = "0 19 * * *"
-  description = "Kubernetes cron (node timezone = schedule_timezone): AWS labs go to sleep (crucible labs bedtime); keep it 30 minutes before sleep_cron and before backup_cron"
+  default     = "0 19 * * 1-5"
+  description = "Kubernetes cron (node timezone = schedule_timezone): AWS labs go to sleep (crucible labs bedtime), Mon-Fri like sleep_cron (1-5: 0 is Sunday); keep it 30 minutes before sleep_cron and before backup_cron. Applies only with schedule_enabled"
   validation {
     condition     = can(regex("^\\S+ \\S+ \\S+ \\S+ \\S+$", var.labs_sleep_cron))
-    error_message = "labs_sleep_cron is a 5-field Kubernetes cron, e.g. \"0 19 * * 0-4\""
+    error_message = "labs_sleep_cron is a 5-field Kubernetes cron, e.g. \"0 19 * * 1-5\""
   }
 }
 variable "git_credentials" {

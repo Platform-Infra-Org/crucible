@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import { AsleepLab, LabPage, LabWorkspace } from './Lab'
+import { AsleepLab, LabPage, LabWorkspace, WakingLab } from './Lab'
 import type { LabView, ModuleLab } from '../types'
 
 const clusterInfo = { title: 'Cluster heat', runtime: 'cluster', runtime_ready: false, runtime_message: 'Your laptop agent is offline.', lab: null, contexts: [] } as unknown as ModuleLab
@@ -71,6 +71,17 @@ test('a sleeping lab says how it slept and offers Wake it', () => {
 test('a sleeping lab can be extended when its run allows it', () => {
   expect(asleep('stopped')).not.toContain('>Extend</button>')
   expect(asleep('stopped', undefined, true)).toMatch(/<button[^>]*class="ghost"[^>]*>Extend<\/button>/)
+})
+
+test('a waking lab shows what went wrong and can be ended', () => {
+  const waking = (error?: string) => renderToStaticMarkup(
+    <WakingLab lab={{ id: 'l4', state: 'waking', runtime: 'aws', error, tasks: [], terminals: [] } as unknown as LabView} setLab={() => {}} />)
+  let h = waking()
+  expect(h).toContain('Stoking the coals: starting your machines…')
+  expect(h).not.toContain('role="alert"')
+  expect(h).toMatch(/<button[^>]*class="ghost"[^>]*>End lab<\/button>/)
+  h = waking('putting its machines back to sleep failed')
+  expect(h).toMatch(/role="alert"[^>]*>putting its machines back to sleep failed</)
 })
 
 test('after a wake the workspace says once what came back', () => {

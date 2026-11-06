@@ -104,7 +104,7 @@ export function LabPage() {
   if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" lines={lab.log} />
   if (lab?.state === 'destroying' && lab.runtime === 'aws') return <Loader label="Quenching: terraform is tearing down your cloud resources…" />
   if (lab?.state === 'destroying' && lab.runtime === 'cluster') return <Loader label="Quenching: removing the lab from your cluster…" />
-  if (lab?.state === 'waking') return <Loader label="Stoking the coals: starting your machines…" />
+  if (lab?.state === 'waking') return <WakingLab lab={lab} setLab={setLab} />
   if (lab?.state === 'asleep') return <AsleepLab lab={lab} setLab={setLab} title={info.title} back={back} />
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
@@ -236,6 +236,28 @@ export function AsleepLab({ lab, setLab, title, back }: { lab: LabView; setLab: 
           <button className="ghost" disabled={busy} onClick={() => act('DELETE')}>End lab</button>
         </div>
       </section>
+    </section>
+  )
+}
+
+// A lab waking up: the loader, why a wake is stuck when it is, and a way out (a wake that failed with its machines maybe
+// running stays waking until the sweep puts it back to sleep).
+export function WakingLab({ lab, setLab }: { lab: LabView; setLab: (l: LabView) => void }) {
+  const [err, setErr] = useState<string>()
+  const end = async () => {
+    if (!confirm('End this lab? Your progress is kept.')) return
+    try {
+      setLab(await api<LabView>(`/api/labs/${lab.id}`, { method: 'DELETE' }))
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+  return (
+    <section className="page lobby">
+      <Loader label="Stoking the coals: starting your machines…" />
+      {lab.error && <p className="error" role="alert">{lab.error}</p>}
+      {err && <p className="error" role="alert">{err}</p>}
+      <button className="ghost" onClick={end}>End lab</button>
     </section>
   )
 }

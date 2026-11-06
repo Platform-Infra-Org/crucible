@@ -80,7 +80,8 @@ only an admin can approve it.
 An AWS lab sleeps when Crucible does (about 19:00). Its machines either hibernate, so they resume exactly where you
 left them, or stop, so they restart from their disks; the lab page tells you which. Your workspace keeps its files.
 In the morning, open the lab and press **Wake it**. The lab's time keeps running while it sleeps, so a lab that runs
-out of time overnight is over; when its training allows more time, **Extend** works on a sleeping lab too. While Crucible is going to sleep, no new labs start; they start again in the morning.
+out of time overnight is over; when its training allows more time, **Extend** works on a sleeping lab too. While it wakes, the lab page shows what went wrong if a wake fails, and **End lab** ends it; a wake that
+could not finish goes back to sleep within about 20 minutes, and then **Wake it** tries again. While Crucible is going to sleep, no new labs start; they start again in the morning.
 
 ## The Labs page
 

@@ -30,6 +30,8 @@ const endMessages: Record<string, string> = {
   kill_switch: 'An admin paused all labs.',
   agent_restarted: 'Your laptop agent restarted — start the lab again.',
   budget: 'The budget cap was reached.',
+  bedtime: 'Crucible went to sleep before your lab was ready. Start it again in the morning.',
+  workspace_full: 'Your workspace grew past 20 GiB, so the lab was put out.',
 }
 
 function endMessage(lab: LabView): string {
@@ -92,7 +94,7 @@ export function LabPage() {
       try {
         setLab(await api<LabView>(`/api/labs/${lab.id}`))
       } catch { /* transient; next poll retries */ }
-    }, lab.state === 'provisioning' ? 2000 : 5000)
+    }, lab.state === 'provisioning' || lab.state === 'waking' ? 2000 : 5000)
     return () => clearInterval(id)
   }, [lab?.id, lab?.state])
 
@@ -102,6 +104,8 @@ export function LabPage() {
   if (lab?.state === 'provisioning') return <Loader label="Heating the crucible: provisioning your lab…" lines={lab.log} />
   if (lab?.state === 'destroying' && lab.runtime === 'aws') return <Loader label="Quenching: terraform is tearing down your cloud resources…" />
   if (lab?.state === 'destroying' && lab.runtime === 'cluster') return <Loader label="Quenching: removing the lab from your cluster…" />
+  if (lab?.state === 'waking') return <Loader label="Stoking the coals: starting your machines…" />
+  if (lab?.state === 'asleep') return <AsleepLab lab={lab} setLab={setLab} title={info.title} back={back} />
   if (lab && (lab.state === 'ready' || lab.state === 'destroying')) return <LabWorkspace lab={lab} setLab={setLab} title={info.title} back={back} />
 
   const cluster = info.runtime === 'cluster'
@@ -184,6 +188,59 @@ export function LabPage() {
       {info.estimate_breakdown && <EstimateLines b={info.estimate_breakdown} />}
     </section>
   )
+}
+
+const sleptLine: Record<string, string> = {
+  hibernated: 'Crucible hibernated your machines last night: they resume where you left them.',
+  stopped: 'Crucible stopped your machines last night: they restart from their disks.',
+}
+
+// A lab that slept with the platform: how it slept, its deadline, and the one way back (spec 2026-11-05 §7).
+export function AsleepLab({ lab, setLab, title, back }: { lab: LabView; setLab: (l: LabView) => void; title: string; back: string }) {
+  const [err, setErr] = useState<string>()
+  const [busy, setBusy] = useState(false)
+  const act = async (method: 'POST' | 'DELETE') => {
+    setBusy(true)
+    setErr(undefined)
+    try {
+      setLab(await api<LabView>(method === 'POST' ? `/api/labs/${lab.id}/wake` : `/api/labs/${lab.id}`, { method, json: method === 'POST' ? {} : undefined }))
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="page lobby">
+      <Link className="action back" to={back}>Back to the training</Link>
+      <h1>{title}</h1>
+      <section className="panel asleep" aria-labelledby="asleep-h">
+        <h2 id="asleep-h">Your lab is asleep</h2>
+        <p>{sleptLine[lab.slept_as ?? 'stopped']}</p>
+        {lab.ends_at && <p className="muted">It ends at {new Date(lab.ends_at).toLocaleString()}; its time runs while it sleeps.</p>}
+        {lab.error && <p className="error" role="alert">{lab.error}</p>}
+        {err && <p className="error" role="alert">{err}</p>}
+        <div className="row">
+          <button className="primary" disabled={busy} onClick={() => act('POST')}>Wake it</button>
+          <button className="ghost" disabled={busy} onClick={() => act('DELETE')}>End lab</button>
+        </div>
+      </section>
+    </section>
+  )
+}
+
+const wokeLine: Record<string, string> = {
+  hibernated: 'Your machines resumed where you left them.',
+  stopped: "Your machines restarted from their disks; anything you hadn't saved is gone.",
+}
+
+// Shown once per wake, remembered per browser.
+function WakeBanner({ lab }: { lab: LabView }) {
+  const key = `crucible.woke.${lab.id}`
+  const [seen] = useState(() => { try { return localStorage.getItem(key) === lab.woke_at } catch { return false } })
+  useEffect(() => { try { if (lab.woke_at) localStorage.setItem(key, lab.woke_at) } catch { /* private window */ } }, [key, lab.woke_at])
+  if (!lab.woke_at || !lab.slept_as || seen) return null
+  return <p className="request" role="status">{wokeLine[lab.slept_as]}</p>
 }
 
 export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: LabView) => void; title: string; back: string }) {
@@ -316,6 +373,10 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
         <button className="ghost" onClick={end}>End lab</button>
       </header>
       <div>
+        <WakeBanner lab={lab} />
+        {lab.workspace_warning && (
+          <p className="warn" role="status">Your workspace holds more than 20 GiB: delete files you don't need, or the lab will be put out at the next check.</p>
+        )}
         {lab.complete && !lab.lab_review && <div className="banner pass" role="status">✦ Lab forged: {lab.score} / {lab.max_score} points</div>}
         {lab.lab_review && <FeedbackBox f={lab.lab_review} />}
         {askAlerts && (

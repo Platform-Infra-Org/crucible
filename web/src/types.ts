@@ -43,9 +43,10 @@ export type TaskView = {
   id: string; title: string; status: TaskStatus; kind: 'check' | 'quiz' | 'review'; points: number; awarded: number
   quiz_prompt?: string; has_setup: boolean; hints_total: number; hints_revealed: number; next_hint_cost: number; review?: Feedback
 }
-export type LabState = 'pending_approval' | 'provisioning' | 'ready' | 'destroying' | 'destroyed' | 'failed' | 'rejected' | 'expired'
+export type LabState = 'pending_approval' | 'provisioning' | 'ready' | 'destroying' | 'destroyed' | 'failed' | 'rejected' | 'expired' | 'asleep' | 'waking'
 export type Tier = 'auto' | 'approver' | 'leader' | 'admin'
 export type LabView = {
+  slept_as?: 'hibernated' | 'stopped'; slept_at?: string; woke_at?: string; workspace_warning?: boolean
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
   terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number

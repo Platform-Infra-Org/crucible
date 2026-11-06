@@ -20,7 +20,7 @@ type workspaceMeter interface {
 	WorkspaceMiB(ctx context.Context, inst *Instance) (int64, error)
 }
 
-// nodeFull reports whether the node's lab storage (CRUCIBLE_NODE_STORAGE, local-path's directory mounted read-only)
+// nodeFull reports whether the node's lab storage (CRUCIBLE_NODE_STORAGE, an empty directory on local-path's filesystem, mounted read-only)
 // has less than minNodeFree left. Unreadable counts as full: the operator set the path, so a wrong one must show.
 func (s *Service) nodeFull() bool {
 	if s.NodeStorage == "" {

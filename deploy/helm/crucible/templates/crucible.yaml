@@ -131,8 +131,8 @@ spec:
         - name: git-credentials
           secret: { secretName: {{ .Values.secretName }}, items: [{ key: git-credentials, path: git-credentials }] }
         {{- if .Values.awsLabs.enabled }}
-        - name: node-storage  # k3s local-path: where workspace volumes live; read for its free space only
-          hostPath: { path: /var/lib/rancher/k3s/storage, type: DirectoryOrCreate }
+        - name: node-storage  # an empty directory on k3s local-path's filesystem: statfs reads its free space; no workspace is visible
+          hostPath: { path: /var/lib/rancher/k3s/storage/.crucible-free, type: DirectoryOrCreate }
         {{- end }}
 ---
 apiVersion: v1

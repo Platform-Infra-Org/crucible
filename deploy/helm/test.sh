@@ -93,6 +93,7 @@ for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
 done
 grep -q 'name: CRUCIBLE_NODE_STORAGE, value: /node-storage' <<<"$awsout" || { echo "aws labs: the free-disk guard"; exit 1; }
 grep -q 'mountPath: /node-storage, readOnly: true' <<<"$awsout" || { echo "aws labs: the node storage is read-only"; exit 1; }
+grep -q 'hostPath: { path: /var/lib/rancher/k3s/storage/.crucible-free, type: DirectoryOrCreate }' <<<"$awsout" || { echo "aws labs: the free-disk guard mounts an empty directory, never the workspaces"; exit 1; }
 if grep -q node-storage <<<"$out"; then echo "no node storage without aws labs"; exit 1; fi
 if grep -q crucible-bedtime <<<"$awsout"; then echo "no bedtime without a schedule"; exit 1; fi
 bed=$(helm template t "$chart" $aws --set-string labs.sleepSchedule="0 19 * * 0-4")

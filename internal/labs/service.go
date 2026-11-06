@@ -57,7 +57,7 @@ type Service struct {
 	Cloud       awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	AWSRegions  []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
 	Prices      *pricing.Store   // list prices for aws estimates; nil when unset
-	NodeStorage string           // CRUCIBLE_NODE_STORAGE: the node's lab volume directory, read-only, for the free-disk guard; "" = off
+	NodeStorage string           // CRUCIBLE_NODE_STORAGE: a directory on the lab volumes' filesystem, read-only, for the free-disk guard; "" = off
 
 	measureMu  sync.Mutex
 	measuredAt map[string]time.Time // per aws lab: its last workspace measure in this process

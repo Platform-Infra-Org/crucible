@@ -143,3 +143,14 @@ func TestFakeSleepStopsOnlyTheLabsOwnMachines(t *testing.T) {
 		t.Fatalf("wake: %v %s", err, f.InstanceState("i-a"))
 	}
 }
+
+func TestFakeSleepAndWakeRefuseAnInvalidLabID(t *testing.T) {
+	f := &Fake{}
+	c := Credentials{SessionToken: token("../x")}
+	if _, err := f.Sleep(context.Background(), "eu-west-1", c, "../x"); err == nil {
+		t.Fatal("sleep")
+	}
+	if err := f.Wake(context.Background(), "eu-west-1", c, "../x"); err == nil {
+		t.Fatal("wake")
+	}
+}

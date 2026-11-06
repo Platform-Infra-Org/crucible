@@ -58,6 +58,9 @@ func (f *Fake) InstanceState(id string) string {
 
 // setStates moves the lab's machines in region from one state to another, with the lab's own session only.
 func (f *Fake) setStates(region string, c Credentials, labID, from, to string) ([]Slept, error) {
+	if !ValidLabID(labID) {
+		return nil, fmt.Errorf("invalid lab id %q", labID)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.Err != nil {

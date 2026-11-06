@@ -675,3 +675,148 @@ func TestWakeStartsTheLabsStoppedMachines(t *testing.T) {
 		t.Fatalf("one start for both machines, both running: %d %v", starts, state)
 	}
 }
+
+func stopIDs(f url.Values) []string {
+	var ids []string
+	for i := 1; f.Get(fmt.Sprintf("InstanceId.%d", i)) != ""; i++ {
+		ids = append(ids, f.Get(fmt.Sprintf("InstanceId.%d", i)))
+	}
+	return ids
+}
+
+const badState = `<Response><Errors><Error><Code>IncorrectInstanceState</Code><Message>bad state</Message></Error></Errors><RequestID>r</RequestID></Response>`
+
+var testCreds = Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}
+
+func TestSleepForcesOnlyTheMachinesStillStopping(t *testing.T) {
+	old := StopWait
+	StopWait = 30 * time.Millisecond
+	t.Cleanup(func() { StopWait = old })
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "running", "i-2": "running"}
+	var forced [][]string
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StopInstances":
+			ids := stopIDs(c.form)
+			if c.form.Get("Force") == "true" {
+				forced = append(forced, ids)
+				for _, id := range ids {
+					if state[id] == "terminated" {
+						return 400, "text/xml", badState
+					}
+					state[id] = "stopped"
+				}
+			} else if ids[0] == "i-1" {
+				state["i-1"] = "stopping"
+			} else {
+				state["i-2"] = "terminated"
+			}
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StopInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	if _, err := cl.Sleep(context.Background(), "eu-west-1", testCreds, "aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if len(forced) != 1 || !slices.Equal(forced[0], []string{"i-1"}) {
+		t.Fatalf("the force names only the machine still stopping: %v", forced)
+	}
+}
+
+func TestSleepStopsTheRestWhenOneFails(t *testing.T) {
+	old := StopWait
+	StopWait = time.Second
+	t.Cleanup(func() { StopWait = old })
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "running", "i-2": "running"}
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StopInstances":
+			if c.form.Get("InstanceId.1") == "i-1" {
+				return 400, "text/xml", badState
+			}
+			state["i-2"] = "stopped"
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StopInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	got, err := cl.Sleep(context.Background(), "eu-west-1", testCreds, "aaaaaaaaaaaa")
+	if err == nil || !strings.Contains(err.Error(), "i-1") {
+		t.Fatalf("the failure surfaces: %v", err)
+	}
+	if state["i-2"] != "stopped" || !slices.Equal(got, []Slept{{"i-2", true}}) {
+		t.Fatalf("a later machine is still stopped: %v %+v", state, got)
+	}
+}
+
+func TestSleepFailsWhenAMachineNeverStops(t *testing.T) {
+	old := StopWait
+	StopWait = 20 * time.Millisecond
+	t.Cleanup(func() { StopWait = old })
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "running"}
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StopInstances":
+			state["i-1"] = "stopping"
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StopInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	if _, err := cl.Sleep(context.Background(), "eu-west-1", testCreds, "aaaaaaaaaaaa"); err == nil {
+		t.Fatal("a machine left running or stopping, even after the force, is an error")
+	}
+}
+
+func TestWakeSkipsAMachineThatTerminatedWhileWaiting(t *testing.T) {
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "stopped", "i-2": "stopping"}
+	describes := 0
+	var started [][]string
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			describes++
+			if describes >= 2 {
+				state["i-2"] = "terminated"
+			}
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StartInstances":
+			ids := stopIDs(c.form)
+			started = append(started, ids)
+			for _, id := range ids {
+				if state[id] == "terminated" {
+					return 400, "text/xml", badState
+				}
+				state[id] = "running"
+			}
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StartInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	if err := cl.Wake(context.Background(), "eu-west-1", testCreds, "aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if len(started) != 1 || !slices.Equal(started[0], []string{"i-1"}) {
+		t.Fatalf("only the stopped machine is started: %v", started)
+	}
+}

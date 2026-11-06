@@ -215,6 +215,8 @@ func labInstances(ctx context.Context, e *ec2.Client, labID string, states ...st
 	return out, nil
 }
 
+var errNotYetThere = errors.New("machines not yet in the wanted state")
+
 // waitState polls until every id is in want (or terminated), for at most d.
 func (c *Client) waitState(ctx context.Context, e *ec2.Client, labID string, ids []string, want string, d time.Duration) error {
 	deadline := time.Now().Add(d)
@@ -233,7 +235,7 @@ func (c *Client) waitState(ctx context.Context, e *ec2.Client, labID string, ids
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the lab's machines were not %s after %s", want, d)
+			return fmt.Errorf("%w: the lab's machines were not %s after %s", errNotYetThere, want, d)
 		}
 		select {
 		case <-ctx.Done():
@@ -254,6 +256,7 @@ func (c *Client) Sleep(ctx context.Context, region string, cr Credentials, labID
 	}
 	ids := slices.Sorted(maps.Keys(live))
 	var out []Slept
+	var errs []error
 	for _, id := range ids {
 		_, err := e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{id}, Hibernate: aws.Bool(true)})
 		hibernated := err == nil
@@ -261,23 +264,46 @@ func (c *Client) Sleep(ctx context.Context, region string, cr Credentials, labID
 		if errors.As(err, &api) && hibernationRefused[api.ErrorCode()] {
 			_, err = e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{id}})
 		}
-		if err != nil {
-			return out, fmt.Errorf("stopping %s: %w", id, err)
+		if err != nil { // keep going: one that won't stop must not leave the rest running
+			errs = append(errs, fmt.Errorf("stopping %s: %w", id, err))
+			continue
 		}
 		out = append(out, Slept{InstanceID: id, Hibernated: hibernated})
 	}
-	if len(ids) == 0 {
-		return out, nil
+	stopped := make([]string, len(out))
+	for i, s := range out {
+		stopped[i] = s.InstanceID
 	}
-	if c.waitState(ctx, e, labID, ids, "stopped", StopWait) != nil {
-		if _, err := e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: ids, Force: aws.Bool(true)}); err != nil {
-			return out, fmt.Errorf("forcing the stop: %w", err)
+	if len(stopped) > 0 {
+		err := c.waitState(ctx, e, labID, stopped, "stopped", StopWait)
+		if errors.Is(err, errNotYetThere) {
+			// force only what is still going down: EC2 rejects a whole batch holding a terminated id
+			var left []string
+			still, lerr := labInstances(ctx, e, labID, "pending", "running", "stopping")
+			if lerr != nil {
+				err = lerr
+			}
+			for _, id := range stopped {
+				if _, ok := still[id]; ok {
+					left = append(left, id)
+				}
+			}
+			if lerr == nil {
+				err = nil
+				if len(left) > 0 {
+					if _, ferr := e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: left, Force: aws.Bool(true)}); ferr != nil {
+						err = fmt.Errorf("forcing the stop: %w", ferr)
+					} else {
+						err = c.waitState(ctx, e, labID, left, "stopped", StopWait)
+					}
+				}
+			}
 		}
-		if err := c.waitState(ctx, e, labID, ids, "stopped", StopWait); err != nil {
-			return out, err
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return out, nil
+	return out, errors.Join(errs...)
 }
 
 func (c *Client) Wake(ctx context.Context, region string, cr Credentials, labID string) error {
@@ -295,6 +321,14 @@ func (c *Client) Wake(ctx context.Context, region string, cr Credentials, labID 
 	}
 	if err := c.waitState(ctx, e, labID, ids, "stopped", StopWait); err != nil { // one still hibernating finishes first
 		return err
+	}
+	now, err := labInstances(ctx, e, labID, "stopped") // one may have been terminated while we waited
+	if err != nil {
+		return err
+	}
+	ids = slices.Sorted(maps.Keys(now))
+	if len(ids) == 0 {
+		return nil
 	}
 	if _, err := e.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: ids}); err != nil {
 		return err

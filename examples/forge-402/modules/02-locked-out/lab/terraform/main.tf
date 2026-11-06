@@ -35,8 +35,10 @@ resource "aws_instance" "box" {
   vpc_security_group_ids      = [aws_security_group.box.id]
   iam_instance_profile        = var.crucible_instance_profile != "" ? var.crucible_instance_profile : null
   associate_public_ip_address = false
+  hibernation                 = true # a healthy machine: it resumes with its shells after a night asleep
 
   root_block_device {
+    encrypted   = true
     volume_size = 8
     volume_type = "gp3"
   }

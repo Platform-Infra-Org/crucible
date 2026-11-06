@@ -23,6 +23,10 @@ const bankingMsg = "The forge is banking for the night: labs start again in the 
 // settleFor is how long labs starting at bedtime get to finish before they are cancelled.
 const settleFor = 10 * time.Minute
 
+// nodeSleepsWithin is how long after a bedtime was requested the node has surely stopped (aws sleep waits 20 minutes
+// for the labs, then stops it).
+const nodeSleepsWithin = 3 * time.Hour
+
 // Bedtime is the platform going to sleep (spec 2026-11-05 §2): one row while it lasts.
 type Bedtime struct {
 	RequestedAt time.Time
@@ -145,6 +149,14 @@ func (s *Service) bedtimeStep(ctx context.Context) {
 		return
 	}
 	now := s.Now()
+	if b.Phase == "asleep" && now.Sub(b.RequestedAt) > nodeSleepsWithin {
+		// the node stops soon after its labs sleep; a server still sweeping this long after did not stop, so labs may start again
+		s.Log.Warn("bedtime: the node did not go to sleep; ending the bedtime", "requested_at", b.RequestedAt)
+		if err := CancelBedtime(ctx, s.DB); err != nil {
+			s.Log.Error("bedtime: ending it failed", "err", err)
+		}
+		return
+	}
 	if b.Phase == "settling" {
 		var starting int
 		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_instances WHERE runtime = 'aws' AND state IN ('provisioning', 'destroying')`).Scan(&starting); err != nil {
@@ -183,27 +195,40 @@ func (s *Service) bedtimeStep(ctx context.Context) {
 		return
 	}
 	for _, inst := range ready {
-		var failedRecently bool // a failed sleep is retried every 5 minutes, not every sweep
-		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'sleep_failed' AND at > $2)`,
-			inst.ID, now.Add(-5*time.Minute)).Scan(&failedRecently); err != nil || failedRecently {
-			continue
-		}
-		s.once("sleep:"+inst.ID, func() { s.sleepLab(context.WithoutCancel(ctx), inst) }) // its own slot: a destroy keeps the lab id's
+		s.sleepSoon(ctx, inst)
 	}
 	if awake, err := AwakeAWSLabs(ctx, s.DB); err == nil && len(awake) == 0 {
 		_, _ = s.DB.Exec(ctx, `UPDATE platform_bedtime SET phase = 'asleep'`)
 	}
 }
 
-// sleepLab puts one ready aws lab to sleep. A failure leaves it ready (the next sweep tries again) and is logged.
+// sleepSoon puts the lab to sleep in the background, in its own slot (a destroy keeps the lab id's). A failed sleep is
+// retried every 5 minutes, not every sweep.
+func (s *Service) sleepSoon(ctx context.Context, inst *Instance) {
+	var failedRecently bool
+	if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'sleep_failed' AND at > $2)`,
+		inst.ID, s.Now().Add(-5*time.Minute)).Scan(&failedRecently); err != nil || failedRecently {
+		return
+	}
+	s.once("sleep:"+inst.ID, func() { s.sleepLab(context.WithoutCancel(ctx), inst) })
+}
+
+// sleepLab puts one aws lab to sleep through its runner: a ready one at bedtime, or a waking one whose wake never
+// finished (whatever it started stops: asleep means stopped). A failure leaves the state as it was (the next sweep
+// tries again) and is logged.
 func (s *Service) sleepLab(ctx context.Context, inst *Instance) {
 	sl, ok := s.Runners[inst.Runtime].(labSleeper)
 	if !ok {
 		return
 	}
+	failed := func(ctx context.Context, err error) {
+		s.Log.Error("a lab did not go to sleep", "lab", inst.ID, "err", err)
+		_, _ = s.DB.Exec(ctx, `INSERT INTO lab_events (lab_id, kind, detail, at) VALUES ($1, 'sleep_failed', $2, $3)`,
+			inst.ID, cleanText(err.Error()), s.Now())
+	}
 	lab, _, err := s.labContent(ctx, inst)
 	if err != nil {
-		s.Log.Error("bedtime: the lab's content is gone", "lab", inst.ID, "err", err)
+		failed(ctx, fmt.Errorf("the lab's content is gone: %w", err))
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
@@ -212,9 +237,12 @@ func (s *Service) sleepLab(ctx context.Context, inst *Instance) {
 	wctx, wcancel := finalCtx(ctx)
 	defer wcancel()
 	if err != nil {
-		s.Log.Error("bedtime: a lab did not go to sleep", "lab", inst.ID, "err", err)
-		_, _ = s.DB.Exec(wctx, `INSERT INTO lab_events (lab_id, kind, detail, at) VALUES ($1, 'sleep_failed', $2, $3)`,
-			inst.ID, cleanText(err.Error()), s.Now())
+		failed(wctx, err)
+		return
+	}
+	if inst.State == Waking { // its sleeping meter never ended: the wake did not finish
+		s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL, error = $2
+			WHERE id = $1 AND state = 'waking'`, "Waking took too long; press Wake it again.")
 		return
 	}
 	now := s.Now()

@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"crucible/internal/awscloud"
+	"errors"
 	"testing"
 	"time"
 )
@@ -109,17 +110,34 @@ func TestSleepingLabsStayCommittedInSpend(t *testing.T) {
 func TestAWakeThatNeverFinishedGoesBackToSleep(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
-	f.withAWS(t)
+	run, _ := f.withAWS(t)
 	id := f.approvedAWS(t)
 	f.waitState(t, f.u, id, Ready)
 	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'waking', waking_since = $2 WHERE id = $1`, id, f.clk.Now()); err != nil {
 		t.Fatal(err)
 	}
 	f.clk.Add(21 * time.Minute)
+	run.mu.Lock()
+	run.sleepErr = errors.New("throttled")
+	run.mu.Unlock()
 	f.s.Sweep(ctx)
-	got, _ := f.s.Get(ctx, f.u, id)
-	if got.State != Asleep || got.Error != "Waking took too long; press Wake it again." {
+	f.settled(t, "sleep:"+id)
+	if got, _ := f.s.Get(ctx, f.u, id); got.State != Waking {
+		t.Fatalf("machines that may run are never called asleep: %+v", got)
+	}
+	run.mu.Lock()
+	run.sleepErr = nil
+	run.mu.Unlock()
+	f.clk.Add(6 * time.Minute) // past the failed sleep's back-off
+	f.s.Sweep(ctx)
+	got := f.waitState(t, f.u, id, Asleep)
+	if got.Error != "Waking took too long; press Wake it again." {
 		t.Fatalf("a restart mid-wake leaves the lab asleep with a way forward: %+v", got)
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.slept) != 2 || run.slept[1] != id {
+		t.Fatalf("whatever the dead wake started is put back to sleep through the runner: %v", run.slept)
 	}
 }
 

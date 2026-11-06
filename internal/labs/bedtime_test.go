@@ -354,3 +354,48 @@ func TestWakeRefusedWhilePausedAndAWakeInFlightIsNotLeftWaking(t *testing.T) {
 		t.Fatalf("not left waking: %s", got.State)
 	}
 }
+
+func TestASleepWithoutItsContentBacksOffLikeAFailedSleep(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withAWS(t)
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET sha = 'gone' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	f.bedtime(t)
+	failures := func() (n int) {
+		f.settled(t, "sleep:"+id)
+		_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_events WHERE lab_id = $1 AND kind = 'sleep_failed'`, id).Scan(&n)
+		return n
+	}
+	f.s.Sweep(ctx)
+	if n := failures(); n != 1 {
+		t.Fatalf("a lab whose content is gone records a failed sleep: %d", n)
+	}
+	f.clk.Add(time.Minute)
+	f.s.Sweep(ctx)
+	if n := failures(); n != 1 {
+		t.Fatalf("and waits five minutes like any failed sleep: %d", n)
+	}
+}
+
+func TestABedtimeOutlivingItsNodeEnds(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		ago  time.Duration
+		kept bool
+	}{{2 * time.Hour, true}, {3*time.Hour + time.Minute, false}} {
+		f := setup(t, true)
+		f.bedtime(t)
+		if _, err := f.s.DB.Exec(ctx, `UPDATE platform_bedtime SET phase = 'asleep'`); err != nil {
+			t.Fatal(err)
+		}
+		f.clk.Add(tc.ago)
+		f.s.Sweep(ctx)
+		if kept := f.phase(t) == "asleep"; kept != tc.kept {
+			t.Fatalf("asleep %s ago: kept %v (the node did not stop, so labs may start again)", tc.ago, kept)
+		}
+	}
+}

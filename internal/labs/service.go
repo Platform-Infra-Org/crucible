@@ -1566,10 +1566,11 @@ func (s *Service) Sweep(ctx context.Context) {
 	for _, inst := range due {
 		reason := "idle"
 		switch {
-		case inst.State == Waking: // a wake that never finished (a restart mid-wake): back to sleep; the trainee tries again
+		case inst.State == Waking && (inst.EndsAt == nil || inst.EndsAt.After(now)):
+			// a wake that never finished (a restart mid-wake): back to sleep through the runner, so whatever it started
+			// stops; the trainee tries again. Past its deadline it is destroyed instead.
 			if _, busy := s.inflight.Load("wake:" + inst.ID); !busy {
-				s.endRow(ctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL, error = $2
-					WHERE id = $1 AND state = 'waking'`, "Waking took too long; press Wake it again.")
+				s.sleepSoon(ctx, inst)
 			}
 			continue
 		case inst.State == PendingApproval:

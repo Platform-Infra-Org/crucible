@@ -71,6 +71,7 @@ type labObjects struct {
 	Limits    *corev1.LimitRange
 	Network   *networkingv1.NetworkPolicy
 	Pod       *corev1.Pod
+	PVC       *corev1.PersistentVolumeClaim // aws labs: the workspace's disk (nil otherwise)
 }
 
 // clusterObjects is everything one cluster lab runs in (spec §8.2). privileged is only for dev clusters without

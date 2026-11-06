@@ -25,11 +25,12 @@ type Lookup interface {
 }
 
 type Line struct {
-	Address        string  `json:"address"`
-	Type           string  `json:"type"`
-	HourlyUSD      float64 `json:"hourly_usd"`
-	UsageHourlyUSD float64 `json:"usage_hourly_usd"`
-	Note           string  `json:"note,omitempty"` // "free", "declared", "usage not stated", …
+	Address          string  `json:"address"`
+	Type             string  `json:"type"`
+	HourlyUSD        float64 `json:"hourly_usd"`
+	UsageHourlyUSD   float64 `json:"usage_hourly_usd"`
+	StoppedHourlyUSD float64 `json:"-"`              // per hour while the lab sleeps: an instance's disks only; anything else its HourlyUSD
+	Note             string  `json:"note,omitempty"` // "free", "declared", "usage not stated", …
 }
 
 type Breakdown struct {

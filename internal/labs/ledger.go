@@ -196,7 +196,7 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 	}
 	spenders := map[[2]string]float64{}
 	for _, x := range all {
-		if x.State == Provisioning || x.State == Ready || x.State == Destroying && x.Runtime == "aws" { // aws: live resources until terraform destroy ends
+		if x.State == Provisioning || x.State == Ready || x.State == Asleep || x.State == Waking || x.State == Destroying && x.Runtime == "aws" { // aws: live resources until terraform destroy ends
 			l.Running = append(l.Running, x)
 		}
 		if i, ok := day[x.CreatedAt.UTC().Format(time.DateOnly)]; ok {

@@ -39,3 +39,8 @@ Forge settings**, and they take effect at once. See [Forge settings](/docs/admin
 ## Recent privileged actions
 
 The latest entries of the audit log. See [First admin, audit and runbooks](/docs/admins/first-admin-audit-and-runbooks).
+
+## Teardown and the kill switch
+
+`crucible aws teardown` turns the kill switch on as `crucible aws teardown` so the server ends every lab before the
+stack is removed. When the rebuilt server starts, it turns that switch off. A kill switch an admin turned on stays on.

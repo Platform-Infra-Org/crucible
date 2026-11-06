@@ -125,6 +125,10 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.Extend(r.Context(), user(r), p(r, "id"))
 		reply(w, v, err)
 	})
+	r.Post("/api/labs/{id}/wake", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.Wake(r.Context(), user(r), p(r, "id"))
+		reply(w, v, err)
+	})
 	r.Get("/api/labs/{id}/tasks/{task}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := s.OpenTask(r.Context(), user(r), p(r, "id"), p(r, "task"))
 		reply(w, v, err)

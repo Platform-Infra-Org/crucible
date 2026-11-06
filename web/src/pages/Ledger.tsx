@@ -30,7 +30,7 @@ function LabRows({ labs, testid }: { labs: LedgerLab[]; testid: string }) {
         {labs.map((l) => (
           <tr key={l.id}>
             <td>{l.training} / {l.module}</td><td>{l.team}</td><td>{l.requester}</td><td>{l.runtime}</td>
-            <td>{l.state}{l.state === 'ready' && l.ends_at ? ` · ends ${new Date(l.ends_at).toLocaleTimeString()}` : ''}</td>
+            <td>{l.state}{(l.state === 'ready' || l.state === 'asleep') && l.ends_at ? ` · ends ${new Date(l.ends_at).toLocaleTimeString()}` : ''}</td>
             <td>{usd(l.estimate_usd)}</td><td>{usd(l.cost_usd)}</td><td>{l.metered_usd == null ? '—' : usd(l.metered_usd)}</td>
             <td>{l.actual_usd == null ? '—' : `${usd(l.actual_usd)}${l.settled ? '' : ' (so far)'}`}</td>
           </tr>

@@ -662,11 +662,36 @@ func (o Ops) requireRunning(ctx context.Context, m map[string]string) error {
 	return nil
 }
 
-// SleepNode snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
-func (o Ops) SleepNode(ctx context.Context, noSnapshot bool) error {
+// labsOnNode runs `crucible labs <args>` in the server's pod, as root on the node.
+func labsOnNode(args string) string {
+	return "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n crucible exec deploy/crucible -c api -- crucible labs " + args
+}
+
+// SleepNode puts the AWS labs to sleep, snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
+func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err error) {
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
 		return err
+	}
+	closed, stopped := false, false
+	defer func() { // the node stays up, so the platform must reopen to labs
+		if closed && !stopped {
+			if cerr := o.ssm(ctx, m, labsOnNode("bedtime --cancel")); cerr != nil {
+				err = fmt.Errorf("%w; and cancelling the bedtime failed too: %v (run `crucible aws connect`, then `crucible labs bedtime --cancel` on the node)", err, cerr)
+			}
+		}
+	}()
+	if keepLabs {
+		fmt.Fprintln(o.Log, "WARNING: --keep-labs: AWS labs are left as they are; they keep running and billing while the node sleeps")
+	} else if st, serr := o.state(ctx, m); serr != nil {
+		return fmt.Errorf("not stopping: %w (use --keep-labs to skip the labs)", serr)
+	} else if st == "running" {
+		closed = true
+		if _, err := o.ssmOut(ctx, m, labsOnNode("bedtime --wait 20m")); err != nil {
+			return fmt.Errorf("the labs did not all go to sleep, so the node keeps running (the bedtime was cancelled; "+
+				"`crucible aws sleep --keep-labs` stops it anyway): %w", err)
+		}
+		fmt.Fprintln(o.Log, "every AWS lab is asleep")
 	}
 	if !noSnapshot {
 		st, err := o.state(ctx, m)
@@ -684,6 +709,7 @@ func (o Ops) SleepNode(ctx context.Context, noSnapshot bool) error {
 	if err := o.Exec(ctx, o.Root, "aws", "ec2", "stop-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
 		return err
 	}
+	stopped = true
 	fmt.Fprintln(o.Log, "the forge is banked for the night 🌙")
 	return o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-stopped", "--region", m["region"], "--instance-ids", m["instance_id"])
 }
@@ -871,16 +897,34 @@ func (o Ops) Status(ctx context.Context) error {
 	default:
 		fmt.Fprintf(o.Log, "egress: the firewall blocks these, ask the network team to allow them:\n%s\n", strings.TrimSpace(out))
 	}
+	if out, err := o.ssmOut(ctx, m, labsOnNode("status")); err == nil {
+		fmt.Fprintf(o.Log, "labs:\n  %s\n", strings.ReplaceAll(strings.TrimSpace(out), "\n", "\n  "))
+	}
 	return nil
 }
 
-func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot bool) error {
+func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keepLabs bool) error {
 	if !yes {
 		return errors.New("teardown destroys the node (buckets and snapshots are kept); re-run with --yes to confirm")
 	}
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
 		return err
+	}
+	if keepLabs {
+		fmt.Fprintln(o.Log, "WARNING: --keep-labs: running labs are left as they are; nothing will clean them up, and they keep billing")
+	} else {
+		st, err := o.state(ctx, m)
+		if err != nil {
+			return fmt.Errorf("not tearing down: %w (use --keep-labs to skip ending the labs)", err)
+		}
+		if st != "running" {
+			return fmt.Errorf("the node is %s, so it can't end its labs: wake it first (crucible aws wake), or pass --keep-labs", st)
+		}
+		if _, err := o.ssmOut(ctx, m, labsOnNode("stop-all --wait 30m")); err != nil {
+			return fmt.Errorf("the labs did not all end, so nothing was torn down. The kill switch stays on until the server restarts, so labs stay paused; run `crucible aws teardown --yes` again to continue (`--keep-labs` tears down anyway): %w", err)
+		}
+		fmt.Fprintln(o.Log, "every lab has ended; the rebuilt server reopens labs when it starts")
 	}
 	if err := o.snapshotFirst(ctx, m, noSnapshot, "tearing down"); err != nil {
 		return err
@@ -890,7 +934,43 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot bool)
 		return err
 	}
 	abs, _ := filepath.Abs(varFile)
-	return o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + o.dir("main"), "destroy", "-auto-approve", "-var-file=" + abs}, mainVars(p)...)...)
+	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + o.dir("main"), "destroy", "-auto-approve", "-var-file=" + abs}, mainVars(p)...)...); err != nil {
+		return err
+	}
+	o.reportLeftovers(ctx)
+	return nil
+}
+
+// reportLeftovers lists anything still tagged crucible:lab-id in the lab regions, with how to remove it. It deletes
+// nothing: with the server gone, a person decides.
+func (o Ops) reportLeftovers(ctx context.Context) {
+	raw, err := o.Output(ctx, o.Root, "terraform", "-chdir="+o.dir("labs"), "output", "-json") // not o.outputs: it insists on lab_role_arn
+	if err != nil {
+		return
+	}
+	var parsed struct {
+		Regions struct{ Value string } `json:"regions"`
+	}
+	if json.Unmarshal([]byte(raw), &parsed) != nil || parsed.Regions.Value == "" {
+		return
+	}
+	l := map[string]string{"regions": parsed.Regions.Value}
+	found := false
+	for r := range strings.SplitSeq(l["regions"], ",") {
+		out, err := o.Output(ctx, o.Root, "aws", "resourcegroupstaggingapi", "get-resources", "--region", r,
+			"--tag-filters", "Key=crucible:lab-id", "--query", "ResourceTagMappingList[].ResourceARN", "--output", "text")
+		if err != nil {
+			fmt.Fprintf(o.Log, "lab leftovers in %s: not checked (%v)\n", r, err)
+			continue
+		}
+		if arns := strings.Fields(out); len(arns) > 0 {
+			found = true
+			fmt.Fprintf(o.Log, "still tagged crucible:lab-id in %s (delete these by hand, e.g. aws ec2 terminate-instances):\n  %s\n", r, strings.Join(arns, "\n  "))
+		}
+	}
+	if !found {
+		fmt.Fprintln(o.Log, "no lab resources are left")
+	}
 }
 
 // inviteEmail is a plain address (like the main stack's bootstrap_admin), and never starts with "-", so the AWS CLI

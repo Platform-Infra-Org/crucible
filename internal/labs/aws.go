@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	ap "crucible/internal/agentproto"
 	"crucible/internal/apperr"
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
@@ -38,6 +41,7 @@ type AWSRunner struct {
 	Cloud          awscloud.Cloud
 	StateBucket    string // deploy/aws/labs output state_bucket
 	StateRegion    string
+	Regions        []string           // every allowed lab region (CRUCIBLE_AWS_LAB_REGIONS): sleep and wake reach each one
 	Network        content.LabNetwork // labs-init --vpc-id --subnet-ids (CRUCIBLE_AWS_LAB_VPC_ID, …_SUBNET_IDS)
 	WorkspaceImage string
 	TerraformImage string
@@ -55,6 +59,11 @@ type AWSRunner struct {
 }
 
 var _ Runner = (*AWSRunner)(nil)
+
+var (
+	_ labSleeper     = (*AWSRunner)(nil)
+	_ workspaceMeter = (*AWSRunner)(nil)
+)
 
 func (a *AWSRunner) now() time.Time {
 	if a.Now != nil {
@@ -551,4 +560,150 @@ func (a *AWSRunner) consoleLink(ctx context.Context, inst *Instance, region stri
 	}
 	dest := fmt.Sprintf("https://%[1]s.console.aws.amazon.com/ec2/home?region=%[1]s#Instances:tag:crucible:lab-id=%[2]s", region, inst.ID)
 	return awscloud.ConsoleURL(ctx, hc, cmp.Or(a.SigninEndpoint, awscloud.SigninEndpoint), creds, a.Issuer, dest)
+}
+
+// SleepLab puts a ready lab to sleep (spec 2026-11-05 §3, §4): the workspace's containers stop cleanly, its pod goes (the
+// volume keeps the disk), then the lab's machines hibernate where AWS can and stop otherwise. It returns "hibernated"
+// when every machine hibernated, "stopped" when any one stopped, and "" when the lab has no machines.
+func (a *AWSRunner) SleepLab(ctx context.Context, inst *Instance, lab *content.Lab) (string, error) {
+	if !validLabID(inst.ID) || lab.AWS == nil {
+		return "", errors.New("invalid aws lab")
+	}
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
+	if err != nil {
+		return "", fmt.Errorf("getting lab credentials: %w", err)
+	}
+	ns := labNamespace(inst.ID)
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	_ = a.Cluster.run(sctx, ns, []string{"docker", "compose", "stop"}, nil, &ap.Capped{}) // best effort: a pod already gone has nothing to stop
+	cancel()
+	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil {
+		return "", fmt.Errorf("stopping the workspace: %w", err)
+	}
+	slept, err := a.sleepMachines(ctx, a.labRegions(lab), creds, inst.ID)
+	if err != nil {
+		return "", fmt.Errorf("putting the lab's machines to sleep: %w", err)
+	}
+	how := ""
+	for _, s := range slept {
+		if !s.Hibernated {
+			return "stopped", nil
+		}
+		how = "hibernated"
+	}
+	return how, nil
+}
+
+// errMachinesMayRun: a wake failed and so did putting what it started back to sleep, so the lab's machines may be running.
+var errMachinesMayRun = errors.New("the lab's machines may still be running")
+
+// WakeLab brings a sleeping lab back: its machines start, its credentials are renewed, and its workspace pod comes back
+// on the same volume, where Docker finds the trainee's container and starts it again (never a new one).
+func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.Lab) error {
+	if !validLabID(inst.ID) || lab.AWS == nil {
+		return errors.New("invalid aws lab")
+	}
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
+	if err != nil {
+		return fmt.Errorf("getting lab credentials: %w", err)
+	}
+	if err := a.putCreds(ctx, inst.ID, creds); err != nil {
+		return fmt.Errorf("mounting the lab's credentials: %w", err)
+	}
+	regions, ns := a.labRegions(lab), labNamespace(inst.ID)
+	var errs []error
+	for _, r := range regions {
+		if err := a.cloud().Wake(ctx, r, creds, inst.ID); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r, err))
+		}
+	}
+	if err = errors.Join(errs...); err != nil {
+		err = fmt.Errorf("starting the lab's machines: %w", err)
+	} else {
+		err = a.wakeWorkspace(ctx, ns, inst.ID)
+	}
+	if err != nil { // asleep means stopped: whatever this wake started goes back to sleep, best effort
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		_ = a.Cluster.deletePod(bctx, ns, labPod)
+		if _, serr := a.sleepMachines(bctx, regions, creds, inst.ID); serr != nil {
+			err = fmt.Errorf("%w; and putting its machines back to sleep failed: %w: %w", err, errMachinesMayRun, serr)
+		}
+	}
+	return err
+}
+
+// wakeWorkspace brings the workspace pod back on its volume and starts the trainee's own containers again.
+func (a *AWSRunner) wakeWorkspace(ctx context.Context, ns, id string) error {
+	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil { // the dead pod a stopped node left behind
+		return fmt.Errorf("starting the workspace: %w", err)
+	}
+	pod := awsWorkspace(clusterObjects(id, workspaceCompose, a.Cluster.Privileged)).Pod
+	if _, err := a.Cluster.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("starting the workspace: %w", err)
+	}
+	if err := a.Cluster.waitReady(ctx, ns); err != nil {
+		return err
+	}
+	up := &ap.Capped{}
+	if err := a.Cluster.run(ctx, ns, []string{"docker", "compose", "up", "-d", "--no-recreate", "--wait", "--quiet-pull"}, nil, up); err != nil {
+		return fmt.Errorf("docker compose up: %w: %s", err, tailOf(up.Bytes()))
+	}
+	return nil
+}
+
+// labRegions is every region a lab's machines may be in: each allowed lab region, and the lab's own.
+func (a *AWSRunner) labRegions(lab *content.Lab) []string {
+	if slices.Contains(a.Regions, lab.AWS.Region) {
+		return a.Regions
+	}
+	return append(slices.Clone(a.Regions), lab.AWS.Region)
+}
+
+// sleepMachines puts the lab's machines to sleep in every region, trying each one whatever the others did.
+func (a *AWSRunner) sleepMachines(ctx context.Context, regions []string, creds awscloud.Credentials, id string) ([]awscloud.Slept, error) {
+	var all []awscloud.Slept
+	var errs []error
+	for _, r := range regions {
+		slept, err := a.cloud().Sleep(ctx, r, creds, id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r, err))
+		}
+		all = append(all, slept...)
+	}
+	return all, errors.Join(errs...)
+}
+
+// WorkspaceMiB is what the workspace's volume holds (Docker's storage and /lab), measured with du in its pod.
+func (a *AWSRunner) WorkspaceMiB(ctx context.Context, inst *Instance) (int64, error) {
+	if !validLabID(inst.ID) {
+		return 0, errors.New("invalid lab id")
+	}
+	out := &ap.Capped{}
+	if err := a.Cluster.run(ctx, labNamespace(inst.ID), []string{"du", "-sxm", "/var/lib/docker", "/lab"}, nil, out); err != nil {
+		return 0, fmt.Errorf("measuring the workspace: %w", err)
+	}
+	var total int64
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out.Bytes())), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		n, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("du said %q", line)
+		}
+		total += n
+	}
+	return total, nil
 }

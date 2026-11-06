@@ -75,6 +75,14 @@ The lab page says why: labs are paused by an admin, the training only runs labs 
 the next window opens), or a budget would be passed. A lab that would pass a budget cap can still be requested, but
 only an admin can approve it.
 
+## Overnight
+
+An AWS lab sleeps when Crucible does (about 19:00). Its machines either hibernate, so they resume exactly where you
+left them, or stop, so they restart from their disks; the lab page tells you which. Your workspace keeps its files.
+In the morning, open the lab and press **Wake it**. The lab's time keeps running while it sleeps, so a lab that runs
+out of time overnight is over; when its training allows more time, **Extend** works on a sleeping lab too. While it wakes, the lab page shows what went wrong if a wake fails, and **End lab** ends it; a wake that
+could not finish goes back to sleep within about 20 minutes, and then **Wake it** tries again. While Crucible is going to sleep, no new labs start; they start again in the morning.
+
 ## The Labs page
 
 **Labs** in the top bar lists every lab you have started, with its state, when it started and, while it runs, when it

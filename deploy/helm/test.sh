@@ -75,6 +75,10 @@ for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_A
   'name: CRUCIBLE_AWS_EXPORT_PREFIX, value: "cur"' 'name: CRUCIBLE_AWS_EXPORT_NAME, value: "crucible-labs"'; do
   grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
 done
+awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)
+grep -q 'resources: \[persistentvolumeclaims\]' <<<"$awsrbac" || { echo "aws labs: the workspace volume may be created"; exit 1; }
+grep -q 'operations: \[CREATE\], resources: \[persistentvolumeclaims\]' <<<"$awsrbac" || { echo "aws labs: admission confines the workspace volume to lab namespaces"; exit 1; }
+if grep -q persistentvolumeclaims <<<"$rbac"; then echo "without aws labs, no volumes"; exit 1; fi
 grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: ""' <<<"$awsout" || { echo "aws labs: an unset lab network is empty"; exit 1; }
 net=$(helm template t "$chart" $aws --set awsLabs.vpcId=vpc-0abc --set awsLabs.subnetIds=subnet-01\\,subnet-02)
 grep -q 'name: CRUCIBLE_AWS_LAB_VPC_ID, value: "vpc-0abc"' <<<"$net" || { echo "missing: lab VPC env"; exit 1; }
@@ -86,6 +90,15 @@ done
 # fixwave I1: the runner pod holds the lab credentials, so its images are pinned by digest, never a re-pushable tag.
 for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
   grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }
+done
+grep -q 'name: CRUCIBLE_NODE_STORAGE, value: /node-storage' <<<"$awsout" || { echo "aws labs: the free-disk guard"; exit 1; }
+grep -q 'mountPath: /node-storage, readOnly: true' <<<"$awsout" || { echo "aws labs: the node storage is read-only"; exit 1; }
+grep -q 'hostPath: { path: /var/lib/rancher/k3s/storage/.crucible-free, type: DirectoryOrCreate }' <<<"$awsout" || { echo "aws labs: the free-disk guard mounts an empty directory, never the workspaces"; exit 1; }
+if grep -q node-storage <<<"$out"; then echo "no node storage without aws labs"; exit 1; fi
+if grep -q crucible-bedtime <<<"$awsout"; then echo "no bedtime without a schedule"; exit 1; fi
+bed=$(helm template t "$chart" $aws --set-string labs.sleepSchedule="0 19 * * 0-4")
+for want in 'name: crucible-bedtime' 'schedule: "0 19 \* \* 0-4"' 'timeZone: "Europe/Bucharest"' 'command: \["crucible", "labs", "bedtime"\]'; do
+  grep -q -- "$want" <<<"$bed" || { echo "missing in the bedtime CronJob: $want"; exit 1; }
 done
 if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
 if grep -q CRUCIBLE_GIT_ALLOW_FILE <<<"$out$boot$awsout"; then echo "file git transport must never be rendered"; exit 1; fi

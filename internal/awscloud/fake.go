@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -17,19 +18,85 @@ type Fake struct {
 	Err            error // when set, every call fails with it (throttling, an API down…)
 	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
 	costsErr       error // when set, only Costs fails (a broken billing export)
+	sleepErr       error // when set, only Sleep fails (StopInstances refused on pending machines)
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
 	assumed   []Session
 	costs     []DailyCost
 	events    []TrailEvent
-	notYet    map[string]int    // ARN → deletes still refused with ErrNotYet
-	states    map[string][]byte // lab id → its Terraform state
+	notYet    map[string]int          // ARN → deletes still refused with ErrNotYet
+	states    map[string][]byte       // lab id → its Terraform state
+	instances map[string]fakeInstance // by instance id
 }
 
 type fakeRes struct {
 	region string
 	r      Resource
+}
+
+type fakeInstance struct {
+	region, labID, state string
+	hibernatable         bool
+}
+
+// AddInstance adds a running lab machine; hibernatable means it was launched for hibernation.
+func (f *Fake) AddInstance(region, labID, id string, hibernatable bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.instances == nil {
+		f.instances = map[string]fakeInstance{}
+	}
+	f.instances[id] = fakeInstance{region: region, labID: labID, state: "running", hibernatable: hibernatable}
+}
+
+// InstanceState is a machine's state, "" when there is no such machine.
+func (f *Fake) InstanceState(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.instances[id].state
+}
+
+// setStates moves the lab's machines in region from one state to another, with the lab's own session only.
+func (f *Fake) setStates(region string, c Credentials, labID, from, to string) ([]Slept, error) {
+	if !ValidLabID(labID) {
+		return nil, fmt.Errorf("invalid lab id %q", labID)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if c.SessionToken != token(labID) {
+		return nil, errors.New("AccessDenied: not this lab's machines")
+	}
+	var out []Slept
+	for _, id := range slices.Sorted(maps.Keys(f.instances)) {
+		if x := f.instances[id]; x.region == region && x.labID == labID && x.state == from {
+			x.state = to
+			f.instances[id] = x
+			out = append(out, Slept{InstanceID: id, Hibernated: x.hibernatable})
+		}
+	}
+	return out, nil
+}
+
+// FailSleep makes Sleep fail with err; nil restores it.
+func (f *Fake) FailSleep(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.sleepErr = err }
+
+func (f *Fake) Sleep(_ context.Context, region string, c Credentials, labID string) ([]Slept, error) {
+	f.mu.Lock()
+	err := f.sleepErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return f.setStates(region, c, labID, "running", "stopped")
+}
+
+func (f *Fake) Wake(_ context.Context, region string, c Credentials, labID string) error {
+	_, err := f.setStates(region, c, labID, "stopped", "running")
+	return err
 }
 
 var _ Cloud = (*Fake)(nil)
@@ -218,7 +285,7 @@ func (f *Fake) ReadState(_ context.Context, _, _, key string) ([]byte, error) {
 // SimulateApply stands in for `terraform apply` in dry-run mode. It adds the lab's bucket (managed by terraform)
 // and a volume "made by hand in the workspace", which only the destroy-time tag sweep removes. Its state holds the
 // bucket and a t3.nano instance with an 8 GiB gp3 root, so metering has something to price. It also books $0.11 of
-// cost today, so the Ledger has an actual to show.
+// cost today, so the Ledger has an actual to show. It also adds a running machine, which bedtime puts to sleep.
 func (f *Fake) SimulateApply(region string, s Session) {
 	f.Add(region, Resource{ARN: "arn:aws:s3:::crucible-lab-" + s.LabID, LabID: s.LabID})
 	f.Add(region, Resource{ARN: fmt.Sprintf("arn:aws:ec2:%s:000000000000:volume/vol-%s", region, s.LabID), LabID: s.LabID})
@@ -227,6 +294,7 @@ func (f *Fake) SimulateApply(region string, s Session) {
 {"mode":"managed","type":"aws_instance","name":"web","instances":[{"attributes":{"instance_type":"t3.nano",
 "associate_public_ip_address":false,"root_block_device":[{"volume_size":8,"volume_type":"gp3"}]}}]}]}`, s.LabID))
 	f.AddCost(DailyCost{Day: f.now().UTC().Truncate(24 * time.Hour), LabID: s.LabID, USD: 0.11})
+	f.AddInstance(region, s.LabID, "i-"+s.LabID, false)
 }
 
 // SimulateDestroy stands in for `terraform destroy`: it removes only what terraform manages (the bucket) and leaves
@@ -236,4 +304,5 @@ func (f *Fake) SimulateDestroy(labID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.resources, "arn:aws:s3:::crucible-lab-"+labID)
+	delete(f.instances, "i-"+labID)
 }

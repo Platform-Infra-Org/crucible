@@ -576,3 +576,30 @@ run "ghcr_pull_token_is_required" {
   }
   expect_failures = [var.ghcr_pull_token]
 }
+
+run "labs_sleep_cron_reaches_helm" {
+  command = plan
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).labs.sleepSchedule == "0 19 * * 1-5"
+    error_message = "the nightly bedtime reaches the chart"
+  }
+  assert {
+    condition     = aws_instance.node.root_block_device[0].volume_size == 100
+    error_message = "the node disk holds sleeping workspaces: 100 GB by default"
+  }
+}
+
+run "no_bedtime_without_the_schedule" {
+  command = plan
+  variables { schedule_enabled = false }
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).labs.sleepSchedule == ""
+    error_message = "no schedule, no nightly bedtime"
+  }
+}
+
+run "labs_sleep_cron_is_a_kubernetes_cron" {
+  command = plan
+  variables { labs_sleep_cron = "cron(0 19 ? * MON-FRI *)" }
+  expect_failures = [var.labs_sleep_cron]
+}

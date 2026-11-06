@@ -51,6 +51,9 @@ func PriceAWS(res []Resource, region string, declared map[string]float64, usage 
 		if p, ok := declared[r.Type]; ok && !errors.Is(err, errNoListPrice) && (err != nil || p > line.HourlyUSD+line.UsageHourlyUSD) {
 			line, err = Line{Address: r.Address, Type: r.Type, HourlyUSD: p, Note: "declared"}, nil
 		}
+		if line.Type != "aws_instance" || line.Note == "declared" { // only an instance's compute and IPv4 stop with it
+			line.StoppedHourlyUSD = line.HourlyUSD
+		}
 		if errors.Is(err, errNoPricer) {
 			missing = append(missing, r.Type)
 			continue
@@ -105,6 +108,7 @@ func priceOwn(get func(string) (float64, error), r Resource, u map[string]float6
 			return line, err
 		}
 		line.HourlyUSD += size * gbp / HoursPerMonth
+		stopped := size * gbp / HoursPerMonth
 		if r.Unknown["ebs_block_device"] == true {
 			return line, fmt.Errorf("%s: ebs_block_device is unknown until apply; set it literally or declare a price for aws_instance", r.Address)
 		}
@@ -119,7 +123,9 @@ func priceOwn(get func(string) (float64, error), r Resource, u map[string]float6
 				return line, err
 			}
 			line.HourlyUSD += num(d, "volume_size") * gbp / HoursPerMonth
+			stopped += num(d, "volume_size") * gbp / HoursPerMonth
 		}
+		line.StoppedHourlyUSD = stopped
 		if v, ok := r.Values["associate_public_ip_address"].(bool); v || !ok { // null or unknown counts: over-estimating is the safe side
 			ip, err := get("ipv4:hour")
 			if err != nil {

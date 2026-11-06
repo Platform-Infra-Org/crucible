@@ -148,6 +148,7 @@ resource "aws_ssm_parameter" "helm_values" {
       instanceProfile = var.lab_instance_profile
       subnetCidrs     = var.lab_subnet_cidrs
     }, var.workspace_image == "" ? {} : { workspaceImage = var.workspace_image })
+    labs = { sleepSchedule = var.schedule_enabled ? var.labs_sleep_cron : "" }
   }, var.toolbox_image == "" ? {} : { toolboxImage = var.toolbox_image }))
 }
 

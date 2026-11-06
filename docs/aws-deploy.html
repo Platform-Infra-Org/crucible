@@ -465,12 +465,13 @@ schedule_timezone = "Europe/Bucharest"
         <tr><th scope="row"><code>smtp_addr</code>, <code>smtp_from</code>, <code>smtp_username</code>, <code>smtp_password</code></th><td><code>""</code></td><td class="req">for email</td><td>The SMTP server (<code>host:port</code>), the sender (an address or <code>Name &lt;address&gt;</code>), and the login. The password is stored as the SecureString <code>/crucible/smtp_password</code>, the rest in <code>/crucible/env</code>. Without <code>smtp_addr</code> Crucible sends no email. See <a href="#email">Email</a>.</td></tr>
         <tr><th scope="row"><code>route53_zone_id</code></th><td><code>""</code></td><td class="req">no</td><td>A Route 53 hosted zone that holds <code>domain</code>. When set, Terraform creates the A record (TTL 300) and keeps it on the Elastic IP, even after a rebuild. Empty: you create the record yourself.</td></tr>
         <tr><th scope="row"><code>instance_type</code></th><td><code>t3a.xlarge</code></td><td class="req">no</td><td>The node's size (4 vCPU, 16 GiB). AWS lab workspaces run on it. The example suggests <code>t3a.large</code> as cheaper. It must be x86_64: the image is Ubuntu amd64 and sysbox is amd64-only.</td></tr>
-        <tr><th scope="row"><code>disk_gb</code></th><td><code>60</code></td><td class="req">no</td><td>The encrypted gp3 root disk: k3s, Postgres data, images. The runbook doesn't cover resizing it on a running node.</td></tr>
+        <tr><th scope="row"><code>disk_gb</code></th><td><code>100</code></td><td class="req">no</td><td>The encrypted gp3 root disk: k3s, Postgres data, images, and the AWS labs' workspace volumes (20 GiB each). Two guards protect it: a workspace over 20 GiB is put out, and starts are refused under 15 GiB free. The runbook doesn't cover resizing it on a running node.</td></tr>
         <tr><th scope="row"><code>schedule_enabled</code></th><td><code>true</code></td><td class="req">no</td><td>Stops the node at night and starts it in the morning. <code>false</code> runs it 24/7.</td></tr>
         <tr><th scope="row"><code>schedule_timezone</code></th><td><code>Europe/Bucharest</code></td><td class="req">change it</td><td>The IANA zone for the wake and sleep schedule and the backup time. It also sets the node's clock at first boot, which only a new node picks up.</td></tr>
         <tr><th scope="row"><code>wake_cron</code></th><td><code>cron(30 7 ? * MON-FRI *)</code></td><td class="req">no</td><td>When the node starts, in EventBridge cron format.</td></tr>
         <tr><th scope="row"><code>sleep_cron</code></th><td><code>cron(30 19 ? * MON-FRI *)</code></td><td class="req">no</td><td>When the node stops.</td></tr>
         <tr><th scope="row"><code>backup_cron</code></th><td><code>15 19 * * *</code></td><td class="req">no</td><td>The nightly <code>pg_dump</code> to S3, in Kubernetes cron format and <code>schedule_timezone</code>. Keep it before <code>sleep_cron</code>.</td></tr>
+        <tr><th scope="row"><code>labs_sleep_cron</code></th><td><code>0 19 * * 1-5</code></td><td class="req">no</td><td>When AWS labs go to sleep (<code>crucible labs bedtime</code>), in Kubernetes cron format and <code>schedule_timezone</code>: 19:00 on the node's days, Monday to Friday (<code>1-5</code>; 0 is Sunday). Keep it before <code>backup_cron</code> and <code>sleep_cron</code>. It applies only with <code>schedule_enabled</code>.</td></tr>
         <tr><th scope="row"><code>name</code></th><td><code>crucible</code></td><td class="req">leave it</td><td>The prefix for SSM paths, roles and the security group. <code>init</code> always uses <code>crucible</code>, and the lab roles trust <code>crucible-node</code>. With another name you must copy <code>/crucible/secret_key</code> to <code>/&lt;name&gt;/secret_key</code> and run <code>labs-init</code> again after <code>up</code>.</td></tr>
         <tr><th scope="row"><code>k3s_version</code></th><td><code>v1.34.1+k3s1</code></td><td class="req">no</td><td>First boot only. Sysbox needs k3s 1.32 or later.</td></tr>
         <tr><th scope="row"><code>sysbox_version</code>, <code>sysbox_sha256_amd64</code></th><td><code>0.7.1</code>, pinned digest</td><td class="req">no</td><td>Sysbox CE for AWS lab workspaces. Change both together. First boot only.</td></tr>
@@ -831,7 +832,7 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
       <tbody>
         <tr><th scope="row">Ship the current commit</th><td><code>crucible aws deploy</code></td><td>Build, upload, roll out, check health. The node must be awake.</td></tr>
         <tr><th scope="row">Take a snapshot now</th><td><code>crucible aws snapshot</code></td><td>Runs the backup job on the node and waits for it, up to 15 minutes.</td></tr>
-        <tr><th scope="row">Stop paying for compute tonight</th><td><code>crucible aws sleep</code></td><td>Snapshot, then stop and wait until stopped. The disk, the IP and S3 still cost money. <code>--no-snapshot</code> skips the snapshot.</td></tr>
+        <tr><th scope="row">Stop paying for compute tonight</th><td><code>crucible aws sleep</code></td><td>Puts AWS labs to sleep (and cancels that bedtime if the sleep aborts afterwards), snapshots, then stops and waits until stopped. The disk, the IP and S3 still cost money. <code>--no-snapshot</code> skips the snapshot. It refuses a node whose state it cannot read, unless <code>--keep-labs</code> (which leaves the labs running and billing).</td></tr>
         <tr><th scope="row">Start before the schedule</th><td><code>crucible aws wake</code></td><td>Start, wait until running, then wait for <code>/healthz</code>.</td></tr>
         <tr><th scope="row">Is it up?</th><td><code>crucible aws status</code></td><td>Instance state, URL and <code>healthz</code>.</td></tr>
         <tr><th scope="row">A shell on the node</th><td><code>aws ssm start-session --target &lt;instance_id&gt;</code></td><td>As <code>ssm-user</code>; use <code>sudo k3s kubectl</code>. The id is <code>terraform -chdir=deploy/aws/main output -raw instance_id</code>.</td></tr>
@@ -841,12 +842,21 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <tr><th scope="row">Invite or remove a person</th><td>see <code>cognito.md</code></td><td>Cognito for sign-in, the team page for access.</td></tr>
       </tbody>
     </table></div>
+    <h3 id="labs-overnight">AWS labs overnight</h3>
+    <p>AWS labs sleep with the platform, so they do not run and bill all night. At <code>labs_sleep_cron</code> a CronJob runs <code>crucible labs bedtime</code>:</p>
+    <ol class="steps">
+      <li><h3>The forge banks for the night</h3><p>Starts, approvals and wakes are refused (<i>The forge is banking for the night: labs start again in the morning.</i>). Labs being provisioned or destroyed get up to 10 minutes to settle.</p></li>
+      <li><h3>Each lab sleeps</h3><p>The workspace pod goes; its files stay on the lab's 20 GiB workspace volume. The machines are hibernated if they were launched with hibernation enabled, otherwise stopped (a machine that will not stop in 5 minutes is force-stopped). A stopped machine restarts from its disk and loses what was in memory. Asleep, the lab pays for its disks: an instance's compute and public IPv4 stop.</p></li>
+      <li><h3>Wake it</h3><p>The trainee opens the lab and presses <b>Wake it</b>. Crucible starts the machines (up to 10 minutes) and re-creates the workspace pod on the same volume. A wake that takes over 20 minutes goes back to asleep. A lab's time limit keeps running while it sleeps; wake is refused after the deadline.</p></li>
+      <li><h3>The server's start ends the bedtime</h3><p>On start the server runs <code>Morning()</code>, which ends a bedtime and a teardown's kill switch (never an admin's own). A pod restart in the middle of a bedtime therefore reopens the platform; the next night's bedtime catches the labs that had not slept.</p></li>
+    </ol>
+    <p>See it with <code>crucible aws status</code> (the bedtime and the AWS labs by state). End a bedtime without a restart: <code>crucible labs bedtime --cancel</code> (on the node, through <code>kubectl -n crucible exec deploy/crucible -c api -- crucible labs …</code>). The runbook lists the by-hand checks on a real account.</p>
     <div class="note"><p><strong>In our account.</strong><code>crucible aws status</code> shows the instance, its address, <code>healthz:</code> (checked on the node over SSM) and <code>egress:</code>, after <code>ssm:</code> (the ping status; anything but <code>Online</code> skips the checks).
       If egress lists blocked hosts, the network team must allow them. It does not check your git host. Open the app with <code>crucible aws connect</code>; Ctrl-C closes the tunnel
       (it exits quietly). The org's after-hours automation (roles <code>after-hours-scheduler-role</code>,
       <code>afterhours-shut-down-role</code>, <code>EC2Stop-Role</code>) probably stops instances out of hours. Not confirmed what it targets: check with the platform team.
       "Bring it back" needs no DNS change here.</p></div>
-    <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. The
+    <p>With the schedule on, the node wakes at <b>07:30</b> and sleeps at <b>19:30</b>, Monday to Friday, in <code>schedule_timezone</code>. AWS labs go to sleep first, at <code>labs_sleep_cron</code> (<b>19:00</b>, the same days). The
       nightly backup runs at <b>19:15</b>: a <code>pg_dump</code> to <code>snapshots/</code> in the data bucket (kept 30 days) and a copy to
       <code>latest/crucible-latest.dump</code>, which never expires, so a long teardown can still be restored. Your own role runs <code>snapshot</code>, <code>sleep</code> and <code>wake</code>; the node role does the backup (<a href="deploy-architecture.html#backups">backups</a>, <a href="deploy-architecture.html#iam-roles">IAM roles</a>). Trainees' uploads live under <code>uploads/</code>, with no expiry.</p>
   </section>
@@ -897,7 +907,9 @@ crucible aws deploy --version vX.Y.Z    <span class="c"># otherwise</span></code
     <ol class="steps">
       <li><h3>Tear down</h3>
         <div class="cmd"><pre><code>crucible aws teardown --yes</code></pre></div>
-        <p>Takes a snapshot, then <code>terraform destroy</code> on the main stack without asking again. The buckets, snapshots, uploads,
+        <p>Ends every AWS lab first (the kill switch, then it waits until every lab has ended), takes a snapshot, then <code>terraform destroy</code> on the main stack without asking again.
+          It refuses a node that isn't running (<i>wake it first</i>: the labs can only be ended through a running server). If ending the labs fails the kill switch stays on until the server restarts: run teardown again. <code>--keep-labs</code> skips the labs.
+          It lists resources tagged <code>crucible:lab-id</code> that are left in the lab account and does not delete them: delete them by hand (with the server gone, no reaper runs). A teardown never overrides an admin's own kill switch. The buckets, snapshots, uploads,
           Cognito users, the secret key and the labs stack all survive. Without <code>--yes</code> it refuses. It reads
           <code>crucible.tfvars</code> (or <code>--var-file</code>) like <code>up</code>.</p></li>
       <li><h3>Rebuild</h3>

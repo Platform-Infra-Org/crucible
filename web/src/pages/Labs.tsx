@@ -4,7 +4,7 @@ import type { MyLab } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 
-const active = ['pending_approval', 'provisioning', 'ready', 'destroying']
+const active = ['pending_approval', 'provisioning', 'ready', 'destroying', 'asleep', 'waking']
 const when = (s: string) => new Date(s).toLocaleString()
 
 export function LabsPage() {

@@ -29,15 +29,25 @@ func TestCancelledGitLeavesNoHelpers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	push, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if _, err := git(short, work, "push", "-q", remote, "HEAD:main"); err == nil {
-		t.Fatal("a push held by its hook must fail at the deadline")
+	done := make(chan error, 1)
+	go func() { _, err := git(push, work, "push", "-q", remote, "HEAD:main"); done <- err }()
+	var st os.FileInfo
+	for start := time.Now(); ; time.Sleep(20 * time.Millisecond) { // the hook runs, however loaded the machine is
+		var err error
+		if st, err = os.Stat(beat); err == nil {
+			break
+		}
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the hook never ran: %v", err)
+		}
 	}
-	st, err := os.Stat(beat)
-	if err != nil {
-		t.Fatalf("the hook never ran: %v", err)
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a push held by its hook must fail when cancelled")
 	}
+	st, _ = os.Stat(beat)
 	time.Sleep(400 * time.Millisecond)
 	if after, _ := os.Stat(beat); after.ModTime().After(st.ModTime()) {
 		t.Fatal("the hook is still running after git was cancelled")

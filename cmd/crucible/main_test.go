@@ -129,3 +129,36 @@ func TestDeployVersionAndBuildAreExclusive(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+func TestLintWantsAnEncryptedRootForHibernation(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../examples/forge-401")); err != nil {
+		t.Fatal(err)
+	}
+	tf := func(root string) string {
+		return `resource "aws_instance" "hib" {
+  ami           = "ami-0123456789abcdef0"
+  instance_type = "t3.micro"
+  hibernation   = true
+  root_block_device {` + root + `
+    volume_size = 8
+  }
+}
+`
+	}
+	p := filepath.Join(dir, "modules/01-cloud-heat/lab/terraform/hib.tf")
+	if err := os.WriteFile(p, []byte(tf("")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := lint(dir, &out); code != 1 || !strings.Contains(out.String(), "hibernation needs root_block_device { encrypted = true }") {
+		t.Fatalf("exit %d\n%s", code, out.String())
+	}
+	if err := os.WriteFile(p, []byte(tf("\n    encrypted = true")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := lint(dir, &out); code != 0 {
+		t.Fatalf("an encrypted root may hibernate: exit %d\n%s", code, out.String())
+	}
+}

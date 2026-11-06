@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
+import { execFileSync } from 'node:child_process'
 import { addParticipant } from './helpers'
 
 async function login(browser: Browser, user: string): Promise<Page> {
@@ -18,6 +19,11 @@ async function typeIn(page: Page, tab: string, command: string) {
   await page.locator(`[data-terminal="${tab}"]`).click()
   await page.keyboard.type(command)
   await page.keyboard.press('Enter')
+}
+
+// crucible labs in the server's container, as the nightly CronJob and crucible aws sleep run it.
+function crucibleLabs(...args: string[]) {
+  execFileSync('docker', ['exec', process.env.CRUCIBLE_E2E_API!, 'crucible', 'labs', ...args], { stdio: 'inherit' })
 }
 
 test('an aws lab is estimated, approved, provisioned, checked, destroyed and swept; spend shows on the Ledger', async ({ browser }) => {
@@ -94,4 +100,37 @@ test('forge 402: the GRUB rescue lab is priced; Locked out refuses to start with
   const failed = trainee.getByText(/^The lab failed to start: direct_ssh needs this install's lab network in eu-west-1/)
   await expect(failed).toBeVisible({ timeout: 5 * 60_000 })
   await expect(failed).toContainText('crucible aws labs-init --vpc-id --subnet-ids')
+})
+
+test('an aws lab sleeps with the platform and wakes, with its files, when its trainee opens it', async ({ browser }) => {
+  const leader = await login(browser, 'leader')
+  await addParticipant(leader, 'forge-401', 'trainee@crucible.local')
+  const trainee = await login(browser, 'trainee')
+  await trainee.goto('/p/forge/forge-401/m/01-cloud-heat/lab')
+  await trainee.getByRole('button', { name: 'Request approval ($0.04)' }).click()
+  await leader.getByRole('link', { name: 'Approvals' }).click()
+  await leader.getByRole('listitem', { name: 'Request from trainee@crucible.local' }).getByRole('button', { name: 'Approve' }).click()
+  await expect(trainee.getByRole('tab', { name: 'workspace', exact: true })).toBeVisible({ timeout: 10 * 60_000 })
+  // Something only this container has, checked after the wake.
+  await typeIn(trainee, 'workspace', "aws configure list | awk '/region/ {print $2}' > ~/region.txt")
+  await trainee.waitForTimeout(5_000) // the aws CLI starts slowly in dind
+
+  // Bedtime: the dry run's machine stops (it isn't launched for hibernation) and the workspace pod goes.
+  crucibleLabs('bedtime', '--wait', '10m')
+  await expect(trainee.getByRole('heading', { name: 'Your lab is asleep' })).toBeVisible({ timeout: 60_000 })
+  await expect(trainee.getByText('Crucible stopped your machines last night: they restart from their disks.')).toBeVisible()
+
+  // The morning: a real node restarts the server, which ends the bedtime; here it is cancelled.
+  crucibleLabs('bedtime', '--cancel')
+  await trainee.getByRole('button', { name: 'Wake it' }).click()
+  await expect(trainee.getByText("Your machines restarted from their disks; anything you hadn't saved is gone.")).toBeVisible({ timeout: 5 * 60_000 })
+
+  // The same container came back on its volume: the file is still there, and the lab's credentials work.
+  // Task 1 passes and the tasks move on to task 2, so wait for the passed mark, not the message.
+  await expect(async () => {
+    await trainee.getByRole('button', { name: 'Check' }).click()
+    await expect(trainee.getByRole('button', { name: 'Task 1: Find your region (passed)' })).toBeVisible({ timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
+  await trainee.getByRole('button', { name: 'End lab' }).click()
+  await expect(trainee.getByRole('heading', { name: 'The forge has cooled' })).toBeVisible({ timeout: 5 * 60_000 })
 })

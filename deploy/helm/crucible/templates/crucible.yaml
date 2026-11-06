@@ -113,6 +113,7 @@ spec:
             - { name: CRUCIBLE_AWS_LAB_SUBNET_CIDRS, value: {{ .Values.awsLabs.subnetCidrs | quote }} }
             - name: CRUCIBLE_NODE_IP   # direct_ssh labs: excepted from their TCP 22 rule
               valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+            - { name: CRUCIBLE_NODE_STORAGE, value: /node-storage }   # free-disk guard: no new aws lab below 15 GiB
             - { name: AWS_REGION, value: {{ .Values.backup.region | quote }} }   # STS regional endpoint
             {{- end }}
           readinessProbe:
@@ -121,11 +122,18 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: git-credentials, mountPath: /etc/crucible/git-credentials, subPath: git-credentials, readOnly: true }
+            {{- if .Values.awsLabs.enabled }}
+            - { name: node-storage, mountPath: /node-storage, readOnly: true }
+            {{- end }}
       volumes:
         - name: data
           emptyDir: {}        # git mirrors and exports: rebuilt from git on start
         - name: git-credentials
           secret: { secretName: {{ .Values.secretName }}, items: [{ key: git-credentials, path: git-credentials }] }
+        {{- if .Values.awsLabs.enabled }}
+        - name: node-storage  # an empty directory on k3s local-path's filesystem: statfs reads its free space; no workspace is visible
+          hostPath: { path: /var/lib/rancher/k3s/storage/.crucible-free, type: DirectoryOrCreate }
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

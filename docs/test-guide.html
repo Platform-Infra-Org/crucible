@@ -645,6 +645,21 @@ nc -z -w 3 &lt;the node's private IP&gt; 22; echo $?</code></pre></div>
           <li class="item" data-id="aw-os-status"><label><input type="checkbox" id="c-aw-os-status"><span class="t"><code>crucible aws status</code> reports the serial endpoint <span class="pill cost">AWS</span></span></label>
             <div class="body"><p>Run <code>crucible aws status</code>.</p>
               <p class="expect"><b>Expect</b><i>egress: every host Crucible checks is reachable</i>, which includes <code>ec2-serial-console.il-central-1.api.aws</code> on TCP 22 and <code>signin.aws.amazon.com</code>. A blocked line names <code>host:22</code>; send it to the network team.</p></div></li>
+          <li class="item" data-id="aw-bedtime"><label><input type="checkbox" id="c-aw-bedtime"><span class="t">Labs sleep at bedtime <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>With an AWS lab running, run <code>crucible labs bedtime --wait 10m</code> on the node (through <code>kubectl -n crucible exec deploy/crucible -c api -- crucible labs …</code>), or wait for <code>labs_sleep_cron</code>.</p>
+              <p class="expect"><b>Expect</b>the trainee's lab shows <i>Your lab is asleep</i>; the workspace pod is gone and the machines are stopped (or hibernated); new starts say the forge is banking for the night.</p></div></li>
+          <li class="item" data-id="aw-wake"><label><input type="checkbox" id="c-aw-wake"><span class="t">Wake it <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>As the trainee press <b>Wake it</b> (cancel a still-open bedtime first with <code>crucible labs bedtime --cancel</code>).</p>
+              <p class="expect"><b>Expect</b><i>Stoking the coals</i>, then the lab is back with the files you left in the workspace and a banner about how the machines came back.</p></div></li>
+          <li class="item" data-id="aw-asleep-cmd"><label><input type="checkbox" id="c-aw-asleep-cmd"><span class="t"><code>crucible aws sleep</code> puts labs to sleep <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run <code>crucible aws sleep</code> with an AWS lab running, then <code>crucible aws wake</code>.</p>
+              <p class="expect"><b>Expect</b>the lab sleeps before the snapshot and the node stop; after the wake the bedtime has ended and the trainee can wake the lab. With <code>--keep-labs</code> the lab keeps running.</p></div></li>
+          <li class="item" data-id="aw-teardown-labs"><label><input type="checkbox" id="c-aw-teardown-labs"><span class="t"><code>crucible aws teardown</code> ends the labs first <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run <code>crucible aws teardown --yes</code> with a lab running, and once with the node stopped.</p>
+              <p class="expect"><b>Expect</b>the lab ends before the snapshot and destroy; a stopped node is refused (<i>wake it first</i>); leftovers tagged <code>crucible:lab-id</code> are listed, not deleted.</p></div></li>
+          <li class="item" data-id="aw-byhand-sleep"><label><input type="checkbox" id="c-aw-byhand-sleep"><span class="t">The by-hand sleep checks <span class="pill cost">AWS</span></span></label>
+            <div class="body"><p>Run the five checks at the end of the runbook's <i>Labs overnight</i>: hibernation resume, a GRUB-broken machine, <code>StopInstances --hibernate</code> at GRUB, an encrypted lab disk under the boundary, and a workspace volume under sysbox with <code>hostUsers: false</code> across a pod re-creation.</p>
+              <p class="expect"><b>Expect</b>each behaves as the runbook says; record what AWS does at GRUB.</p></div></li>
         </ul>
       </section>
 

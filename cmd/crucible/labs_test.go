@@ -65,3 +65,34 @@ func TestLabsStopAllTurnsTheKillSwitchOnAsTheTeardown(t *testing.T) {
 		t.Fatalf("%v %q %v", on, by, err)
 	}
 }
+
+func TestLabsBedtimeWaitFailsWhenTheBedtimeEndsBeforeEveryLabSlept(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.New(t)
+	t.Setenv("DATABASE_URL", pool.Config().ConnString())
+	old := labsPoll
+	labsPoll = time.Millisecond
+	t.Cleanup(func() { labsPoll = old })
+	if _, err := pool.Exec(ctx, `INSERT INTO users (sub, email, name) VALUES ('kc-1', 'tr@x', 'Tra Inee')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state, created_at,
+		last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s)
+		SELECT 'lab1', id, 't', 'a', 'm1', 'abc', 'aws', 'ready', now(), now(), 1, 1, 1, 1 FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	go func() { // a server restart mid-wait: Morning deletes the bedtime while the lab is still awake
+		for {
+			if b, err := labs.ReadBedtime(ctx, pool); err != nil || b != nil {
+				_ = labs.CancelBedtime(ctx, pool)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	var errw bytes.Buffer
+	if code := runMain([]string{"labs", "bedtime", "--wait", "300ms"}, io.Discard, &errw); code != 1 ||
+		!strings.Contains(errw.String(), "the bedtime ended before every lab slept") || !strings.Contains(errw.String(), "lab1 (ready)") {
+		t.Fatalf("a bedtime gone is not every lab asleep: exit %d: %s", code, errw.String())
+	}
+}

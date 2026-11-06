@@ -97,11 +97,15 @@ func labsCmd(args []string, out, errw io.Writer) int {
 		}
 		return until(func() ([]string, error) {
 			b, err := labs.ReadBedtime(ctx, pool)
-			if err != nil || b == nil || b.Phase == "asleep" {
+			if err != nil || (b != nil && b.Phase == "asleep") {
 				return nil, err
 			}
 			l, err := labs.AwakeAWSLabs(ctx, pool)
-			if len(l) == 0 && err == nil {
+			switch {
+			case err != nil:
+			case b == nil: // Morning (a restart) or a cancel ended it: never done, so aws sleep keeps the node up
+				l = append(l, "the bedtime ended before every lab slept (did the server restart?)")
+			case len(l) == 0:
 				l = []string{"the server (phase " + b.Phase + ")"}
 			}
 			return l, err

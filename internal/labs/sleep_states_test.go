@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	"crucible/internal/awscloud"
 	"testing"
 	"time"
 )
@@ -119,5 +120,56 @@ func TestAWakeThatNeverFinishedGoesBackToSleep(t *testing.T) {
 	got, _ := f.s.Get(ctx, f.u, id)
 	if got.State != Asleep || got.Error != "Waking took too long; press Wake it again." {
 		t.Fatalf("a restart mid-wake leaves the lab asleep with a way forward: %+v", got)
+	}
+}
+
+func TestASleepingLabsPendingExtensionCanBeDecided(t *testing.T) {
+	ctx := context.Background()
+	for _, approve := range []bool{true, false} {
+		f := setup(t, true)
+		ready := readyPaidLab(t, f)
+		if got, err := f.s.Extend(ctx, f.u, ready.ID); err != nil || !got.ExtensionPending {
+			t.Fatalf("fixture: %+v %v", got, err)
+		}
+		f.asleep(t, ready.ID)
+		if v, _ := f.s.Get(ctx, f.u, ready.ID); v.State != Asleep || !v.ExtensionPending {
+			t.Fatalf("a sleeping lab keeps its pending extension: %+v", v)
+		}
+		if list, _ := f.s.Approvals(ctx, f.leader); len(list) != 1 {
+			t.Fatalf("approvals list: %+v", list)
+		}
+		if err := f.s.DecideExtension(ctx, f.leader, ready.ID, approve, ""); err != nil {
+			t.Fatalf("approve=%v: %v", approve, err)
+		}
+		v, _ := f.s.Get(ctx, f.u, ready.ID)
+		want := *ready.EndsAt
+		if approve {
+			want = want.Add(30 * time.Minute)
+		}
+		if v.ExtensionPending || !v.EndsAt.Equal(want) {
+			t.Fatalf("approve=%v: ends %v want %v, %+v", approve, v.EndsAt, want, v)
+		}
+	}
+}
+
+func TestLedgerListsSleepingAndWakingLabsAsRunning(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{}
+	now := f.clk.Now()
+	for id, st := range map[string]State{"ddddddddddd1": Asleep, "ddddddddddd2": Waking} {
+		in := &Instance{ID: id, UserID: f.u.ID, Team: "forge", Training: "forge-101", Module: "m-" + id, SHA: "abc",
+			Runtime: "aws", State: st, CreatedAt: now, ReadyAt: &now, LastActivityAt: now, TTL: time.Hour, IdleTimeout: 30 * time.Minute,
+			Tier: "approver", HourlyUSD: 1, EstimateUSD: 1}
+		if err := f.s.insert(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET ready_at = $1 WHERE id LIKE 'ddddddddddd%'`, now); err != nil {
+		t.Fatal(err)
+	}
+	l, err := f.s.Ledger(ctx, f.admin)
+	if err != nil || len(l.Running) != 2 {
+		t.Fatalf("both still cost their disks: %+v %v", l.Running, err)
 	}
 }

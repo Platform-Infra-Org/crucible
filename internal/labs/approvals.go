@@ -270,7 +270,7 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 	if err != nil {
 		return err
 	}
-	if inst.State != Ready || inst.ExtUntil == nil || inst.EndsAt == nil {
+	if (inst.State != Ready && inst.State != Asleep) || inst.ExtUntil == nil || inst.EndsAt == nil {
 		return apperr.Wrap(apperr.Conflict, "there is no extension waiting on this lab")
 	}
 	email, _, err := s.requester(ctx, inst.UserID)

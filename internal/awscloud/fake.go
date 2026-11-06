@@ -18,6 +18,7 @@ type Fake struct {
 	Err            error // when set, every call fails with it (throttling, an API down…)
 	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
 	costsErr       error // when set, only Costs fails (a broken billing export)
+	sleepErr       error // when set, only Sleep fails (StopInstances refused on pending machines)
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
@@ -80,7 +81,16 @@ func (f *Fake) setStates(region string, c Credentials, labID, from, to string) (
 	return out, nil
 }
 
+// FailSleep makes Sleep fail with err; nil restores it.
+func (f *Fake) FailSleep(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.sleepErr = err }
+
 func (f *Fake) Sleep(_ context.Context, region string, c Credentials, labID string) ([]Slept, error) {
+	f.mu.Lock()
+	err := f.sleepErr
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	return f.setStates(region, c, labID, "running", "stopped")
 }
 

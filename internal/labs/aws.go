@@ -599,6 +599,9 @@ func (a *AWSRunner) SleepLab(ctx context.Context, inst *Instance, lab *content.L
 	return how, nil
 }
 
+// errMachinesMayRun: a wake failed and so did putting what it started back to sleep, so the lab's machines may be running.
+var errMachinesMayRun = errors.New("the lab's machines may still be running")
+
 // WakeLab brings a sleeping lab back: its machines start, its credentials are renewed, and its workspace pod comes back
 // on the same volume, where Docker finds the trainee's container and starts it again (never a new one).
 func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.Lab) error {
@@ -634,7 +637,7 @@ func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.La
 		defer cancel()
 		_ = a.Cluster.deletePod(bctx, ns, labPod)
 		if _, serr := a.sleepMachines(bctx, regions, creds, inst.ID); serr != nil {
-			err = fmt.Errorf("%w; and putting its machines back to sleep failed: %v", err, serr)
+			err = fmt.Errorf("%w; and putting its machines back to sleep failed: %w: %w", err, errMachinesMayRun, serr)
 		}
 	}
 	return err

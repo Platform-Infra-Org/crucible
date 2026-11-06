@@ -312,8 +312,14 @@ func (s *Service) wakeLab(ctx context.Context, inst *Instance, lab *content.Lab,
 	defer wcancel()
 	if err != nil {
 		s.Log.Warn("waking a lab failed", "lab", inst.ID, "err", err)
-		s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL, error = $2
-			WHERE id = $1 AND state = 'waking'`, cleanText(err.Error()))
+		if errors.Is(err, errMachinesMayRun) {
+			// never asleep while machines may run (nothing revisits an asleep lab before its deadline): it stays waking,
+			// and the stale-wake sweep puts it back to sleep through the runner, or destroys it past its deadline
+			s.endRow(wctx, inst.ID, `UPDATE lab_instances SET error = $2 WHERE id = $1 AND state = 'waking'`, cleanText(err.Error()))
+		} else {
+			s.endRow(wctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL, error = $2
+				WHERE id = $1 AND state = 'waking'`, cleanText(err.Error()))
+		}
 		s.event(wctx, inst.ID, "wake_failed", cleanText(err.Error()))
 		return
 	}

@@ -151,6 +151,30 @@ func TestAWakeThatFailsPutsTheMachinesBackToSleep(t *testing.T) {
 	}
 }
 
+// A wake that fails and cannot put its machines back to sleep says they may run, so the lab is not called asleep.
+func TestAWakeThatCannotSleepAgainSaysItsMachinesMayRun(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	cs.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("quota exceeded")
+	})
+	a, cloud, _ := testAWS(cs)
+	cloud.AddInstance("eu-west-1", testID, "i-1", false)
+	c, _ := cloud.AssumeLab(ctx, awscloud.Session{LabID: testID})
+	if _, err := cloud.Sleep(ctx, "eu-west-1", c, testID); err != nil {
+		t.Fatal(err)
+	}
+	cloud.FailSleep(errors.New("IncorrectInstanceState: pending"))
+	err := a.WakeLab(ctx, &Instance{ID: testID}, cloudHeat(t))
+	if !errors.Is(err, errMachinesMayRun) {
+		t.Fatalf("the error says the machines may run: %v", err)
+	}
+	cloud.FailSleep(nil)
+	if _, err := cloud.Sleep(ctx, "eu-west-1", c, testID); err != nil {
+		t.Fatalf("nil restores Sleep: %v", err)
+	}
+}
+
 // A trainee may start a machine by hand in any allowed region: the lab's sleep and wake reach every one.
 func TestSleepAndWakeCoverEveryLabRegion(t *testing.T) {
 	ctx := context.Background()

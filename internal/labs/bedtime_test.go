@@ -3,6 +3,7 @@ package labs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -160,6 +161,40 @@ func TestAFailedWakeLeavesTheLabAsleepWithItsError(t *testing.T) {
 	got, _ := f.s.Get(ctx, f.u, id)
 	if got.State != Asleep || got.Error == "" {
 		t.Fatalf("asleep again, with what went wrong: %+v", got)
+	}
+}
+
+// A money path: a wake whose machines may still run is never called asleep (nothing revisits an asleep lab before its
+// deadline); it stays waking, and the stale-wake sweep puts it back to sleep through the runner.
+func TestAWakeThatMayLeaveMachinesRunningStaysWaking(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	run, _ := f.withAWS(t)
+	run.wakeErr = fmt.Errorf("starting the workspace: quota exceeded; and putting its machines back to sleep failed: %w", errMachinesMayRun)
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	f.asleep(t, id)
+	if _, err := f.s.Wake(ctx, f.u, id); err != nil {
+		t.Fatal(err)
+	}
+	f.settled(t, "wake:"+id)
+	got, _ := f.s.Get(ctx, f.u, id)
+	if got.State != Waking || got.Error == "" {
+		t.Fatalf("machines that may run stay waking, with what went wrong: %+v", got)
+	}
+	var failed bool
+	if err := f.s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'wake_failed')`, id).Scan(&failed); err != nil || !failed {
+		t.Fatalf("the failed wake is recorded: %v %v", failed, err)
+	}
+	f.clk.Add(21 * time.Minute)
+	f.s.Sweep(ctx)
+	if got := f.waitState(t, f.u, id, Asleep); got.Error != "Waking took too long; press Wake it again." {
+		t.Fatalf("the stale wake goes back to sleep: %+v", got)
+	}
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if !slices.Equal(run.slept, []string{id}) {
+		t.Fatalf("its machines are put to sleep through the runner: %v", run.slept)
 	}
 }
 

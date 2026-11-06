@@ -210,6 +210,15 @@ export function AsleepLab({ lab, setLab, title, back }: { lab: LabView; setLab: 
       setBusy(false)
     }
   }
+  const extend = async () => { // as the workspace's Timer does: a sleeping lab's time runs too
+    try {
+      const v = await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' })
+      setLab(v)
+      if (v.extension_pending) toast('This extension needs an approval; your lab stays asleep meanwhile.')
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
   return (
     <section className="page lobby">
       <Link className="action back" to={back}>Back to the training</Link>
@@ -220,8 +229,10 @@ export function AsleepLab({ lab, setLab, title, back }: { lab: LabView; setLab: 
         {lab.ends_at && <p className="muted">It ends at {new Date(lab.ends_at).toLocaleString()}; its time runs while it sleeps.</p>}
         {lab.error && <p className="error" role="alert">{lab.error}</p>}
         {err && <p className="error" role="alert">{err}</p>}
+        {lab.extension_pending && <p><span className="badge warn" role="status">Extension pending</span></p>}
         <div className="row">
           <button className="primary" disabled={busy} onClick={() => act('POST')}>Wake it</button>
+          {lab.can_extend && <button className="ghost" disabled={busy} onClick={extend}>Extend</button>}
           <button className="ghost" disabled={busy} onClick={() => act('DELETE')}>End lab</button>
         </div>
       </section>

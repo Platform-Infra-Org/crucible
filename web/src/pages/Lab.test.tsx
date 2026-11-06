@@ -53,9 +53,9 @@ test('only a ready aws lab has an AWS console button', () => {
 })
 
 // LabPage loads its lab in an effect, which a static render never runs: render the asleep view itself.
-const asleep = (slept: 'hibernated' | 'stopped', error?: string) => renderToStaticMarkup(
+const asleep = (slept: 'hibernated' | 'stopped', error?: string, canExtend = false) => renderToStaticMarkup(
   <MemoryRouter><AsleepLab lab={{ id: 'l2', state: 'asleep', runtime: 'aws', slept_as: slept, slept_at: new Date().toISOString(), error,
-    ends_at: new Date(Date.now() + 3600e3).toISOString(), tasks: [], terminals: [] } as unknown as LabView}
+    can_extend: canExtend, ends_at: new Date(Date.now() + 3600e3).toISOString(), tasks: [], terminals: [] } as unknown as LabView}
   setLab={() => {}} title="Cloud heat" back="/" /></MemoryRouter>)
 
 test('a sleeping lab says how it slept and offers Wake it', () => {
@@ -66,6 +66,11 @@ test('a sleeping lab says how it slept and offers Wake it', () => {
   h = asleep('stopped', "starting the lab's machines: InsufficientInstanceCapacity")
   expect(h).toContain('Crucible stopped your machines last night: they restart from their disks.')
   expect(h).toContain('InsufficientInstanceCapacity')
+})
+
+test('a sleeping lab can be extended when its run allows it', () => {
+  expect(asleep('stopped')).not.toContain('>Extend</button>')
+  expect(asleep('stopped', undefined, true)).toMatch(/<button[^>]*class="ghost"[^>]*>Extend<\/button>/)
 })
 
 test('after a wake the workspace says once what came back', () => {

@@ -46,7 +46,7 @@ func (s *Service) signals(ctx context.Context, st *gitsync.State, team string, u
 	scan := []any{&k.uid, &k.training, &m, &item, &n, &at}
 
 	rows, err := s.DB.Query(ctx, `SELECT DISTINCT user_id, training, module FROM lab_instances WHERE user_id = ANY($1) AND team = $2
-		AND state IN ('pending_approval', 'provisioning', 'ready', 'destroying')`, uids, team)
+		AND state IN ('pending_approval', 'provisioning', 'ready', 'asleep', 'waking', 'destroying')`, uids, team)
 	if err != nil {
 		return nil, err
 	}

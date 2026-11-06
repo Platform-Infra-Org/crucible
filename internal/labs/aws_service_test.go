@@ -24,9 +24,21 @@ import (
 // fake cloud; "destroy" removes the bucket only, as terraform would.
 type fakeAWSRunner struct {
 	fakeRunner
-	cloud *awscloud.Fake
-	labs  []*content.Lab
-	hold  chan struct{} // optional: Destroy waits for it to close (a long terraform destroy)
+	cloud       *awscloud.Fake
+	labs        []*content.Lab
+	hold        chan struct{} // optional: Destroy waits for it to close (a long terraform destroy)
+	slept, woke []string
+	sleepAs     string // "" = stopped
+	sleepErr    error
+	wakeErr     error
+	wakeHold    chan struct{} // optional: WakeLab waits for it to close (machines slow to start)
+	mib         int64         // the workspace size WorkspaceMiB reports
+}
+
+func (f *fakeAWSRunner) WorkspaceMiB(context.Context, *Instance) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mib, nil
 }
 
 func (f *fakeAWSRunner) ProvisionLab(_ context.Context, inst *Instance, lab *content.Lab) error {
@@ -49,6 +61,26 @@ func (f *fakeAWSRunner) Destroy(ctx context.Context, inst *Instance) error {
 	}
 	f.cloud.SimulateDestroy(inst.ID)
 	return f.fakeRunner.Destroy(ctx, inst)
+}
+
+func (f *fakeAWSRunner) SleepLab(_ context.Context, inst *Instance, _ *content.Lab) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.slept = append(f.slept, inst.ID)
+	if f.sleepAs == "" {
+		return "stopped", f.sleepErr
+	}
+	return f.sleepAs, f.sleepErr
+}
+
+func (f *fakeAWSRunner) WakeLab(_ context.Context, inst *Instance, _ *content.Lab) error {
+	if f.wakeHold != nil {
+		<-f.wakeHold
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.woke = append(f.woke, inst.ID)
+	return f.wakeErr
 }
 
 func (f *fx) withAWS(t *testing.T) (*fakeAWSRunner, *awscloud.Fake) {

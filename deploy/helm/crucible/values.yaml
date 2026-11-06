@@ -26,6 +26,8 @@ backup:
   region: ""
   schedule: "15 19 * * *"
   timeZone: Europe/Bucharest
+labs:
+  sleepSchedule: ""   # nightly bedtime for AWS labs (crucible labs bedtime), 5-field cron in backup.timeZone; empty = none
 toolboxImage: ""  # cluster labs: the toolbox image by digest (deploy/toolbox); empty disables them
 clusterLabs:
   enabled: true            # Crucible's own cluster (CRUCIBLE_LAB_CLUSTER): aws lab workspaces. Cluster labs run on trainees' clusters; nodes need the sysbox-runc RuntimeClass (docs/runbooks/aws.md)

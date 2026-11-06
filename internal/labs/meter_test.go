@@ -324,3 +324,37 @@ func TestReMeteringWaitsEvenWhenTheContentFails(t *testing.T) {
 		t.Fatalf("tried again after 15 minutes: %d", n)
 	}
 }
+
+func TestMeterSleepPricesOnlyDisksUntilTheLabWakes(t *testing.T) {
+	ctx := context.Background()
+	f, cloud, inst, lab := meterFixture(t, corev1.PodSucceeded)
+	cloud.SetState(inst.ID, stateWith("aws_instance.web"))
+	if err := f.s.Meter(ctx, inst, lab); err != nil {
+		t.Fatal(err)
+	}
+	full := openRows(t, f, inst.ID)["aws_instance.web"]
+	f.clk.Add(time.Hour)
+	slept := f.clk.Now()
+	if err := f.s.meterSleep(ctx, inst.ID, slept); err != nil {
+		t.Fatal(err)
+	}
+	disk := 8 * 0.088 / pricing.HoursPerMonth
+	if got := openRows(t, f, inst.ID)["aws_instance.web"]; math.Abs(got-disk) > 1e-9 || got >= full {
+		t.Fatalf("asleep, the instance's row costs its disks: %v (running %v)", got, full)
+	}
+	f.clk.Add(10 * time.Hour)
+	if err := f.s.EndMeter(ctx, inst.ID, f.clk.Now()); err != nil { // the wake (or a destroy while asleep)
+		t.Fatal(err)
+	}
+	if n := len(openRows(t, f, inst.ID)); n != 0 {
+		t.Fatalf("waking or a destroy ends the sleeping rows: %d open", n)
+	}
+	var usd float64
+	if err := f.s.DB.QueryRow(ctx, `SELECT sum((hourly_usd + usage_hourly_usd) * extract(epoch FROM ended_at - started_at) / 3600)
+		FROM lab_resources WHERE lab_id = $1`, inst.ID).Scan(&usd); err != nil {
+		t.Fatal(err)
+	}
+	if want := full*1 + disk*10; math.Abs(usd-want) > 1e-9 {
+		t.Fatalf("an hour running and ten asleep: $%v, want $%v", usd, want)
+	}
+}

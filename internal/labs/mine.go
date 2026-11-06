@@ -23,7 +23,7 @@ type MyLab struct {
 // Mine lists the user's own labs for the Labs page: active ones first, then the newest, at most 20.
 func (s *Service) Mine(ctx context.Context, u *auth.User) ([]MyLab, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE user_id = $1
-		ORDER BY (state IN ('pending_approval', 'provisioning', 'ready', 'destroying')) DESC, created_at DESC LIMIT 20`, u.ID)
+		ORDER BY (state IN ('pending_approval', 'provisioning', 'ready', 'asleep', 'waking', 'destroying')) DESC, created_at DESC LIMIT 20`, u.ID)
 	if err != nil {
 		return nil, err
 	}

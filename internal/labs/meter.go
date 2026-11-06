@@ -57,10 +57,10 @@ func (s *Service) Meter(ctx context.Context, inst *Instance, lab *content.Lab) e
 	seen := []string{}
 	for _, l := range b.Lines {
 		seen = append(seen, l.Address)
-		if _, err := tx.Exec(ctx, `INSERT INTO lab_resources (lab_id, address, type, hourly_usd, usage_hourly_usd, started_at)
-			SELECT $1, $2, $3, $4, $5, $6 WHERE NOT EXISTS (
+		if _, err := tx.Exec(ctx, `INSERT INTO lab_resources (lab_id, address, type, hourly_usd, usage_hourly_usd, stopped_hourly_usd, started_at)
+			SELECT $1, $2, $3, $4, $5, $6, $7 WHERE NOT EXISTS (
 				SELECT 1 FROM lab_resources WHERE lab_id = $1 AND address = $2 AND ended_at IS NULL)`,
-			inst.ID, l.Address, l.Type, l.HourlyUSD, l.UsageHourlyUSD, now); err != nil {
+			inst.ID, l.Address, l.Type, l.HourlyUSD, l.UsageHourlyUSD, l.StoppedHourlyUSD, now); err != nil {
 			return err
 		}
 	}
@@ -113,4 +113,52 @@ func (s *Service) provisionLab(ctx context.Context, lp labProvisioner, inst *Ins
 		}
 	}
 	return err
+}
+
+// meterSleep re-prices the lab's open rows from at for its sleep (spec 2026-11-05 §3): each continues at its stopped
+// price (an instance's disks; its compute and IPv4 stop). Waking ends these rows with EndMeter, and the next sweep
+// meters the running lab again; a destroy while asleep ends them the same way.
+func (s *Service) meterSleep(ctx context.Context, labID string, at time.Time) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	rows, err := tx.Query(ctx, `SELECT address, type, usage_hourly_usd, stopped_hourly_usd, started_at FROM lab_resources
+		WHERE lab_id = $1 AND ended_at IS NULL FOR UPDATE`, labID)
+	if err != nil {
+		return err
+	}
+	type open struct {
+		addr, typ      string
+		usage, stopped float64
+		started        time.Time
+	}
+	var all []open
+	for rows.Next() {
+		var o open
+		if err := rows.Scan(&o.addr, &o.typ, &o.usage, &o.stopped, &o.started); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, o)
+	}
+	rows.Close()
+	for _, o := range all {
+		if o.started.Equal(at) { // metered this instant: price the row itself
+			if _, err := tx.Exec(ctx, `UPDATE lab_resources SET hourly_usd = stopped_hourly_usd WHERE lab_id = $1 AND address = $2 AND started_at = $3`,
+				labID, o.addr, at); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE lab_resources SET ended_at = $3 WHERE lab_id = $1 AND address = $2 AND ended_at IS NULL`, labID, o.addr, at); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO lab_resources (lab_id, address, type, hourly_usd, usage_hourly_usd, stopped_hourly_usd, started_at)
+			VALUES ($1, $2, $3, $4, $5, $4, $6)`, labID, o.addr, o.typ, o.stopped, o.usage, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

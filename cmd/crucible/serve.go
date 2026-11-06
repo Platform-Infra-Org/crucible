@@ -307,7 +307,8 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
-		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch}
+		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch,
+		NodeStorage: os.Getenv("CRUCIBLE_NODE_STORAGE")}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
 		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))
@@ -323,6 +324,9 @@ func run(ctx context.Context) error {
 	learnSvc.Scoring = scoreSvc
 	learnSvc.Notify = notifySvc
 	labSvc.Scoring, labSvc.Blobs = scoreSvc, blobs
+	if err := labSvc.Morning(ctx); err != nil { // the platform is awake: its bedtime (and a teardown's kill switch) ends
+		return fmt.Errorf("waking the labs: %w", err)
+	}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})

@@ -44,20 +44,24 @@ type Notifier interface {
 }
 
 type Service struct {
-	Notify     Notifier
-	DB         *pgxpool.Pool
-	Learn      *learn.Service
-	Runners    map[string]Runner
-	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
-	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
-	Now        func() time.Time
-	Log        *slog.Logger
-	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
-	Blobs      blob.Store       // transcripts (Task 6)
-	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
-	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
-	Prices     *pricing.Store   // list prices for aws estimates; nil when unset
-	PriceFetch *pricing.Fetcher // downloads them from the public AWS Price List weekly; nil when unset
+	Notify      Notifier
+	DB          *pgxpool.Pool
+	Learn       *learn.Service
+	Runners     map[string]Runner
+	Kube        *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
+	Estimators  map[string]Estimator // by runtime; a runtime without one cannot be requested
+	Now         func() time.Time
+	Log         *slog.Logger
+	Scoring     *scoring.Service // human review (M5); nil in tests that don't need it
+	Blobs       blob.Store       // transcripts (Task 6)
+	Cloud       awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
+	AWSRegions  []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
+	Prices      *pricing.Store   // list prices for aws estimates; nil when unset
+	NodeStorage string           // CRUCIBLE_NODE_STORAGE: the node's lab volume directory, read-only, for the free-disk guard; "" = off
+
+	measureMu  sync.Mutex
+	measuredAt map[string]time.Time // per aws lab: its last workspace measure in this process
+	PriceFetch *pricing.Fetcher     // downloads them from the public AWS Price List weekly; nil when unset
 
 	Jobs *river.Client[pgx.Tx] // queue for "Refresh now" on the Ledger; nil in tests that don't need it
 
@@ -107,6 +111,7 @@ type TaskView struct {
 }
 
 type View struct {
+	WorkspaceWarning bool               `json:"workspace_warning,omitempty"` // over the workspace limit once: put out at the next measure
 	ID               string             `json:"id"`
 	State            State              `json:"state"`
 	Error            string             `json:"error,omitempty"`
@@ -139,6 +144,9 @@ type View struct {
 	DecidedBy        string             `json:"decided_by,omitempty"`
 	DecisionNote     string             `json:"decision_note,omitempty"`
 	ClusterContext   string             `json:"cluster_context,omitempty"`
+	SleptAs          string             `json:"slept_as,omitempty"` // asleep, and after a wake: hibernated | stopped
+	SleptAt          *time.Time         `json:"slept_at,omitempty"`
+	WokeAt           *time.Time         `json:"woke_at,omitempty"`
 	Log              []string           `json:"log,omitempty"` // provisioning only: the lab's latest events (spec §8.3)
 }
 
@@ -181,7 +189,7 @@ type ModuleLab struct {
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
 	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
 	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note,
-	ext_until, ext_estimate_usd, ext_tier, ext_requested_at, cluster_context`
+	ext_until, ext_estimate_usd, ext_tier, ext_requested_at, cluster_context, slept_at, slept_as, woke_at, waking_since`
 
 func scanInst(row pgx.Row) (*Instance, error) {
 	var in Instance
@@ -189,7 +197,8 @@ func scanInst(row pgx.Row) (*Instance, error) {
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
 		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
 		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
-		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt, &in.ClusterContext)
+		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt, &in.ClusterContext,
+		&in.SleptAt, &in.SleptAs, &in.WokeAt, &in.WakingSince)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, apperr.Wrap(apperr.NotFound, "lab not found")
 	}
@@ -416,7 +425,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
-		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SelfReported: selfReported(inst.Runtime), Complete: true,
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SleptAs: inst.SleptAs, SleptAt: inst.SleptAt, WokeAt: inst.WokeAt, SelfReported: selfReported(inst.Runtime), Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -455,6 +464,10 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
+		_ = s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'workspace_full_warning')`,
+			inst.ID).Scan(&v.WorkspaceWarning)
+	}
+	if inst.State == Ready || inst.State == Asleep { // a sleeping lab can still be extended
 		v.ExtensionPending = inst.ExtUntil != nil
 		v.CanExtend = !inst.Extended && inst.MaxExtension > 0 && inst.LimitReason != "schedule" && inst.LimitReason != "budget"
 	}
@@ -618,7 +631,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.OverCap, q.Tier = true, rbac.TierAdmin
 		}
 	}
-	// Blocked precedence: kill switch, then schedule window.
+	// Blocked precedence: kill switch, bedtime, then schedule window.
 	now := s.Now()
 	ks, err := s.KillSwitch(ctx)
 	if err != nil {
@@ -626,6 +639,10 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	}
 	if ks.Enabled {
 		q.Blocked = "Labs are paused by an admin."
+	} else if b, err := ReadBedtime(ctx, s.DB); err != nil {
+		return nil, err
+	} else if b != nil {
+		q.Blocked = bankingMsg
 	} else if sc := p.ProgramSchedule(team, training); !sc.Open(now) {
 		q.Blocked = "Labs for this program run " + sc.String() + "."
 		if n := sc.NextOpen(now); !n.IsZero() {
@@ -638,6 +655,8 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Blocked = overCeiling(hourly, lab.AWS.MaxHourlyUSD)
 		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
 			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)
+		case s.nodeFull():
+			q.Blocked = diskFullMsg
 		}
 	}
 	return q, nil
@@ -722,7 +741,7 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	}
 	if inst, err := s.active(ctx, u.ID, team, training, module); err != nil {
 		return nil, err
-	} else if inst != nil && (inst.State == PendingApproval || inst.State == Provisioning || inst.State == Ready) {
+	} else if inst != nil && (slices.Contains([]State{PendingApproval, Provisioning, Ready, Asleep, Waking}, inst.State)) {
 		return s.view(ctx, inst)
 	}
 	cr, isCluster := r.(contextRunner)
@@ -1328,7 +1347,7 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	if err != nil {
 		return nil, err
 	}
-	if inst.State != Ready || inst.Extended || inst.MaxExtension == 0 || inst.EndsAt == nil {
+	if (inst.State != Ready && inst.State != Asleep) || inst.Extended || inst.MaxExtension == 0 || inst.EndsAt == nil {
 		return nil, apperr.Wrap(apperr.Conflict, "this lab can't be extended further")
 	}
 	if inst.LimitReason == "budget" {
@@ -1357,7 +1376,7 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 		}
 	}
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ends_at = $2, limit_reason = $3, extended = true, last_activity_at = $4
-		WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, end, reason, s.Now())
+		WHERE id = $1 AND NOT extended AND state IN ('ready', 'asleep')`, inst.ID, end, reason, s.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -1382,7 +1401,7 @@ func (s *Service) requestExtension(ctx context.Context, u *auth.User, p *config.
 	tier = c.Route(tier, inst.Team, inst.Training, u.Email)
 	now := s.Now()
 	tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET ext_until = $2, ext_estimate_usd = $3, ext_tier = $4, ext_requested_at = $5,
-		extended = true, last_activity_at = $5 WHERE id = $1 AND NOT extended AND state = 'ready'`, inst.ID, until, estimate, tier, now)
+		extended = true, last_activity_at = $5 WHERE id = $1 AND NOT extended AND state IN ('ready', 'asleep')`, inst.ID, until, estimate, tier, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1438,7 +1457,7 @@ func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
 	err := s.DB.QueryRow(ctx, `UPDATE lab_instances l SET state = 'destroying', end_reason = $2, destroyed_at = $3,
 			ext_until = NULL, ext_requested_at = NULL, ext_tier = ''
 		FROM (SELECT ext_until FROM lab_instances WHERE id = $1 FOR UPDATE) old
-		WHERE l.id = $1 AND l.state IN ('provisioning', 'ready') RETURNING old.ext_until`,
+		WHERE l.id = $1 AND l.state IN ('provisioning', 'ready', 'asleep', 'waking') RETURNING old.ext_until`,
 		inst.ID, reason, s.Now()).Scan(&lapsed)
 	if err != nil {
 		cancel()
@@ -1522,8 +1541,11 @@ func (s *Service) Sweep(ctx context.Context) {
 		s.killAll(ctx)
 		paused = true // escalation and expiry of pending requests wait until labs are re-enabled
 	}
+	s.bedtimeStep(ctx)
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
-		WHERE (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
+		WHERE (state = 'asleep' AND ends_at <= $1)
+		   OR (state = 'waking' AND waking_since < $1 - interval '20 minutes')
+		   OR (state = 'ready' AND (ends_at <= $1 OR last_activity_at + idle_timeout_s * interval '1 second' <= $1))
 		   OR (state = 'provisioning' AND coalesce(decided_at, created_at) < $1 -
 		       CASE WHEN runtime = 'aws' THEN interval '65 minutes' ELSE interval '15 minutes' END)
 		   OR (state = 'destroying' AND destroyed_at < $1 -
@@ -1544,6 +1566,12 @@ func (s *Service) Sweep(ctx context.Context) {
 	for _, inst := range due {
 		reason := "idle"
 		switch {
+		case inst.State == Waking: // a wake that never finished (a restart mid-wake): back to sleep; the trainee tries again
+			if _, busy := s.inflight.Load("wake:" + inst.ID); !busy {
+				s.endRow(ctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL, error = $2
+					WHERE id = $1 AND state = 'waking'`, "Waking took too long; press Wake it again.")
+			}
+			continue
 		case inst.State == PendingApproval:
 			if !paused {
 				s.escalate(ctx, inst)
@@ -1569,6 +1597,7 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.reconcileCluster(ctx)
 	s.refreshAWS(ctx)
+	s.guardWorkspaces(ctx)
 	if ar, ok := s.Runners["aws"].(*AWSRunner); ok && ar.DryRun == nil && ar.Cluster != nil {
 		if err := ar.reapPlans(ctx, now); err != nil {
 			s.Log.Warn("deleting leftover estimate plans failed", "err", err)
@@ -1627,7 +1656,7 @@ func (s *Service) reconcileCluster(ctx context.Context) {
 	if len(ids) == 0 {
 		return
 	}
-	rows, err := s.DB.Query(ctx, `SELECT id FROM lab_instances WHERE id = ANY($1) AND state IN ('provisioning', 'ready', 'destroying')`, ids)
+	rows, err := s.DB.Query(ctx, `SELECT id FROM lab_instances WHERE id = ANY($1) AND state IN ('provisioning', 'ready', 'asleep', 'waking', 'destroying')`, ids)
 	if err != nil {
 		s.Log.Error("lab namespace reconcile query failed", "err", err)
 		return

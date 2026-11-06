@@ -20,6 +20,8 @@ const (
 	Provisioning    State = "provisioning"
 	Ready           State = "ready"
 	Destroying      State = "destroying"
+	Asleep          State = "asleep" // an aws lab whose machines sleep while the platform does (spec 2026-11-05)
+	Waking          State = "waking" // its trainee pressed Wake it: machines starting, workspace coming back
 	Destroyed       State = "destroyed"
 	Failed          State = "failed"
 	Rejected        State = "rejected"
@@ -28,6 +30,8 @@ const (
 
 type Instance struct {
 	ClusterContext                              string // runtime cluster: the kubeconfig context it runs on (display only)
+	SleptAt, WokeAt, WakingSince                *time.Time
+	SleptAs                                     string // "" | hibernated | stopped
 	ID                                          string
 	UserID                                      int64
 	Team, Training, Module, SHA, Runtime        string

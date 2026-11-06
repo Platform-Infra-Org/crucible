@@ -1,0 +1,32 @@
+{{- if and .Values.awsLabs.enabled .Values.labs.sleepSchedule }}
+# Nightly bedtime (spec 2026-11-05 §2): asks the server to put every AWS lab to sleep before the node stops.
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: crucible-bedtime }
+spec:
+  schedule: {{ .Values.labs.sleepSchedule | quote }}
+  timeZone: {{ .Values.backup.timeZone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.image.pullSecret }}
+          imagePullSecrets:
+            - name: {{ . }}
+          {{- end }}
+          containers:
+            - name: bedtime
+              image: "{{ include "crucible.image" . }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["crucible", "labs", "bedtime"]
+              resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 100m, memory: 128Mi } }
+              env:
+                - name: POSTGRES_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secretName }}, key: POSTGRES_PASSWORD } }
+                - { name: DATABASE_URL, value: "postgres://crucible:$(POSTGRES_PASSWORD)@postgres:5432/crucible?sslmode=disable" }
+{{- end }}

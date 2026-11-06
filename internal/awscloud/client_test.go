@@ -6,12 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -544,5 +547,131 @@ func TestCreditsDontReduceBilledSpend(t *testing.T) {
 	c = exportClient(t, map[string][]byte{exportBase + "2026-10/p.csv.gz": gzBytes(t, "line_item_usage_start_date,line_item_unblended_cost,resource_tags\n")})
 	if _, err := c.Costs(context.Background(), day("2026-10-01"), day("2026-10-13")); err == nil {
 		t.Fatal("without the line item type a credit can't be told apart: the read must fail")
+	}
+}
+
+// describeXML answers DescribeInstances from state, keeping only the states its instance-state-name filter names.
+func describeXML(state map[string]string, form url.Values) string {
+	want := map[string]bool{}
+	for i := 1; form.Get(fmt.Sprintf("Filter.2.Value.%d", i)) != ""; i++ {
+		want[form.Get(fmt.Sprintf("Filter.2.Value.%d", i))] = true
+	}
+	var b strings.Builder
+	b.WriteString(`<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><reservationSet><item><instancesSet>`)
+	for _, id := range slices.Sorted(maps.Keys(state)) {
+		if len(want) == 0 || want[state[id]] {
+			fmt.Fprintf(&b, `<item><instanceId>%s</instanceId><instanceState><code>0</code><name>%s</name></instanceState></item>`, id, state[id])
+		}
+	}
+	b.WriteString(`</instancesSet></item></reservationSet></DescribeInstancesResponse>`)
+	return b.String()
+}
+
+const ec2OK = `<%[1]sResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><instancesSet/></%[1]sResponse>`
+
+func TestSleepHibernatesWhatItCanAndStopsTheRest(t *testing.T) {
+	old := StopWait
+	StopWait = time.Second
+	t.Cleanup(func() { StopWait = old })
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "running", "i-2": "running"}
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StopInstances":
+			id := c.form.Get("InstanceId.1")
+			if id == "i-2" && c.form.Get("Hibernate") == "true" {
+				return 400, "text/xml", `<Response><Errors><Error><Code>UnsupportedHibernationConfiguration</Code><Message>not set up for hibernation</Message></Error></Errors><RequestID>r</RequestID></Response>`
+			}
+			state[id] = "stopped"
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StopInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	creds := Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}
+	got, err := cl.Sleep(context.Background(), "eu-west-1", creds, "aaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []Slept{{"i-1", true}, {"i-2", false}}) {
+		t.Fatalf("i-1 hibernated, i-2 refused hibernation and stopped: %+v", got)
+	}
+	var stops []string
+	for _, c := range calls() {
+		switch c.form.Get("Action") {
+		case "StopInstances":
+			stops = append(stops, c.form.Get("InstanceId.1")+" hibernate="+c.form.Get("Hibernate"))
+		case "DescribeInstances":
+			if c.form.Get("Filter.1.Name") != "tag:crucible:lab-id" || c.form.Get("Filter.1.Value.1") != "aaaaaaaaaaaa" {
+				t.Fatalf("only the lab's own machines are listed: %v", c.form)
+			}
+		}
+	}
+	if strings.Join(stops, ", ") != "i-1 hibernate=true, i-2 hibernate=true, i-2 hibernate=" {
+		t.Fatalf("stops: %v", stops)
+	}
+}
+
+func TestSleepForcesAMachineThatNeverStops(t *testing.T) {
+	old := StopWait
+	StopWait = 20 * time.Millisecond
+	t.Cleanup(func() { StopWait = old })
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "running"}
+	cl, calls := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StopInstances":
+			state["i-1"] = map[bool]string{true: "stopped", false: "stopping"}[c.form.Get("Force") == "true"]
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StopInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	got, err := cl.Sleep(context.Background(), "eu-west-1", Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}, "aaaaaaaaaaaa")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	forced := false
+	for _, c := range calls() {
+		forced = forced || (c.form.Get("Action") == "StopInstances" && c.form.Get("Force") == "true")
+	}
+	if !forced {
+		t.Fatal("a guest that never answers the shutdown (a broken boot) is force-stopped")
+	}
+}
+
+func TestWakeStartsTheLabsStoppedMachines(t *testing.T) {
+	var mu sync.Mutex
+	state := map[string]string{"i-1": "stopped", "i-2": "stopped"}
+	starts := 0
+	cl, _ := fakeAWS(t, func(c call) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch c.form.Get("Action") {
+		case "DescribeInstances":
+			return 200, "text/xml", describeXML(state, c.form)
+		case "StartInstances":
+			starts++
+			for i := 1; c.form.Get(fmt.Sprintf("InstanceId.%d", i)) != ""; i++ {
+				state[c.form.Get(fmt.Sprintf("InstanceId.%d", i))] = "running"
+			}
+			return 200, "text/xml", fmt.Sprintf(ec2OK, "StartInstances")
+		}
+		return 400, "text/plain", "unexpected"
+	})
+	cl.poll = time.Millisecond
+	if err := cl.Wake(context.Background(), "eu-west-1", Credentials{AccessKeyID: "ASIA", SecretAccessKey: "s", SessionToken: "t"}, "aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || state["i-1"] != "running" || state["i-2"] != "running" {
+		t.Fatalf("one start for both machines, both running: %d %v", starts, state)
 	}
 }

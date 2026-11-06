@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -47,6 +48,7 @@ type Client struct {
 	cfg  Config
 	node aws.Config
 	ops  aws.Config
+	poll time.Duration // 0 = 5 s; tests shorten it
 }
 
 var _ Cloud = (*Client)(nil)
@@ -171,6 +173,133 @@ func (c *Client) labBuckets(ctx context.Context, region, labID string, res []Res
 		}
 	}
 	return res, nil
+}
+
+// labEC2 is an EC2 client in region with a lab session's credentials.
+func (c *Client) labEC2(region string, cr Credentials) *ec2.Client {
+	cfg := c.node.Copy()
+	cfg.Region = region
+	cfg.Credentials = credentials.NewStaticCredentialsProvider(cr.AccessKeyID, cr.SecretAccessKey, cr.SessionToken)
+	return ec2.NewFromConfig(cfg, func(o *ec2.Options) { o.BaseEndpoint = c.endpoint() })
+}
+
+func (c *Client) every() time.Duration {
+	if c.poll == 0 {
+		return 5 * time.Second
+	}
+	return c.poll
+}
+
+// hibernationRefused: AWS won't hibernate this machine (launched without it, or a type or image that can't).
+var hibernationRefused = map[string]bool{"UnsupportedHibernationConfiguration": true, "UnsupportedOperation": true}
+
+// labInstances is the lab's machines in the given states, id -> state.
+func labInstances(ctx context.Context, e *ec2.Client, labID string, states ...string) (map[string]string, error) {
+	out := map[string]string{}
+	p := ec2.NewDescribeInstancesPaginator(e, &ec2.DescribeInstancesInput{Filters: []ec2types.Filter{
+		{Name: aws.String("tag:" + TagLab), Values: []string{labID}},
+		{Name: aws.String("instance-state-name"), Values: states}}})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range page.Reservations {
+			for _, i := range r.Instances {
+				if i.State != nil {
+					out[aws.ToString(i.InstanceId)] = string(i.State.Name)
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// waitState polls until every id is in want (or terminated), for at most d.
+func (c *Client) waitState(ctx context.Context, e *ec2.Client, labID string, ids []string, want string, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for {
+		all, err := labInstances(ctx, e, labID, "pending", "running", "stopping", "stopped", "shutting-down", "terminated")
+		if err != nil {
+			return err
+		}
+		done := true
+		for _, id := range ids {
+			if s := all[id]; s != want && s != "terminated" {
+				done = false
+			}
+		}
+		if done {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the lab's machines were not %s after %s", want, d)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(c.every()):
+		}
+	}
+}
+
+func (c *Client) Sleep(ctx context.Context, region string, cr Credentials, labID string) ([]Slept, error) {
+	if !ValidLabID(labID) {
+		return nil, fmt.Errorf("invalid lab id %q", labID)
+	}
+	e := c.labEC2(region, cr)
+	live, err := labInstances(ctx, e, labID, "pending", "running")
+	if err != nil {
+		return nil, err
+	}
+	ids := slices.Sorted(maps.Keys(live))
+	var out []Slept
+	for _, id := range ids {
+		_, err := e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{id}, Hibernate: aws.Bool(true)})
+		hibernated := err == nil
+		var api smithy.APIError
+		if errors.As(err, &api) && hibernationRefused[api.ErrorCode()] {
+			_, err = e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{id}})
+		}
+		if err != nil {
+			return out, fmt.Errorf("stopping %s: %w", id, err)
+		}
+		out = append(out, Slept{InstanceID: id, Hibernated: hibernated})
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if c.waitState(ctx, e, labID, ids, "stopped", StopWait) != nil {
+		if _, err := e.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: ids, Force: aws.Bool(true)}); err != nil {
+			return out, fmt.Errorf("forcing the stop: %w", err)
+		}
+		if err := c.waitState(ctx, e, labID, ids, "stopped", StopWait); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) Wake(ctx context.Context, region string, cr Credentials, labID string) error {
+	if !ValidLabID(labID) {
+		return fmt.Errorf("invalid lab id %q", labID)
+	}
+	e := c.labEC2(region, cr)
+	asleep, err := labInstances(ctx, e, labID, "stopping", "stopped")
+	if err != nil {
+		return err
+	}
+	ids := slices.Sorted(maps.Keys(asleep))
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := c.waitState(ctx, e, labID, ids, "stopped", StopWait); err != nil { // one still hibernating finishes first
+		return err
+	}
+	if _, err := e.StartInstances(ctx, &ec2.StartInstancesInput{InstanceIds: ids}); err != nil {
+		return err
+	}
+	return c.waitState(ctx, e, labID, ids, "running", StartWait)
 }
 
 func (c *Client) Delete(ctx context.Context, region string, cr Credentials, s string) (bool, error) {

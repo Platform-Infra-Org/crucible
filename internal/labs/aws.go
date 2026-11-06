@@ -58,6 +58,11 @@ type AWSRunner struct {
 
 var _ Runner = (*AWSRunner)(nil)
 
+var (
+	_ labSleeper     = (*AWSRunner)(nil)
+	_ workspaceMeter = (*AWSRunner)(nil)
+)
+
 func (a *AWSRunner) now() time.Time {
 	if a.Now != nil {
 		return a.Now()

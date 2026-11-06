@@ -323,6 +323,9 @@ func run(ctx context.Context) error {
 	learnSvc.Scoring = scoreSvc
 	learnSvc.Notify = notifySvc
 	labSvc.Scoring, labSvc.Blobs = scoreSvc, blobs
+	if err := labSvc.Morning(ctx); err != nil { // the platform is awake: its bedtime (and a teardown's kill switch) ends
+		return fmt.Errorf("waking the labs: %w", err)
+	}
 	hub.OnHello = func(userID int64, liveIDs []string) { labSvc.ReconcileAgent(ctx, userID, liveIDs) }
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &labs.SweepWorker{S: labSvc})

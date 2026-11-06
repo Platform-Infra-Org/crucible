@@ -447,6 +447,11 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		} else if paused {
 			return "", apperr.Wrap(apperr.Conflict, "Labs are paused by an admin.")
 		}
+		if b, err := ReadBedtime(ctx, s.DB); err != nil {
+			return "", err
+		} else if b != nil {
+			return "", apperr.Wrap(apperr.Conflict, bankingMsg)
+		}
 		if !inst.OverCap && inst.EstimateUSD > 0 {
 			over, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.EstimateUSD)
 			if err != nil {

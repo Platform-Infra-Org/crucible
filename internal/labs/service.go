@@ -624,7 +624,7 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.OverCap, q.Tier = true, rbac.TierAdmin
 		}
 	}
-	// Blocked precedence: kill switch, then schedule window.
+	// Blocked precedence: kill switch, bedtime, then schedule window.
 	now := s.Now()
 	ks, err := s.KillSwitch(ctx)
 	if err != nil {
@@ -632,6 +632,10 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 	}
 	if ks.Enabled {
 		q.Blocked = "Labs are paused by an admin."
+	} else if b, err := ReadBedtime(ctx, s.DB); err != nil {
+		return nil, err
+	} else if b != nil {
+		q.Blocked = bankingMsg
 	} else if sc := p.ProgramSchedule(team, training); !sc.Open(now) {
 		q.Blocked = "Labs for this program run " + sc.String() + "."
 		if n := sc.NextOpen(now); !n.IsZero() {
@@ -1528,6 +1532,7 @@ func (s *Service) Sweep(ctx context.Context) {
 		s.killAll(ctx)
 		paused = true // escalation and expiry of pending requests wait until labs are re-enabled
 	}
+	s.bedtimeStep(ctx)
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'asleep' AND ends_at <= $1)
 		   OR (state = 'waking' AND waking_since < $1 - interval '20 minutes')

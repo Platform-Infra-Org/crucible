@@ -87,6 +87,9 @@ done
 for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
   grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }
 done
+grep -q 'name: CRUCIBLE_NODE_STORAGE, value: /node-storage' <<<"$awsout" || { echo "aws labs: the free-disk guard"; exit 1; }
+grep -q 'mountPath: /node-storage, readOnly: true' <<<"$awsout" || { echo "aws labs: the node storage is read-only"; exit 1; }
+if grep -q node-storage <<<"$out"; then echo "no node storage without aws labs"; exit 1; fi
 if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
 if grep -q CRUCIBLE_GIT_ALLOW_FILE <<<"$out$boot$awsout"; then echo "file git transport must never be rendered"; exit 1; fi
 for k in planRoleArn exportBucket exportName; do   # real labs: no estimate without the plan role, no billed spend without the export

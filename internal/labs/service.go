@@ -44,20 +44,24 @@ type Notifier interface {
 }
 
 type Service struct {
-	Notify     Notifier
-	DB         *pgxpool.Pool
-	Learn      *learn.Service
-	Runners    map[string]Runner
-	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
-	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
-	Now        func() time.Time
-	Log        *slog.Logger
-	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
-	Blobs      blob.Store       // transcripts (Task 6)
-	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
-	AWSRegions []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
-	Prices     *pricing.Store   // list prices for aws estimates; nil when unset
-	PriceFetch *pricing.Fetcher // downloads them from the public AWS Price List weekly; nil when unset
+	Notify      Notifier
+	DB          *pgxpool.Pool
+	Learn       *learn.Service
+	Runners     map[string]Runner
+	Kube        *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
+	Estimators  map[string]Estimator // by runtime; a runtime without one cannot be requested
+	Now         func() time.Time
+	Log         *slog.Logger
+	Scoring     *scoring.Service // human review (M5); nil in tests that don't need it
+	Blobs       blob.Store       // transcripts (Task 6)
+	Cloud       awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
+	AWSRegions  []string         // regions aws labs may run in (the lab account's allowed_regions); empty blocks every aws lab
+	Prices      *pricing.Store   // list prices for aws estimates; nil when unset
+	NodeStorage string           // CRUCIBLE_NODE_STORAGE: the node's lab volume directory, read-only, for the free-disk guard; "" = off
+
+	measureMu  sync.Mutex
+	measuredAt map[string]time.Time // per aws lab: its last workspace measure in this process
+	PriceFetch *pricing.Fetcher     // downloads them from the public AWS Price List weekly; nil when unset
 
 	Jobs *river.Client[pgx.Tx] // queue for "Refresh now" on the Ledger; nil in tests that don't need it
 
@@ -107,6 +111,7 @@ type TaskView struct {
 }
 
 type View struct {
+	WorkspaceWarning bool               `json:"workspace_warning,omitempty"` // over the workspace limit once: put out at the next measure
 	ID               string             `json:"id"`
 	State            State              `json:"state"`
 	Error            string             `json:"error,omitempty"`
@@ -459,6 +464,8 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	if inst.State == Ready {
 		dl := inst.LastActivityAt.Add(inst.IdleTimeout)
 		v.IdleDeadline = &dl
+		_ = s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'workspace_full_warning')`,
+			inst.ID).Scan(&v.WorkspaceWarning)
 	}
 	if inst.State == Ready || inst.State == Asleep { // a sleeping lab can still be extended
 		v.ExtensionPending = inst.ExtUntil != nil
@@ -648,6 +655,8 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 			q.Blocked = overCeiling(hourly, lab.AWS.MaxHourlyUSD)
 		case !slices.Contains(s.AWSRegions, lab.AWS.Region):
 			q.Blocked = fmt.Sprintf("This lab runs in %s, which this server does not allow.", lab.AWS.Region)
+		case s.nodeFull():
+			q.Blocked = diskFullMsg
 		}
 	}
 	return q, nil
@@ -1588,6 +1597,7 @@ func (s *Service) Sweep(ctx context.Context) {
 	}
 	s.reconcileCluster(ctx)
 	s.refreshAWS(ctx)
+	s.guardWorkspaces(ctx)
 	if ar, ok := s.Runners["aws"].(*AWSRunner); ok && ar.DryRun == nil && ar.Cluster != nil {
 		if err := ar.reapPlans(ctx, now); err != nil {
 			s.Log.Warn("deleting leftover estimate plans failed", "err", err)

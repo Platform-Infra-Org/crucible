@@ -36,6 +36,7 @@ type Proxy struct {
 	Token string
 	CA    []byte // PEM: the proxy's own self-signed certificate, for the toolbox kubeconfig's certificate-authority-data
 	srv   *http.Server
+	ln    net.Listener
 	base  *http.Transport
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
@@ -45,6 +46,8 @@ type Proxy struct {
 // nothing keeps an authenticated upstream connection after the lab ends.
 func (p *Proxy) Close() error {
 	err := p.srv.Close()
+	// srv.Close only closes listeners Serve has picked up, and Serve runs in a goroutine that may not have started yet.
+	_ = p.ln.Close()
 	p.mu.Lock()
 	for c := range p.conns {
 		_ = c.Close()
@@ -88,7 +91,7 @@ func StartProxy(ctx context.Context, kubeconfig, kubeContext, bind string) (*Pro
 	// TLS because kubectl and helm (clientcmd) send a kubeconfig's token only over https. HTTP/1.1 only: exec, attach
 	// and port-forward upgrade the connection.
 	ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{"http/1.1"}, MinVersion: tls.VersionTLS12})
-	p := &Proxy{Addr: ln.Addr().String(), Token: tok, CA: ca, base: base, conns: map[net.Conn]struct{}{}}
+	p := &Proxy{Addr: ln.Addr().String(), Token: tok, CA: ca, ln: ln, base: base, conns: map[net.Conn]struct{}{}}
 	p.srv = &http.Server{Handler: requireToken(tok, h), ReadHeaderTimeout: 10 * time.Second,
 		ConnState: func(c net.Conn, st http.ConnState) {
 			p.mu.Lock()

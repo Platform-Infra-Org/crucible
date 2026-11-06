@@ -1580,7 +1580,8 @@ func TestTeardownFailedStopAllSaysLabsStayPaused(t *testing.T) {
 		return nil
 	}}
 	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
-	if err == nil || !strings.Contains(err.Error(), "kill switch") || !strings.Contains(err.Error(), "crucible aws teardown --yes") {
+	if err == nil || !strings.Contains(err.Error(), "The kill switch stays on until the server restarts") ||
+		!strings.Contains(err.Error(), "crucible aws teardown --yes") {
 		t.Fatalf("%v", err)
 	}
 }

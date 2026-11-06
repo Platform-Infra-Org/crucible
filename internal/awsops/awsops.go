@@ -922,7 +922,7 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keep
 			return fmt.Errorf("the node is %s, so it can't end its labs: wake it first (crucible aws wake), or pass --keep-labs", st)
 		}
 		if _, err := o.ssmOut(ctx, m, labsOnNode("stop-all --wait 30m")); err != nil {
-			return fmt.Errorf("the labs did not all end, so nothing was torn down. The kill switch stays on, so labs stay paused; run `crucible aws teardown --yes` again to continue (`--keep-labs` tears down anyway): %w", err)
+			return fmt.Errorf("the labs did not all end, so nothing was torn down. The kill switch stays on until the server restarts, so labs stay paused; run `crucible aws teardown --yes` again to continue (`--keep-labs` tears down anyway): %w", err)
 		}
 		fmt.Fprintln(o.Log, "every lab has ended; the rebuilt server reopens labs when it starts")
 	}

@@ -100,7 +100,7 @@ func TestAWSProvisionBuildsTheWorkspaceThenApplies(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"create namespaces", "create resourcequotas", "create limitranges", "create networkpolicies",
-		"create secrets", "create configmaps", "create pods", "create pods"}
+		"create secrets", "create configmaps", "create persistentvolumeclaims", "create pods", "create pods"}
 	if got := steps(cs, "create"); !slices.Equal(got, want) {
 		t.Fatalf("policies, then credentials and module, then the workspace, then terraform: %v", got)
 	}

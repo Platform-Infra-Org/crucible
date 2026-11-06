@@ -87,6 +87,12 @@ func (c *ClusterRunner) provision(ctx context.Context, inst *Instance, bundle []
 	if awsSetup != nil {
 		create = append(create, func() error { return awsSetup(ns) })
 	}
+	if o.PVC != nil {
+		create = append(create, func() error {
+			_, err := core.PersistentVolumeClaims(ns).Create(ctx, o.PVC, metav1.CreateOptions{})
+			return err
+		})
+	}
 	create = append(create, func() error { _, err := core.Pods(ns).Create(ctx, o.Pod, metav1.CreateOptions{}); return err }) // last: isolated from its first packet
 	for _, step := range create {
 		if err := step(); err != nil && !apierrors.IsAlreadyExists(err) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	ap "crucible/internal/agentproto"
 	"crucible/internal/apperr"
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
@@ -551,4 +553,104 @@ func (a *AWSRunner) consoleLink(ctx context.Context, inst *Instance, region stri
 	}
 	dest := fmt.Sprintf("https://%[1]s.console.aws.amazon.com/ec2/home?region=%[1]s#Instances:tag:crucible:lab-id=%[2]s", region, inst.ID)
 	return awscloud.ConsoleURL(ctx, hc, cmp.Or(a.SigninEndpoint, awscloud.SigninEndpoint), creds, a.Issuer, dest)
+}
+
+// SleepLab puts a ready lab to sleep (spec 2026-11-05 §3, §4): the workspace's containers stop cleanly, its pod goes (the
+// volume keeps the disk), then the lab's machines hibernate where AWS can and stop otherwise. It returns "hibernated"
+// when every machine hibernated, "stopped" when any one stopped, and "" when the lab has no machines.
+func (a *AWSRunner) SleepLab(ctx context.Context, inst *Instance, lab *content.Lab) (string, error) {
+	if !validLabID(inst.ID) || lab.AWS == nil {
+		return "", errors.New("invalid aws lab")
+	}
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
+	if err != nil {
+		return "", fmt.Errorf("getting lab credentials: %w", err)
+	}
+	ns := labNamespace(inst.ID)
+	sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	_ = a.Cluster.run(sctx, ns, []string{"docker", "compose", "stop"}, nil, &ap.Capped{}) // best effort: a pod already gone has nothing to stop
+	cancel()
+	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil {
+		return "", fmt.Errorf("stopping the workspace: %w", err)
+	}
+	slept, err := a.cloud().Sleep(ctx, lab.AWS.Region, creds, inst.ID)
+	if err != nil {
+		return "", fmt.Errorf("putting the lab's machines to sleep: %w", err)
+	}
+	how := ""
+	for _, s := range slept {
+		if !s.Hibernated {
+			return "stopped", nil
+		}
+		how = "hibernated"
+	}
+	return how, nil
+}
+
+// WakeLab brings a sleeping lab back: its machines start, its credentials are renewed, and its workspace pod comes back
+// on the same volume, where Docker finds the trainee's container and starts it again (never a new one).
+func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.Lab) error {
+	if !validLabID(inst.ID) || lab.AWS == nil {
+		return errors.New("invalid aws lab")
+	}
+	release, err := a.acquire(ctx, inst.ID)
+	if err != nil {
+		return err
+	}
+	defer release()
+	creds, err := a.cloud().AssumeLab(ctx, labSession(inst))
+	if err != nil {
+		return fmt.Errorf("getting lab credentials: %w", err)
+	}
+	if err := a.putCreds(ctx, inst.ID, creds); err != nil {
+		return fmt.Errorf("mounting the lab's credentials: %w", err)
+	}
+	if err := a.cloud().Wake(ctx, lab.AWS.Region, creds, inst.ID); err != nil {
+		return fmt.Errorf("starting the lab's machines: %w", err)
+	}
+	ns := labNamespace(inst.ID)
+	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil { // the dead pod a stopped node left behind
+		return fmt.Errorf("starting the workspace: %w", err)
+	}
+	pod := awsWorkspace(clusterObjects(inst.ID, workspaceCompose, a.Cluster.Privileged)).Pod
+	if _, err := a.Cluster.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("starting the workspace: %w", err)
+	}
+	if err := a.Cluster.waitReady(ctx, ns); err != nil {
+		return err
+	}
+	up := &ap.Capped{}
+	if err := a.Cluster.run(ctx, ns, []string{"docker", "compose", "up", "-d", "--no-recreate", "--wait", "--quiet-pull"}, nil, up); err != nil {
+		return fmt.Errorf("docker compose up: %w: %s", err, tailOf(up.Bytes()))
+	}
+	return nil
+}
+
+// WorkspaceMiB is what the workspace's volume holds (Docker's storage and /lab), measured with du in its pod.
+func (a *AWSRunner) WorkspaceMiB(ctx context.Context, inst *Instance) (int64, error) {
+	if !validLabID(inst.ID) {
+		return 0, errors.New("invalid lab id")
+	}
+	out := &ap.Capped{}
+	if err := a.Cluster.run(ctx, labNamespace(inst.ID), []string{"du", "-sxm", "/var/lib/docker", "/lab"}, nil, out); err != nil {
+		return 0, fmt.Errorf("measuring the workspace: %w", err)
+	}
+	var total int64
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out.Bytes())), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		n, err := strconv.ParseInt(f[0], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("du said %q", line)
+		}
+		total += n
+	}
+	return total, nil
 }

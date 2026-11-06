@@ -21,7 +21,8 @@ import (
 func TestAWSWorkspaceObjects(t *testing.T) {
 	o := awsWorkspace(clusterObjects(testID, "crucible-workspace.yaml", false))
 	c := o.Pod.Spec.Containers[0]
-	m, v := c.VolumeMounts[len(c.VolumeMounts)-1], o.Pod.Spec.Volumes[len(o.Pod.Spec.Volumes)-1]
+	m := c.VolumeMounts[slices.IndexFunc(c.VolumeMounts, func(m corev1.VolumeMount) bool { return m.Name == "aws" })]
+	v := o.Pod.Spec.Volumes[slices.IndexFunc(o.Pod.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == "aws" })]
 	if m.MountPath != "/aws" || !m.ReadOnly || v.Secret == nil || v.Secret.SecretName != awsSecret {
 		t.Fatalf("the workspace mounts the credentials read-only at /aws: %+v %+v", m, v)
 	}
@@ -137,7 +138,7 @@ func TestProvisionCreatesAWSObjectsBeforeThePod(t *testing.T) {
 			order = append(order, a.GetResource().Resource)
 		}
 	}
-	if !slices.Equal(order, []string{"namespaces", "resourcequotas", "limitranges", "networkpolicies", "secrets", "pods"}) {
+	if !slices.Equal(order, []string{"namespaces", "resourcequotas", "limitranges", "networkpolicies", "secrets", "persistentvolumeclaims", "pods"}) {
 		t.Fatalf("the secret the pod mounts exists first, behind the policies: %v", order)
 	}
 	pod, _ := cs.CoreV1().Pods(labNamespace(testID)).Get(ctx, labPod, metav1.GetOptions{})

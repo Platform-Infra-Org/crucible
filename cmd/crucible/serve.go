@@ -281,6 +281,7 @@ func run(ctx context.Context) error {
 				awsRegions = append(awsRegions, r)
 			}
 		}
+		ar.Regions = awsRegions // a lab's sleep and wake reach every region its trainee may launch in
 		prices := &pricing.Store{DB: pool, Now: time.Now}
 		est, fetch, err := awsSetup(ctx, mode, ar, rates, os.Getenv, func(ctx context.Context, c awscloud.Config) (awscloud.Cloud, error) {
 			return awscloud.New(ctx, c)

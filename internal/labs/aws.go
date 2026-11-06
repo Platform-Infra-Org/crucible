@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type AWSRunner struct {
 	Cloud          awscloud.Cloud
 	StateBucket    string // deploy/aws/labs output state_bucket
 	StateRegion    string
+	Regions        []string           // every allowed lab region (CRUCIBLE_AWS_LAB_REGIONS): sleep and wake reach each one
 	Network        content.LabNetwork // labs-init --vpc-id --subnet-ids (CRUCIBLE_AWS_LAB_VPC_ID, …_SUBNET_IDS)
 	WorkspaceImage string
 	TerraformImage string
@@ -583,7 +585,7 @@ func (a *AWSRunner) SleepLab(ctx context.Context, inst *Instance, lab *content.L
 	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil {
 		return "", fmt.Errorf("stopping the workspace: %w", err)
 	}
-	slept, err := a.cloud().Sleep(ctx, lab.AWS.Region, creds, inst.ID)
+	slept, err := a.sleepMachines(ctx, a.labRegions(lab), creds, inst.ID)
 	if err != nil {
 		return "", fmt.Errorf("putting the lab's machines to sleep: %w", err)
 	}
@@ -615,14 +617,35 @@ func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.La
 	if err := a.putCreds(ctx, inst.ID, creds); err != nil {
 		return fmt.Errorf("mounting the lab's credentials: %w", err)
 	}
-	if err := a.cloud().Wake(ctx, lab.AWS.Region, creds, inst.ID); err != nil {
-		return fmt.Errorf("starting the lab's machines: %w", err)
+	regions, ns := a.labRegions(lab), labNamespace(inst.ID)
+	var errs []error
+	for _, r := range regions {
+		if err := a.cloud().Wake(ctx, r, creds, inst.ID); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r, err))
+		}
 	}
-	ns := labNamespace(inst.ID)
+	if err = errors.Join(errs...); err != nil {
+		err = fmt.Errorf("starting the lab's machines: %w", err)
+	} else {
+		err = a.wakeWorkspace(ctx, ns, inst.ID)
+	}
+	if err != nil { // asleep means stopped: whatever this wake started goes back to sleep, best effort
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		_ = a.Cluster.deletePod(bctx, ns, labPod)
+		if _, serr := a.sleepMachines(bctx, regions, creds, inst.ID); serr != nil {
+			err = fmt.Errorf("%w; and putting its machines back to sleep failed: %v", err, serr)
+		}
+	}
+	return err
+}
+
+// wakeWorkspace brings the workspace pod back on its volume and starts the trainee's own containers again.
+func (a *AWSRunner) wakeWorkspace(ctx context.Context, ns, id string) error {
 	if err := a.Cluster.deletePod(ctx, ns, labPod); err != nil { // the dead pod a stopped node left behind
 		return fmt.Errorf("starting the workspace: %w", err)
 	}
-	pod := awsWorkspace(clusterObjects(inst.ID, workspaceCompose, a.Cluster.Privileged)).Pod
+	pod := awsWorkspace(clusterObjects(id, workspaceCompose, a.Cluster.Privileged)).Pod
 	if _, err := a.Cluster.Client.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 		return fmt.Errorf("starting the workspace: %w", err)
 	}
@@ -634,6 +657,28 @@ func (a *AWSRunner) WakeLab(ctx context.Context, inst *Instance, lab *content.La
 		return fmt.Errorf("docker compose up: %w: %s", err, tailOf(up.Bytes()))
 	}
 	return nil
+}
+
+// labRegions is every region a lab's machines may be in: each allowed lab region, and the lab's own.
+func (a *AWSRunner) labRegions(lab *content.Lab) []string {
+	if slices.Contains(a.Regions, lab.AWS.Region) {
+		return a.Regions
+	}
+	return append(slices.Clone(a.Regions), lab.AWS.Region)
+}
+
+// sleepMachines puts the lab's machines to sleep in every region, trying each one whatever the others did.
+func (a *AWSRunner) sleepMachines(ctx context.Context, regions []string, creds awscloud.Credentials, id string) ([]awscloud.Slept, error) {
+	var all []awscloud.Slept
+	var errs []error
+	for _, r := range regions {
+		slept, err := a.cloud().Sleep(ctx, r, creds, id)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", r, err))
+		}
+		all = append(all, slept...)
+	}
+	return all, errors.Join(errs...)
 }
 
 // WorkspaceMiB is what the workspace's volume holds (Docker's storage and /lab), measured with du in its pod.

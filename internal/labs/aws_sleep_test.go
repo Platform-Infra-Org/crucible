@@ -2,6 +2,7 @@ package labs
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -9,7 +10,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/remotecommand"
 
 	"crucible/internal/awscloud"
@@ -111,5 +114,62 @@ func TestWorkspaceMiBAddsUpTheVolume(t *testing.T) {
 	}
 	if got := strings.Join(fe.last().cmd, " "); got != "du -sxm /var/lib/docker /lab" {
 		t.Fatalf("measured with du: %s", got)
+	}
+}
+
+// asleep means stopped (a money path): a wake that fails after the machines started puts them back to sleep.
+func TestAWakeThatFailsPutsTheMachinesBackToSleep(t *testing.T) {
+	ctx := context.Background()
+	ns := labNamespace(testID)
+	for name, broken := range map[string]func(*fake.Clientset){
+		"the pod is refused": func(cs *fake.Clientset) {
+			cs.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("quota exceeded")
+			})
+		},
+		"the pod fails": func(cs *fake.Clientset) {
+			onPodCreate(cs, func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed })
+		},
+	} {
+		cs := fake.NewClientset()
+		broken(cs)
+		a, cloud, _ := testAWS(cs)
+		cloud.AddInstance("eu-west-1", testID, "i-1", false)
+		c, _ := cloud.AssumeLab(ctx, awscloud.Session{LabID: testID})
+		if _, err := cloud.Sleep(ctx, "eu-west-1", c, testID); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.WakeLab(ctx, &Instance{ID: testID}, cloudHeat(t)); err == nil {
+			t.Fatalf("%s: the wake fails", name)
+		}
+		if got := cloud.InstanceState("i-1"); got != "stopped" {
+			t.Fatalf("%s: a lab left asleep keeps its machines stopped: %s", name, got)
+		}
+		if _, err := cs.CoreV1().Pods(ns).Get(ctx, labPod, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s: the half-made workspace pod goes: %v", name, err)
+		}
+	}
+}
+
+// A trainee may start a machine by hand in any allowed region: the lab's sleep and wake reach every one.
+func TestSleepAndWakeCoverEveryLabRegion(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewClientset()
+	kubelet(cs, corev1.PodSucceeded, "")
+	a, cloud, _ := testAWS(cs)
+	a.Regions = []string{"eu-west-1", "us-east-1"}
+	cloud.AddInstance("eu-west-1", testID, "i-1", false)
+	cloud.AddInstance("us-east-1", testID, "i-2", false)
+	if _, err := a.SleepLab(ctx, &Instance{ID: testID}, cloudHeat(t)); err != nil {
+		t.Fatal(err)
+	}
+	if cloud.InstanceState("i-1") != "stopped" || cloud.InstanceState("i-2") != "stopped" {
+		t.Fatalf("both sleep: %s %s", cloud.InstanceState("i-1"), cloud.InstanceState("i-2"))
+	}
+	if err := a.WakeLab(ctx, &Instance{ID: testID}, cloudHeat(t)); err != nil {
+		t.Fatal(err)
+	}
+	if cloud.InstanceState("i-1") != "running" || cloud.InstanceState("i-2") != "running" {
+		t.Fatalf("both wake: %s %s", cloud.InstanceState("i-1"), cloud.InstanceState("i-2"))
 	}
 }

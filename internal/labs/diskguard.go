@@ -64,23 +64,31 @@ func (s *Service) guardWorkspaces(ctx context.Context) {
 		}
 		s.measuredAt[inst.ID] = now
 		s.measureMu.Unlock()
-		mib, err := wm.WorkspaceMiB(ctx, inst)
-		if err != nil {
-			s.Log.Warn("measuring a workspace failed", "lab", inst.ID, "err", err)
-			continue
-		}
-		if mib <= workspaceLimitMiB {
-			continue
-		}
-		var warned bool
-		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'workspace_full_warning')`,
-			inst.ID).Scan(&warned); err != nil {
-			continue
-		}
-		if !warned {
-			s.event(ctx, inst.ID, "workspace_full_warning", "")
-			continue
-		}
-		s.destroy(ctx, inst, "workspace_full")
+		s.once("measure:"+inst.ID, func() { // a slow du never holds the sweep
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceEvery)
+			defer cancel()
+			s.measure(ctx, wm, inst)
+		})
 	}
+}
+
+func (s *Service) measure(ctx context.Context, wm workspaceMeter, inst *Instance) {
+	mib, err := wm.WorkspaceMiB(ctx, inst)
+	if err != nil {
+		s.Log.Warn("measuring a workspace failed", "lab", inst.ID, "err", err)
+		return
+	}
+	if mib <= workspaceLimitMiB {
+		return
+	}
+	var warned bool
+	if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'workspace_full_warning')`,
+		inst.ID).Scan(&warned); err != nil {
+		return
+	}
+	if !warned {
+		s.event(ctx, inst.ID, "workspace_full_warning", "")
+		return
+	}
+	s.destroy(ctx, inst, "workspace_full")
 }

@@ -33,9 +33,13 @@ type fakeAWSRunner struct {
 	wakeErr     error
 	wakeHold    chan struct{} // optional: WakeLab waits for it to close (machines slow to start)
 	mib         int64         // the workspace size WorkspaceMiB reports
+	mibHold     chan struct{} // optional: WorkspaceMiB waits for it to close (a slow du)
 }
 
 func (f *fakeAWSRunner) WorkspaceMiB(context.Context, *Instance) (int64, error) {
+	if f.mibHold != nil {
+		<-f.mibHold
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.mib, nil

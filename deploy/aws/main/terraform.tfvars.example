@@ -17,3 +17,4 @@ ghcr_pull_token    = "ghp_…"   # required: a classic GitHub PAT with read:pack
 # smtp_password    = "..."                                      # stored as a SecureString; never in plain parameters
 # instance_type    = "t3a.large"     # cheaper if you only use local labs
 # schedule_enabled = false           # run 24/7
+# labs_sleep_cron  = "0 19 * * 0-4"   # AWS labs go to sleep (5-field cron, schedule_timezone); default every day at 19:00, before backup_cron and the node's sleep

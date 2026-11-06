@@ -69,13 +69,13 @@ The server no longer ships through S3: CI publishes images and the chart to GHCR
 |---|---|
 | Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z` (a release or prerelease from GHCR; `up` takes the same flags), or `--build` (builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, plus `-dirty.<unix time>` when the tree has changes; needs your own `docker login ghcr.io` and `helm registry login ghcr.io` with a classic token that has `write:packages`: a different, broader token than the node's `read:packages` pull token). `--build` rebuilds only the server image and the chart: the workspace and toolbox images come from `workspace_image` / `toolbox_image` in `crucible.tfvars` if set, otherwise the chart's in-tree defaults (`amazon/aws-cli` without `lab-ssh`/`lab-console`, and no toolbox, so cluster labs are off). A binary built from source (`dev`, or `make build`'s `git describe` such as `1044e7f` or `v0.3.0-3-gabc1234`) with neither flag refuses. |
 | Take a snapshot now | `crucible aws snapshot` |
-| Stop paying for compute tonight | `crucible aws sleep` (snapshot, then stop) |
+| Stop paying for compute tonight | `crucible aws sleep` (puts AWS labs to sleep, snapshot, then stop; `--keep-labs` leaves the labs running) |
 | Start before the schedule | `crucible aws wake` |
 | Is it up? / which release? | `crucible aws status` (shows `release:`) |
 | Shell on the node | `aws ssm start-session --target <instance_id>` |
 | Invite / remove a person | [cognito.md](cognito.md) |
 
-The schedule wakes the node at 07:30 and sleeps it at 19:30 (Mon-Fri, `schedule_timezone`). The backup runs at 19:15.
+The schedule wakes the node at 07:30 and sleeps it at 19:30 (Mon-Fri, `schedule_timezone`). The backup runs at 19:15. AWS labs go to sleep first, at `labs_sleep_cron` (default 19:00, every day); to follow the node's days, set it with `backup_cron`'s days in `crucible.tfvars`, e.g. `labs_sleep_cron = "0 19 * * 0-4"`. Keep it before the backup and the node's sleep (see [Labs overnight](#labs-overnight)).
 
 `t3a` instances run in *unlimited* CPU-credit mode by default: sustained CPU above the baseline (40% for `t3a.xlarge`) is billed as surplus credits (about $0.05 per vCPU-hour). Busy labs can add to the bill; check the instance's `CPUSurplusCreditsCharged` metric.
 
@@ -84,7 +84,11 @@ The schedule wakes the node at 07:30 and sleeps it at 19:30 (Mon-Fri, `schedule_
 **Skipping the safety snapshot.** `sleep`, `teardown` and `up` take a snapshot first and refuse to continue if it fails. If the node is broken and cannot snapshot, add `--no-snapshot`. It prints a loud warning: **everything since the last backup is lost** if the disk goes away.
 
 ## Disaster / full teardown
-- `crucible aws teardown --yes`: takes a snapshot, then destroys the main stack. The buckets and Cognito pool survive.
+- `crucible aws teardown --yes`: ends every AWS lab first (`crucible labs stop-all --wait`: the kill switch, set by actor `crucible aws teardown`, then it waits until every lab has ended), takes a snapshot, then destroys the main stack. The buckets and Cognito pool survive.
+  - It refuses a stopped node: run `crucible aws wake` first, because the labs can only be ended through a running server.
+  - If the stop-all fails, the kill switch stays on: run teardown again. `--keep-labs` skips the labs (they are then orphaned on the lab account, and keep billing).
+  - It lists leftovers tagged `crucible:lab-id` in the lab account and does not delete them; delete them by hand, or let the reaper find them.
+  - A teardown never overrides an admin's own kill switch: the server clears only a switch whose `changed_by` is `crucible aws teardown`.
 - `crucible aws up`: rebuilds the node. The restore init container loads the newest snapshot into the empty database. Config and content come back from git.
 - **Re-point DNS**: the Elastic IP changes after a teardown, so update the A record to the IP `up` prints (automatic with `route53_zone_id`).
 - Dated snapshots under `snapshots/` expire after 30 days, but **the last snapshot is always kept**: every backup also writes `latest/crucible-latest.dump`, which never expires. After a long teardown, the restore falls back to it.
@@ -167,6 +171,25 @@ Verify after `up` (over SSM, as root). Nothing here is covered by `terraform tes
 - **No certificate.** Check that DNS points at the Elastic IP and port 80 is reachable. Then run `sudo k3s kubectl -n kube-system logs deploy/traefik`. If the Traefik chart bundled with your k3s version rejects `ports.web.redirections`, use `ports.web.redirectTo: {port: websecure}` in `/var/lib/rancher/k3s/server/manifests/traefik-config.yaml`.
 - **Bootstrap failed.** `deploy` reports "node bootstrap failed" when `/opt/crucible/.failed` exists. Read `sudo tail -f /var/log/crucible-bootstrap.log` over SSM; `.ready` appears only after the first deploy attempt. After fixing the cause, clear the marker with `sudo rm /opt/crucible/.failed` and run `crucible aws deploy` again.
 - **App logs.** `sudo k3s kubectl -n crucible logs deploy/crucible -c api` (and `-c restore`).
+
+## Labs overnight
+
+AWS labs sleep with the platform, so a trainee's lab does not run (and bill) all night while the node is stopped.
+
+- **Bedtime.** At `labs_sleep_cron` the chart's CronJob runs `crucible labs bedtime` (on the node, every `crucible labs` call is `KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n crucible exec deploy/crucible -c api -- crucible labs <args>`). Bedtime closes the forge to new starts, approvals and wakes (*The forge is banking for the night: labs start again in the morning.*), waits up to 10 minutes for labs that are starting (and for labs being destroyed), then puts every ready lab to sleep. Each lab's workspace pod goes; its files stay on a 20 GiB workspace volume. The lab's machines are **hibernated** when they were launched with hibernation enabled, and otherwise **stopped** (a stopped machine restarts from its disk; anything it held in memory is gone). A machine that will not stop in 5 minutes is force-stopped.
+- **Wake it.** The trainee opens the lab and presses **Wake it**: Crucible starts the machines (up to 10 minutes), re-creates the workspace pod on the same volume, and the lab is back with its files. A `waking` lab older than 20 minutes goes back to asleep (*Waking took too long; press Wake it again.*). Wake is refused during bedtime, and after the lab's deadline (*Time ran out on this lab while it slept.*).
+- **The time limit runs while a lab sleeps.** The lab's time limit is wall-clock time and keeps running while it sleeps (the idle timeout does not). The meter prices compute only for the intervals the lab was awake; disks and addresses stay metered. A lab whose deadline passes while asleep is destroyed by the usual sweep.
+- **Morning.** `Morning()` runs when the server starts: it ends a bedtime and a teardown's kill switch (not an admin's own). A real node restart each morning therefore reopens the platform. **A pod restart in the middle of a bedtime reopens the platform too**, mid-bedtime: labs that had not yet slept stay running, and the next night's bedtime catches them. Check `crucible aws status` after restarting the api in the evening.
+- **See it.** `crucible aws status` prints the bedtime and the AWS labs by state (it runs `crucible labs status`). To end a bedtime without restarting the server: `crucible labs bedtime --cancel`.
+- **`crucible aws sleep`** puts AWS labs to sleep first (a bedtime, waited for), then snapshots and stops the node. If it aborts after a successful bedtime it cancels the bedtime again. It refuses when the node's state cannot be read, unless `--keep-labs` is given; `--keep-labs` skips the labs and stops the node under them (they keep billing and are lost to the stopped server until `wake`).
+- **Disks.** `disk_gb` defaults to **100**. Two guards protect the node: a lab whose workspace volume exceeds 20 GiB (measured every 5 minutes) is warned (*Your workspace holds more than 20 GiB...*) and then put out (end reason `workspace_full`); and starts are refused while the node has less than 15 GiB free (*The forge's disk is nearly full: try again later, or ask an admin.*). Resizing a running node's disk is not covered here.
+
+**Verify on the account (by hand; nothing in `make` touches AWS).**
+1. A hibernation-enabled lab machine resumes with its shell: start a lab whose instance sets `hibernation = true` on an encrypted root volume, open a shell on it and leave a process running, run `crucible labs bedtime --wait 10m`, press **Wake it**, and the process and shell are where they were.
+2. A GRUB-broken machine stops and wakes still broken: break the machine's GRUB (the serial console lab), sleep and wake the lab; the machine comes back at the same GRUB prompt, not repaired or lost.
+3. What `StopInstances --hibernate` does to a machine at a GRUB prompt: write down whether AWS refuses, stops, or hangs until the 5-minute force-stop ends it.
+4. An encrypted lab disk launches under the boundary: a `run-instances` with an encrypted root volume (the account's KMS key) succeeds with the lab role, and without the key it is denied.
+5. A workspace volume works under sysbox with user namespaces (`hostUsers: false`) on the real node: write a file in the workspace, delete the workspace pod (`k3s kubectl -n lab-<id> delete pod workspace`) so it is re-created on the same volume, and the file is still there and writable by the lab user.
 
 ## AWS labs (runtime: terraform, cloud: aws)
 

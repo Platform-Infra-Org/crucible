@@ -52,7 +52,8 @@ $compose down -v >/dev/null 2>&1 || true
 $compose up -d --build --wait
 
 echo "== end-to-end"
+api=$($compose ps -q api) # the container the e2e runs `crucible labs` in
 (cd e2e && npm install --no-audit --no-fund && npx playwright install chromium \
-  && CRUCIBLE_AGENT="$root/bin/crucible" npx playwright test --project="$project")
+  && CRUCIBLE_AGENT="$root/bin/crucible" CRUCIBLE_E2E_API="$api" npx playwright test --project="$project")
 
 echo "🔥 Local check passed. The forge holds."

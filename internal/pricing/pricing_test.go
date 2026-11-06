@@ -343,3 +343,29 @@ func TestUnknownEBSBlockDevicesFailClosed(t *testing.T) {
 		t.Fatalf("ebs_block_device unknown until apply must fail closed: %+v %v", b, err)
 	}
 }
+
+type stoppedPrices map[string]float64
+
+func (m stoppedPrices) Price(_, _, key string) (float64, bool) { v, ok := m[key]; return v, ok }
+
+func TestAnInstanceAsleepCostsOnlyItsDisks(t *testing.T) {
+	prices := stoppedPrices{"ec2:t3.nano": 0.0052, "ebs:gp3": 0.088, "ipv4:hour": 0.005, "nat:hour": 0.048}
+	inst := Resource{Address: "aws_instance.web", Type: "aws_instance", Values: map[string]any{"instance_type": "t3.nano",
+		"associate_public_ip_address": true, "root_block_device": []any{map[string]any{"volume_size": 8.0, "volume_type": "gp3"}}}}
+	nat := Resource{Address: "aws_nat_gateway.gw", Type: "aws_nat_gateway", Values: map[string]any{"connectivity_type": "private"}}
+	b, err := PriceAWS([]Resource{inst, nat}, "eu-west-1", nil, nil, prices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk := 8 * 0.088 / HoursPerMonth
+	if l := b.Lines[0]; math.Abs(l.StoppedHourlyUSD-disk) > 1e-12 || l.HourlyUSD <= disk+0.0052 {
+		t.Fatalf("an instance asleep pays for its disks; its compute and IPv4 stop: %+v", l)
+	}
+	if l := b.Lines[1]; l.StoppedHourlyUSD != l.HourlyUSD {
+		t.Fatalf("anything else costs as much asleep: %+v", l)
+	}
+	d, err := PriceAWS([]Resource{inst}, "eu-west-1", map[string]float64{"aws_instance": 1}, nil, prices)
+	if err != nil || d.Lines[0].Note != "declared" || d.Lines[0].StoppedHourlyUSD != 1 {
+		t.Fatalf("a declared price stands for the whole machine, asleep too: %+v %v", d.Lines, err)
+	}
+}

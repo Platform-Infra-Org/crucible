@@ -51,6 +51,19 @@ type TrailEvent struct {
 	Resources []string
 }
 
+// Slept is how one lab machine went to sleep: hibernated (its RAM kept on its encrypted root) or stopped.
+type Slept struct {
+	InstanceID string
+	Hibernated bool
+}
+
+// StopWait is how long Sleep waits for machines to stop before forcing them: a guest stuck at GRUB or in an emergency
+// shell may never answer the shutdown. StartWait bounds Wake. Vars for tests.
+var (
+	StopWait  = 5 * time.Minute
+	StartWait = 10 * time.Minute
+)
+
 var ErrUnsupported = errors.New("Crucible cannot delete this resource type; delete it by hand")
 
 // ErrNotYet is a delete AWS refuses for now (a volume still attached, a security group still in use, an instance
@@ -70,6 +83,11 @@ type Cloud interface {
 	// Delete removes one resource with lab credentials. deleted is false when it was already gone;
 	// ErrUnsupported for types Crucible does not delete; ErrNotYet while something still holds it.
 	Delete(ctx context.Context, region string, c Credentials, arn string) (deleted bool, err error)
+	// Sleep, with lab credentials, hibernates every running or pending machine tagged with labID in region (a plain stop
+	// where AWS refuses hibernation) and waits until they are stopped, forcing any still stopping after StopWait.
+	Sleep(ctx context.Context, region string, c Credentials, labID string) ([]Slept, error)
+	// Wake starts every stopped machine tagged with labID in region and waits until they run.
+	Wake(ctx context.Context, region string, c Credentials, labID string) error
 	// Costs is daily cost per lab for [from, to); untagged spend is left out.
 	Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error)
 	// LabWrites lists successful create calls by lab sessions since `since` whose request had no lab tag.

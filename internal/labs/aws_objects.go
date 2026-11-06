@@ -1,6 +1,7 @@
 package labs
 
 import (
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -21,10 +22,12 @@ const (
 
 	estimatesNS    = "crucible-estimates" // where estimates' plan pods run
 	estimatesLabel = "estimates"          // its crucible.io/lab value: never a lab id, so never taken for a lab
+	workspacePVC   = "workspace"          // the aws workspace's one volume
 	planDeadline   = 10 * time.Minute     // a plan pod's; its credentials last 15
 )
 
 var (
+	workspaceDisk  = resource.MustParse("20Gi")
 	runnerRequests = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m"), corev1.ResourceMemory: resource.MustParse("256Mi")}
 	// the aws provider plugin alone unpacks to ~0.6 GiB
 	runnerLimits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi"),
@@ -38,8 +41,24 @@ func awsWorkspace(o labObjects) labObjects {
 	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: "aws", MountPath: "/aws", ReadOnly: true})
 	o.Pod.Spec.Volumes = append(o.Pod.Spec.Volumes, corev1.Volume{Name: "aws",
 		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: awsSecret}}})
+	// The workspace's disk outlives its pod (spec 2026-11-05 §4): Docker's storage and /lab on one volume, so a lab that
+	// slept comes back with the trainee's container, files and pulled images. Deleted with the namespace.
+	o.PVC = &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: workspacePVC, Namespace: o.Namespace.Name,
+		Labels: map[string]string{labLabel: o.Namespace.Labels[labLabel]}},
+		Spec: corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: workspaceDisk}}}}
+	for i := range c.VolumeMounts {
+		if n := c.VolumeMounts[i].Name; n == "docker" || n == "lab" {
+			c.VolumeMounts[i].Name, c.VolumeMounts[i].SubPath = workspacePVC, n
+		}
+	}
+	o.Pod.Spec.Volumes = slices.DeleteFunc(o.Pod.Spec.Volumes, func(v corev1.Volume) bool { return v.Name == "docker" || v.Name == "lab" })
+	o.Pod.Spec.Volumes = append(o.Pod.Spec.Volumes, corev1.Volume{Name: workspacePVC, VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: workspacePVC}}})
 	h := o.Quota.Spec.Hard
 	h[corev1.ResourcePods] = resource.MustParse("2")
+	h[corev1.ResourcePersistentVolumeClaims] = resource.MustParse("1")
+	h[corev1.ResourceRequestsStorage] = workspaceDisk
 	add := func(k corev1.ResourceName, v resource.Quantity) {
 		q := h[k].DeepCopy()
 		q.Add(v)

@@ -122,3 +122,35 @@ func TestFakeStateFollowsApplyAndDestroy(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFakeSleepStopsOnlyTheLabsOwnMachines(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+	f.AddInstance("eu-west-1", "aaaaaaaaaaaa", "i-a", true)
+	f.AddInstance("eu-west-1", "bbbbbbbbbbbb", "i-b", false)
+	c, _ := f.AssumeLab(ctx, Session{LabID: "aaaaaaaaaaaa"})
+	got, err := f.Sleep(ctx, "eu-west-1", c, "aaaaaaaaaaaa")
+	if err != nil || !slices.Equal(got, []Slept{{"i-a", true}}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if f.InstanceState("i-a") != "stopped" || f.InstanceState("i-b") != "running" {
+		t.Fatal("only the lab's own machine sleeps")
+	}
+	if _, err := f.Sleep(ctx, "eu-west-1", c, "bbbbbbbbbbbb"); err == nil {
+		t.Fatal("one lab's session can't stop another lab's machines")
+	}
+	if err := f.Wake(ctx, "eu-west-1", c, "aaaaaaaaaaaa"); err != nil || f.InstanceState("i-a") != "running" {
+		t.Fatalf("wake: %v %s", err, f.InstanceState("i-a"))
+	}
+}
+
+func TestFakeSleepAndWakeRefuseAnInvalidLabID(t *testing.T) {
+	f := &Fake{}
+	c := Credentials{SessionToken: token("../x")}
+	if _, err := f.Sleep(context.Background(), "eu-west-1", c, "../x"); err == nil {
+		t.Fatal("sleep")
+	}
+	if err := f.Wake(context.Background(), "eu-west-1", c, "../x"); err == nil {
+		t.Fatal("wake")
+	}
+}

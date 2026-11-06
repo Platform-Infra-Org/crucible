@@ -75,6 +75,10 @@ for want in 'name: CRUCIBLE_AWS_LABS, value: "1"' 'name: CRUCIBLE_AWS_LAB_ROLE_A
   'name: CRUCIBLE_AWS_EXPORT_PREFIX, value: "cur"' 'name: CRUCIBLE_AWS_EXPORT_NAME, value: "crucible-labs"'; do
   grep -q -- "$want" <<<"$awsout" || { echo "missing with aws labs: $want"; exit 1; }
 done
+awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)
+grep -q 'resources: \[persistentvolumeclaims\]' <<<"$awsrbac" || { echo "aws labs: the workspace volume may be created"; exit 1; }
+grep -q 'operations: \[CREATE\], resources: \[persistentvolumeclaims\]' <<<"$awsrbac" || { echo "aws labs: admission confines the workspace volume to lab namespaces"; exit 1; }
+if grep -q persistentvolumeclaims <<<"$rbac"; then echo "without aws labs, no volumes"; exit 1; fi
 grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: ""' <<<"$awsout" || { echo "aws labs: an unset lab network is empty"; exit 1; }
 net=$(helm template t "$chart" $aws --set awsLabs.vpcId=vpc-0abc --set awsLabs.subnetIds=subnet-01\\,subnet-02)
 grep -q 'name: CRUCIBLE_AWS_LAB_VPC_ID, value: "vpc-0abc"' <<<"$net" || { echo "missing: lab VPC env"; exit 1; }

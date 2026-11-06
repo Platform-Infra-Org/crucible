@@ -236,3 +236,121 @@ func TestStopAllListsWhatATeardownWaitsFor(t *testing.T) {
 }
 
 func containsMsg(err error, s string) bool { return err != nil && strings.Contains(err.Error(), s) }
+
+func TestBedtimeWaitsForALabBeingDestroyed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	run, _ := f.withAWS(t)
+	run.hold = make(chan struct{})
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	if _, err := f.s.End(ctx, f.u, id); err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, id, Destroying)
+	f.bedtime(t)
+	f.s.Sweep(ctx)
+	f.clk.Add(11 * time.Minute)
+	f.s.Sweep(ctx)
+	if awake, _ := AwakeAWSLabs(ctx, f.s.DB); len(awake) != 1 || f.phase(t) == "asleep" {
+		t.Fatalf("a destroy in flight is waited for: %v %q", awake, f.phase(t))
+	}
+	close(run.hold)
+	f.waitState(t, f.u, id, Destroyed)
+	f.s.Sweep(ctx)
+	if p := f.phase(t); p != "asleep" {
+		t.Fatalf("asleep once the destroy finished: %q", p)
+	}
+}
+
+func TestStopAllLeavesAnAdminsSwitchTheirs(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	if _, err := f.s.SetKillSwitch(ctx, f.admin, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := StopAll(ctx, f.s.DB, TeardownActor, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.Morning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ks, _ := f.s.KillSwitch(ctx)
+	if !ks.Enabled || ks.ChangedBy == TeardownActor {
+		t.Fatalf("the admin's switch stays on and theirs: %+v", ks)
+	}
+}
+
+func TestRequestBedtimeRestartsAStaleOneButKeepsTonights(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.bedtime(t)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE platform_bedtime SET phase = 'asleep'`); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Add(time.Hour)
+	f.bedtime(t)
+	if p := f.phase(t); p != "asleep" {
+		t.Fatalf("the same night keeps its bedtime: %q", p)
+	}
+	f.clk.Add(24 * time.Hour)
+	f.bedtime(t)
+	b, _ := ReadBedtime(ctx, f.s.DB)
+	if b.Phase != "settling" || !b.RequestedAt.Equal(f.clk.Now()) {
+		t.Fatalf("a bedtime from an earlier night starts over: %+v", b)
+	}
+}
+
+func TestAFailedSleepIsRetriedEveryFiveMinutes(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	run, _ := f.withAWS(t)
+	run.sleepErr = errors.New("boom")
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	f.bedtime(t)
+	count := func() int { run.mu.Lock(); defer run.mu.Unlock(); return len(run.slept) }
+	waitCount := func(n int) {
+		for i := 0; i < 200 && count() < n; i++ {
+			time.Sleep(25 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond) // let the failure be recorded
+		if count() != n {
+			t.Fatalf("want %d attempts, got %d", n, count())
+		}
+	}
+	f.s.Sweep(ctx)
+	waitCount(1)
+	f.clk.Add(15 * time.Second)
+	f.s.Sweep(ctx)
+	waitCount(1)
+	f.clk.Add(5 * time.Minute)
+	f.s.Sweep(ctx)
+	waitCount(2)
+}
+
+func TestWakeRefusedWhilePausedAndAWakeInFlightIsNotLeftWaking(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.withAWS(t)
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	f.asleep(t, id)
+	pause := func(on bool) { // straight to the row: the switch's own kill-all would end the lab
+		if _, err := f.s.DB.Exec(ctx, `UPDATE kill_switch SET enabled = $1`, on); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pause(true)
+	if _, err := f.s.Wake(ctx, f.u, id); !errors.Is(err, apperr.Conflict) || !containsMsg(err, "Labs are paused by an admin.") {
+		t.Fatalf("%v", err)
+	}
+	pause(false)
+	f.s.inflight.Store("wake:"+id, true) // a previous wake goroutine still holds the slot
+	if _, err := f.s.Wake(ctx, f.u, id); !errors.Is(err, apperr.Conflict) {
+		t.Fatalf("%v", err)
+	}
+	if got, _ := f.s.Get(ctx, f.u, id); got.State != Asleep {
+		t.Fatalf("not left waking: %s", got.State)
+	}
+}

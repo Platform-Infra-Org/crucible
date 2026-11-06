@@ -29,9 +29,11 @@ type Bedtime struct {
 	By, Phase   string // settling | sleeping | asleep
 }
 
-// RequestBedtime starts the platform's bedtime (a no-op while one is under way); the server's sweep carries it out.
+// RequestBedtime starts the platform's bedtime (a no-op within the same night; a row left from an earlier night starts over); the server's sweep carries it out.
 func RequestBedtime(ctx context.Context, db *pgxpool.Pool, by string, now time.Time) error {
-	_, err := db.Exec(ctx, `INSERT INTO platform_bedtime (requested_at, requested_by) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, now, by)
+	_, err := db.Exec(ctx, `INSERT INTO platform_bedtime (requested_at, requested_by) VALUES ($1, $2)
+		ON CONFLICT (id) DO UPDATE SET requested_at = EXCLUDED.requested_at, requested_by = EXCLUDED.requested_by, phase = 'settling'
+		WHERE platform_bedtime.requested_at < EXCLUDED.requested_at - interval '12 hours'`, now, by)
 	return err
 }
 
@@ -64,10 +66,10 @@ func labList(ctx context.Context, db *pgxpool.Pool, sql, format string) ([]strin
 	return out, err
 }
 
-// AwakeAWSLabs is every aws lab that would still run its machines overnight: starting, ready or waking.
+// AwakeAWSLabs is every aws lab that would still run its machines overnight: starting, ready, waking or being destroyed.
 func AwakeAWSLabs(ctx context.Context, db *pgxpool.Pool) ([]string, error) {
 	return labList(ctx, db, `SELECT id, runtime, state FROM lab_instances WHERE runtime = 'aws'
-		AND state IN ('provisioning', 'ready', 'waking') ORDER BY id`, "%[1]s (%[3]s)")
+		AND state IN ('provisioning', 'ready', 'waking', 'destroying') ORDER BY id`, "%[1]s (%[3]s)")
 }
 
 // ActiveLabs is every lab not yet ended: what a teardown waits for.
@@ -83,11 +85,14 @@ func StopAll(ctx context.Context, db *pgxpool.Pool, by string, now time.Time) er
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, `UPDATE kill_switch SET enabled = true, changed_by = $1, changed_at = $2`, by, now); err != nil {
+	tag, err := tx.Exec(ctx, `UPDATE kill_switch SET enabled = true, changed_by = $1, changed_at = $2 WHERE NOT enabled`, by, now)
+	if err != nil {
 		return err
 	}
-	if err := audit.Log(ctx, tx, by, "kill_switch.on", "", map[string]any{"why": "teardown"}, ""); err != nil {
-		return err
+	if tag.RowsAffected() == 1 { // an admin's switch already on stays theirs
+		if err := audit.Log(ctx, tx, by, "kill_switch.on", "", map[string]any{"why": "teardown"}, ""); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -142,7 +147,7 @@ func (s *Service) bedtimeStep(ctx context.Context) {
 	now := s.Now()
 	if b.Phase == "settling" {
 		var starting int
-		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_instances WHERE runtime = 'aws' AND state = 'provisioning'`).Scan(&starting); err != nil {
+		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM lab_instances WHERE runtime = 'aws' AND state IN ('provisioning', 'destroying')`).Scan(&starting); err != nil {
 			s.Log.Error("bedtime: counting starting labs failed", "err", err)
 			return
 		}
@@ -178,6 +183,11 @@ func (s *Service) bedtimeStep(ctx context.Context) {
 		return
 	}
 	for _, inst := range ready {
+		var failedRecently bool // a failed sleep is retried every 5 minutes, not every sweep
+		if err := s.DB.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_events WHERE lab_id = $1 AND kind = 'sleep_failed' AND at > $2)`,
+			inst.ID, now.Add(-5*time.Minute)).Scan(&failedRecently); err != nil || failedRecently {
+			continue
+		}
 		s.once("sleep:"+inst.ID, func() { s.sleepLab(context.WithoutCancel(ctx), inst) }) // its own slot: a destroy keeps the lab id's
 	}
 	if awake, err := AwakeAWSLabs(ctx, s.DB); err == nil && len(awake) == 0 {
@@ -203,7 +213,8 @@ func (s *Service) sleepLab(ctx context.Context, inst *Instance) {
 	defer wcancel()
 	if err != nil {
 		s.Log.Error("bedtime: a lab did not go to sleep", "lab", inst.ID, "err", err)
-		s.event(wctx, inst.ID, "sleep_failed", cleanText(err.Error()))
+		_, _ = s.DB.Exec(wctx, `INSERT INTO lab_events (lab_id, kind, detail, at) VALUES ($1, 'sleep_failed', $2, $3)`,
+			inst.ID, cleanText(err.Error()), s.Now())
 		return
 	}
 	now := s.Now()
@@ -232,6 +243,11 @@ func (s *Service) Wake(ctx context.Context, u *auth.User, labID string) (*View, 
 	} else if b != nil {
 		return nil, apperr.Wrap(apperr.Conflict, bankingMsg)
 	}
+	if ks, err := s.KillSwitch(ctx); err != nil {
+		return nil, err
+	} else if ks.Enabled {
+		return nil, apperr.Wrap(apperr.Conflict, "Labs are paused by an admin.")
+	}
 	if inst.EndsAt != nil && !inst.EndsAt.After(s.Now()) {
 		return nil, apperr.Wrap(apperr.Conflict, "Time ran out on this lab while it slept.")
 	}
@@ -253,7 +269,10 @@ func (s *Service) Wake(ctx context.Context, u *auth.User, labID string) (*View, 
 	}
 	s.event(ctx, inst.ID, "waking", "")
 	// its own slot: a destroy (End during the wake) takes the lab id's and waits for the runner's per-lab lock
-	s.once("wake:"+inst.ID, func() { s.wakeLab(context.WithoutCancel(ctx), inst, lab, sl) })
+	if !s.once("wake:"+inst.ID, func() { s.wakeLab(context.WithoutCancel(ctx), inst, lab, sl) }) {
+		s.endRow(ctx, inst.ID, `UPDATE lab_instances SET state = 'asleep', waking_since = NULL WHERE id = $1 AND state = 'waking'`)
+		return nil, apperr.Wrap(apperr.Conflict, "the lab is changing state; try again")
+	}
 	return s.Get(ctx, u, labID)
 }
 

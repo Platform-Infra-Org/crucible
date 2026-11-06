@@ -668,16 +668,26 @@ func labsOnNode(args string) string {
 }
 
 // SleepNode puts the AWS labs to sleep, snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
-func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) error {
+func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err error) {
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
 		return err
 	}
+	closed, stopped := false, false
+	defer func() { // the node stays up, so the platform must reopen to labs
+		if closed && !stopped {
+			if cerr := o.ssm(ctx, m, labsOnNode("bedtime --cancel")); cerr != nil {
+				err = fmt.Errorf("%w; and cancelling the bedtime failed too: %v (run `crucible aws connect`, then `crucible labs bedtime --cancel` on the node)", err, cerr)
+			}
+		}
+	}()
 	if keepLabs {
 		fmt.Fprintln(o.Log, "WARNING: --keep-labs: AWS labs are left as they are; they keep running and billing while the node sleeps")
-	} else if st, err := o.state(ctx, m); err == nil && st == "running" {
+	} else if st, serr := o.state(ctx, m); serr != nil {
+		return fmt.Errorf("not stopping: %w (use --keep-labs to skip the labs)", serr)
+	} else if st == "running" {
+		closed = true
 		if _, err := o.ssmOut(ctx, m, labsOnNode("bedtime --wait 20m")); err != nil {
-			_ = o.ssm(ctx, m, labsOnNode("bedtime --cancel")) // the node stays up, so the platform must stay open
 			return fmt.Errorf("the labs did not all go to sleep, so the node keeps running (the bedtime was cancelled; "+
 				"`crucible aws sleep --keep-labs` stops it anyway): %w", err)
 		}
@@ -699,6 +709,7 @@ func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) error {
 	if err := o.Exec(ctx, o.Root, "aws", "ec2", "stop-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
 		return err
 	}
+	stopped = true
 	fmt.Fprintln(o.Log, "the forge is banked for the night 🌙")
 	return o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-stopped", "--region", m["region"], "--instance-ids", m["instance_id"])
 }
@@ -911,7 +922,7 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keep
 			return fmt.Errorf("the node is %s, so it can't end its labs: wake it first (crucible aws wake), or pass --keep-labs", st)
 		}
 		if _, err := o.ssmOut(ctx, m, labsOnNode("stop-all --wait 30m")); err != nil {
-			return fmt.Errorf("the labs did not all end, so nothing was torn down (`--keep-labs` tears down anyway): %w", err)
+			return fmt.Errorf("the labs did not all end, so nothing was torn down. The kill switch stays on, so labs stay paused; run `crucible aws teardown --yes` again to continue (`--keep-labs` tears down anyway): %w", err)
 		}
 		fmt.Fprintln(o.Log, "every lab has ended; the rebuilt server reopens labs when it starts")
 	}

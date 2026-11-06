@@ -1530,3 +1530,57 @@ func TestTeardownListsWhatIsStillTagged(t *testing.T) {
 		t.Fatalf("every lab region is checked, leftovers named: %s", r.log.String())
 	}
 }
+
+func TestSleepReopensTheLabsWhenTheSnapshotFails(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "snapshot.sh") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false); err == nil {
+		t.Fatal("a failed snapshot stops the sleep")
+	}
+	if indexOf(r.calls, "bedtime --cancel") < 0 || indexOf(r.calls, "stop-instances") >= 0 {
+		t.Fatalf("the node stays up, so the bedtime is cancelled: %v", r.calls)
+	}
+}
+
+func TestSleepWontSkipTheBedtimeOnAnUnknownState(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "describe-instances") {
+			return errors.New("throttled")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).SleepNode(context.Background(), true, false)
+	if err == nil || !strings.Contains(err.Error(), "--keep-labs") || indexOf(r.calls, "stop-instances") >= 0 {
+		t.Fatalf("%v %v", err, r.calls)
+	}
+}
+
+func TestSleepSaysWhenCancellingTheBedtimeFailsToo(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "bedtime") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false)
+	if err == nil || !strings.Contains(err.Error(), "cancelling the bedtime failed too") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestTeardownFailedStopAllSaysLabsStayPaused(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "stop-all") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
+	if err == nil || !strings.Contains(err.Error(), "kill switch") || !strings.Contains(err.Error(), "crucible aws teardown --yes") {
+		t.Fatalf("%v", err)
+	}
+}

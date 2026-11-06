@@ -34,8 +34,8 @@ const usage = `usage:
   crucible aws snapshot | wake | status
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws invite EMAIL [--name "Full Name"]
-  crucible aws sleep [--no-snapshot]
-  crucible aws teardown [--var-file FILE] --yes [--no-snapshot]
+  crucible aws sleep [--no-snapshot] [--keep-labs]
+  crucible aws teardown [--var-file FILE] --yes [--no-snapshot] [--keep-labs]
   crucible local up [--keycloak-port PORT] [--no-build]
   crucible local down [--wipe]
   crucible local status
@@ -115,6 +115,7 @@ func awsCmd(args []string) int {
 	varFile := fs.String("var-file", "", "terraform variables file (default <repo root>/deploy/aws/main/crucible.tfvars)")
 	crucibleAccount := fs.String("crucible-account", "", "labs-init: account id that runs Crucible, when labs live in another account")
 	yes := fs.Bool("yes", false, "confirm teardown")
+	keepLabs := fs.Bool("keep-labs", false, "sleep/teardown: leave AWS labs as they are (they keep running and billing)")
 	noSnapshot := fs.Bool("no-snapshot", false, "up/sleep/teardown: skip the safety snapshot (may lose data)")
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
@@ -187,13 +188,13 @@ func awsCmd(args []string) int {
 	case "snapshot":
 		err = ops.Snapshot(ctx)
 	case "sleep":
-		err = ops.SleepNode(ctx, *noSnapshot)
+		err = ops.SleepNode(ctx, *noSnapshot, *keepLabs)
 	case "wake":
 		err = ops.Wake(ctx)
 	case "status":
 		err = ops.Status(ctx)
 	case "teardown":
-		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot)
+		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot, *keepLabs)
 	case "connect":
 		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
 	case "invite":

@@ -11,7 +11,7 @@ export function ConnectPage() {
     <section className="page">
       <h1>Connect your laptop</h1>
       <p>
-        Laptop labs run in Docker on your own machine through <code>crucible-agent</code>, and cluster labs on a Kubernetes cluster of your kubeconfig. You need Docker with the compose plugin (macOS, Linux, or Windows with WSL2).
+        Laptop labs run in Docker on your own machine through <code>crucible agent</code> (a subcommand of <code>crucible</code>), and cluster labs on a Kubernetes cluster of your kubeconfig. You need Docker with the compose plugin (macOS, Linux, or Windows with WSL2).
       </p>
       <p className={status?.online ? 'pass' : 'muted'} role="status">
         {status?.online ? '● Agent connected. Your forge is lit.' : '○ No agent connected yet.'}
@@ -19,10 +19,10 @@ export function ConnectPage() {
       <p className="muted">
         Cluster labs run on a cluster from your kubeconfig. {status?.contexts?.length
           ? <>Your agent sees: {status.contexts.map((c) => c.name).join(', ')}.</>
-          : <>No cluster? Run <code>crucible-agent cluster up</code> to make one on this laptop (needs Docker), or point the agent at your kubeconfig with <code>--kubeconfig</code>.</>}
+          : <>No cluster? Run <code>crucible agent cluster up</code> to make one on this laptop (needs Docker), or point the agent at your kubeconfig with <code>--kubeconfig</code>.</>}
       </p>
       <ol>
-        <li>Get <code>crucible-agent</code> for your platform from your admin (or build it with <code>make build</code>).</li>
+        <li>Get <code>crucible</code> for your platform from your admin (or build it with <code>make build</code>).</li>
         <li>Generate a pairing token. A new token revokes the previous one. Run one agent per account: starting it on another laptop stops this one.</li>
         <li>Run the command below and leave it running while you do labs.</li>
       </ol>

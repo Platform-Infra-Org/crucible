@@ -38,7 +38,7 @@ export function ForgeStatusPage() {
       </section>
       <section className="panel">
       <h2>Needs attention</h2>
-      {p.pending_edits > 0 && <p><Link to="/edits">{p.pending_edits} content edit{p.pending_edits === 1 ? '' : 's'} waiting for review</Link></p>}
+      {p.pending_edits > 0 && <p><Link className="action" to="/edits">{p.pending_edits} content edit{p.pending_edits === 1 ? '' : 's'} waiting for review</Link></p>}
       {p.attention.length === 0 ? <p className="pass">No failed or stuck labs.</p> : (
         <div className="table-wrap"><table className="grid">
           <thead><tr><th>Lab</th><th>Trainee</th><th>Program</th><th>State</th><th>Since</th><th>Error</th></tr></thead>

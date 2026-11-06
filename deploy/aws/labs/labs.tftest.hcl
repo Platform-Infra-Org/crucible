@@ -9,7 +9,10 @@ mock_provider "aws" {
     defaults = { arn = "arn:aws:iam::444455556666:role/crucible-lab" }
   }
   mock_data "aws_subnet" {
-    defaults = { vpc_id = "vpc-0abc" }
+    defaults = { vpc_id = "vpc-0abc", cidr_block = "10.2.129.0/24" }
+  }
+  mock_resource "aws_iam_instance_profile" {
+    defaults = { arn = "arn:aws:iam::444455556666:instance-profile/crucible-lab-instance" }
   }
 }
 
@@ -58,8 +61,8 @@ run "lab_role_is_bounded_tagged_and_short_lived" {
     error_message = "only small instance types"
   }
   assert {
-    condition     = !anytrue([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : anytrue([for a in flatten([lookup(s, "Action", [])]) : startswith(a, "iam:")])])
-    error_message = "no IAM for lab roles"
+    condition     = toset(flatten([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : [for a in flatten([lookup(s, "Action", [])]) : a if startswith(a, "iam:")] if s.Effect == "Allow"])) == toset(["iam:PassRole"])
+    error_message = "the only IAM a lab has is passing the lab instance role"
   }
   assert {
     condition     = toset(jsondecode(aws_iam_role_policy.ops.policy).Statement[0].Action) == toset(["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"])
@@ -358,4 +361,97 @@ run "lab_subnets_must_be_in_the_vpc" {
     lab_subnet_ids = ["subnet-01"]
   }
   expect_failures = [data.aws_subnet.lab]
+}
+
+run "lab_instances_get_a_minimal_ssm_role" {
+  command = apply
+
+  assert {
+    condition     = aws_iam_instance_profile.lab_instance.name == "crucible-lab-instance" && output.lab_instance_profile == "crucible-lab-instance"
+    error_message = "one shared instance profile, named for the stack"
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.lab_instance.assume_role_policy).Statement[0].Principal.Service == "ec2.amazonaws.com"
+    error_message = "only EC2 assumes the lab instance role"
+  }
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : anytrue([for a in flatten([s.Action]) : lower(a) == "*" || (endswith(a, "*") && startswith("ssm:getparameter", trimsuffix(lower(a), "*"))) || startswith(lower(a), "ssm:getparameter")]) if s.Effect == "Allow"])
+    error_message = "lab instances must never read SSM parameters (Crucible's secrets live there)"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Effect == "Deny" && one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Action == "ssm:GetParameter*" && toset(one([for s in jsondecode(aws_iam_role_policy.lab_instance.policy).Statement : s if s.Sid == "NeverCrucibleParameters"]).Resource) == toset(["arn:aws:ssm:*:*:parameter/crucible", "arn:aws:ssm:*:*:parameter/crucible/*"])
+    error_message = "an explicit deny on /<name>/* parameters"
+  }
+  assert {
+    condition     = !strcontains(file("${path.module}/main.tf"), "AmazonSSMManagedInstanceCore")
+    error_message = "no managed SSM policy (AmazonSSMManagedInstanceCore grants ssm:GetParameter)"
+  }
+  assert {
+    condition     = !strcontains(file("${path.module}/main.tf"), "aws_ec2_serial_console_access")
+    error_message = "the account's serial console setting is not Crucible's to manage (destroy would turn it off for everyone)"
+  }
+}
+
+run "lab_subnet_cidrs_reach_the_outputs" {
+  command = apply
+  variables {
+    lab_vpc_id     = "vpc-0abc"
+    lab_subnet_ids = ["subnet-0a", "subnet-0b"]
+  }
+  assert {
+    condition     = length(split(",", output.lab_subnet_cidrs)) == 2
+    error_message = "one CIDR per lab subnet, comma-joined"
+  }
+}
+
+run "no_lab_subnet_cidrs_by_default" {
+  command = plan
+  assert {
+    condition     = output.lab_subnet_cidrs == ""
+    error_message = "no lab network, no CIDRs"
+  }
+}
+
+run "lab_sessions_keys_and_consoles_stay_on_own_instances" {
+  command = apply
+
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "PassLabInstanceRole"]).Resource == aws_iam_role.lab_instance.arn && one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "PassLabInstanceRole"]).Condition.StringEquals["iam:PassedToService"] == "ec2.amazonaws.com"
+    error_message = "PassRole: the lab instance role only, to EC2 only"
+  }
+  assert {
+    condition     = alltrue([for sid in ["SessionsToOwn", "KeysToOwn", "ConsoleOfOwn", "CommandsToOwn"] : one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == sid]).Condition.StringEquals[sid == "KeysToOwn" || sid == "ConsoleOfOwn" ? "aws:ResourceTag/crucible:lab-id" : "ssm:resourceTag/crucible:lab-id"] == "$${aws:PrincipalTag/crucible:lab-id}"])
+    error_message = "every new instance action carries the session's lab id"
+  }
+  assert {
+    condition     = toset([for r in one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "SessionDocuments"]).Resource : r]) == toset(["arn:aws:ssm:*::document/AWS-StartSSHSession", "arn:aws:ssm:*::document/AWS-StartPortForwardingSession", "arn:aws:ssm:*:*:document/SSM-SessionManagerRunShell"])
+    error_message = "sessions only with the shell, ssh and local port-forward documents"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).Effect == "Deny" && contains(one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).NotResource, "arn:aws:ssm:*::document/AWS-StartSSHSession") && !contains(one([for s in jsondecode(aws_iam_policy.boundary.policy).Statement : s if s.Sid == "OnlyLabSessionDocuments"]).NotResource, "arn:aws:ssm:*::document/AWS-StartPortForwardingSessionToRemoteHost")
+    error_message = "the boundary denies every other session document, ToRemoteHost included"
+  }
+  assert {
+    condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "OwnSessionsOnly"]).Resource) == toset(["arn:aws:ssm:*:*:session/$${aws:userid}-*"])
+    error_message = "terminate and resume only your own sessions"
+  }
+  assert {
+    condition     = !anytrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : anytrue([for a in flatten([s.Action]) : lower(a) == "*" || lower(a) == "ssm:*" || lower(a) == "ssm:list*" || lower(a) == "ssm:listcommands" || lower(a) == "ssm:listcommandinvocations"]) if s.Effect == "Allow" && lookup(s, "Action", null) != null])
+    error_message = "ListCommandInvocations and ListCommands cannot be scoped to instances: they would list other labs' and Crucible's Run Command output"
+  }
+  assert {
+    condition     = alltrue([for s in concat(jsondecode(aws_iam_role_policy.lab.policy).Statement, jsondecode(aws_iam_policy.boundary.policy).Statement) : alltrue([for r in flatten([s.Resource]) : r == aws_iam_role.lab_instance.arn]) if s.Effect == "Allow" && lookup(s, "Action", null) != null && anytrue([for a in flatten([s.Action]) : lower(a) == "iam:passrole"])])
+    error_message = "every Allow of iam:PassRole names the lab instance role and nothing else"
+  }
+  assert {
+    condition = alltrue([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : (
+      alltrue([for r in flatten([s.Resource]) : startswith(r, "arn:aws:ssm:") && strcontains(r, ":document/")]) ||
+      (!contains(flatten([s.Resource]), "*") && strcontains(jsonencode(lookup(s, "Condition", {})), "crucible:lab-id") && strcontains(jsonencode(lookup(s, "Condition", {})), "PrincipalTag/crucible:lab-id"))
+    ) if s.Effect == "Allow" && anytrue([for a in flatten([s.Action]) : contains(["ssm:StartSession", "ssm:SendCommand", "ec2-instance-connect:SendSSHPublicKey", "ec2-instance-connect:SendSerialConsoleSSHPublicKey", "ec2:GetConsoleScreenshot", "ec2:GetConsoleOutput"], a)])])
+    error_message = "session, command, key and console actions are on documents or on instances carrying the lab-id condition, never on *"
+  }
+  assert {
+    condition     = toset(one([for s in jsondecode(aws_iam_role_policy.lab.policy).Statement : s if s.Sid == "CommandDocuments"]).Resource) == toset(["arn:aws:ssm:*::document/AWS-RunShellScript", "arn:aws:ssm:*::document/AWS-RunPowerShellScript"])
+    error_message = "Run Command only with the two AWS-owned documents"
+  }
 }

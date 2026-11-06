@@ -24,6 +24,7 @@ import (
 
 	"crucible/internal/agenthub"
 	"crucible/internal/apperr"
+	"crucible/internal/audit"
 	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/blob"
@@ -515,7 +516,9 @@ func (s *Service) ModuleLab(ctx context.Context, u *auth.User, team, training, m
 	}
 	if r := s.Runners[m.Lab.Runtime]; r == nil {
 		out.RuntimeReady, out.RuntimeMessage = false, fmt.Sprintf("%s labs are not available yet", m.Lab.Runtime)
-	} else if err := r.Available(&Instance{UserID: u.ID}); err != nil {
+	} else if err := r.Available(&Instance{UserID: u.ID}); errors.Is(err, errAgentOffline) {
+		out.RuntimeReady, out.RuntimeMessage = false, "Your laptop agent is not connected." // the page adds the Connect link
+	} else if err != nil {
 		out.RuntimeReady, out.RuntimeMessage = false, strings.TrimSuffix(err.Error(), ": "+apperr.Unavailable.Error())
 	}
 	if q, err := s.quote(ctx, st.Platform, u, team, training, module, m.Lab); err != nil {
@@ -1693,15 +1696,15 @@ func (s *Service) ReconcileAgent(ctx context.Context, userID int64, liveIDs []st
 // selfReported: results come from the trainee's machine (laptop labs, and cluster labs through the agent).
 func selfReported(runtime string) bool { return runtime == "local" || runtime == "cluster" }
 
-// scriptBody is what a script step runs: a ready: check runs crucible-ready in the toolbox, anything else its file.
+// scriptBody is what a script step runs: a ready: check runs crucible ready in the toolbox, anything else its file.
 func scriptBody(lab *content.Lab, sc *content.Script) ([]byte, error) {
 	if len(sc.Ready) > 0 {
-		return []byte("exec crucible-ready " + strings.Join(sc.Ready, " ") + "\n"), nil
+		return []byte("exec crucible ready " + strings.Join(sc.Ready, " ") + "\n"), nil
 	}
 	return os.ReadFile(filepath.Join(lab.Dir, sc.Script))
 }
 
-// parseHealth reads crucible-ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
+// parseHealth reads crucible ready's JSON; the output may carry stderr lines too, so it takes the last line that parses.
 func parseHealth(out string) (ready.Report, bool) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -1715,13 +1718,13 @@ func parseHealth(out string) (ready.Report, bool) {
 	return rep.Lists(), err == nil
 }
 
-// recordHealth runs crucible-ready over every release and keeps the report as the lab's latest health event.
+// recordHealth runs crucible ready over every release and keeps the report as the lab's latest health event.
 func (s *Service) recordHealth(ctx context.Context, inst *Instance) {
 	r, err := s.runner(inst.Runtime)
 	if err != nil {
 		return
 	}
-	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible-ready --json all\n"), Timeout: 30 * time.Second})
+	res, err := r.RunScript(ctx, inst, ScriptSpec{Service: content.ToolboxService, Script: []byte("crucible ready --json all\n"), Timeout: 30 * time.Second})
 	if err != nil {
 		return
 	}
@@ -1744,4 +1747,32 @@ func (s *Service) health(ctx context.Context, labID string) *ready.Report {
 	}
 	rep = rep.Lists()
 	return &rep
+}
+
+type ConsoleLink struct {
+	URL string `json:"url"`
+}
+
+// Console gives the lab's own trainee an AWS console sign-in link for their running AWS lab (spec 2026-11-04 §4.2).
+func (s *Service) Console(ctx context.Context, u *auth.User, labID string) (*ConsoleLink, error) {
+	inst, err := s.owned(ctx, u, labID)
+	if err != nil {
+		return nil, err
+	}
+	ar, ok := s.Runners["aws"].(*AWSRunner)
+	if !ok || inst.Runtime != "aws" || inst.State != Ready {
+		return nil, apperr.Wrap(apperr.Conflict, "only a running AWS lab has an AWS console")
+	}
+	lab, _, err := s.labContent(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	link, err := ar.ConsoleURL(ctx, inst, lab.AWS.Region)
+	if err != nil {
+		return nil, err
+	}
+	if err := audit.Log(ctx, s.DB, u.Email, "lab.console", inst.ID, map[string]any{"team": inst.Team, "training": inst.Training}, ""); err != nil {
+		return nil, err
+	}
+	return &ConsoleLink{URL: link}, nil
 }

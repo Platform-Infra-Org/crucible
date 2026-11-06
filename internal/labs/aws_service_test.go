@@ -2,15 +2,20 @@ package labs
 
 import (
 	"context"
+	"crucible/internal/apperr"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/content"
 )
@@ -419,5 +424,103 @@ func TestStuckDestroyOfAFailedProvisionEndsFailed(t *testing.T) {
 	}
 	if st != Failed || errText != "apply: quota exceeded" {
 		t.Fatalf("state %s, error %q", st, errText)
+	}
+}
+
+func TestConsoleLinkForARunningAWSLab(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	_, cloud := f.withAWS(t)
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-401", "01-cloud-heat", StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+
+	var gotSession string
+	fed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSession = r.URL.Query().Get("Session")
+		_, _ = w.Write([]byte(`{"SigninToken":"tok123"}`))
+	}))
+	defer fed.Close()
+	// the real runner takes over the "aws" runtime once the lab is ready; its federation endpoint is the test server
+	f.s.Runners["aws"] = &AWSRunner{Cloud: cloud, SigninEndpoint: fed.URL, HTTP: fed.Client(), Issuer: "https://crucible.example.com", Now: f.clk.Now}
+
+	if _, err := f.s.Console(ctx, f.other, v.ID); !errors.Is(err, apperr.NotFound) {
+		t.Fatalf("someone else's lab: %v", err)
+	}
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.u)))
+		})
+	})
+	f.s.Routes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("POST", "/api/labs/"+v.ID+"/console", strings.NewReader("{}")))
+	var out ConsoleLink
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil || !strings.HasPrefix(out.URL, fed.URL) || !strings.Contains(out.URL, "SigninToken=") {
+		t.Fatalf("console: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(gotSession, "ASIAFAKE") || !strings.Contains(gotSession, "fake-token-"+v.ID) {
+		t.Fatalf("the federation endpoint got the lab's session: %q", gotSession)
+	}
+	var detail string
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*), coalesce(max(detail::text), '') FROM audit_log WHERE action = 'lab.console' AND target = $1`, v.ID).Scan(&n, &detail)
+	if n != 1 || strings.Contains(detail, "tok123") || strings.Contains(detail, "SigninToken") {
+		t.Fatalf("audit: %d %s", n, detail)
+	}
+	if _, err := f.s.Console(ctx, f.u, v.ID); err == nil || !strings.Contains(err.Error(), "one console link a minute") {
+		t.Fatalf("a second link within a minute: %v", err)
+	}
+	f.clk.Add(2 * time.Minute)
+	if _, err := f.s.Console(ctx, f.u, v.ID); err != nil {
+		t.Fatalf("a minute later: %v", err)
+	}
+	// a lab that is not running AWS has no console
+	in := f.start(t)
+	if _, err := f.s.Console(ctx, f.u, in.ID); err == nil || !strings.Contains(err.Error(), "only a running AWS lab") {
+		t.Fatalf("local lab: %v", err)
+	}
+}
+
+func TestConsoleNeedsAReadyLabAndRefusesDryRun(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	fake, cloud := f.withAWS(t)
+	fed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("federation endpoint must not be called") }))
+	defer fed.Close()
+	v, err := f.s.Start(ctx, f.u, "forge", "forge-401", "01-cloud-heat", StartOptions{})
+	if err != nil || v.State != PendingApproval {
+		t.Fatalf("%+v %v", v, err)
+	}
+	f.s.Runners["aws"] = &AWSRunner{Cloud: cloud, SigninEndpoint: fed.URL, HTTP: fed.Client(), Now: f.clk.Now}
+	if _, err := f.s.Console(ctx, f.u, v.ID); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "only a running AWS lab") {
+		t.Fatalf("a lab waiting for approval has no console: %v", err)
+	}
+	f.s.Runners["aws"] = fake // provisioning goes through the fake runner
+	if _, err := f.s.Decide(ctx, f.leader, v.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.waitState(t, f.u, v.ID, Ready)
+	f.s.Runners["aws"] = &AWSRunner{DryRun: &awscloud.Fake{Now: f.clk.Now}, SigninEndpoint: fed.URL, HTTP: fed.Client(), Now: f.clk.Now}
+	if _, err := f.s.Console(ctx, f.u, v.ID); !errors.Is(err, apperr.Unavailable) {
+		t.Fatalf("dry run has no console: %v", err)
+	}
+	// a failed attempt does not use up the minute: a real runner works straight away
+	f.s.Runners["aws"] = &AWSRunner{Cloud: &awscloud.Fake{Now: f.clk.Now, Err: errors.New("sts down")}, SigninEndpoint: fed.URL, HTTP: fed.Client(), Now: f.clk.Now}
+	if _, err := f.s.Console(ctx, f.u, v.ID); err == nil {
+		t.Fatal("expected the sts failure")
+	}
+	ar := f.s.Runners["aws"].(*AWSRunner)
+	ar.mu.Lock()
+	n := len(ar.consoleAt)
+	ar.mu.Unlock()
+	if n != 0 {
+		t.Fatal("a failed attempt must not consume the minute")
 	}
 }

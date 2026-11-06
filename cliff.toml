@@ -1,0 +1,38 @@
+# git-cliff: conventional commits -> each GitHub Release's notes and the next version.
+[changelog]
+header = "# Changelog\n"
+body = """
+{% if version %}## {{ version }} - {{ timestamp | date(format="%Y-%m-%d") }}{% else %}## Unreleased{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | upper_first }}{% if commit.breaking %} (breaking){% endif %}
+{% endfor %}{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "v[0-9]*"
+# Prerelease tags (release-manual, v1.2.3-branch.4) are not releases: their commits belong to the next release.
+ignore_tags = "^v[0-9]+\\.[0-9]+\\.[0-9]+-"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build", group = "Build" },
+  { message = "^ci", group = "CI" },
+  { message = "^chore", group = "Chores" },
+]
+
+[bump]
+# Before 1.0.0 a breaking change bumps the minor, and a feature does too.
+features_always_bump_minor = true
+breaking_always_bump_major = false
+# No tag yet: the first release is v0.1.0 (it must match tag_pattern).
+initial_tag = "v0.1.0"

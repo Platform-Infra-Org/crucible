@@ -11,6 +11,9 @@ trainings:
   forge-401:
     repo: file:///git/forge-401.git   # aws lab e2e fixture (dry run on kind); the e2e makes the trainee a participant through the UI
     ref: main
+  forge-402:
+    repo: file:///git/forge-402.git   # OS-level aws labs (dry run on kind: priced, not booted); the e2e makes the trainee a participant
+    ref: main
   forge-102:
     repo: file:///git/forge-102.git   # fixture for the M7 e2e (ranks, badges, journey, content edits); participants added through the UI
     ref: main

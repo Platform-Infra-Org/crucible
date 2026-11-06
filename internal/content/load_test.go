@@ -543,7 +543,7 @@ AWS`, "AWS", aws, 1)
 	}
 }
 
-// The lint runs inside crucible-api on every git sync: an author's push must not crash it (stack overflow on deep
+// The lint runs inside crucible serve on every git sync: an author's push must not crash it (stack overflow on deep
 // nesting) or burn minutes of CPU (evaluating expressions). Each input must fail fast with a problem.
 func TestAWSLabModuleRejectsHostileInputFast(t *testing.T) {
 	nest := func(open, close string, n int) string { return strings.Repeat(open, n) + strings.Repeat(close, n) }
@@ -613,7 +613,7 @@ func TestForge401IsAnAWSLab(t *testing.T) {
 
 func TestLabTFVarsIsJSON(t *testing.T) {
 	var v map[string]any
-	if err := json.Unmarshal(LabTFVars("abcdefabcdef", `te"am`, "tr", "eu-west-1", LabNetwork{}), &v); err != nil || v["crucible_team"] != `te"am` || v["crucible_region"] != "eu-west-1" {
+	if err := json.Unmarshal(LabTFVars("abcdefabcdef", `te"am`, "tr", "eu-west-1", LabNetwork{}, false), &v); err != nil || v["crucible_team"] != `te"am` || v["crucible_region"] != "eu-west-1" {
 		t.Fatalf("tfvars must be JSON so no value escapes its string: %v %v", v, err)
 	}
 	for _, want := range []string{`backend "s3" {}`, `provider "aws"`, `"crucible:lab-id"   = var.crucible_lab_id`,
@@ -635,15 +635,15 @@ func TestLabTFVarsCarryTheLabNetworkInItsRegion(t *testing.T) {
 		}
 		return v
 	}
-	in := decode(LabTFVars("abcdefabcdef", "t", "tr", "il-central-1", net))
+	in := decode(LabTFVars("abcdefabcdef", "t", "tr", "il-central-1", net, false))
 	if in["crucible_vpc_id"] != "vpc-1" || fmt.Sprint(in["crucible_subnet_ids"]) != "[subnet-a subnet-b]" {
 		t.Fatalf("same region: %v", in)
 	}
-	other := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", net))
+	other := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", net, false))
 	if other["crucible_vpc_id"] != "" || fmt.Sprint(other["crucible_subnet_ids"]) != "[]" {
 		t.Fatalf("another region must get no network: %v", other)
 	}
-	none := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", LabNetwork{}))
+	none := decode(LabTFVars("abcdefabcdef", "t", "tr", "eu-west-1", LabNetwork{}, false))
 	if none["crucible_subnet_ids"] == nil || fmt.Sprint(none["crucible_subnet_ids"]) != "[]" || none["crucible_vpc_id"] != "" {
 		t.Fatalf("an unset network is \"\" and [], never null: %v", none)
 	}

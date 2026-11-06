@@ -53,6 +53,6 @@ $compose up -d --build --wait
 
 echo "== end-to-end"
 (cd e2e && npm install --no-audit --no-fund && npx playwright install chromium \
-  && CRUCIBLE_AGENT="$root/bin/crucible-agent" npx playwright test --project="$project")
+  && CRUCIBLE_AGENT="$root/bin/crucible" npx playwright test --project="$project")
 
 echo "🔥 Local check passed. The forge holds."

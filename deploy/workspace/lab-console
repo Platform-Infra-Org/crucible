@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# lab-console <instance-id>: the instance's serial console (GRUB menu, boot messages, a login or emergency shell,
+# Windows SAC), even when it doesn't boot. Leave with Enter, then ~. (ssh's escape).
+set -euo pipefail
+usage() { echo "usage: lab-console <instance-id>" >&2; exit 2; }
+id=${1:-}
+[[ $id =~ ^i-[0-9a-f]{8,17}$ ]] || usage
+region=${AWS_REGION:?AWS_REGION is not set}
+# AWS's table: the endpoint's name differs by region, and each has a published host key fingerprint.
+read -r host want < <(awk -v r="$region" '$1 == r {print $2, $3}' "${CRUCIBLE_SERIAL_ENDPOINTS:-/etc/crucible/serial-console-endpoints}") || true
+if [ -z "${host:-}" ] || [ -z "${want:-}" ]; then echo "no EC2 Serial Console endpoint with a pinned fingerprint known for $region" >&2; exit 1; fi
+dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+# Record the endpoint's host key with a handshake that can't log in (no key pushed yet; ssh-keyscan gets no answer
+# from these endpoints), then refuse it unless it is AWS's published key.
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" \
+  -o ConnectTimeout=10 "$id.port0@$host" true >/dev/null 2>&1 || true
+got=$(ssh-keygen -lf "$dir/known_hosts" 2>/dev/null | awk '{print $2}')
+if [ -z "$got" ] || [ "$got" != "$want" ]; then echo "serial console host key ${got:-none} is not AWS's published $want for $region" >&2; exit 1; fi
+ssh-keygen -q -t ed25519 -N '' -f "$dir/key"
+aws ec2-instance-connect send-serial-console-ssh-public-key --instance-id "$id" --serial-port 0 \
+  --ssh-public-key "file://$dir/key.pub" >/dev/null
+echo "Connected to $id's serial console. Press Enter if the screen is blank; leave with Enter then ~." >&2
+ssh -i "$dir/key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$dir/known_hosts" "$id.port0@$host"

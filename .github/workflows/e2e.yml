@@ -1,0 +1,62 @@
+# Browser end-to-end suites, run by hand (Actions tab -> e2e -> Run workflow).
+# They are heavy (Docker, Keycloak, kind), so they never run on push or PR.
+name: e2e
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+      # System libraries for Chromium; the suites then find the browser installed.
+      - name: Playwright browser
+        run: cd e2e && npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+      - run: KEYCLOAK_PORT=8082 make local-check
+
+  # After local, so the two never share the runner's Docker.
+  cluster:
+    needs: local
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+      # System libraries for Chromium; the suites then find the browser installed.
+      - name: Playwright browser
+        run: cd e2e && npm install --no-audit --no-fund && npx playwright install --with-deps chromium
+      - run: KEYCLOAK_PORT=8082 make cluster-check

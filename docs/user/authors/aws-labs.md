@@ -61,6 +61,48 @@ The Terraform goes in `terraform/` inside the lab folder. Crucible adds the prov
   instance types, gp2 or gp3 volumes up to a size limit, and lab buckets named `crucible-lab-<lab id>…`. Every
   instance needs the lab's own security group.
 
+## Labs on the machine itself
+
+Some labs are about an instance's operating system: a broken boot, a service, a firewall. A trainee reaches the machine
+three ways, and you set up the lab for them in Terraform.
+
+- **A shell over SSM.** Crucible gives every lab `var.crucible_instance_profile` (empty on an older labs stack). Attach
+  it, and use an AMI that ships the SSM agent (Amazon Linux, recent Ubuntu and Windows Server AMIs do):
+
+  ```hcl
+  resource "aws_instance" "box" {
+    iam_instance_profile = var.crucible_instance_profile != "" ? var.crucible_instance_profile : null
+  }
+  ```
+
+  The trainee runs `aws ssm start-session --target <instance id>` from the workspace.
+- **Plain SSH, only when you ask.** Set `aws.direct_ssh: true` and open port 22 to `var.crucible_ssh_source_cidr`:
+
+  ```hcl
+  resource "aws_vpc_security_group_ingress_rule" "ssh" {
+    count             = var.crucible_ssh_source_cidr != "" ? 1 : 0
+    security_group_id = aws_security_group.box.id
+    ip_protocol       = "tcp"
+    from_port         = 22
+    to_port           = 22
+    cidr_ipv4         = var.crucible_ssh_source_cidr
+  }
+  ```
+
+  (The same works as an inline `ingress { from_port = 22, to_port = 22, cidr_blocks = [var.crucible_ssh_source_cidr] }`.)
+  `aws.direct_ssh` lets the workspace reach TCP 22 on machines in the lab subnets, but never the Crucible node itself. It needs the install's lab network (`crucible aws labs-init --vpc-id --subnet-ids`) in the lab's region; without it the lab refuses to start. The lab's security group must allow TCP 22 from `var.crucible_ssh_source_cidr`, the Crucible node's address, because the workspace's traffic leaves from it. Without `direct_ssh` the variable is empty.
+- **The console.** For a machine that won't boot or has no network, the trainee uses `aws ec2 get-console-screenshot`
+  and the serial console. `lab-ssh` and `lab-console` come with the workspace image each release pins
+  (an operator can override it with `workspace_image`).
+
+For the serial console to be useful, set the machine up for it. On Linux, put `GRUB_TERMINAL="serial console"`,
+`GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"` and `GRUB_TIMEOUT=10` in `/etc/default/grub` and run
+`update-grub`. On Windows, enable the Special Administration Console: `bcdedit /ems {current} on` and
+`bcdedit /emssettings EMSPORT:1 EMSBAUDRATE:115200`.
+
+Never put a password in user data or state: the trainee's credentials can read both. To check the machine from your
+side, use `aws ssm send-command` and `aws ssm get-command-invocation`.
+
 ## How a lab is priced
 
 Crucible prices labs itself from AWS's public list prices (on-demand, Linux, shared tenancy), refreshed every week.

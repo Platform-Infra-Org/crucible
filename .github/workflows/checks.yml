@@ -1,0 +1,119 @@
+# Fast checks on every push and PR. Releasing lives in the release-* workflows;
+# the browser end-to-end suites are manual (e2e.yml).
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  # A PR's new push cancels its old run; runs on main all finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: deps-${{ runner.os }}-${{ hashFiles('go.sum', 'web/package-lock.json') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: .local/tools
+          key: tools-${{ runner.os }}-${{ hashFiles('scripts/tools.sh') }}
+
+      # The repo brings its own pinned Go and Terraform (the runner's are not the pins).
+      - name: Install pinned tools
+        run: |
+          make tools
+          echo "$PWD/.local/tools/go/bin" >> "$GITHUB_PATH"
+          echo "$PWD/.local/tools" >> "$GITHUB_PATH"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.18.4
+
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal scripts)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go vet (cluster tag)
+        run: go vet -tags cluster ./internal/labs
+
+      - name: go test
+        env:
+          # The packages' test binaries share one ryuk reaper; when its handshake drops, ryuk removes the shared Postgres
+          # mid-run (connection refused everywhere after). The runner is thrown away, so nothing needs reaping.
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: go test -race ./...
+
+      # Mock providers only: no AWS is called.
+      - name: Terraform tests
+        run: |
+          for s in persistent main labs; do
+            (cd "deploy/aws/$s" && terraform init -backend=false -input=false >/dev/null && terraform test)
+          done
+
+      - name: Helm chart
+        run: bash deploy/helm/test.sh
+
+      - name: Workspace image scripts
+        run: bash deploy/workspace/test.sh
+
+      - name: Toolbox shim
+        run: bash deploy/toolbox/test.sh
+
+      # The Go stages only (no push, no full image): catches a COPY the build needs and lacks.
+      - name: Image build stages
+        run: |
+          docker build --target go -f Dockerfile .
+          docker build --target ready -f deploy/toolbox/Dockerfile .
+
+      - name: Content lint
+        run: |
+          make build
+          for r in examples/platform examples/forge-*; do ./bin/crucible lint "$r"; done
+
+      - name: Web
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+          npx tsc -b
+          npm run lint
+          npm run build
+
+  # Conventional-commit gate: with squash-merge the PR *title* is the commit
+  # git-cliff parses, so it must be a valid conventional-commit subject.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

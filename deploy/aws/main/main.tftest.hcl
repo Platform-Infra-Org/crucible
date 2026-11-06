@@ -43,6 +43,7 @@ variables {
   oidc_issuer          = "https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"
   oidc_client_id       = "client123"
   cognito_user_pool_id = "eu-west-1_abc"
+  ghcr_pull_token      = "ghp_test"
 }
 
 run "node_is_locked_down" {
@@ -179,7 +180,7 @@ run "aws_labs_off_by_default" {
     error_message = "deploy.sh passes the helm values from SSM"
   }
   assert {
-    condition     = toset(keys(aws_ssm_parameter.secret)) == toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+    condition     = toset(keys(aws_ssm_parameter.secret)) == toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "ghcr_pull_token"])
     error_message = "Crucible prices aws labs itself from the free AWS Price List: no pricing API key among the secrets"
   }
 }
@@ -199,7 +200,7 @@ run "aws_labs_wiring" {
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "", instanceProfile = "", subnetCidrs = "" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {
@@ -248,12 +249,12 @@ run "secret_key_reaches_the_api_when_init_made_it" {
   }
 }
 
-run "cluster_labs_off_without_a_toolbox_image" {
+run "no_toolbox_image_keeps_the_release_pin" {
   command = plan
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).toolboxImage == ""
-    error_message = "no toolbox image by default: cluster labs stay off"
+    condition     = !contains(keys(yamldecode(aws_ssm_parameter.helm_values.value)), "toolboxImage")
+    error_message = "an empty toolbox_image leaves the release's pinned toolbox (chart values): it must not override it with \"\""
   }
 }
 
@@ -282,6 +283,22 @@ run "toolbox_image_rejects_a_short_digest" {
     toolbox_image = "ghcr.io/example/crucible-toolbox@sha256:0123"
   }
   expect_failures = [var.toolbox_image]
+}
+
+run "name_is_an_output" {
+  command = plan
+  assert {
+    condition     = output.name == "crucible"
+    error_message = "the name output carries var.name (the release pointer's SSM path)"
+  }
+}
+
+run "ghcr_pull_token_rejects_a_quote" {
+  command = plan
+  variables {
+    ghcr_pull_token = "ghp_te'st"
+  }
+  expect_failures = [var.ghcr_pull_token]
 }
 
 run "smtp_off_by_default_keeps_hand_added_keys" {
@@ -466,4 +483,96 @@ run "lab_network_reaches_helm" {
     condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.vpcId == "vpc-0abc" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.subnetIds == "subnet-01,subnet-02"
     error_message = "the lab network reaches the Helm values"
   }
+}
+
+run "os_lab_inputs_reach_helm" {
+  command = plan
+  variables {
+    lab_role_arn         = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn     = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket     = "crucible-444455556666-labstate"
+    lab_state_region     = "il-central-1"
+    lab_plan_role_arn    = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket    = "crucible-444455556666-exports"
+    lab_export_name      = "crucible-labs"
+    lab_instance_profile = "crucible-lab-instance"
+    lab_subnet_cidrs     = "10.2.129.0/24"
+    workspace_image      = "ghcr.io/platform-infra-org/crucible-workspace@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.instanceProfile == "crucible-lab-instance" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.subnetCidrs == "10.2.129.0/24" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.workspaceImage == var.workspace_image
+    error_message = "the lab instance profile, subnet CIDRs and workspace image reach the Helm values"
+  }
+}
+
+run "workspace_image_must_be_a_digest" {
+  command = plan
+  variables {
+    workspace_image = "ghcr.io/x/y:latest"
+  }
+  expect_failures = [var.workspace_image]
+}
+
+run "no_workspace_image_keeps_the_chart_default" {
+  command = plan
+  variables {
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "il-central-1"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_name   = "crucible-labs"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(aws_ssm_parameter.helm_values.value).awsLabs), "workspaceImage")
+    error_message = "an empty workspace_image leaves the chart's default"
+  }
+}
+
+run "node_installs_a_ghcr_release_with_the_pull_token" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_parameter.secret["ghcr_pull_token"].type == "SecureString" && aws_ssm_parameter.secret["ghcr_pull_token"].name == "/crucible/ghcr_pull_token"
+    error_message = "the GHCR pull token is a SecureString at /<name>/ghcr_pull_token"
+  }
+  assert {
+    condition     = strcontains(aws_instance.node.user_data, "GHCR refused the pull token: set a GitHub token with read:packages as ghcr_pull_token in crucible.tfvars and run crucible aws up") && strcontains(aws_instance.node.user_data, "cannot pull chart $version from GHCR: check the release exists and ghcr_pull_token has read:packages")
+    error_message = "a bad token or a missing chart version stops deploy.sh with an actionable message"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "--docker-password") && strcontains(aws_instance.node.user_data, "--type=kubernetes.io/dockerconfigjson") && strcontains(aws_instance.node.user_data, "helm registry logout ghcr.io >/dev/null 2>&1 || true; rm -rf")
+    error_message = "the token stays out of argv; logout runs in the EXIT trap"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "ghp_test")
+    error_message = "the token must not appear in user data"
+  }
+  assert {
+    condition     = alltrue([for s in ["oci://ghcr.io/platform-infra-org/charts/crucible", "helm registry login ghcr.io", "/$NAME/release", "ghcr-pull", "no release chosen: run crucible aws deploy"] : strcontains(aws_instance.node.user_data, s)])
+    error_message = "deploy.sh installs the chart from GHCR at the version in /<name>/release, logged in with the pull token"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.node.user_data, "current-release") && !strcontains(aws_instance.node.user_data, "$DATA_BUCKET/releases") && !strcontains(aws_instance.node.user_data, "ctr images import")
+    error_message = "no release tarballs in S3"
+  }
+  assert {
+    condition     = alltrue([for first in ["helm registry login", "helm show chart oci://ghcr.io/platform-infra-org/charts/crucible"] : can(regex("(?s)${first}.*kubectl create namespace", aws_instance.node.user_data)) && !can(regex("(?s)kubectl create namespace.*${first}", aws_instance.node.user_data))])
+    error_message = "the token is checked before anything is applied"
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.node.statement : alltrue([for r in s.resources : !strcontains(r, "releases/")])])
+    error_message = "the node policy has no release-specific resources"
+  }
+}
+
+run "ghcr_pull_token_is_required" {
+  command = plan
+  variables {
+    ghcr_pull_token = ""
+  }
+  expect_failures = [var.ghcr_pull_token]
 }

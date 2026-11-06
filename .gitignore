@@ -17,3 +17,7 @@ deploy/aws/main/*.tfvars
 
 # downloaded installers (e.g. the Session Manager plugin)
 *.pkg
+
+# git worktrees for parallel work
+.worktrees/
+/dist/

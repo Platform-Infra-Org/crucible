@@ -13,6 +13,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/httpstream"
@@ -55,13 +56,13 @@ func NewClusterRunner(cfg *rest.Config, privileged bool) (*ClusterRunner, error)
 func (c *ClusterRunner) Available(*Instance) error { return nil }
 
 func (c *ClusterRunner) Provision(ctx context.Context, inst *Instance, bundle []byte, compose string) error {
-	return c.provision(ctx, inst, bundle, compose, nil)
+	return c.provision(ctx, inst, bundle, compose, nil, nil)
 }
 
 // provision creates the lab namespace, its policies and the dind pod, unpacks the bundle and starts compose.
 // awsSetup (aws labs only) runs once the namespace and its policies exist and before the pod: it creates the
 // credentials secret the pod mounts and the module config map the terraform pods mount. It must be idempotent.
-func (c *ClusterRunner) provision(ctx context.Context, inst *Instance, bundle []byte, compose string, awsSetup func(ns string) error) error {
+func (c *ClusterRunner) provision(ctx context.Context, inst *Instance, bundle []byte, compose string, awsSetup func(ns string) error, extra []networkingv1.NetworkPolicyEgressRule) error {
 	if !validLabID(inst.ID) || !filepath.IsLocal(compose) {
 		return errors.New("invalid lab id or compose file name")
 	}
@@ -69,6 +70,7 @@ func (c *ClusterRunner) provision(ctx context.Context, inst *Instance, bundle []
 	if awsSetup != nil {
 		o = awsWorkspace(o)
 	}
+	o.Network.Spec.Egress = append(o.Network.Spec.Egress, extra...)
 	core, ns := c.Client.CoreV1(), o.Namespace.Name
 	create := []func() error{
 		func() error { _, err := core.Namespaces().Create(ctx, o.Namespace, metav1.CreateOptions{}); return err },

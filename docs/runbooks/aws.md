@@ -6,6 +6,7 @@
 2. `go run ./cmd/crucible aws init --region eu-west-1 --domain crucible.example.com`. This creates the state and data buckets, the Cognito user pool and the secret key that seals repository credentials (`/<name>/secret_key`; see Secrets). None of them is ever destroyed.
 3. **The persistent stack's state is backed up for you.** `deploy/aws/persistent/terraform.tfstate` is local and git-ignored; after every successful apply, `init` copies it to `s3://<state_bucket>/persistent.tfstate` (private, versioned) and prints `state backed up to …`. If the copy fails, `init` exits with an error that gives the `aws s3 cp` to run by hand. On a machine without the file, `init` restores it from there first (it finds the bucket from your account: `crucible-<account>-tfstate`); with no backup it's a new stack, and if it can't tell (access denied) it stops before applying. The file holds the secret key and the Cognito client secret in plain text; a second copy outside the account (a password manager) protects against losing the account.
 4. `cp deploy/aws/main/terraform.tfvars.example deploy/aws/main/crucible.tfvars` and fill it in. `domain` there must equal the `--domain` you gave `init`.
+   **Set `ghcr_pull_token`** (required): a **classic** GitHub personal access token with `read:packages` only (GHCR does not take fine-grained tokens), which the node uses to pull the private chart and server image from GHCR. It is stored as the SecureString `/<name>/ghcr_pull_token`. A wrong token stops `deploy.sh` before anything is applied, with a message that says what to fix (`GHCR refused the pull token …`).
    Sign-in needs no settings here; it is wired from the Cognito user pool automatically.
 5. `go run ./cmd/crucible aws up` (`--var-file` defaults to `deploy/aws/main/crucible.tfvars` in the repo root).
    Right after the apply it prints `Point an A record <domain> → <ip>`: create that DNS record **while `up` waits** for the node (skip if `route53_zone_id` is set).
@@ -29,7 +30,11 @@ an Elastic IP, a DNS record or a certificate.
 4. `crucible aws status`. Expect `ssm: Online`, `healthz: ok` and `egress: every host Crucible checks is reachable`. If `ssm:` is not `Online`, the checks stop
    and it names the three SSM hosts. If egress lists blocked hosts, send them to the network team. The list covers k3s, GitHub, Docker,
    apt (plain HTTP on port 80), the AWS CLI, Price List, S3, STS, SSM, Cognito (including its login domain), and the AWS-lab path
-   (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`). The git host is not tested: check it by hand.
+   (`registry.terraform.io`, `releases.hashicorp.com`, `iam`, `ec2`, `tagging`, `cloudtrail`), plus the OS-level lab hosts:
+   `signin.aws.amazon.com` (console link), `ec2-instance-connect.<region>.amazonaws.com` (key pushes) and, over **TCP 22**, the
+   region's EC2 Serial Console endpoint (`ec2-serial-console.il-central-1.api.aws` here; the name differs by region generation, so
+   status looks it up in a table and checks only regions in it). `ghcr.io` and `pkg-containers.githubusercontent.com` (the workspace image's registry and blob host; the lab pod's Docker pulls it
+   through the node). A blocked `host:22` line means `lab-console` can't connect from lab pods. The git host is not tested: check it by hand.
 5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
    sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
@@ -47,14 +52,26 @@ The organization's after-hours automation may stop the node whatever `schedule_e
 
 Second machine or fresh clone: run `crucible aws init` with the same flags (it restores the persistent state from the state bucket; its plan should change nothing), then `crucible aws up` (it is idempotent) to initialise the S3 backend before using `deploy`. With aws labs on, run `labs-init` with lab-account credentials first too: it restores the labs state the same way.
 
+## Releases and GHCR
+
+The server no longer ships through S3: CI publishes images and the chart to GHCR and the node pulls them. Nothing about a release lives in the data bucket.
+
+- **Images:** `ghcr.io/platform-infra-org/crucible` (server, private), `crucible-workspace` and `crucible-toolbox` (public). **Chart:** `oci://ghcr.io/platform-infra-org/charts/crucible` (private); its version is the release version without the `v`.
+- **One-time:** after the first release, make the `crucible-workspace` and `crucible-toolbox` packages public (Package settings → Change visibility). Set `ghcr_pull_token` (step 4) before `up`.
+- **Firewall egress:** `ghcr.io` and `pkg-containers.githubusercontent.com`. `crucible aws status` checks both.
+- **Workflows** (`.github/workflows`): `checks` runs on every PR and push to main. `release` builds everything without pushing when a PR is opened or updated; when it merges, git-cliff picks the version and the merge commit is tagged (nothing is pushed to main, which `protect-main` guards), the three images go to GHCR with provenance and SBOMs, the chart is pinned to their digests and pushed, the GitHub Release carries the binaries, `SHA256SUMS` and the changes since the last release as its notes, and `latest` moves last on the workspace and toolbox images. Docs-only and ci-only merges release nothing. `release-manual` (Actions tab, any branch) publishes a prerelease named `<next>-<branch>.<run>`, with no `latest` tags. `e2e` is manual.
+- **Choosing a release:** `--version` takes releases and prereleases. `crucible aws status` shows `release:`.
+- **Caveats:** a PR merged from a fork cannot release (no write token). A release run that failed part-way: **Re-run failed jobs** picks up from the failed job with the version the run already chose, including a Release whose upload or `latest` move failed. **Re-run all jobs** resumes only a tag on this merge with no GitHub Release yet, and does nothing once one exists. An older run re-run after a newer release publishes its version but leaves `latest` on the newer one. Don't add a ruleset that restricts creating `v*` tags: the release workflow creates them as `github-actions`, which can't be on a ruleset's bypass list, so every release would fail. The images' build stages cross-compile on the runner; only their small final stages run under QEMU for arm64.
+- **Migration:** a node created before this change keeps its old `deploy.sh`, and `deploy` refuses it. Before the rebuild, set `ghcr_pull_token` in `crucible.tfvars`, and remove `toolbox_image` and `workspace_image` unless you override them on purpose: the release pins both, and an old pinned toolbox lacks `crucible ready`. Then run `crucible aws teardown --yes`, then `crucible aws up` (the snapshot restores the data). Old `releases/` objects in the data bucket can be deleted by hand.
+
 ## Everyday
 | Want | Command |
 |---|---|
-| Ship the current commit | `crucible aws deploy` |
+| Run a release | `crucible aws deploy` (this binary's own release), `--version vX.Y.Z` (a release or prerelease from GHCR; `up` takes the same flags), or `--build` (builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, plus `-dirty.<unix time>` when the tree has changes; needs your own `docker login ghcr.io` and `helm registry login ghcr.io` with a classic token that has `write:packages`: a different, broader token than the node's `read:packages` pull token). `--build` rebuilds only the server image and the chart: the workspace and toolbox images come from `workspace_image` / `toolbox_image` in `crucible.tfvars` if set, otherwise the chart's in-tree defaults (`amazon/aws-cli` without `lab-ssh`/`lab-console`, and no toolbox, so cluster labs are off). A binary built from source (`dev`, or `make build`'s `git describe` such as `1044e7f` or `v0.3.0-3-gabc1234`) with neither flag refuses. |
 | Take a snapshot now | `crucible aws snapshot` |
 | Stop paying for compute tonight | `crucible aws sleep` (snapshot, then stop) |
 | Start before the schedule | `crucible aws wake` |
-| Is it up? | `crucible aws status` |
+| Is it up? / which release? | `crucible aws status` (shows `release:`) |
 | Shell on the node | `aws ssm start-session --target <instance_id>` |
 | Invite / remove a person | [cognito.md](cognito.md) |
 
@@ -110,7 +127,7 @@ A setting left empty is never written, so `CRUCIBLE_SMTP_*` keys you added by ha
 
 Cloud-init installs Sysbox CE (pinned version, sha256-checked; `sysbox_version` and `sysbox_sha256_amd64` in `deploy/aws/main/variables.tf`, update both together, amd64 only) and registers the `sysbox-runc` runtime with k3s's containerd through `config-v3.toml.tmpl` (containerd 2.x, k3s >= 1.32). It also creates the `sysbox-runc` RuntimeClass, and the chart defaults to `clusterLabs.enabled: true`. This cluster runs AWS lab workspaces only (`CRUCIBLE_LAB_CLUSTER`); cluster labs run on trainees' own clusters through their agent and need none of this (they need `CRUCIBLE_TOOLBOX_IMAGE`). Lab pods run in `lab-<id>` namespaces with Pod Security `baseline`, a quota, and a NetworkPolicy that blocks `169.254.169.254` (IMDS) and every private range.
 
-**The cluster-lab toolbox image.** Trainees' laptops pull it, on arm64 (Apple silicon) and amd64 alike, so build it for both and push it to a registry their laptops can pull from (public, or one they are signed in to), then set `CRUCIBLE_TOOLBOX_IMAGE` (Helm `toolboxImage`) to the pushed digest, never a tag:
+**The cluster-lab toolbox image.** Trainees' laptops pull it, on arm64 (Apple silicon) and amd64 alike. Every release builds it for both, pushes `ghcr.io/platform-infra-org/crucible-toolbox` (public) and pins the release's chart to its digest, so an AWS install running a release has cluster labs with nothing to set. To run your own toolbox instead, build it for both architectures, push it to a registry their laptops can pull from (public, or one they are signed in to), and set `CRUCIBLE_TOOLBOX_IMAGE` (Helm `toolboxImage`) to the pushed digest, never a tag:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -f deploy/toolbox/Dockerfile -t <registry>/crucible-toolbox:<version> --push .
@@ -118,13 +135,13 @@ docker buildx imagetools inspect <registry>/crucible-toolbox:<version>   # the m
 # CRUCIBLE_TOOLBOX_IMAGE=<registry>/crucible-toolbox@sha256:<digest>
 ```
 
-On AWS, set it in `crucible.tfvars` and run `crucible aws up`; the node's Helm values carry it as `toolboxImage`:
+On AWS, set the override in `crucible.tfvars` and run `crucible aws up`; the node's Helm values carry it as `toolboxImage`:
 
 ```hcl
 toolbox_image = "<registry>/crucible-toolbox@sha256:<digest>"
 ```
 
-Terraform refuses a tag (`:latest`, `:1.2`): the value must be `<image>@sha256:<64 hex>`. Left empty (the default), cluster labs stay off; laptop and AWS labs work either way.
+Terraform refuses a tag (`:latest`, `:1.2`): the value must be `<image>@sha256:<64 hex>`. Left empty (the default), the node keeps the toolbox the release's chart pins. A chart without a toolbox (a `--build` deploy, or the in-tree chart) leaves cluster labs off; laptop and AWS labs work either way.
 
 Run one Crucible deployment per Kubernetes cluster: the orphan sweep deletes `lab-*` namespaces that are not active in its own database. Turning the lab cluster off leaves existing lab namespaces in place (their rows are marked destroyed with "cleanup skipped"); delete them by hand with `kubectl delete ns -l crucible.io/lab`.
 
@@ -179,6 +196,10 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    - the **export bucket** (`<name>-<account>-labexports`) and a **CUR 2.0 export** into it (`<name>-labs`, prefix `cur`,
      daily, gzip CSV, overwritten in place, with `resource_tags` so each line carries its `crucible:lab-id`). Data
      Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`;
+   - the **lab instance role and profile** `crucible-lab-instance` (labs may attach the profile to their machines): the SSM agent's
+     channel and Run Command only, written out instead of AWS's managed SSM core policy because that grants `ssm:GetParameter(s)`,
+     and root on a lab machine could then read `/<name>/*` (secret key, database password, OIDC secret). It carries an explicit
+     deny of `ssm:GetParameter*` on `/<name>` and `/<name>/*` as well;
    - an alert-only **AWS Budget** (`<name>-labs-monthly`) that emails at 80 % and 100 % of the month's actual spend,
      independent of Crucible. Set it with `--budget-usd 200 --budget-email ops@example.com` (repeat `--budget-email`,
      at most 10). On the first run, without `--budget-usd` the amount is $100 and without any `--budget-email` no
@@ -195,6 +216,10 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
      ```
      The plan should destroy only `aws_budgets_budget.labs[0]`; if it shows anything else, a value differs from
      what labs-init passed: stop and compare.
+   labs-init also reads the account's EC2 Serial Console setting (`aws ec2 get-serial-console-access-status`). It is already on in
+   il-central-1 (managed by the account). When it is off, labs-init only prints a note with the command an account admin runs
+   (it is account-wide per region): `aws ec2 enable-serial-console-access --region <region>`. It never turns it on itself.
+   `labs-init` and `up` also hand the node the lab subnets' CIDRs and its own address, which `aws.direct_ssh` labs need.
 2. **Activate the cost-allocation tag (the one manual step, free).** In Billing → Cost allocation tags (in the
    **management (payer) account** if the lab account is in an organization, else in the lab account), activate
    `crucible:lab-id`. It shows up there only after a tagged resource has existed, which can take up to 24 h, and
@@ -218,7 +243,7 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    `table_configurations`, record it here and fix the stack before the next labs-init.
 
 **Server settings.** `crucible aws up` sets these from the labs stack's outputs; set them yourself only on another
-host. With `CRUCIBLE_AWS_LABS=1`, crucible-api refuses to start without `CRUCIBLE_AWS_PLAN_ROLE_ARN`,
+host. With `CRUCIBLE_AWS_LABS=1`, crucible serve refuses to start without `CRUCIBLE_AWS_PLAN_ROLE_ARN`,
 `CRUCIBLE_AWS_EXPORT_BUCKET` and `CRUCIBLE_AWS_EXPORT_NAME` (outputs `plan_role_arn`, `export_bucket`, `export_name`).
 `CRUCIBLE_AWS_EXPORT_PREFIX` defaults to `cur`. `INFRACOST_API_KEY` and `CRUCIBLE_INFRACOST` are gone and ignored.
 
@@ -413,6 +438,64 @@ request "Cloud Heat", approve it, then:
 Record anything that differed (IAM condition keys, CloudTrail field names, tag propagation to root volumes, rule
 tagging, tf-apply memory) in this section, and fix the code or the labs stack before the release.
 
+**OS-level labs (machines the trainee works on as root, boots, breaks and repairs).**
+
+*The workspace image.* `deploy/workspace` is `amazon/aws-cli` plus ssh, the Session Manager plugin and the two helpers
+`lab-ssh` and `lab-console`. Every release pushes it (`ghcr.io/platform-infra-org/crucible-workspace`, public) and pins the
+release's chart to its digest, so an install running a release has those commands with nothing to set. Leave `workspace_image`
+empty to keep that pin; set it only to override it. The in-tree chart (a `--build` deploy without the override) keeps plain
+`amazon/aws-cli`, where those commands don't exist. To publish your own
+(`make workspace` builds one local arch for a quick look; do not use it to publish):
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -f deploy/workspace/Dockerfile --push \
+  -t ghcr.io/platform-infra-org/crucible-workspace:<version> deploy/workspace
+docker buildx imagetools inspect ghcr.io/platform-infra-org/crucible-workspace:<version>   # note the Digest: sha256:...
+```
+Then in `deploy/aws/main/crucible.tfvars` set the override `workspace_image = "<registry>/crucible-workspace@sha256:<digest>"`
+(a digest is required; a tag is refused) and run `crucible aws up`. `crucible aws status` must show no blocked host (it checks `ghcr.io` and `pkg-containers.githubusercontent.com`, which the node needs to pull the image). The serial console endpoints and host-key fingerprints are baked
+into the image from `deploy/workspace/serial-console-endpoints`; `go test ./internal/awsops` fails if that file and the table
+`crucible aws status` uses disagree.
+
+*Three ways in, none needing an inbound path.* Session Manager (`aws ssm start-session`, `lab-ssh` through
+`AWS-StartSSHSession`, `ssm send-command`); plain SSH from the workspace (`lab-ssh --direct`, only for labs that set
+`aws.direct_ssh`); and the EC2 Serial Console (`lab-console`, or the console page). All use keys valid for one minute
+(`ec2-instance-connect`). The AWS console button on a running AWS lab signs the trainee in with the lab's own session (the lab
+role's permissions only, a fresh lab session per press, so it lasts an hour from the click; one link a minute per lab).
+
+*What spec §9 already confirmed in our account (2026-11-04, read-only and dry run).* Serial console access is on in il-central-1;
+its endpoint resolves and answers on TCP 22 from a laptop, with the RSA host key AWS publishes; `ec2-instance-connect`, `ssm-guiconnect`,
+`ssm`, `ssmmessages` and `signin.aws.amazon.com` resolve; `RunInstances` dry runs (Ubuntu 24.04 t3.micro with a profile and a lab-id tag, Windows
+Server 2022 t3.small) succeed in spokeSubnet1, as do `GetConsoleScreenshot` and `GetConsoleOutput`; instance profiles can be created; Session
+Manager works from these subnets; the SCPs let `SendSSHPublicKey` and `SendSerialConsoleSSHPublicKey` through (both failed only with
+"instance not running" on the stopped node); `getSigninToken` with an assumed-role session returned a token.
+
+*Accepted deviation from spec §3.2.* The lab role allows `ssm:GetCommandInvocation` on `*`: IAM cannot scope it to instances. A
+session needs the command id (an unguessable UUID) to read an invocation, and `ssm:ListCommandInvocations` and `ssm:ListCommands`
+are **not** granted, so a trainee cannot discover other labs' commands. `SendCommand` itself is scoped to instances tagged with the lab's id.
+
+*Still to verify by hand (spec §10), each with a real lab; record any difference here.* Use a lab whose module attaches the
+`crucible-lab-instance` profile (Forge 402 uses it; `examples/forge-402`).
+1. **Plain SSH wall.** Needs a `direct_ssh` lab. From its workspace terminal:
+   `nc -z -w 3 <the node's private IP> 22; echo $?` must print a non-zero status after about 3 s (the lab pod's NetworkPolicy
+   excepts the node's /32; k3s must enforce that, including for a pod's traffic to its own node). Then
+   `lab-ssh --direct <lab instance id>` must give a shell. If `nc` succeeds, stop: the node's sshd is exposed to labs.
+2. **GRUB rescue on the serial console.** Start the Forge 402 rescue module. In the workspace: `lab-console <instance id>`; press
+   Enter. Expect the GRUB menu (and the initramfs shell after the break). Leave with Enter then `~.`. Then, in the AWS console
+   button's session, EC2 → the instance → Connect → EC2 Serial Console shows the same.
+3. **Fleet Manager remote desktop.** Start a lab with a Windows Server instance with the `crucible-lab-instance` profile. In
+   the AWS console (button), Systems Manager → Fleet Manager → the instance → Connect with Remote Desktop. It must open; it needs the
+   session's own `ssm:StartSession` and `ssm-guiconnect:*`, both in the lab role. If it fails, note the denied action in CloudTrail.
+4. **Terminate and resume.** In the workspace: `aws ssm start-session --target <id>`, then in a second terminal
+   `aws ssm describe-sessions --state Active` and `aws ssm terminate-session --session-id <that id>`: it works (the id starts with
+   the session's `${aws:userid}`). Terminating a session id that is not the lab's own must be denied.
+5. **Console sign-in.** Press the AWS console button on a running AWS lab: a new tab opens signed in as
+   `crucible-lab-<id>`; the account's other resources are limited by the lab role; the console session ends an hour after the click (a role chained from
+   the node role caps at one hour; each press makes a fresh lab session). The sign-in link works once, within 15 minutes, and a second press within a minute for the same lab is refused.
+6. **Serial endpoint reachable.** `crucible aws status` must not list `ec2-serial-console.il-central-1.api.aws:22` under blocked
+   hosts (egress line says every host is reachable). If it does, the firewall blocks TCP 22 to it and `lab-console` will hang.
+7. **Run Command stays in the lab.** From a lab workspace, `aws ssm send-command --targets Key=tag:crucible:lab-id,Values=<another lab id>
+   --document-name AWS-RunShellScript --parameters commands=true` is denied or reaches no instance.
+
 **What trainees can see.** A lab session can read and write its own terraform state
 (`s3://<labstate bucket>/labs/<id>.tfstate`), and the workspace has those credentials. **Content authors must not
 put secrets in terraform state or outputs** (no generated passwords, keys or tokens the trainee should not see).
@@ -433,7 +516,7 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
 - **Lab bucket names are global.** OwnBuckets matches `crucible-lab-<id>*` by name, with no `s3:ResourceAccount`
   pin. A bucket of that name in another account is reachable only if that account's bucket policy allows it, so
   this is harmless, but a dedicated lab account is still the safer setup.
-- If crucible-api restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
+- If crucible serve restarts while an aws lab is being destroyed, the destroy is not resumed at once: the sweep picks
   the lab up as stuck after **70 minutes** and destroys it again (the hourly cost cap limits what that can cost).
 - `CRUCIBLE_AWS_LABS=dryrun` (Helm `awsLabs.dryRun`) prices aws labs from `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds
   fixture list prices on every start, so metering works without AWS. Fixture prices never price a real lab: a

@@ -131,7 +131,7 @@ export function LabPage() {
   return (
     <section className="page lobby">
       <Embers />
-      <Link to={back}>← Back to the training</Link>
+      <Link className="action back" to={back}>Back to the training</Link>
       <h1>{info.title}</h1>
       {cooled && lab && (
         <div className="cooled" role="status">
@@ -170,7 +170,7 @@ export function LabPage() {
       )}
       {!info.runtime_ready && (
         <p className="warn">
-          {info.runtime_message} {(info.runtime === 'local' || info.runtime === 'cluster') && <Link to="/connect">Connect your laptop</Link>}
+          {info.runtime_message} {(info.runtime === 'local' || info.runtime === 'cluster') && <Link className="action" to="/connect">Connect your laptop</Link>}
         </p>
       )}
       {info.blocked && <p className="warn">{info.blocked}</p>}
@@ -186,7 +186,7 @@ export function LabPage() {
   )
 }
 
-function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: LabView) => void; title: string; back: string }) {
+export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: LabView) => void; title: string; back: string }) {
   const [split, setSplit] = useState(40)
   const [collapsed, setCollapsed] = useState(false)
   const [fontSize, setFontSize] = useState(() => {
@@ -258,6 +258,16 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
       toast((e as Error).message)
     }
   }
+  const openConsole = async () => {
+    const tab = window.open('', '_blank') // opened in the click, so the browser doesn't block it
+    try {
+      const v = await api<{ url: string }>(`/api/labs/${lab.id}/console`, { method: 'POST', json: {} })
+      if (tab) { tab.opener = null; tab.location.href = v.url } else window.location.assign(v.url)
+    } catch (e) {
+      tab?.close()
+      toast(e instanceof Error ? e.message : 'The AWS console could not be opened')
+    }
+  }
   const extend = async () => {
     try {
       const v = await api<LabView>(`/api/labs/${lab.id}/extend`, { method: 'POST' })
@@ -291,7 +301,7 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
   return (
     <div className="lab">
       <header className="lab-head">
-        <Link to={back} aria-label="Back to the training">←</Link>
+        <Link className="action back" to={back} aria-label="Back to the training"></Link>
         <h1>{title}</h1>
         <span className="badge">{lab.runtime === 'local' ? 'Your laptop' : lab.runtime}</span>
         {lab.cluster_context && <span className="muted small">on {lab.cluster_context}</span>}
@@ -300,6 +310,9 @@ function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLab: (l: 
         <span className="spacer" />
         <button className="ghost" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>{collapsed ? 'Show tasks' : 'Hide tasks'}</button>
         <Timer lab={lab} offset={offset} onExtend={extend} />
+        {lab.runtime === 'aws' && lab.state === 'ready' && (
+          <button className="ghost" onClick={openConsole} title="Opens the AWS console for this lab's resources, in a new tab">AWS console</button>
+        )}
         <button className="ghost" onClick={end}>End lab</button>
       </header>
       <div>

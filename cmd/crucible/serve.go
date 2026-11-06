@@ -45,14 +45,20 @@ import (
 	"crucible/internal/secrets"
 )
 
-func main() {
+// serve runs the Crucible server (formerly the crucible-api binary).
+func serve(args []string) int {
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: crucible serve (configured by environment variables only)")
+		return 2
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx); err != nil {
-		slog.Error("crucible-api failed", "err", err)
-		os.Exit(1)
+		slog.Error("crucible serve failed", "err", err)
+		return 1
 	}
+	return 0
 }
 
 // previewGuard fails closed: preview mode (an admin login by token, OIDC off) starts only when CRUCIBLE_PUBLIC_URL is
@@ -265,9 +271,11 @@ func run(ctx context.Context) error {
 	case "1", "dryrun":
 		ar := &labs.AWSRunner{Cluster: kube, StateBucket: os.Getenv("CRUCIBLE_AWS_STATE_BUCKET"), StateRegion: os.Getenv("CRUCIBLE_AWS_STATE_REGION"),
 			WorkspaceImage: env("CRUCIBLE_AWS_WORKSPACE_IMAGE", labs.DefaultWorkspaceImage),
-			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage)}
+			TerraformImage: env("CRUCIBLE_TERRAFORM_IMAGE", labs.DefaultTerraformImage), Issuer: public}
 		ar.Network = content.LabNetwork{Region: ar.StateRegion, VPCID: os.Getenv("CRUCIBLE_AWS_LAB_VPC_ID"),
-			SubnetIDs: commaList(os.Getenv("CRUCIBLE_AWS_LAB_SUBNET_IDS"))} // the labs stack's own region
+			SubnetIDs:       commaList(os.Getenv("CRUCIBLE_AWS_LAB_SUBNET_IDS")), // the labs stack's own region
+			InstanceProfile: os.Getenv("CRUCIBLE_AWS_LAB_INSTANCE_PROFILE"),
+			SubnetCIDRs:     commaList(os.Getenv("CRUCIBLE_AWS_LAB_SUBNET_CIDRS")), NodeIP: os.Getenv("CRUCIBLE_NODE_IP")}
 		for r := range strings.SplitSeq(env("CRUCIBLE_AWS_LAB_REGIONS", "eu-west-1"), ",") {
 			if r = strings.TrimSpace(r); r != "" {
 				awsRegions = append(awsRegions, r)
@@ -391,7 +399,7 @@ func run(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(shutdown)
 	}()
-	slog.Info("crucible-api listening. The forge is lit", "addr", srv.Addr, "public_url", public)
+	slog.Info("crucible serve listening. The forge is lit", "addr", srv.Addr, "public_url", public)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

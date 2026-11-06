@@ -610,6 +610,19 @@ in:    stranger  →  52.x.x.x:443   →  no entry  →  dropped</code></pre>
       <p>A third, rarely used layer exists: <strong>network ACLs</strong>, stateless allow and deny lists on whole subnets.</p>
     </div>
   </article>
+
+  <article class="qa" id="q2-9">
+    <h3><span class="qn">2.9</span>How do you reach a machine that won't boot on AWS?</h3>
+    <div class="ans">
+      <p>Not over the network: a machine that stops during boot, or has lost its network or its SSH setup, answers on none of the usual paths. AWS gives you three ways to look at it from outside.</p>
+      <ul>
+        <li><strong>Screenshot and boot log:</strong> <code>aws ec2 get-console-screenshot</code> returns the last screen the machine drew, and <code>aws ec2 get-console-output</code> its boot text. Read-only, and enough for a lot of failures (a missing disk, a kernel panic).</li>
+        <li><strong>The EC2 Serial Console:</strong> a text console, like a cable into the machine's serial port. It shows the GRUB menu, boot messages and a login or emergency shell, and on Windows the Special Administration Console. It works with no network in the machine. You connect over SSH to a regional AWS endpoint on <strong>TCP 22</strong> after pushing a one-minute key with <code>ec2-instance-connect send-serial-console-ssh-public-key</code>. Access is switched on per account and region, and the endpoint's name differs by region generation: older regions use <code>serial-console.ec2-instance-connect.&lt;region&gt;.aws</code>, newer ones <code>ec2-serial-console.&lt;region&gt;.api.aws</code>. Check the host key against the fingerprint AWS publishes.</li>
+        <li><strong>A rescue volume:</strong> stop the machine, detach its root volume, attach it to a second, working machine, fix the files (a broken <code>fstab</code>, a bad GRUB config), then put it back.</li>
+      </ul>
+      <p><strong>In our account:</strong> serial console access is already on in il-central-1 (the account manages it), the endpoint is <code>ec2-serial-console.il-central-1.api.aws</code>, and TCP 22 to it is reachable from a laptop. From the Crucible node it depends on the firewall, which <code>crucible aws status</code> checks. The SCPs let the key-push calls through. Crucible's workspace gives trainees <code>lab-console</code> for this, restricted to their own lab's machines.</p>
+    </div>
+  </article>
 </section>
 
 <!-- ============ 3 ============ -->

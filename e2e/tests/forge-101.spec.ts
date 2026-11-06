@@ -39,17 +39,22 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await page.getByRole('link', { name: 'Connect your laptop' }).click()
   await page.getByRole('button', { name: 'Generate pairing token' }).click()
   const token = (await page.getByTestId('pairing-token').textContent())!.trim()
-  agent = spawn(process.env.CRUCIBLE_AGENT!, ['--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
+  agent = spawn(process.env.CRUCIBLE_AGENT!, ['agent', '--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
   // Case-sensitive: getByText('Agent connected') would also match "No agent connected yet."
   await expect(page.getByRole('status').filter({ hasText: /Agent connected/ })).toBeVisible({ timeout: 30_000 })
 
   // Module 1: read + quiz; module 2 starts locked
-  await page.getByRole('link', { name: 'Hearth', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Hearth', exact: true }).click()
   await page.getByRole('link', { name: /Forge 101/ }).click()
   await expect(page.getByTestId('module-02-first-lab')).toHaveAttribute('data-locked', 'true')
   await page.getByRole('link', { name: 'How We Work' }).click()
   await page.getByRole('button', { name: 'Mark as read' }).click()
   await page.getByTestId('module-01-welcome').getByRole('link', { name: 'Quiz' }).click()
+
+  // A question's title sits inside its box: the legend must not ride the fieldset's top border.
+  const q = page.locator('fieldset.question').first()
+  const [box, title] = await Promise.all([q.boundingBox(), q.locator('legend').boundingBox()])
+  expect(box && title && title.y).toBeGreaterThanOrEqual((box?.y ?? 0) + 8)
 
   await page.getByLabel('docker ps').check()
   for (const r of ['Docker Hub', 'GitHub Container Registry', 'Amazon ECR']) await page.getByLabel(r).check()
@@ -121,7 +126,7 @@ test('a trainee completes Forge 101 using only a local lab', async ({ page }) =>
   await expect(page.getByTestId('module-02-first-lab')).toHaveClass(/complete/)
 
   // The Hearth: a rank-up banner may be showing (dismiss it); the swords list names Forge 101; the card shows the smith rank
-  await page.getByRole('link', { name: 'Hearth', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Hearth', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Your swords' })).toBeVisible()
   const nice = page.getByRole('button', { name: 'Nice' })
   if (await nice.first().isVisible()) await nice.first().click()

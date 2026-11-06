@@ -170,7 +170,7 @@ func NewRouter(d Deps) chi.Router {
 				return
 			}
 			httpx.JSON(w, http.StatusOK, map[string]string{"token": tok,
-				"command": "CRUCIBLE_TOKEN=" + tok + " crucible-agent --server " + d.PublicURL}) // env, not argv: other local users can read argv
+				"command": "CRUCIBLE_TOKEN=" + tok + " crucible agent --server " + d.PublicURL}) // env, not argv: other local users can read argv
 		})
 		r.Delete("/api/agent/tokens", func(w http.ResponseWriter, r *http.Request) {
 			u := auth.UserFrom(r.Context()) // the caller's own tokens

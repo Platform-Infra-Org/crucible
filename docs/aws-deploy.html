@@ -159,6 +159,7 @@ svg .ahm { fill: var(--muted); }
       <a href="#configure">Configure</a>
       <a href="#up">Build the node</a>
       <a href="#deploy">Ship the app</a>
+      <a href="#releases">Releases and GHCR</a>
       <a href="#first">First sign-in</a>
       <a href="#labs">AWS labs</a>
       <a href="#everyday">Everyday</a>
@@ -285,9 +286,10 @@ svg .ahm { fill: var(--muted); }
       <div><h3>The cost drivers</h3><p>The instance type and how many hours it runs. <code>t3a</code> instances also bill surplus CPU credits if they stay busy
         above their baseline (40% for <code>t3a.xlarge</code>), about $0.05 per vCPU-hour; watch the <code>CPUSurplusCreditsCharged</code> metric.
         Cognito, the scheduler, SSM and the lab account's billing export and Budget are free at this size.</p></div>
-      <div><h3>Cluster labs are opt-in</h3><p>Cluster labs run on trainees' own clusters and need a toolbox image. Build it for arm64 and amd64,
-        push it, and set <code>toolbox_image</code> in <code>crucible.tfvars</code> to its digest
-        (<code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>; a tag is refused). Left empty, cluster labs stay off. Laptop labs
+      <div><h3>Cluster labs come with the release</h3><p>Cluster labs run on trainees' own clusters and need a toolbox image. Every release
+        pushes one and pins its chart to the digest, so leave <code>toolbox_image</code> empty to use it. Set <code>toolbox_image</code> in
+        <code>crucible.tfvars</code> only to override it with your own (<code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>;
+        a tag is refused). A <code>--build</code> deploy has no toolbox unless you set one, so cluster labs stay off there. Laptop labs
         and AWS labs work either way. The runbook's toolbox section has the build commands.</p></div>
     </div>
   </section>
@@ -335,12 +337,12 @@ svg .ahm { fill: var(--muted); }
       <thead><tr><th scope="col">Tool</th><th scope="col">Version</th><th scope="col">Used for</th></tr></thead>
       <tbody>
         <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>All three stacks (<code>required_version = "&gt;= 1.10"</code>).</td></tr>
-        <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Uploading releases, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
+        <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Recording the release, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
         <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>For <code>aws ssm start-session</code>, a shell on the node: the AWS CLI needs it for every interactive session. Install it from AWS's <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin page</a>; <code>session-manager-plugin --version</code> checks it.</td></tr>
-        <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Building the <code>linux/amd64</code> image. On an Apple-silicon Mac this is a cross-build and is slower.</td></tr>
-        <tr><th scope="row">Helm</th><td>3</td><td>Packaging the chart (<code>helm package</code>).</td></tr>
+        <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Only for <code>deploy --build</code>: building the <code>linux/amd64</code> server image and pushing it to GHCR. Deploying a released version needs neither Docker nor Helm.</td></tr>
+        <tr><th scope="row">Helm</th><td>3</td><td>Only for <code>deploy --build</code>: packaging and pushing the chart (<code>helm package</code>, <code>helm push</code>).</td></tr>
         <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old. <code>make tools</code> installs the repo's pinned Go and Terraform (and kind) into <code>.local/tools</code>, checksum-verified; it's git-ignored, so a fresh clone runs it once. Then put it first on your <code>PATH</code>.</td></tr>
-        <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository. <code>deploy</code> ships the commit you have checked out.</td></tr>
+        <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository, for the Terraform stacks. <code>deploy</code> ships a published release (or, with <code>--build</code>, your checked-out tree), not whatever the clone holds.</td></tr>
       </tbody>
     </table></div>
     <p>Run every command from the repository root. Install the command once, then type <code>crucible …</code>. If you'd rather not,
@@ -435,6 +437,7 @@ domain          = "crucible.example.com"        <span class="c"># exactly the --
 acme_email      = "ops@example.com"
 bootstrap_admin = "you@example.com"
 git_credentials = "https://crucible-bot:TOKEN@git.example.com"
+ghcr_pull_token = "ghp_xxxxxxxx"                <span class="c"># classic PAT, read:packages only; see Releases and GHCR</span>
 git_bot_email   = "crucible-bot@example.com"     <span class="c"># an address your git host accepts</span>
 schedule_timezone = "Europe/Bucharest"
 <span class="c"># route53_zone_id  = "Z0123456789"</span>
@@ -457,7 +460,8 @@ schedule_timezone = "Europe/Bucharest"
         <tr><th scope="row"><code>git_credentials</code></th><td><code>""</code></td><td class="req">no</td><td>Lines for git's credential store, such as <code>https://bot:TOKEN@git.example.com</code>. Crucible uses them for any <code>https://</code> repository connected with no credential of its own. To let people edit content in Crucible, the token needs push access: edits go to <code>crucible/edit/&lt;id&gt;</code> branches, and the bot merges approved ones, so branch protection must let it. Empty is stored as <code>none</code>. You can also give each repository its own token or deploy key in the app instead.</td></tr>
         <tr><th scope="row"><code>git_bot_email</code></th><td><code>crucible-bot@example.com</code></td><td class="req">change it</td><td>The author email of the commits Crucible pushes. Hosts that require verified commit emails reject the default.</td></tr>
         <tr><th scope="row"><code>git_bot_name</code></th><td><code>Crucible Bot</code></td><td class="req">no</td><td>The author name of those commits.</td></tr>
-        <tr><th scope="row"><code>toolbox_image</code></th><td><code>""</code></td><td class="req">for cluster labs</td><td>The cluster-lab toolbox image trainees' laptops pull, pinned by digest: <code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>. Terraform refuses a tag. It reaches the node's Helm values (<code>toolboxImage</code>), so a change needs only <code>up</code>. Empty: cluster labs stay off.</td></tr>
+        <tr><th scope="row"><code>ghcr_pull_token</code></th><td>none</td><td class="req">yes</td><td>A <b>classic</b> GitHub personal access token with <code>read:packages</code> only (letters, digits and <code>_</code>; GHCR does not take fine-grained tokens). The node uses it to pull the private chart and server image from GHCR. It is stored as the SecureString <code>/crucible/ghcr_pull_token</code>. See <a href="#releases">Releases and GHCR</a>.</td></tr>
+        <tr><th scope="row"><code>toolbox_image</code></th><td><code>""</code></td><td class="req">no</td><td>The cluster-lab toolbox image trainees' laptops pull, pinned by digest: <code>&lt;registry&gt;/crucible-toolbox@sha256:&lt;64 hex&gt;</code>. Terraform refuses a tag. It reaches the node's Helm values (<code>toolboxImage</code>), so a change needs only <code>up</code>. Empty: the release's pinned toolbox (chart values). Set: an override.</td></tr>
         <tr><th scope="row"><code>smtp_addr</code>, <code>smtp_from</code>, <code>smtp_username</code>, <code>smtp_password</code></th><td><code>""</code></td><td class="req">for email</td><td>The SMTP server (<code>host:port</code>), the sender (an address or <code>Name &lt;address&gt;</code>), and the login. The password is stored as the SecureString <code>/crucible/smtp_password</code>, the rest in <code>/crucible/env</code>. Without <code>smtp_addr</code> Crucible sends no email. See <a href="#email">Email</a>.</td></tr>
         <tr><th scope="row"><code>route53_zone_id</code></th><td><code>""</code></td><td class="req">no</td><td>A Route 53 hosted zone that holds <code>domain</code>. When set, Terraform creates the A record (TTL 300) and keeps it on the Elastic IP, even after a rebuild. Empty: you create the record yourself.</td></tr>
         <tr><th scope="row"><code>instance_type</code></th><td><code>t3a.xlarge</code></td><td class="req">no</td><td>The node's size (4 vCPU, 16 GiB). AWS lab workspaces run on it. The example suggests <code>t3a.large</code> as cheaper. It must be x86_64: the image is Ubuntu amd64 and sysbox is amd64-only.</td></tr>
@@ -484,7 +488,7 @@ schedule_timezone = "Europe/Bucharest"
   <!-- ───────────── 5. up ───────────── -->
   <section id="up" aria-labelledby="up-h">
     <div class="head"><span class="eyebrow">deploy/aws/main · internal/awsops</span><h2 id="up-h">Build the node: <code>crucible aws up</code></h2>
-      <p>One command builds the server, waits for it, and ships the release you have checked out. <code>--var-file</code> defaults to
+      <p>One command builds the server, waits for it, and deploys a release from GHCR (this binary's own version, or the one you name with <code>--version</code> or <code>--build</code>). <code>--var-file</code> defaults to
         <code>deploy/aws/main/crucible.tfvars</code>.</p></div>
     <div class="note"><p><strong>In our account.</strong><code>up</code> puts the node in <code>subnet_id</code>, creates no Elastic IP and no DNS record, and prints no "point DNS" line.
       It waits for the node to register with SSM (up to ten minutes), then checks <code>/healthz</code> on the node itself instead of a public URL. It ends by telling you to run
@@ -507,7 +511,7 @@ schedule_timezone = "Europe/Bucharest"
         <ul class="muted">
           <li>a security group <code>crucible-web</code>: 80 and 443 in from anywhere, no SSH (the shell goes through SSM);</li>
           <li>the node role and instance profile <code>crucible-node</code>: the identity the node uses for S3, SSM and, with labs on, the lab roles (what it may do: <a href="deploy-architecture.html#iam-roles">IAM roles</a>);</li>
-          <li>SSM parameters: <code>/crucible/env</code> and <code>/crucible/helm-values</code> (settings), and five SecureStrings
+          <li>SSM parameters: <code>/crucible/env</code> and <code>/crucible/helm-values</code> (settings), and six SecureStrings
             (see <a href="#secrets">Secrets</a>);</li>
           <li>the EC2 node <code>crucible</code>: the current Ubuntu 24.04 amd64 image, IMDSv2 only, an encrypted gp3 disk;</li>
           <li>an Elastic IP, and the Route 53 A record if you gave a zone;</li>
@@ -519,11 +523,11 @@ schedule_timezone = "Europe/Bucharest"
         <p>Create that record at your DNS provider <b>while <code>up</code> carries on</b>: the build and the node's first boot give you a few
           minutes. With <code>route53_zone_id</code> set, Terraform already did it. Check it with <code>dig +short crucible.example.com</code>.</p></li>
       <li><h3>Ships the release <span class="lane">your computer</span> <span class="lane k8s">node</span></h3>
-        <p>It runs the same steps as <a href="#deploy"><code>crucible aws deploy</code></a>: build, upload, then run the node's deploy script
+        <p>It checks the release choice first, before anything is applied (a binary built from source with neither <code>--version</code> nor <code>--build</code> refuses), then runs the same steps as <a href="#deploy"><code>crucible aws deploy</code></a>: record the release in SSM, then run the node's deploy script
           through SSM. That waits for the node's first boot to finish.</p></li>
       <li><h3>Waits for HTTPS</h3>
         <p>It polls <code>https://&lt;domain&gt;/healthz</code> until it answers 200. Success ends with
-          <span class="out">the forge is lit: https://crucible.example.com</span> and <span class="out">&lt;sha&gt; is live at https://crucible.example.com</span>.</p></li>
+          <span class="out">the forge is lit: https://crucible.example.com</span> and <span class="out">&lt;version&gt; is live at https://crucible.example.com</span>.</p></li>
     </ol>
 
     <h3>What the node does on first boot</h3>
@@ -539,16 +543,16 @@ schedule_timezone = "Europe/Bucharest"
         <code>WARNING: sysbox install failed; AWS labs stay unavailable</code> and carries on: Crucible still comes up.</p></li>
       <li><h3>Installs k3s and Helm</h3><p>k3s at <code>k3s_version</code>, then Helm 3.18.4.</p></li>
       <li><h3>Reads its settings and writes its scripts</h3><p>Fetches <code>/crucible/env</code> from SSM, then writes <code>/opt/crucible/deploy.sh</code>
-        (imports a release and installs the chart) and <code>/opt/crucible/snapshot.sh</code> (runs the backup now).</p></li>
-      <li><h3>Tries a first deploy</h3><p>Runs <code>deploy.sh</code> once. On a brand-new install no release is published yet, so it prints
-        <code>no release published yet</code>, and that's expected. On a rebuilt node it deploys the last release, and the chart's
+        (logs in to GHCR with the pull token, then installs the chosen release's chart) and <code>/opt/crucible/snapshot.sh</code> (runs the backup now).</p></li>
+      <li><h3>Tries a first deploy</h3><p>Runs <code>deploy.sh</code> once. On a brand-new install no release is chosen yet, so it prints
+        <code>no release yet: run 'crucible aws deploy'</code>, and that's expected. On a rebuilt node the release named in <code>/crucible/release</code> is deployed again, and the chart's
         <code>restore</code> step loads the newest snapshot into the empty database.</p></li>
       <li><h3>Marks itself ready</h3><p>Touches <code>/opt/crucible/.ready</code>. If any step before this failed, it touches
         <code>/opt/crucible/.failed</code> instead, and <code>deploy</code> reports <code>node bootstrap failed</code>.</p></li>
     </ol>
 
     <h3>How long it takes, and how <code>up</code> waits</h3>
-    <p>The runbook gives no typical duration. Most of the time goes on the local image build and the node's first boot. These are the
+    <p>The runbook gives no typical duration. Most of the time goes on the node's first boot (and, with <code>--build</code>, the image build and push). These are the
       limits in <code>internal/awsops</code>:</p>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Waiting for</th><th scope="col">Gives up after</th><th scope="col">Then</th></tr></thead>
@@ -573,30 +577,44 @@ schedule_timezone = "Europe/Bucharest"
   <!-- ───────────── 6. deploy ───────────── -->
   <section id="deploy" aria-labelledby="deploy-h">
     <div class="head"><span class="eyebrow">internal/awsops Deploy · deploy.sh</span><h2 id="deploy-h">Ship the app: <code>crucible aws deploy</code></h2>
-      <p>Ships the commit you have checked out. <code>up</code> already ran it once. Run it yourself for every later release. The node must
-        be running: if it's asleep, it stops at once with <code>node is stopped; run `crucible aws wake`</code>.</p></div>
-    <div class="cmd"><pre><code>crucible aws deploy</code></pre></div>
+      <p>Tells the node which published release to run and rolls it out. <code>up</code> already ran it once. Run it yourself for every later release.
+        The node must be running: if it's asleep, it stops at once with <code>node is stopped; run `crucible aws wake`</code>. The server no longer
+        travels through S3: the node pulls the chart and the image from GHCR (<a href="#releases">how releases are made</a>).</p></div>
+    <div class="cmd"><pre><code>crucible aws deploy                    <span class="c"># this binary's own release</span>
+crucible aws deploy --version v0.4.0   <span class="c"># a release or a prerelease (v0.4.0-feat-x.3)</span>
+crucible aws deploy --build            <span class="c"># push a dev build of this tree, then run it</span></code></pre></div>
     <ol class="steps">
-      <li><h3>Names the release <span class="lane">your computer</span></h3><p>The release is the 12-character commit id. With uncommitted changes it
-        becomes <code>&lt;sha&gt;-dirty-&lt;unix time&gt;</code>, so commit first if you want a clean name.</p></li>
-      <li><h3>Builds</h3><p><code>docker buildx build --platform linux/amd64 -t crucible:&lt;sha&gt; --load .</code>, then <code>docker save</code> and gzip it,
-        then <code>helm package deploy/helm/crucible</code>. Everything goes to <code>.local/release/</code>.</p></li>
-      <li><h3>Uploads <span class="lane aws">data bucket</span></h3><p><code>releases/&lt;sha&gt;/crucible-image.tar.gz</code>, <code>releases/&lt;sha&gt;/chart.tgz</code>, then
-        <code>current-release</code>, which names the sha. It prints <span class="out">release &lt;sha&gt; published; rolling out…</span>. There's no container registry.</p></li>
+      <li><h3>Names the release <span class="lane">your computer</span></h3><p>With no flag it is the version baked into the <code>crucible</code> you run (<code>crucible version</code>). A binary built from
+        source reports <code>dev</code>, or with <code>make build</code> its <code>git describe</code> (a bare commit like <code>1044e7f</code>, commits past a tag like
+        <code>v0.3.0-3-gabc1234</code>, or a <code>-dirty</code> tree), and refuses:
+        <code>this crucible (&lt;version&gt;) was built from source and names no release: pass --version vX.Y.Z or --build</code>. <code>--version</code> takes
+        <code>vX.Y.Z</code> or a prerelease like <code>vX.Y.Z-feat-x.4</code>; <code>--version</code> and <code>--build</code> together are refused.</p></li>
+      <li><h3>Refuses an old node</h3><p>It looks at the node's <code>deploy.sh</code> over SSM. A node built before releases came from GHCR still has the old script, and <code>deploy</code> stops with
+        <code>this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up</code>. See <a href="#upgrade">Upgrading</a>.</p></li>
+      <li><h3>With <code>--build</code>: pushes a dev build <span class="lane">your computer</span></h3><p>The release is named <code>0.0.0-dev.g&lt;12-char sha&gt;</code>, with <code>-dirty.&lt;unix time&gt;</code> added when the tree has uncommitted changes.
+        It builds the <code>linux/amd64</code> server image with <code>docker buildx build --push</code>, stamped with <code>v0.0.0-dev.g&lt;sha&gt;</code> so the server reports that version, packages the chart with its image pointed at that tag, and runs <code>helm push</code> to the same
+        GHCR repositories a release uses. You need your own <code>docker login ghcr.io</code> and <code>helm registry login ghcr.io</code> with a classic token that has <code>write:packages</code>: a different, broader token than the node's <code>read:packages</code> pull token. Keep it on your machine; never put it in <code>crucible.tfvars</code>. Only the server image and the chart are rebuilt. The workspace and toolbox images come from <code>workspace_image</code> and <code>toolbox_image</code> in <code>crucible.tfvars</code> if you set them; otherwise the chart's in-tree defaults apply: plain <code>amazon/aws-cli</code> (no <code>lab-ssh</code> or <code>lab-console</code>) and no toolbox, so cluster labs are off.</p></li>
+      <li><h3>Records the release <span class="lane aws">SSM</span></h3><p>It reads the release <code>/crucible/release</code> names now, then <code>aws ssm put-parameter</code> sets it to the new version and prints
+        <span class="out">release &lt;version&gt; recorded; rolling out…</span>. If the rollout below fails (a mistyped but well-formed version, say), it puts the old value back,
+        or deletes the parameter when there was none, and still reports the failure.</p></li>
       <li><h3>Rolls out <span class="lane k8s">node, via SSM</span></h3><p>Your role sends the command; the node runs it with the node role. <code>aws ssm send-command</code> waits for <code>.ready</code>, then runs
-        <code>/opt/crucible/deploy.sh</code>. That re-reads <code>/crucible/env</code>, downloads the release, imports the image into k3s,
-        rebuilds the <code>crucible-secrets</code> Secret from SSM, and runs <code>helm upgrade --install</code> with <code>/crucible/helm-values</code>.</p></li>
-      <li><h3>Checks health</h3><p>Polls <code>/healthz</code> as <code>up</code> does, and prints <span class="out">&lt;sha&gt; is live at &lt;url&gt;</span>.</p></li>
+        <code>/opt/crucible/deploy.sh</code>. That re-reads <code>/crucible/env</code>, reads the release and the pull token from SSM, runs <code>helm registry login ghcr.io</code> with the token,
+        checks the chart exists (<code>helm show chart</code>), refreshes the <code>ghcr-pull</code> image-pull Secret and the <code>crucible-secrets</code> Secret, and runs <code>helm upgrade --install</code> from
+        <code>oci://ghcr.io/platform-infra-org/charts/crucible</code> with <code>/crucible/helm-values</code>. The token goes into a file, never onto a command line, and the registry login is removed afterwards.</p>
+        <p>A wrong token stops it before anything is applied, with a message that says what to do:
+        <code>GHCR refused the pull token: set a GitHub token with read:packages as ghcr_pull_token in crucible.tfvars and run crucible aws up</code>. A missing release gives
+        <code>cannot pull chart &lt;version&gt; from GHCR: check the release exists and ghcr_pull_token has read:packages</code>.</p></li>
+      <li><h3>Checks health</h3><p>Polls <code>/healthz</code> as <code>up</code> does, and prints <span class="out">&lt;version&gt; is live at &lt;url&gt;</span>.</p></li>
     </ol>
     <div class="note warn"><p><strong>Watch the output for one warning.</strong>
       <code>WARNING: no /crucible/secret_key: tokens and deploy keys stay refused until you re-run 'crucible aws init', then 'crucible aws deploy'</code>
       means this install predates the secret key. See <a href="#upgrade">Upgrading</a>.</p></div>
 
     <h3>Check the deploy</h3>
-    <div class="cmd"><pre><code>crucible aws status
-curl -fsS -o /dev/null -w '%{http_code}\n' https://crucible.example.com/healthz      <span class="c"># 200</span>
-aws s3 cp "s3://$(terraform -chdir=deploy/aws/persistent output -raw data_bucket)/current-release" -   <span class="c"># the sha you shipped</span></code></pre></div>
-    <p>Then look inside the node. Open a shell over SSM (no SSH port is open; <a href="aws-primer.html#q1-9">how a Session Manager shell works</a>):</p>
+    <div class="cmd"><pre><code>crucible aws status                                                                  <span class="c"># prints "release: v0.4.0"</span>
+curl -fsS -o /dev/null -w '%{http_code}\n' https://crucible.example.com/healthz      <span class="c"># 200</span></code></pre></div>
+    <p><code>status</code> reads <code>/crucible/release</code> and shows <code>release: none chosen (run crucible aws deploy)</code> when none is set.
+      Then look inside the node. Open a shell over SSM (no SSH port is open; <a href="aws-primer.html#q1-9">how a Session Manager shell works</a>):</p>
     <div class="cmd"><pre><code>aws ssm start-session --region eu-west-1 --target "$(terraform -chdir=deploy/aws/main output -raw instance_id)"</code></pre></div>
     <div class="cmd"><pre><code>sudo k3s kubectl -n crucible get pods                         <span class="c"># crucible and postgres Running</span>
 sudo k3s kubectl -n crucible get deploy crucible -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
@@ -604,8 +622,45 @@ sudo k3s kubectl -n crucible logs deploy/crucible -c api      <span class="c"># 
 sudo k3s kubectl -n crucible logs deploy/crucible -c restore  <span class="c"># "database already initialised", "restored …" or "fresh install"</span>
 systemctl is-active sysbox                                    <span class="c"># active</span>
 sudo k3s kubectl get runtimeclass sysbox-runc</code></pre></div>
-    <p>The image line ends in <code>crucible:&lt;sha&gt;</code>. Then open <code>https://crucible.example.com</code> in a browser: you should land on the Cognito
+    <p>The image line is <code>ghcr.io/platform-infra-org/crucible</code> at the release's tag or digest. Then open <code>https://crucible.example.com</code> in a browser: you should land on the Cognito
       sign-in page.</p>
+  </section>
+
+  <!-- ───────────── 6b. releases ───────────── -->
+  <section id="releases" aria-labelledby="releases-h">
+    <div class="head"><span class="eyebrow">.github/workflows · GHCR</span><h2 id="releases-h">Releases and GHCR</h2>
+      <p>CI builds and publishes every release; your computer and the node only pull. This is what exists, and the one-time setup it needs.</p></div>
+
+    <h3>What CI does</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Workflow</th><th scope="col">When</th><th scope="col">What</th></tr></thead>
+      <tbody>
+        <tr><th scope="row"><code>checks</code></th><td>Every PR and every push to main</td><td>gofmt, vet, tests, Terraform tests, the Helm chart, the workspace image scripts, content lint and the web checks.</td></tr>
+        <tr><th scope="row"><code>release</code></th><td>A PR into main</td><td>Opened or updated: builds the three multi-arch images (not pushed), the chart and the binaries, and attaches them to the run. Merged: git-cliff picks the next version from the conventional commits and tags the merge commit with it (nothing is pushed to main), pushes the three images (<code>crucible</code>, <code>crucible-workspace</code>, <code>crucible-toolbox</code>) to GHCR with provenance and SBOMs, pins the chart to their digests and pushes it, creates the GitHub Release with the binaries, <code>SHA256SUMS</code> and the changes since the last release as its notes, and last moves <code>latest</code> on the workspace and toolbox images. A merge that carries only docs or CI commits releases nothing.</td></tr>
+        <tr><th scope="row"><code>release-manual</code></th><td>By hand (Actions tab), on any branch</td><td>A prerelease named <code>&lt;next&gt;-&lt;branch&gt;.&lt;run number&gt;</code> (or the version you type): the same images, chart and binaries, flagged as a prerelease, with no <code>latest</code> tags.</td></tr>
+        <tr><th scope="row"><code>e2e</code></th><td>By hand</td><td>The browser end-to-end suites. They never run on push or PR.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Images: <code>ghcr.io/platform-infra-org/crucible</code> (the server, private), <code>crucible-workspace</code> and <code>crucible-toolbox</code> (public). The chart is
+      <code>oci://ghcr.io/platform-infra-org/charts/crucible</code> (private); its version is the release version without the <code>v</code>.</p>
+
+    <h3>One-time GHCR setup</h3>
+    <ol class="steps">
+      <li><h3>Make two packages public</h3><p>After the first release, open the <code>crucible-workspace</code> and <code>crucible-toolbox</code> packages (Package settings → Change visibility) and make them public.
+        Trainees' laptops and lab pods pull them with no login. The server image and the chart stay private.</p></li>
+      <li><h3>Create the pull token</h3><p>Create a <b>classic</b> GitHub personal access token with <code>read:packages</code> and nothing else (GHCR does not take fine-grained tokens), and set it as <code>ghcr_pull_token</code> in <code>crucible.tfvars</code> before <code>up</code>.
+        The node keeps it as the SecureString <code>/crucible/ghcr_pull_token</code>. To change it, edit the tfvars and run <code>crucible aws up</code>.</p></li>
+      <li><h3>Open the firewall</h3><p>The node must reach <code>ghcr.io</code> and <code>pkg-containers.githubusercontent.com</code> (the blob host). <code>crucible aws status</code> checks both; send any blocked line to the network team.</p></li>
+      <li><h3>Leave release tags unrestricted</h3><p>The release workflow pushes the <code>v*</code> tag as <code>github-actions</code>, which can't be on a ruleset's bypass list. A ruleset that restricts creating <code>v*</code> tags would make every release fail. <code>protect-main</code> covers only the branch, and the job never pushes to it.</p></li>
+    </ol>
+
+    <h3>When a release goes wrong</h3>
+    <ul class="muted">
+      <li><b>A PR merged from a fork cannot release</b>: the run has no write token.</li>
+      <li><b>A release run failed part-way.</b> Open the run and choose <b>Re-run failed jobs</b>. It picks up from the job that failed, with the version the run already chose, including a Release whose upload or <code>latest</code> move failed. <b>Re-run all jobs</b> is different: it resumes only a tag on this merge that has no GitHub Release yet, and does nothing once one exists.</li>
+      <li><b>An older run re-run after a newer release.</b> It publishes the older version but leaves <code>latest</code> and GitHub's <i>Latest</i> mark on the newer one.</li>
+      <li><b>Build time.</b> The images' build stages cross-compile on the runner, and only their small final stages run under QEMU for arm64.</li>
+    </ul>
   </section>
 
   <!-- ───────────── 7. first steps ───────────── -->
@@ -734,6 +789,22 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
         <p>Then <code>terraform -chdir=deploy/aws/labs plan</code> with the same <code>-var</code>s labs-init passed must show no changes.</p></li>
     </ol>
 
+    <h3 id="os-labs">OS-level labs: machines the trainee logs in to</h3>
+    <p>For labs that boot, break and repair a machine (for example Forge 402). The code ships with <code>labs-init</code> and <code>up</code>; these steps add the workspace image and the checks. How the three ways in work: <a href="deploy-architecture.html#os-access">reaching a machine</a>.</p>
+    <ol class="steps">
+      <li><h3>What labs-init adds <span class="lane aws">lab account credentials</span></h3>
+        <p>The instance role and profile <code>crucible-lab-instance</code> (the SSM agent's channels only, with an explicit deny of <code>ssm:GetParameter*</code> on Crucible's own parameters), and the lab role's Session Manager, key-push, console and Fleet Manager permissions. It also reads the account's serial console setting and prints a note when it is off:
+          <code>aws ec2 enable-serial-console-access --region &lt;region&gt;</code> is for an account admin to run (account-wide). In our account it is already on in il-central-1, so there is nothing to do.
+          <b>Check:</b> <code>aws iam get-instance-profile --instance-profile-name crucible-lab-instance</code>.</p></li>
+      <li><h3>The workspace image <span class="lane">nothing to do</span></h3>
+        <p><code>lab-ssh</code> and <code>lab-console</code> live in the workspace image. Every release pushes it and pins its chart to the digest, so leave <code>workspace_image</code> empty to use it. Set <code>workspace_image</code> in <code>crucible.tfvars</code> only to override it with your own build (by digest), then run <code>crucible aws up</code>: the commands are in <code>docs/runbooks/aws.md</code>, section "OS-level labs". A <code>--build</code> deploy without the override keeps plain <code>amazon/aws-cli</code>, without those commands.
+          <b>Check:</b> a new AWS lab's workspace answers <code>which lab-ssh lab-console</code>.</p></li>
+      <li><h3>Run <code>up</code>, then check the egress <span class="lane aws">Crucible account credentials</span></h3>
+        <p><code>up</code> gives the node the lab subnets and its own address (needed by <code>aws.direct_ssh</code> labs). The node must also reach the sign-in service, EC2 Instance Connect, the serial console endpoint (TCP 22) and GitHub's container registry for the workspace image; the host list is in the runbook. <b>Check:</b> <code>crucible aws status</code> shows no blocked host.</p></li>
+      <li><h3>Try it by hand</h3>
+        <p>The runbook's <code>docs/runbooks/aws.md</code> section "OS-level labs" lists the checks that need a real lab (plain SSH wall, GRUB on the serial console, Fleet Manager, session terminate and resume, console sign-in), each with its command and what to expect; <a href="test-guide.html#p-aws">the test guide</a> has them as a checklist. One note: <code>ssm:GetCommandInvocation</code> is allowed on <code>*</code> for lab sessions because IAM cannot scope it; it needs the command id, and listing commands is not granted.</p></li>
+    </ol>
+
     <div class="cols">
       <div><h3>Prices</h3><p>Crucible downloads the public AWS Price List for the allowed regions every week, and at start when its prices are more
         than 6 days old. The node needs outbound HTTPS to <code>pricing.us-east-1.amazonaws.com</code>. Admins see <b>Price data from
@@ -786,7 +857,7 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
       <p>For example, after pulling a version that adds the secret key and free FinOps. The runbook gives each piece separately. This is
         the order its rules imply: <code>init</code> before <code>deploy</code>, and <code>labs-init</code> before <code>up</code>.</p></div>
     <ol class="steps">
-      <li><h3>Check out the new version</h3><p>Pull and check out the commit you want to ship, with a clean working tree. Make sure
+      <li><h3>Check out the new version</h3><p>Pull the repository (the Terraform stacks come from it) and install the <code>crucible</code> of the release you want to ship, or note its version for <code>--version</code>. Make sure
         <code>deploy/aws/persistent/terraform.tfstate</code> is here; on another machine the next step's <code>init</code> restores it from the state bucket.</p></li>
       <li><h3>Re-run init with the same region and domain <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws init --region eu-west-1 --domain crucible.example.com</code></pre></div>
@@ -802,18 +873,22 @@ aws s3 ls s3://crucible-&lt;lab account&gt;-labexports/cur/ --recursive   <span 
           Then activate the cost-allocation tag (see <a href="#labs">AWS labs</a>).</p></li>
       <li><h3>Ship it <span class="lane aws">main account</span></h3>
         <div class="cmd"><pre><code>crucible aws up        <span class="c"># if you re-ran labs-init or changed crucible.tfvars; it ends by deploying</span>
-crucible aws deploy    <span class="c"># otherwise</span></code></pre></div>
+crucible aws deploy --version vX.Y.Z    <span class="c"># otherwise</span></code></pre></div>
         <p>Run <code>up</code> where the labs state is. The deploy output must not show <code>WARNING: no /crucible/secret_key</code>.</p></li>
       <li><h3>Restart the API, if the release was already running</h3>
         <p>A deploy of the release already running doesn't restart the API, so it won't see the new key. On the node:</p>
         <div class="cmd"><pre><code>sudo k3s kubectl -n crucible rollout restart deploy/crucible</code></pre></div>
-        <p>A new commit rolls the pod anyway. The restart is then harmless, apart from a few seconds offline.</p></li>
+        <p>A new release rolls the pod anyway. The restart is then harmless, apart from a few seconds offline.</p></li>
       <li><h3>Check</h3><p><code>crucible aws status</code> shows <code>healthz: ok</code>. <b>Administrator → Repositories</b> no longer says it can't keep a
         credential.</p></li>
     </ol>
     <div class="note warn"><p><strong>Old nodes need a rebuild.</strong>Terraform never applies first-boot script changes to a running node. A node built
       before sysbox (M4) has none, and one built before M6 has an older <code>deploy.sh</code>. Rebuild either with
       <code>crucible aws teardown --yes</code>, then <code>crucible aws up</code>. The data comes back from the latest snapshot.</p></div>
+    <div class="note warn"><p><strong>Migrating to releases from GHCR.</strong>A node created before this change keeps its old <code>deploy.sh</code>, and <code>deploy</code> refuses it. Add <code>ghcr_pull_token</code> to
+      <code>crucible.tfvars</code>, and remove <code>toolbox_image</code> and <code>workspace_image</code> unless you override them on purpose: the release pins both,
+      and an old pinned toolbox lacks <code>crucible ready</code>. Then run <code>crucible aws teardown --yes</code>, then <code>crucible aws up --version vX.Y.Z</code> (the snapshot restores the data). The old <code>releases/</code> objects in the data bucket
+      are no longer used; delete them by hand when you like.</p></div>
   </section>
 
   <!-- ───────────── 11. teardown ───────────── -->
@@ -984,8 +1059,10 @@ sudo k3s kubectl -n crucible-estimates get pods</code></pre></div>
         <tr><th scope="row"><code>/crucible/git_hook_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td class="money">Regenerated: update your webhooks.</td></tr>
         <tr><th scope="row"><code>/crucible/db_password</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 32 characters</td><td>Regenerated, for the new, restored database.</td></tr>
         <tr><th scope="row"><code>/crucible/quiz_secret</code></th><td>SSM SecureString, main stack</td><td>Terraform: random, 48 characters</td><td class="money">Regenerated: quizzes in progress get a new question order.</td></tr>
+        <tr><th scope="row"><code>/crucible/ghcr_pull_token</code></th><td>SSM SecureString, main stack</td><td>Your <code>ghcr_pull_token</code> (<code>read:packages</code>)</td><td>Recreated from your tfvars.</td></tr>
         <tr><th scope="row"><code>/crucible/smtp_password</code></th><td>SSM SecureString, main stack, only when set</td><td>Your <code>smtp_password</code></td><td>Recreated from your tfvars.</td></tr>
         <tr><th scope="row"><code>/crucible/env</code>, <code>/crucible/helm-values</code></th><td>SSM String, main stack</td><td>Terraform, from your tfvars and the labs outputs</td><td>Recreated. Not secret.</td></tr>
+        <tr><th scope="row"><code>/crucible/release</code></th><td>SSM String</td><td><code>crucible aws deploy</code> (not Terraform)</td><td>Kept, so a rebuilt node deploys the same release.</td></tr>
         <tr><th scope="row"><code>crucible-secrets</code></th><td>Kubernetes Secret, namespace <code>crucible</code></td><td><code>deploy.sh</code>, from the SSM values above, on every deploy: <code>CRUCIBLE_SECRET_KEY</code>, <code>OIDC_CLIENT_SECRET</code>, <code>CRUCIBLE_GIT_HOOK_SECRET</code>, <code>CRUCIBLE_QUIZ_SECRET</code>, <code>POSTGRES_PASSWORD</code>, <code>git-credentials</code>; the <code>CRUCIBLE_SMTP_*</code> keys whose <code>smtp_*</code> settings are set</td><td>Rebuilt on the new node from the SSM values. SMTP keys added by hand must be added again.</td></tr>
         <tr><th scope="row">Persistent state</th><td><code>deploy/aws/persistent/terraform.tfstate</code>, local</td><td><code>init</code></td><td>Untouched. <code>init</code> copies it to <code>persistent.tfstate</code> in the state bucket. Holds the secret key and Cognito client secret in plain text.</td></tr>
         <tr><th scope="row">Labs state</th><td><code>deploy/aws/labs/terraform.tfstate</code>, local</td><td><code>labs-init</code></td><td>Untouched. <code>labs-init</code> copies it to <code>labs-stack.tfstate</code> in the lab state bucket.</td></tr>

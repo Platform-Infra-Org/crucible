@@ -1,0 +1,6 @@
+id: forge-402
+title: "Forge 402: Machine Rooms"
+description: Two AWS labs on the operating system itself, a boot that stops at GRUB and an sshd that locks you out. Real AWS only; the dry run prices them but cannot boot them.
+maintainers: [senior@crucible.local]
+progression: free
+modules: [01-grub-rescue, 02-locked-out]

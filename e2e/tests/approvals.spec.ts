@@ -34,7 +34,7 @@ test('a leader makes a trainee a participant on Manage trainings, approves a pai
   await trainee.getByRole('link', { name: 'Connect your laptop' }).click()
   await trainee.getByRole('button', { name: 'Generate pairing token' }).click()
   const token = (await trainee.getByTestId('pairing-token').textContent())!.trim()
-  agent = spawn(process.env.CRUCIBLE_AGENT!, ['--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
+  agent = spawn(process.env.CRUCIBLE_AGENT!, ['agent', '--server', 'http://localhost:8080'], { stdio: 'inherit', env: { ...process.env, CRUCIBLE_TOKEN: token } })
   await expect(trainee.getByRole('status').filter({ hasText: /Agent connected/ })).toBeVisible({ timeout: 30_000 })
   await trainee.goto('/p/forge/forge-201/m/01-paid-lab/lab')
   await trainee.getByRole('button', { name: 'Request approval ($0.50)' }).click()

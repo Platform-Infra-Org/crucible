@@ -91,6 +91,7 @@ locals {
     git_hook_secret    = random_password.hook.result
     db_password        = random_password.db.result
     quiz_secret        = random_password.quiz.result
+    ghcr_pull_token    = var.ghcr_pull_token
   }
 }
 
@@ -125,9 +126,10 @@ resource "aws_ssm_parameter" "env" {
 resource "aws_ssm_parameter" "helm_values" {
   name = "/${var.name}/helm-values"
   type = "String"
-  value = yamlencode({
-    toolboxImage = var.toolbox_image # empty: cluster labs stay off
-    awsLabs = {
+  # toolboxImage and workspaceImage only when set: deploy.sh applies these after the release's chart values, so an
+  # empty value here would replace the release's pinned image.
+  value = yamlencode(merge({
+    awsLabs = merge({
       enabled     = var.lab_role_arn != ""
       labRoleArn  = var.lab_role_arn
       opsRoleArn  = var.lab_ops_role_arn
@@ -142,12 +144,15 @@ resource "aws_ssm_parameter" "helm_values" {
       # where lab modules launch (var.crucible_vpc_id, var.crucible_subnet_ids); empty: the default VPC
       vpcId     = var.lab_vpc_id
       subnetIds = var.lab_subnet_ids
-    }
-  })
+      # OS-level labs: the instance profile modules may attach, and the CIDRs direct_ssh labs open TCP 22 to
+      instanceProfile = var.lab_instance_profile
+      subnetCidrs     = var.lab_subnet_cidrs
+    }, var.workspace_image == "" ? {} : { workspaceImage = var.workspace_image })
+  }, var.toolbox_image == "" ? {} : { toolboxImage = var.toolbox_image }))
 }
 
 resource "aws_ssm_parameter" "secret" {
-  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret"])
+  for_each = toset(["oidc_client_secret", "git_credentials", "git_hook_secret", "db_password", "quiz_secret", "ghcr_pull_token"])
   name     = "/${var.name}/${each.key}"
   type     = "SecureString"
   value    = local.params[each.key]

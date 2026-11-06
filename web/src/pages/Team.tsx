@@ -362,7 +362,7 @@ function Programs({ team }: { team: TeamView }) {
       <div className="row panel-head">
         <h2 id="programs">Trainings it owns</h2>
         <span className="spacer" />
-        {me.can_manage_trainings && <Link to="/trainings/manage?new">Register a training</Link>}
+        {me.can_manage_trainings && <Link className="action" to="/trainings/manage?new">Register a training</Link>}
       </div>
       {team.programs.length === 0 && <p className="muted">This team owns no training yet. Its leaders, seniors and juniors can register one.</p>}
       {team.programs.length > 0 && (
@@ -375,7 +375,7 @@ function Programs({ team }: { team: TeamView }) {
                 <td>{p.resolved.participants.length}</td>
                 <td>{p.schedule || 'any time'}</td>
                 <td>{p.budget_usd_month ? `${usd(p.budget_usd_month)}/month` : '—'}</td>
-                <td className="actions">{me.can_manage_trainings && <Link to={`/trainings/manage/${p.training}`}>{p.can_manage ? 'Manage' : 'Details'}</Link>}</td>
+                <td className="actions">{me.can_manage_trainings && <Link className="action" to={`/trainings/manage/${p.training}`}>{p.can_manage ? 'Manage' : 'Details'}</Link>}</td>
               </tr>
             ))}
           </tbody>

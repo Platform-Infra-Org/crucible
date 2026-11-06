@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"crucible/internal/docs"
 )
 
 func TestLintExamplesPass(t *testing.T) {
-	for _, dir := range []string{"../../examples/forge-101", "../../examples/platform"} {
+	for _, dir := range []string{"../../examples/forge-101", "../../examples/forge-402", "../../examples/platform"} {
 		var out bytes.Buffer
 		if code := lint(dir, &out); code != 0 {
 			t.Fatalf("%s: exit %d\n%s", dir, code, out.String())
@@ -78,5 +81,51 @@ func TestInviteNeedsOneEmail(t *testing.T) {
 	// EMAIL then --name parses (flags stop at a plain argument): it gets as far as reading the stack, which fails here.
 	if code := awsCmd([]string{"invite", "alice@example.com", "--name", "Alice Smith"}); code != 1 {
 		t.Fatalf("invite EMAIL --name: exit %d, want 1 (past argument checks)", code)
+	}
+}
+
+func TestVersionPrintsTheStampedVersion(t *testing.T) {
+	var out bytes.Buffer
+	if code := runMain([]string{"version"}, &out, io.Discard); code != 0 || strings.TrimSpace(out.String()) != docs.Version {
+		t.Fatalf("version: exit %d, %q", code, out.String())
+	}
+}
+
+func TestUnknownCommandShowsUsage(t *testing.T) {
+	var errw bytes.Buffer
+	if code := runMain([]string{"nope"}, io.Discard, &errw); code != 2 || !strings.Contains(errw.String(), "crucible serve") {
+		t.Fatalf("exit %d, usage %q", code, errw.String())
+	}
+}
+
+func TestAgentAndReadyAreSubcommands(t *testing.T) {
+	for _, k := range []string{"CRUCIBLE_SERVER", "CRUCIBLE_TOKEN", "LAB_NAMESPACE"} {
+		t.Setenv(k, "")
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"agent", "cluster"}, "crucible agent cluster up|down"},
+		{[]string{"ready"}, "crucible ready [--json]"},
+		{[]string{"agent"}, "crucible agent --server"},
+	} {
+		var errw bytes.Buffer
+		code := runMain(c.args, io.Discard, &errw)
+		if code != 2 || !strings.Contains(errw.String(), c.want) || strings.Contains(errw.String(), "crucible serve") {
+			t.Errorf("%v: exit %d, stderr %q (want 2 and %q)", c.args, code, errw.String(), c.want)
+		}
+	}
+	for _, args := range [][]string{{"agent", "-h"}, {"ready", "-h"}} {
+		if code := runMain(args, io.Discard, io.Discard); code != 0 {
+			t.Errorf("%v: exit %d, want 0", args, code)
+		}
+	}
+}
+
+func TestDeployVersionAndBuildAreExclusive(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no terraform or aws on PATH: a regression fails, it never reaches AWS
+	if code := awsCmd([]string{"deploy", "--version", "v1.0.0", "--build"}); code != 2 {
+		t.Fatalf("exit %d", code)
 	}
 }

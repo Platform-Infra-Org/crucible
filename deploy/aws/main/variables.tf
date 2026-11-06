@@ -170,6 +170,25 @@ variable "lab_subnet_ids" {
   default     = ""
   description = "Set by `crucible aws up` from the labs stack: comma-separated subnets lab modules launch into"
 }
+variable "lab_instance_profile" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: the instance profile lab modules may attach (var.crucible_instance_profile)"
+}
+variable "lab_subnet_cidrs" {
+  type        = string
+  default     = ""
+  description = "Set by `crucible aws up` from the labs stack: comma-separated CIDRs of the lab subnets (direct_ssh labs)"
+}
+variable "workspace_image" {
+  type        = string
+  default     = ""
+  description = "The AWS lab workspace image by digest (deploy/workspace). Empty = the release's pinned image (chart values); set = an override."
+  validation {
+    condition     = var.workspace_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.workspace_image))
+    error_message = "workspace_image must be empty or pinned by digest: <image>@sha256:<64 hex>"
+  }
+}
 variable "bootstrap_admin" {
   type        = string
   default     = ""
@@ -182,7 +201,7 @@ variable "bootstrap_admin" {
 variable "toolbox_image" {
   type        = string
   default     = ""
-  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = cluster labs off."
+  description = "Cluster labs: the toolbox image trainees' laptops pull (deploy/toolbox), pinned by digest (<image>@sha256:<64 hex>). Empty = the release's pinned image (chart values); set = an override."
   validation {
     condition     = var.toolbox_image == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}$", var.toolbox_image))
     error_message = "toolbox_image must be empty or an image pinned by digest, e.g. ghcr.io/you/crucible-toolbox@sha256:<64 hex>: laptops pull it, so never a tag."
@@ -221,4 +240,18 @@ variable "smtp_password" {
   default     = ""
   sensitive   = true
   description = "Stored as the SecureString /<name>/smtp_password; deploy.sh copies it into crucible-secrets"
+}
+
+variable "ghcr_pull_token" {
+  type        = string
+  sensitive   = true
+  description = "A classic GitHub personal access token with read:packages only (GHCR does not take fine-grained tokens): the node pulls Crucible's private chart and server image from GHCR"
+  validation {
+    condition     = var.ghcr_pull_token != ""
+    error_message = "ghcr_pull_token is required (a classic GitHub personal access token with read:packages)"
+  }
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_]+$", var.ghcr_pull_token))
+    error_message = "ghcr_pull_token must be a GitHub token: letters, digits and _ only"
+  }
 }

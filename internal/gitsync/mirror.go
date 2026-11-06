@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -20,7 +21,7 @@ import (
 type Mirror struct{ URL, Dir string }
 
 // AllowFileTransport lets remotes use the file transport (local paths, file://): local stacks mount seeded repos at
-// /git. It is off by default, so a repo URL can't read the server's own disk (other clones, mirrors). crucible-api sets
+// /git. It is off by default, so a repo URL can't read the server's own disk (other clones, mirrors). crucible serve sets
 // it from CRUCIBLE_GIT_ALLOW_FILE (AllowFileFromEnv); tests that use local bare repos as remotes set it in TestMain.
 var AllowFileTransport bool
 
@@ -43,7 +44,11 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.WaitDelay = 5 * time.Second // a cancelled git's helpers (remote-https, a local receive-pack) may keep its output open
+	// A cancelled git takes its whole process group with it: its helpers (remote-https, ssh, a local receive-pack and its
+	// hooks) would otherwise run on, writing into the repo after the caller moved on. Unix only, as is every build.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second // backstop: a helper that left the group may still hold git's output open
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+global)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

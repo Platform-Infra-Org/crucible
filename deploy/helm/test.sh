@@ -11,7 +11,9 @@ need "to_regclass('public.users')"                       # restore only into an 
 need 'router.tls.certresolver: le'
 need 'router.entrypoints: websecure'
 need 'host: crucible.example.com'
-need 'imagePullPolicy: Never'
+need 'imagePullPolicy: IfNotPresent'
+need 'image: "docker.io/library/crucible:dev"'
+if grep -q imagePullSecrets <<<"$out"; then echo "default render must have no imagePullSecrets"; exit 1; fi
 need 'type: Recreate'
 need 'CRUCIBLE_QUIZ_SECRET'
 need 'list-objects-v2'
@@ -77,6 +79,10 @@ grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: ""' <<<"$awsout" || { echo "a
 net=$(helm template t "$chart" $aws --set awsLabs.vpcId=vpc-0abc --set awsLabs.subnetIds=subnet-01\\,subnet-02)
 grep -q 'name: CRUCIBLE_AWS_LAB_VPC_ID, value: "vpc-0abc"' <<<"$net" || { echo "missing: lab VPC env"; exit 1; }
 grep -q 'name: CRUCIBLE_AWS_LAB_SUBNET_IDS, value: "subnet-01,subnet-02"' <<<"$net" || { echo "missing: lab subnets env"; exit 1; }
+os=$(helm template t "$chart" $aws --set awsLabs.instanceProfile=crucible-lab-instance --set awsLabs.subnetCidrs=10.2.129.0/24)
+for want in 'name: CRUCIBLE_AWS_LAB_INSTANCE_PROFILE, value: "crucible-lab-instance"' 'name: CRUCIBLE_AWS_LAB_SUBNET_CIDRS, value: "10.2.129.0/24"' 'fieldPath: status.hostIP'; do
+  grep -q -- "$want" <<<"$os" || { echo "missing: $want"; exit 1; }
+done
 # fixwave I1: the runner pod holds the lab credentials, so its images are pinned by digest, never a re-pushable tag.
 for img in CRUCIBLE_AWS_WORKSPACE_IMAGE CRUCIBLE_TERRAFORM_IMAGE; do
   grep -q "name: $img, value: \"[^\"]*@sha256:[0-9a-f]\{64\}\"" <<<"$awsout" || { echo "$img must be pinned by digest"; exit 1; }
@@ -120,10 +126,24 @@ for want in 'namespace: crucible-estimates' 'kind: Role, name: crucible-estimate
   grep -q -- "$want" <<<"$rb" || { echo "estimates RoleBinding: missing $want"; exit 1; }
 done
 vap=$(docof ValidatingAdmissionPolicy)
-grep -q "object.metadata.name == 'crucible-estimates'" <<<"$vap" || { echo "admission: crucible-api may create crucible-estimates"; exit 1; }
+grep -q "object.metadata.name == 'crucible-estimates'" <<<"$vap" || { echo "admission: crucible serve may create crucible-estimates"; exit 1; }
 grep -q "namespaceObject.metadata.name.startsWith('lab-') || namespaceObject.metadata.name == 'crucible-estimates'" <<<"$vap" ||
   { echo "admission: writes only in lab-* and crucible-estimates"; exit 1; }
 if grep -qE "crucible-estimates|kind: Role$|kind: Namespace$" <<<"$rbac"; then echo "estimates RBAC only with aws labs"; exit 1; fi
 if helm template t "$chart" $aws --set clusterLabs.enabled=false >/dev/null 2>&1; then echo "aws labs need cluster labs"; exit 1; fi
 if helm template t "$chart" $base --set awsLabs.enabled=true >/dev/null 2>&1; then echo "aws labs need the lab account's role ARNs"; exit 1; fi
 echo "helm chart OK"
+# Images: a digest wins over the tag; the pull secret lands on every pod that runs the server image.
+dg=sha256:$(printf 'a%.0s' $(seq 64))
+dig=$(helm template t "$chart" $base --set image.repository=ghcr.io/platform-infra-org/crucible --set image.tag=1.2.3 --set image.digest=$dg)
+grep -q "ghcr.io/platform-infra-org/crucible@$dg" <<<"$dig" || { echo "digest not rendered"; exit 1; }
+if grep -q 'crucible:1.2.3' <<<"$dig"; then echo "tag must not render when a digest is set"; exit 1; fi
+bare=$(printf 'a%.0s' $(seq 64))
+for bad in "$bare" "sha256:abc" "sha256:$(printf 'G%.0s' $(seq 64))"; do
+  if err=$(helm template t "$chart" $base --set image.digest="$bad" 2>&1 >/dev/null); then echo "digest $bad must fail"; exit 1; fi
+  grep -q 'image.digest must be' <<<"$err" || { echo "digest $bad failed, but not by the guard"; exit 1; }
+done
+ps=$(helm template t "$chart" $base --set image.pullSecret=ghcr-pull)
+want=$(grep -c 'image: "docker.io/library/crucible' <<<"$ps")
+got=$(grep -c -- '- name: ghcr-pull' <<<"$ps")
+[ "$want" -ge 1 ] && [ "$want" = "$got" ] || { echo "pull secret: $got of $want server-image pods"; exit 1; }

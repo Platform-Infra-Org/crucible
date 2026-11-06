@@ -53,7 +53,7 @@ test('a content edit is reviewed and merged; the trainee earns a badge; senior a
   await trainee.getByLabel('Hot iron').check()
   await trainee.getByRole('button', { name: 'Submit answers' }).click()
   await expect(trainee.getByRole('status').filter({ hasText: 'Passed' })).toBeVisible()
-  await trainee.getByRole('link', { name: 'Hearth', exact: true }).click()
+  await trainee.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Hearth', exact: true }).click()
   await expect(trainee.getByTestId('badges')).toContainText('Forge 102: Sparks')
   // CARRY (M4): Forge 101's cluster module can't be finished in local-check, so never assert a particular rank.
   const nice = trainee.getByRole('button', { name: 'Nice' }) // a rank-up banner may be showing

@@ -60,7 +60,7 @@ func TestProgressionUnlocksModuleTwo(t *testing.T) {
 		t.Fatalf("outline after module 1: %+v", o)
 	}
 	_, md, err := s.Reading(ctx, u, "forge", "forge-101", "02-first-lab", "before-the-lab")
-	if err != nil || !strings.Contains(md, "crucible-agent") {
+	if err != nil || !strings.Contains(md, "crucible agent") {
 		t.Fatalf("reading module 2: %v", err)
 	}
 }

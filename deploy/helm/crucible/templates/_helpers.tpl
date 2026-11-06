@@ -1,0 +1,1 @@
+{{- define "crucible.image" -}}{{ if and .Values.image.digest (not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.image.digest)) }}{{ fail "image.digest must be sha256:<64 hex>" }}{{ end }}{{ .Values.image.repository }}{{ if .Values.image.digest }}@{{ .Values.image.digest }}{{ else }}:{{ .Values.image.tag }}{{ end }}{{- end -}}

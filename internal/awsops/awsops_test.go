@@ -318,7 +318,7 @@ func TestStatusShowsTheRelease(t *testing.T) {
 
 func TestSleepSnapshotsBeforeStop(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false); err != nil {
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, true); err != nil {
 		t.Fatal(err)
 	}
 	snap, stop := indexOf(r.calls, "/opt/crucible/snapshot.sh"), indexOf(r.calls, "stop-instances")
@@ -329,13 +329,13 @@ func TestSleepSnapshotsBeforeStop(t *testing.T) {
 
 func TestTeardownRequiresYes(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", false, false); err == nil {
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", false, false, true); err == nil {
 		t.Fatal("teardown without --yes must fail")
 	}
 	if indexOf(r.calls, "destroy") >= 0 {
 		t.Fatal("nothing may be destroyed without --yes")
 	}
-	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false); err != nil {
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if snap, destroy := indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "destroy"); snap < 0 || destroy < snap {
@@ -371,7 +371,7 @@ func TestDeployAndSnapshotRefuseStoppedNode(t *testing.T) {
 func TestTeardownStates(t *testing.T) {
 	for state, wantDestroy := range map[string]bool{"": false, "stopping": false, "pending": false, "stopped": true} {
 		r := &recorder{output: stateAWS(state)}
-		err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false)
+		err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, true)
 		if got := indexOf(r.calls, "destroy") >= 0; got != wantDestroy || (err == nil) != wantDestroy {
 			t.Fatalf("state %q: destroyed=%v err=%v", state, got, err)
 		}
@@ -383,7 +383,7 @@ func TestTeardownStates(t *testing.T) {
 
 func TestSleepAbortsWhenStateUnknown(t *testing.T) {
 	r := &recorder{output: stateAWS("")}
-	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false); err == nil {
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, true); err == nil {
 		t.Fatal("must abort")
 	}
 	if indexOf(r.calls, "stop-instances") >= 0 {
@@ -461,10 +461,10 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 
 func TestNoSnapshotSkipsSnapshotLoudly(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	if err := r.ops(t.TempDir()).SleepNode(context.Background(), true); err != nil {
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), true, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, true); err != nil {
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, true, true); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "send-command") >= 0 || indexOf(r.calls, "stop-instances") < 0 || indexOf(r.calls, "destroy") < 0 {
@@ -1441,5 +1441,146 @@ func TestStatusSaysWhenNoReleaseIsChosen(t *testing.T) {
 	}
 	if !strings.Contains(r.log.String(), "release: none chosen (run crucible aws deploy)") {
 		t.Fatalf("status:\n%s", r.log.String())
+	}
+}
+
+func TestSleepPutsTheLabsToSleepBeforeTheSnapshot(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false); err != nil {
+		t.Fatal(err)
+	}
+	bed, snap, stop := indexOf(r.calls, "crucible labs bedtime --wait 20m"), indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, "stop-instances")
+	if bed < 0 || !(bed < snap && snap < stop) {
+		t.Fatalf("labs asleep, then the snapshot (which records them asleep), then the node: %v", r.calls)
+	}
+	if !strings.Contains(r.calls[bed], "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n crucible exec deploy/crucible -c api -- crucible labs") {
+		t.Fatalf("run in the server's pod: %s", r.calls[bed])
+	}
+}
+
+func TestSleepCancelsAFailedBedtimeAndKeepsTheNodeUp(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "bedtime --wait") {
+			return errors.New("still waiting after 20m0s: 3c1f… (ready)")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false)
+	if err == nil || !strings.Contains(err.Error(), "--keep-labs") {
+		t.Fatalf("it says what to do: %v", err)
+	}
+	if indexOf(r.calls, "crucible labs bedtime --cancel") < 0 || indexOf(r.calls, "snapshot.sh") >= 0 || indexOf(r.calls, "stop-instances") >= 0 {
+		t.Fatalf("the bedtime is cancelled and the node stays up: %v", r.calls)
+	}
+}
+
+func TestSleepKeepLabsWarnsAndSkipsTheBedtime(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, true); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "crucible labs") >= 0 || !strings.Contains(r.log.String(), "keep running and billing") {
+		t.Fatalf("%v\n%s", r.calls, r.log.String())
+	}
+}
+
+func TestTeardownEndsEveryLabFirst(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false); err != nil {
+		t.Fatal(err)
+	}
+	end, snap, destroy := indexOf(r.calls, "crucible labs stop-all --wait 30m"), indexOf(r.calls, "snapshot.sh"), indexOf(r.calls, " destroy -auto-approve")
+	if end < 0 || !(end < snap && snap < destroy) {
+		t.Fatalf("labs end, then the snapshot, then the destroy: %v", r.calls)
+	}
+}
+
+func TestTeardownRefusesAStoppedNodeUnlessKeepLabs(t *testing.T) {
+	stopped := func(cmd string) string {
+		if strings.Contains(cmd, "describe-instances") {
+			return "stopped"
+		}
+		return fakeAWS(cmd)
+	}
+	r := &recorder{output: stopped}
+	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
+	if err == nil || !strings.Contains(err.Error(), "crucible aws wake") || indexOf(r.calls, " destroy ") >= 0 {
+		t.Fatalf("a stopped server can't end its labs: %v %v", err, r.calls)
+	}
+	r = &recorder{output: stopped}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, true); err != nil {
+		t.Fatalf("--keep-labs tears down anyway: %v", err)
+	}
+}
+
+func TestTeardownListsWhatIsStillTagged(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		switch {
+		case strings.Contains(cmd, "labs output -json"):
+			return `{"regions":{"value":"eu-west-1,eu-central-1"}}`
+		case strings.Contains(cmd, "get-resources") && strings.Contains(cmd, "eu-west-1"):
+			return "arn:aws:ec2:eu-west-1:1:instance/i-0abc"
+		}
+		return fakeAWS(cmd)
+	}}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.log.String(), "arn:aws:ec2:eu-west-1:1:instance/i-0abc") || indexOf(r.calls, "get-resources --region eu-central-1") < 0 {
+		t.Fatalf("every lab region is checked, leftovers named: %s", r.log.String())
+	}
+}
+
+func TestSleepReopensTheLabsWhenTheSnapshotFails(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "snapshot.sh") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	if err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false); err == nil {
+		t.Fatal("a failed snapshot stops the sleep")
+	}
+	if indexOf(r.calls, "bedtime --cancel") < 0 || indexOf(r.calls, "stop-instances") >= 0 {
+		t.Fatalf("the node stays up, so the bedtime is cancelled: %v", r.calls)
+	}
+}
+
+func TestSleepWontSkipTheBedtimeOnAnUnknownState(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "describe-instances") {
+			return errors.New("throttled")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).SleepNode(context.Background(), true, false)
+	if err == nil || !strings.Contains(err.Error(), "--keep-labs") || indexOf(r.calls, "stop-instances") >= 0 {
+		t.Fatalf("%v %v", err, r.calls)
+	}
+}
+
+func TestSleepSaysWhenCancellingTheBedtimeFailsToo(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "bedtime") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).SleepNode(context.Background(), false, false)
+	if err == nil || !strings.Contains(err.Error(), "cancelling the bedtime failed too") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestTeardownFailedStopAllSaysLabsStayPaused(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "stop-all") {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
+	if err == nil || !strings.Contains(err.Error(), "kill switch") || !strings.Contains(err.Error(), "crucible aws teardown --yes") {
+		t.Fatalf("%v", err)
 	}
 }

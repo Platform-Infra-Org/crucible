@@ -160,3 +160,13 @@ and a missing region or ceiling, without an AWS account.
 
 While a lab runs, Crucible meters what it actually built from its Terraform state, and later replaces that with what
 AWS billed. Leaders see both on the [Ledger](/docs/leaders/ledger-and-content-versions).
+
+## Overnight and hibernation
+
+AWS labs sleep with the platform: at bedtime Crucible puts every running lab's machines to sleep, and wakes them when
+the trainee opens the lab in the morning. A machine with `hibernation = true` and `root_block_device { encrypted = true }`
+resumes with its processes where the trainee left them. Give it a root disk larger than its RAM and an image that can
+hibernate: Amazon Linux 2023, or Ubuntu with `ec2-hibinit-agent`. Any other machine, or one that can't hibernate (a
+broken boot, say), is stopped and boots again from its disk, so anything it held only in memory is gone.
+
+`crucible lint` refuses `hibernation` without an encrypted root disk, because AWS hibernates only to an encrypted one.

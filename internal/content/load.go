@@ -944,6 +944,9 @@ func (l *loader) tfFile(root, p string, isJSON bool) {
 		case "provider":
 			l.add(p, "do not declare provider blocks (%s): Crucible adds the aws provider with the lab's region and tags", blk.Labels[0])
 		case "resource", "data", "ephemeral", "action":
+			if blk.Type == "resource" && blk.Labels[0] == "aws_instance" {
+				l.tfHibernation(p, blk.Body)
+			}
 			if blk.Type == "resource" && l.tfTypes[blk.Labels[0]] == "" {
 				l.tfTypes[blk.Labels[0]] = p
 			}
@@ -1613,4 +1616,40 @@ func (l *loader) readyCheck(lf, where string, lab *Lab, s *Script) {
 			l.add(lf, "%s: ready: %s is not a release of this lab", where, r)
 		}
 	}
+}
+
+var (
+	tfInstanceSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "hibernation"}},
+		Blocks: []hcl.BlockHeaderSchema{{Type: "root_block_device"}}}
+	tfRootDiskSchema = &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "encrypted"}}}
+)
+
+// tfHibernation: a hibernating machine writes its RAM to its root disk, and AWS hibernates only to an encrypted one
+// (otherwise the launch fails after the trainee waited for it). hibernation set to anything but a literal false needs
+// root_block_device { encrypted = true }.
+func (l *loader) tfHibernation(p string, body hcl.Body) {
+	c, _, _ := body.PartialContent(tfInstanceSchema)
+	a := c.Attributes["hibernation"]
+	if a == nil || tfBool(a.Expr) == "false" {
+		return
+	}
+	for _, b := range c.Blocks {
+		rc, _, _ := b.Body.PartialContent(tfRootDiskSchema)
+		if e := rc.Attributes["encrypted"]; e != nil && tfBool(e.Expr) == "true" {
+			return
+		}
+	}
+	l.add(p, "aws_instance with hibernation needs root_block_device { encrypted = true } (AWS hibernates only to an encrypted root disk)")
+}
+
+// tfBool is a literal bool's value, "" for anything else (a variable, an expression).
+func tfBool(e hcl.Expression) string {
+	v, d := e.Value(nil)
+	if d.HasErrors() || v.IsNull() || !v.IsKnown() || v.Type() != cty.Bool {
+		return ""
+	}
+	if v.True() {
+		return "true"
+	}
+	return "false"
 }

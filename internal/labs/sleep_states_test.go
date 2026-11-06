@@ -191,3 +191,23 @@ func TestLedgerListsSleepingAndWakingLabsAsRunning(t *testing.T) {
 		t.Fatalf("both still cost their disks: %+v %v", l.Running, err)
 	}
 }
+
+func TestAWakeThatNeverFinishedPastItsDeadlineIsDestroyed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	run, _ := f.withAWS(t)
+	id := f.approvedAWS(t)
+	f.waitState(t, f.u, id, Ready)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'waking', waking_since = $2, ends_at = $3 WHERE id = $1`,
+		id, f.clk.Now(), f.clk.Now().Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Add(21 * time.Minute)
+	f.s.Sweep(ctx)
+	f.waitState(t, f.u, id, Destroyed)
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if len(run.slept) != 0 {
+		t.Fatalf("a lab out of time is destroyed, not put to sleep: %v", run.slept)
+	}
+}

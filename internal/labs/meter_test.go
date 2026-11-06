@@ -358,3 +358,28 @@ func TestMeterSleepPricesOnlyDisksUntilTheLabWakes(t *testing.T) {
 		t.Fatalf("an hour running and ten asleep: $%v, want $%v", usd, want)
 	}
 }
+
+func TestMeterLeavesASleepingLabsRowsAlone(t *testing.T) {
+	ctx := context.Background()
+	f, cloud, inst, lab := meterFixture(t, corev1.PodSucceeded)
+	cloud.SetState(inst.ID, stateWith("aws_instance.web"))
+	if err := f.s.Meter(ctx, inst, lab); err != nil {
+		t.Fatal(err)
+	}
+	f.clk.Add(time.Hour)
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'asleep', slept_at = $2 WHERE id = $1`, inst.ID, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.meterSleep(ctx, inst.ID, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	asleep := openRows(t, f, inst.ID)
+	f.clk.Add(time.Hour)
+	cloud.SetState(inst.ID, stateWith("aws_instance.web", "aws_instance.db")) // applied by hand before bedtime, never metered
+	if err := f.s.Meter(ctx, inst, lab); err != nil {
+		t.Fatal(err)
+	}
+	if got := openRows(t, f, inst.ID); len(got) != 1 || got["aws_instance.web"] != asleep["aws_instance.web"] {
+		t.Fatalf("asleep, the rows keep their disk price, never the full one again: %v → %v", asleep, got)
+	}
+}

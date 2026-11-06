@@ -25,6 +25,7 @@ const usage = `usage:
   crucible version
   crucible agent --server URL (CRUCIBLE_TOKEN=TOKEN) | crucible agent cluster up|down [--name crucible]
   crucible ready [--json] <release>... | all
+  crucible labs bedtime [--wait D] [--cancel] | stop-all [--wait D] | status
   crucible lint <content-or-platform-dir>
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
@@ -77,6 +78,8 @@ func runMain(args []string, out, errw io.Writer) int {
 		return 0
 	case "agent":
 		return agentCmd(args[1:], out, errw)
+	case "labs":
+		return labsCmd(args[1:], out, errw)
 	case "ready":
 		return readyCmd(args[1:], out, errw)
 	case "lint":

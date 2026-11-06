@@ -461,7 +461,7 @@ run "encrypted_volumes_only_through_ec2" {
   assert {
     condition = alltrue([for doc in [jsondecode(aws_iam_policy.boundary.policy), jsondecode(aws_iam_role_policy.lab.policy)] :
       one([for s in doc.Statement : s if s.Sid == "EbsEncryptionViaEC2"]).Condition.StringLike["kms:ViaService"] == "ec2.*.amazonaws.com" &&
-      alltrue([for a in one([for s in doc.Statement : s if s.Sid == "EbsEncryptionViaEC2"]).Action : startswith(a, "kms:")])])
+    alltrue([for a in one([for s in doc.Statement : s if s.Sid == "EbsEncryptionViaEC2"]).Action : startswith(a, "kms:")])])
     error_message = "a hibernating lab machine's encrypted disk uses KMS only through EC2"
   }
 }

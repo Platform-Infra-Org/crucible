@@ -196,7 +196,7 @@ resource "aws_iam_policy" "boundary" {
       { Sid = "Ceiling", Effect = "Allow", Action = ["ec2:*", "s3:*", "sts:GetCallerIdentity", "tag:GetResources", "ssm:*", "ssm-guiconnect:*", "ec2-instance-connect:*"], Resource = "*" },
       { Sid = "PassOnlyTheLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn },
       # Encrypted lab disks (hibernation needs one) with the account's aws/ebs key, and only through EC2.
-      { Sid = "EbsEncryptionViaEC2", Effect = "Allow", Resource = "*",
+      { Sid    = "EbsEncryptionViaEC2", Effect = "Allow", Resource = "*",
         Action = ["kms:CreateGrant", "kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext", "kms:ReEncrypt*"],
       Condition = { StringLike = { "kms:ViaService" = "ec2.*.amazonaws.com" } } },
       # Defence in depth: only the shell, ssh and local port-forward documents (ToRemoteHost is denied). The real fence against
@@ -256,7 +256,7 @@ resource "aws_iam_role_policy" "lab" {
       { Sid = "PassLabInstanceRole", Effect = "Allow", Action = "iam:PassRole", Resource = aws_iam_role.lab_instance.arn,
       Condition = { StringEquals = { "iam:PassedToService" = "ec2.amazonaws.com" } } },
       # Encrypted lab disks (hibernation needs one) with the account's aws/ebs key, and only through EC2.
-      { Sid = "EbsEncryptionViaEC2", Effect = "Allow", Resource = "*",
+      { Sid    = "EbsEncryptionViaEC2", Effect = "Allow", Resource = "*",
         Action = ["kms:CreateGrant", "kms:Decrypt", "kms:DescribeKey", "kms:GenerateDataKeyWithoutPlaintext", "kms:ReEncrypt*"],
       Condition = { StringLike = { "kms:ViaService" = "ec2.*.amazonaws.com" } } },
       { Sid = "SessionsToOwn", Effect = "Allow", Action = "ssm:StartSession", Resource = "arn:aws:ec2:*:*:instance/*",

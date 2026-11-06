@@ -94,7 +94,7 @@ func (s *Service) Reap(ctx context.Context) error {
 	defer wcancel()
 	if complete {
 		if _, err := s.DB.Exec(wctx, `UPDATE lab_resources SET ended_at = $1 WHERE ended_at IS NULL AND lab_id IN (
-			SELECT id FROM lab_instances WHERE state NOT IN ('pending_approval', 'provisioning', 'ready', 'destroying')
+			SELECT id FROM lab_instances WHERE state NOT IN ('pending_approval', 'provisioning', 'ready', 'asleep', 'waking', 'destroying')
 				AND coalesce(destroyed_at, created_at) < $2) AND lab_id <> ALL($3)`, now, now.Add(-time.Hour), listed); err != nil {
 			errs = append(errs, fmt.Errorf("ending the meters of ended labs: %w", err))
 		}
@@ -165,7 +165,7 @@ func (s *Service) labsEnded(ctx context.Context, ids []string, now time.Time) (e
 	if len(ids) == 0 {
 		return ended, known, nil
 	}
-	rows, err := s.DB.Query(ctx, `SELECT id, CASE WHEN state IN ('pending_approval', 'provisioning', 'ready', 'destroying')
+	rows, err := s.DB.Query(ctx, `SELECT id, CASE WHEN state IN ('pending_approval', 'provisioning', 'ready', 'asleep', 'waking', 'destroying')
 		THEN NULL ELSE least(coalesce(destroyed_at, created_at), $2) END FROM lab_instances WHERE id = ANY($1)`, ids, now)
 	if err != nil {
 		return nil, nil, err

@@ -139,7 +139,7 @@ func (s *Service) SetKillSwitch(ctx context.Context, u *auth.User, enabled bool)
 // killAll destroys every provisioning or ready lab. destroy() is guarded by state, so overlapping runs are harmless.
 // ponytail: sequential; offline agents fail fast, so this stays quick below ~100 labs.
 func (s *Service) killAll(ctx context.Context) {
-	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE state IN ('provisioning', 'ready')`)
+	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE state IN ('provisioning', 'ready', 'asleep', 'waking')`)
 	if err != nil {
 		s.Log.Error("kill switch: listing labs failed", "err", err)
 		return

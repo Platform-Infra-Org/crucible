@@ -64,7 +64,7 @@ func (s *Service) spend(ctx context.Context, p *config.Platform, team, training 
 			coalesce(sum(CASE
 				WHEN settled THEN actual
 				WHEN state = 'provisioning' THEN estimate_usd
-				WHEN state = 'ready' THEN est_spent + hourly_usd * extract(epoch FROM greatest(ends_at - $1, interval '0'))::float8 / 3600
+				WHEN state IN ('ready', 'asleep', 'waking') THEN est_spent + hourly_usd * extract(epoch FROM greatest(ends_at - $1, interval '0'))::float8 / 3600
 				ELSE est_spent END), 0),
 			coalesce(sum(CASE WHEN settled THEN actual ELSE 0 END), 0)
 		FROM labs`, now, team, training, monthStart(now)).Scan(&sp.SpentUSD, &sp.CommittedUSD, &sp.ActualUSD)
@@ -214,7 +214,7 @@ func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, erro
 		}
 		out = append(out, *a)
 	}
-	rows, err = s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE state = 'ready' AND ext_until IS NOT NULL ORDER BY ext_requested_at`)
+	rows, err = s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances WHERE state IN ('ready', 'asleep') AND ext_until IS NOT NULL ORDER BY ext_requested_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +298,7 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 		return apperr.Wrap(apperr.Forbidden, "you can't decide this extension")
 	}
 	end, reason := *inst.ExtUntil, "ttl"
-	q := `UPDATE lab_instances SET ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state = 'ready' AND ext_until IS NOT NULL`
+	q := `UPDATE lab_instances SET ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state IN ('ready', 'asleep') AND ext_until IS NOT NULL`
 	args := []any{inst.ID}
 	closed := false
 	if approve {
@@ -317,7 +317,7 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 		}
 		if closed = !end.After(*inst.EndsAt); !closed {
 			q = `UPDATE lab_instances SET ends_at = $2, limit_reason = $3, estimate_usd = $4,
-				ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state = 'ready' AND ext_until IS NOT NULL`
+				ext_until = NULL, ext_requested_at = NULL, ext_tier = '' WHERE id = $1 AND state IN ('ready', 'asleep') AND ext_until IS NOT NULL`
 			args = append(args, end, reason, inst.EstimateUSD+inst.HourlyUSD*end.Sub(*inst.EndsAt).Hours())
 		}
 	}

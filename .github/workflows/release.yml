@@ -7,7 +7,8 @@
 #     to GHCR with provenance and SBOMs, the chart is pinned to their digests and pushed as an OCI chart, and a GitHub
 #     Release carries the binaries, SHA256SUMS and the changelog since the last release as its notes.
 #
-# Docs-only and ci-only merges release nothing.
+# Docs-only and ci-only merges release nothing. Docs-only PRs (docs/ outside docs/user, root *.md, .claude/) skip this
+# workflow altogether: there is nothing to build (see checks.yml's note on path filters).
 #
 # The binaries build on their own runner while the images build (go build already uses every core, so they gain nothing
 # from sharing one); a small version job goes first so both stamp the same version.
@@ -17,6 +18,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches: [main]
+    paths: # skip docs-only changes (see the note at the top)
+      - "**"
+      - "!docs/**"
+      - "docs/user/**" # the binary embeds these and internal/docs tests them
+      - "!*.md"
+      - "!.claude/**"
 
 # A PR's runs share a group, and a new push cancels its in-flight test build. Merges share one group instead, and are
 # never cancelled: two merges in a row release one after the other, in order, so each sees the tag before it.

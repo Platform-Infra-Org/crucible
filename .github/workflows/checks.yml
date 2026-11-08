@@ -1,12 +1,27 @@
 # Fast checks on every push and PR. Releasing lives in the release-* workflows;
 # the browser end-to-end suites are manual (e2e.yml).
+# Changes only to docs (docs/ outside docs/user, root *.md, .claude/) build and test nothing, so they skip this workflow.
+# ponytail: trigger-level path filters; a skipped workflow reports no status, so if protect-main ever requires one of
+# these checks, docs-only PRs would wait forever: then move the filter into a first job the others need.
 name: checks
 
 on:
   push:
     branches: [main]
+    paths: # skip docs-only changes (see the note above)
+      - "**"
+      - "!docs/**"
+      - "docs/user/**" # the binary embeds these and internal/docs tests them
+      - "!*.md"
+      - "!.claude/**"
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened] # a title edit reruns only pr-title.yml
+    paths: # skip docs-only changes (see the note above)
+      - "**"
+      - "!docs/**"
+      - "docs/user/**" # the binary embeds these and internal/docs tests them
+      - "!*.md"
+      - "!.claude/**"
 
 permissions:
   contents: read
@@ -104,16 +119,3 @@ jobs:
           npx tsc -b
           npm run lint
           npm run build
-
-  # Conventional-commit gate: with squash-merge the PR *title* is the commit
-  # git-cliff parses, so it must be a valid conventional-commit subject.
-  pr-title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      pull-requests: read
-    steps:
-      - uses: amannn/action-semantic-pull-request@v5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

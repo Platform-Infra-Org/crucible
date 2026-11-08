@@ -323,7 +323,7 @@ svg .ahm { fill: var(--muted); }
         <li><code>crucible aws up</code>. It prints no 'point an A record' line. It waits for the node to register with SSM and checks health on the node.</li>
         <li><code>crucible aws status</code>. Its <code>egress:</code> line lists every host the firewall blocks; send those to the network team. Your git host is not in that list, so check it by hand.</li>
         <li><code>crucible aws connect</code>, then open <code>http://localhost:18080</code>.</li>
-        <li><code>crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code>, then <code>crucible aws up</code> again.</li>
+        <li><code>crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f --billing-export=false --account-public-access-block=false</code>, then <code>crucible aws up</code> again. The two <code>=false</code> flags skip what our SCP denies: the billing export and the account-wide S3 block.</li>
       </ol>
       <p>Each step is explained in its section below.</p></div>
   </section>
@@ -360,7 +360,8 @@ crucible aws status            <span class="c"># before init, this fails with "d
         <p><b>In our account:</b> we sign in through Identity Center as <code>Workload-Admin-PS</code>. Organization policies (SCPs) deny
           <code>ec2:AllocateAddress</code>, <code>ec2:CreateInternetGateway</code>, <code>elasticloadbalancing:CreateLoadBalancer</code>, <code>ec2:CreateVpcEndpoint</code>,
           <code>ec2:CreateSubnet</code>, <code>ec2:CreateRoute</code> and <code>ec2:CreateClientVpnEndpoint</code>. EC2 instances in the spoke subnets, security groups and
-          IAM roles are allowed. S3, Cognito, SSM parameters, EventBridge Scheduler, Budgets, Data Exports and <code>ssm:StartSession</code> are not yet checked. <code>init --access ssm</code> is the first contact with them; if an SCP denies one, stop and ask the platform team.</p>
+          IAM roles are allowed. The first <code>labs-init</code> found <code>s3:PutAccountPublicAccessBlock</code> and <code>cur:putReportDefinition</code> (Data Exports) denied too:
+          skip them with <code>--account-public-access-block=false --billing-export=false</code>. S3, Cognito, SSM parameters, EventBridge Scheduler, Budgets and <code>ssm:StartSession</code> are not yet checked. <code>init --access ssm</code> is the first contact with them; if an SCP denies one, stop and ask the platform team.</p>
         <p>These are your own role's permissions. The node and the lab roles are made by the stacks; see <a href="deploy-architecture.html#iam-roles">IAM roles</a>.</p></div>
       <div><h3>A domain you control</h3><p>Pick the final hostname now, such as <code>crucible.example.com</code>. The Cognito sign-in callback is
         built from it, and Let's Encrypt issues the certificate for it. You'll either add an A record by hand at your DNS provider, or
@@ -477,7 +478,7 @@ schedule_timezone = "Europe/Bucharest"
         <tr><th scope="row"><code>sysbox_version</code>, <code>sysbox_sha256_amd64</code></th><td><code>0.7.1</code>, pinned digest</td><td class="req">no</td><td>Sysbox CE for AWS lab workspaces. Change both together. First boot only.</td></tr>
         <tr class="group"><th scope="colgroup" colspan="4">Set by <code>crucible aws up</code>; leave them out of the file</th></tr>
         <tr><th scope="row"><code>region</code>, <code>data_bucket</code>, <code>oidc_issuer</code>, <code>oidc_client_id</code>, <code>cognito_user_pool_id</code></th><td>none</td><td class="req">auto</td><td>From the persistent stack's outputs. <code>up</code> passes them after your file, so they win.</td></tr>
-        <tr><th scope="row"><code>lab_role_arn</code>, <code>lab_ops_role_arn</code>, <code>lab_state_bucket</code>, <code>lab_state_region</code>, <code>lab_regions</code>, <code>lab_plan_role_arn</code>, <code>lab_export_bucket</code>, <code>lab_export_prefix</code> (<code>cur</code>), <code>lab_export_name</code></th><td><code>""</code></td><td class="req">auto</td><td>From the labs stack's outputs, when <code>up</code> can read them. Empty <code>lab_role_arn</code> means AWS labs are off. The stack refuses a lab role without the plan role and the billing export.</td></tr>
+        <tr><th scope="row"><code>lab_role_arn</code>, <code>lab_ops_role_arn</code>, <code>lab_state_bucket</code>, <code>lab_state_region</code>, <code>lab_regions</code>, <code>lab_plan_role_arn</code>, <code>lab_export_bucket</code>, <code>lab_export_prefix</code> (<code>cur</code>), <code>lab_export_name</code></th><td><code>""</code></td><td class="req">auto</td><td>From the labs stack's outputs, when <code>up</code> can read them. Empty <code>lab_role_arn</code> means AWS labs are off. The stack refuses a lab role without the plan role. Empty export values (a labs stack made with <code>--billing-export=false</code>) turn billed spend off.</td></tr>
       </tbody>
     </table></div>
     <div class="note"><p><strong>Changing settings later.</strong>Edit <code>crucible.tfvars</code> and run <code>crucible aws up</code>. Node settings are stored in the SSM
@@ -743,7 +744,9 @@ smtp_password = "…"                                         <span class="c"># 
         billing export. How it works, and what the permission boundary allows: <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a> and <a href="deploy-architecture.html#iam-fence">the IAM fence</a>.</p></div>
     <div class="note"><p><strong>In our account.</strong>the lab account is our account. Run <code>labs-init</code> with our own credentials and <b>without</b>
       <code>--crucible-account</code>, and add the lab network: <code>--vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f</code>.
-      Pass both or neither; a re-run without them keeps the current ones. Then run <code>crucible aws up</code> so the server learns them. Lab modules read them as
+      Pass both or neither; a re-run without them keeps the current ones. Add <code>--billing-export=false --account-public-access-block=false</code> too: our SCP denies the billing export
+      (<code>cur:putReportDefinition</code>) and the account-wide S3 block (<code>s3:PutAccountPublicAccessBlock</code>, which the organization
+      already enforces). Without the export the Ledger has no Billed figures and spend comes from the meter. Then run <code>crucible aws up</code> so the server learns them. Lab modules read them as
       <code>var.crucible_vpc_id</code> and <code>var.crucible_subnet_ids</code>, set only in the lab network's region. Lab instances and security groups go in those subnets, get no public IPs, and leave through the same firewall.
       Lab modules that create Elastic IPs, NAT gateways or load balancers fail, denied by the SCPs as well as by the lab role. The permission boundary is
       the only isolation between labs and Crucible itself.</p></div>
@@ -767,7 +770,8 @@ smtp_password = "…"                                         <span class="c"># 
         </ul>
         <p>It creates the lab, ops and plan roles under a permission boundary, the lab state bucket <code>crucible-&lt;account&gt;-labstate</code>,
           the export bucket <code>crucible-&lt;account&gt;-labexports</code> and the CUR 2.0 export <code>crucible-labs</code> (Data Exports live in
-          us-east-1). It also turns on account-wide S3 Block Public Access. The lab roles trust the node role by exact name. labs-init reads
+          us-east-1). It also turns on account-wide S3 Block Public Access. Where an SCP denies either, <code>--billing-export=false</code> and
+          <code>--account-public-access-block=false</code> skip them; a re-run keeps the setting. The lab roles trust the node role by exact name. labs-init reads
           it from main's <code>node_role_name</code> output when it can. With lab-account credentials it usually can't, so it prints a note and
           trusts <code>crucible-node</code>, which is right unless you changed <code>name</code>.</p></li>
       <li><h3>Check the labs state backup</h3>

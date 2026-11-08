@@ -72,7 +72,12 @@ export function LedgerPage() {
           {l.prices_error && ` Last error: ${l.prices_error}`}
         </p>
       )}
-      {l.aws && (
+      {l.aws && l.no_billing_export && (
+        <p role="status" data-testid="actuals-status" className="muted">
+          This install reads no AWS bill (no billing export), so Billed stays empty: spend comes from metered costs and estimates.
+        </p>
+      )}
+      {l.aws && !l.no_billing_export && (
         <p role="status" data-testid="actuals-status" className={l.actuals_stale ? 'error' : 'muted'}>
           {l.actuals_as_of ? `AWS costs as of ${new Date(l.actuals_as_of).toLocaleString()} (AWS reports about 24 h late).` : 'No AWS costs have been read yet.'}
           {l.actuals_stale && ' Out of date: the billed figures lag behind; estimates keep enforcing the budgets.'}

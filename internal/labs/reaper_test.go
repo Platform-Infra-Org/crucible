@@ -207,6 +207,31 @@ func TestIngestCostsUpsertsAndMarksFailures(t *testing.T) {
 	}
 }
 
+// Without a billing export (an SCP denies it) nothing is read: no billed rows, so spend stays metered or estimated, and no
+// run counts as a success the settle rule could swap actuals in on. The Ledger says why Billed is empty, not "stale".
+func TestNoBillingExportReadsNoCostsAndSaysSo(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	cloud.AddCost(awscloud.DailyCost{Day: time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC), LabID: "aaaaaaaaaaaa", USD: 0.42})
+	f.s.Cloud, f.s.NoBillingExport = cloud, true
+	if err := f.s.IngestCosts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	var okAt *time.Time
+	var msg string
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM cost_actuals`).Scan(&n)
+	_ = f.s.DB.QueryRow(ctx, `SELECT ingest_ok_at, ingest_error FROM aws_ops`).Scan(&okAt, &msg)
+	if n != 0 || okAt != nil || msg != "" {
+		t.Fatalf("no export: no billed rows, no ingestion success, no error: %d %v %q", n, okAt, msg)
+	}
+	l, err := f.s.Ledger(ctx, f.admin)
+	if err != nil || !l.NoBillingExport || l.ActualsStale {
+		t.Fatalf("the Ledger says there is no billing export, not that it is stale: %+v %v", l, err)
+	}
+}
+
 func TestExportReadFailureLeavesActualsStale(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)

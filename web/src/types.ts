@@ -117,7 +117,7 @@ export type LedgerLab = {
 export type Finding = { source: 'destroy' | 'reaper' | 'trail'; lab_id: string; arn: string; action: 'deleted' | 'failed' | 'reported'; detail: string; first_at: string; last_at: string }
 export type Accuracy = { labs: number; estimate_usd: number; actual_usd: number }
 export type Ledger = {
-  month: string; aws: boolean; actuals_as_of?: string; actuals_stale: boolean; reaper_stale: boolean; reaper_error?: string; actuals_error?: string; reaped_at?: string; can_refresh: boolean
+  month: string; aws: boolean; actuals_as_of?: string; actuals_stale: boolean; no_billing_export?: boolean; reaper_stale: boolean; reaper_error?: string; actuals_error?: string; reaped_at?: string; can_refresh: boolean
   prices_as_of?: string; prices_stale: boolean; prices_error?: string
   teams: { id: string; name: string; spend: Spend; programs: { training: string; spend: Spend }[] }[]
   daily: { day: string; estimate_usd: number; actual_usd: number }[]

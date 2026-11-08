@@ -87,6 +87,20 @@ variable "lab_subnet_ids" {
   }
 }
 
+# An organization may already enforce S3's account-wide public access block, or deny billing exports to member accounts
+# by SCP (`crucible aws labs-init --account-public-access-block=false --billing-export=false`). Without the export,
+# Crucible meters spend from lab state and list prices only: there are no billed figures to check the meter against.
+variable "account_public_access_block" {
+  type        = bool
+  default     = true
+  description = "Block public S3 access account-wide. false: the organization already does (and an SCP may deny the call)."
+}
+variable "billing_export" {
+  type        = bool
+  default     = true
+  description = "Create the CUR 2.0 billing export billed spend is read from. false: billed spend is off."
+}
+
 # Each lab subnet must exist in this region and sit in lab_vpc_id: a lab would otherwise fail at apply.
 data "aws_subnet" "lab" {
   for_each = toset(var.lab_subnet_ids)
@@ -115,7 +129,6 @@ locals {
   regions   = length(var.allowed_regions) == 0 ? [var.region] : var.allowed_regions
   lab       = "$${aws:PrincipalTag/crucible:lab-id}" # an IAM policy variable, not a Terraform one
   state     = "arn:aws:s3:::${aws_s3_bucket.state.bucket}"
-  exports   = "arn:aws:s3:::${aws_s3_bucket.exports.bucket}"
   export    = "${var.name}-labs"
   # ponytail: no standalone CreateNetworkInterface: a lab could then launch on a detached ENI of its own, or try one
   # another lab left behind (detached ENIs do exist: a terminated instance's extra ENI, or one made by an admin).
@@ -135,6 +148,7 @@ locals {
 }
 
 resource "aws_s3_account_public_access_block" "labs" {
+  count                   = var.account_public_access_block ? 1 : 0
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -339,13 +353,14 @@ resource "aws_iam_role_policy" "ops" {
   role = aws_iam_role.ops.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
+    Statement = concat([
       { Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"], Resource = "*" },
       # Billed spend comes from the free CUR 2.0 export, metering from lab state: no Cost Explorer (paid per call).
-      { Sid = "ReadExport", Effect = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.exports.arn },
-      { Sid = "ReadExportFiles", Effect = "Allow", Action = "s3:GetObject", Resource = "${aws_s3_bucket.exports.arn}/*" },
       { Sid = "ReadLabState", Effect = "Allow", Action = "s3:GetObject", Resource = "${local.state}/labs/*" },
-    ]
+      ], [for b in aws_s3_bucket.exports : [
+        { Sid = "ReadExport", Effect = "Allow", Action = "s3:ListBucket", Resource = b.arn },
+        { Sid = "ReadExportFiles", Effect = "Allow", Action = "s3:GetObject", Resource = "${b.arn}/*" },
+    ]]...)
   })
 }
 
@@ -404,18 +419,21 @@ resource "aws_iam_instance_profile" "lab_instance" {
 
 # Billing export (free): CUR 2.0 as daily gzip CSV, resource ids and tags included.
 resource "aws_s3_bucket" "exports" {
+  count  = var.billing_export ? 1 : 0
   bucket = "${var.name}-${local.account}-labexports"
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "exports" {
-  bucket = aws_s3_bucket.exports.id
+  count  = var.billing_export ? 1 : 0
+  bucket = aws_s3_bucket.exports[0].id
   rule {
     apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
   }
 }
 
 resource "aws_s3_bucket_public_access_block" "exports" {
-  bucket                  = aws_s3_bucket.exports.id
+  count                   = var.billing_export ? 1 : 0
+  bucket                  = aws_s3_bucket.exports[0].id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -423,7 +441,8 @@ resource "aws_s3_bucket_public_access_block" "exports" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "exports" {
-  bucket = aws_s3_bucket.exports.id
+  count  = var.billing_export ? 1 : 0
+  bucket = aws_s3_bucket.exports[0].id
   rule {
     id     = "expire-old-exports"
     status = "Enabled"
@@ -434,15 +453,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "exports" {
 }
 
 resource "aws_s3_bucket_policy" "exports" {
-  bucket = aws_s3_bucket.exports.id
+  count  = var.billing_export ? 1 : 0
+  bucket = aws_s3_bucket.exports[0].id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Sid = "TLSOnly", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [local.exports, "${local.exports}/*"],
+      { Sid = "TLSOnly", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.exports[0].arn, "${aws_s3_bucket.exports[0].arn}/*"],
       Condition = { Bool = { "aws:SecureTransport" = "false" } } },
       { Sid       = "DataExportsWrite", Effect = "Allow",
         Principal = { Service = ["bcm-data-exports.amazonaws.com", "billingreports.amazonaws.com"] },
-        Action    = ["s3:PutObject", "s3:GetBucketPolicy"], Resource = [local.exports, "${local.exports}/*"],
+        Action    = ["s3:PutObject", "s3:GetBucketPolicy"], Resource = [aws_s3_bucket.exports[0].arn, "${aws_s3_bucket.exports[0].arn}/*"],
         Condition = { StringEquals = { "aws:SourceAccount" = local.account },
       StringLike = { "aws:SourceArn" = ["arn:aws:cur:us-east-1:${local.account}:definition/*", "arn:aws:bcm-data-exports:us-east-1:${local.account}:export/*"] } } },
     ]
@@ -452,6 +472,7 @@ resource "aws_s3_bucket_policy" "exports" {
 # BILLING_VIEW_ARN is left to AWS's default (the primary billing view); the runbook's by-hand check covers a diff on
 # first apply.
 resource "aws_bcmdataexports_export" "labs" {
+  count    = var.billing_export ? 1 : 0
   provider = aws.billing
   export {
     name = local.export
@@ -468,7 +489,7 @@ resource "aws_bcmdataexports_export" "labs" {
     }
     destination_configurations {
       s3_destination {
-        s3_bucket = aws_s3_bucket.exports.bucket
+        s3_bucket = aws_s3_bucket.exports[0].bucket
         s3_prefix = "cur"
         s3_region = var.region
         s3_output_configurations {
@@ -507,9 +528,13 @@ resource "aws_budgets_budget" "labs" {
 output "lab_role_arn" { value = aws_iam_role.lab.arn }
 output "ops_role_arn" { value = aws_iam_role.ops.arn }
 output "plan_role_arn" { value = aws_iam_role.plan.arn }
-output "export_bucket" { value = aws_s3_bucket.exports.bucket }
+# Empty when billing_export is off: `crucible aws up` then turns billed spend off.
+output "export_bucket" { value = var.billing_export ? aws_s3_bucket.exports[0].bucket : "" }
 output "export_prefix" { value = "cur" }
-output "export_name" { value = local.export }
+output "export_name" { value = var.billing_export ? local.export : "" }
+# labs-init passes these back when re-run without --billing-export/--account-public-access-block, so a re-run keeps them.
+output "billing_export" { value = var.billing_export }
+output "account_public_access_block" { value = var.account_public_access_block }
 output "state_bucket" { value = aws_s3_bucket.state.bucket }
 output "state_region" { value = var.region }
 output "lab_vpc_id" { value = var.lab_vpc_id }
@@ -521,3 +546,33 @@ output "budget_emails" { value = var.budget_emails }
 output "lab_instance_profile" { value = aws_iam_instance_profile.lab_instance.name }
 output "lab_instance_role_arn" { value = aws_iam_role.lab_instance.arn }
 output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : data.aws_subnet.lab[id].cidr_block]) }
+
+# Both were single resources before they could be turned off: keep the existing ones in place.
+moved {
+  from = aws_s3_account_public_access_block.labs
+  to   = aws_s3_account_public_access_block.labs[0]
+}
+moved {
+  from = aws_s3_bucket.exports
+  to   = aws_s3_bucket.exports[0]
+}
+moved {
+  from = aws_s3_bucket_server_side_encryption_configuration.exports
+  to   = aws_s3_bucket_server_side_encryption_configuration.exports[0]
+}
+moved {
+  from = aws_s3_bucket_public_access_block.exports
+  to   = aws_s3_bucket_public_access_block.exports[0]
+}
+moved {
+  from = aws_s3_bucket_lifecycle_configuration.exports
+  to   = aws_s3_bucket_lifecycle_configuration.exports[0]
+}
+moved {
+  from = aws_s3_bucket_policy.exports
+  to   = aws_s3_bucket_policy.exports[0]
+}
+moved {
+  from = aws_bcmdataexports_export.labs
+  to   = aws_bcmdataexports_export.labs[0]
+}

@@ -191,8 +191,8 @@ func (s *Service) labsEnded(ctx context.Context, ids []string, now time.Time) (e
 // is recorded for the Ledger ("actuals stale") and retried by the next periodic run; caps keep using estimates
 // meanwhile (spec §14).
 func (s *Service) IngestCosts(ctx context.Context) error {
-	if s.Cloud == nil {
-		return nil
+	if s.Cloud == nil || s.NoBillingExport {
+		return nil // ingest_ok_at stays unset, so no lab's spend ever settles on billed actuals
 	}
 	now := s.Now().UTC()
 	// End is exclusive: tomorrow (UTC) includes today. The export is overwritten daily and a month's late

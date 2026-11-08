@@ -41,7 +41,7 @@ awsLabs:
   stateBucket: ""
   stateRegion: ""           # default: backup.region
   planRoleArn: ""           # read-only role cost estimates run terraform plan with
-  exportBucket: ""          # billing export (CUR 2.0) bucket: billed spend
+  exportBucket: ""          # billing export (CUR 2.0) bucket: billed spend (empty: off)
   exportPrefix: cur
   exportName: ""
   vpcId: ""                 # where lab modules launch (labs-init --vpc-id); empty: the default VPC

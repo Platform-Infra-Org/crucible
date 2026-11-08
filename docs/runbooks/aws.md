@@ -38,8 +38,11 @@ an Elastic IP, a DNS record or a certificate.
 5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
    sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
-6. `crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f`
-   (both flags or neither; a re-run without them keeps the current ones), then `crucible aws up` again. Run one AWS lab that launches an
+6. `crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f --billing-export=false --account-public-access-block=false`
+   (both network flags or neither; a re-run without them keeps the current ones), then `crucible aws up` again. The
+   organization's SCP denies `s3:PutAccountPublicAccessBlock` (it enforces the account-wide block itself) and
+   `cur:putReportDefinition` (no billing export in a member account), so the two `=false` flags skip both; a re-run keeps
+   them. Without the export there is no billed spend: the Ledger says so, and spend comes from the meter and estimates. Run one AWS lab that launches an
    instance (step 10 under "AWS labs").
 
 The organization's after-hours automation may stop the node whatever `schedule_enabled` says; check with the platform team.
@@ -206,7 +209,8 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
    `--crucible-account <id>` when the lab account is not the Crucible account). labs-init
    copies `deploy/aws/labs/terraform.tfstate` to `s3://<name>-<account>-labstate/labs-stack.tfstate` after each apply (outside
    `labs/`, which lab sessions and the ops role read), and restores it from there on a machine without it. labs-init also turns on account-wide
-   S3 Block Public Access in that account. The lab roles trust Crucible's node role by exact name: labs-init reads it
+   S3 Block Public Access in that account (`--account-public-access-block=false` leaves it to an organization that already
+   enforces it). The lab roles trust Crucible's node role by exact name: labs-init reads it
    from main's `node_role_name` output when it can, and otherwise trusts `crucible-node` and says so. If your
    `crucible.tfvars` sets another `name`, run labs-init again after the first `up`. **Lab regions:** labs use `--region`
    alone unless you pass `--allowed-regions eu-west-1,eu-central-1` (comma-separated, the stack's `allowed_regions`).
@@ -218,7 +222,9 @@ from each lab's Terraform state, then replaced by the free CUR 2.0 billing expor
      the lab permission boundary);
    - the **export bucket** (`<name>-<account>-labexports`) and a **CUR 2.0 export** into it (`<name>-labs`, prefix `cur`,
      daily, gzip CSV, overwritten in place, with `resource_tags` so each line carries its `crucible:lab-id`). Data
-     Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`;
+     Exports live in us-east-1 whatever `--region` is; the bucket is in `--region`. `--billing-export=false` skips both
+     where an SCP denies the export: billed spend is then off (nothing checks the meter against the bill; the AWS Budget
+     still alerts), and `=true` on a later run turns it on;
    - the **lab instance role and profile** `crucible-lab-instance` (labs may attach the profile to their machines): the SSM agent's
      channel and Run Command only, written out instead of AWS's managed SSM core policy because that grants `ssm:GetParameter(s)`,
      and root on a lab machine could then read `/<name>/*` (secret key, database password, OIDC secret). It carries an explicit

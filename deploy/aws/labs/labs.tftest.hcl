@@ -69,7 +69,7 @@ run "lab_role_is_bounded_tagged_and_short_lived" {
     error_message = "the ops role only reads the inventory, bucket names and CloudTrail"
   }
   assert {
-    condition     = aws_s3_account_public_access_block.labs.block_public_policy && aws_s3_account_public_access_block.labs.restrict_public_buckets
+    condition     = aws_s3_account_public_access_block.labs[0].block_public_policy && aws_s3_account_public_access_block.labs[0].restrict_public_buckets
     error_message = "lab buckets can never be made public"
   }
   assert {
@@ -234,7 +234,7 @@ run "ops_reads_the_export_not_cost_explorer" {
     error_message = "no Cost Explorer: it is paid per call"
   }
   assert {
-    condition     = strcontains(aws_iam_role_policy.ops.policy, aws_s3_bucket.exports.arn)
+    condition     = strcontains(aws_iam_role_policy.ops.policy, aws_s3_bucket.exports[0].arn)
     error_message = "the ops role reads the export bucket"
   }
   assert {
@@ -250,7 +250,7 @@ run "export_and_budget" {
     budget_emails      = ["admin@example.com"]
   }
   assert {
-    condition     = aws_bcmdataexports_export.labs.export[0].destination_configurations[0].s3_destination[0].s3_bucket == aws_s3_bucket.exports.bucket
+    condition     = aws_bcmdataexports_export.labs[0].export[0].destination_configurations[0].s3_destination[0].s3_bucket == aws_s3_bucket.exports[0].bucket
     error_message = "the CUR export lands in the export bucket"
   }
   assert {
@@ -287,7 +287,7 @@ run "export_query_names_columns" {
   command = apply
   assert {
     condition = alltrue([for c in ["line_item_usage_start_date", "line_item_unblended_cost", "resource_tags"] :
-    strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, c)]) && !strcontains(aws_bcmdataexports_export.labs.export[0].data_query[0].query_statement, "*")
+    strcontains(aws_bcmdataexports_export.labs[0].export[0].data_query[0].query_statement, c)]) && !strcontains(aws_bcmdataexports_export.labs[0].export[0].data_query[0].query_statement, "*")
     error_message = "the export query lists its columns"
   }
 }
@@ -295,7 +295,7 @@ run "export_query_names_columns" {
 run "export_bucket_policy_guards_confused_deputy" {
   command = apply
   assert {
-    condition     = strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:cur:us-east-1:444455556666:definition/*") && strcontains(aws_s3_bucket_policy.exports.policy, "arn:aws:bcm-data-exports:us-east-1:444455556666:export/*")
+    condition     = strcontains(aws_s3_bucket_policy.exports[0].policy, "arn:aws:cur:us-east-1:444455556666:definition/*") && strcontains(aws_s3_bucket_policy.exports[0].policy, "arn:aws:bcm-data-exports:us-east-1:444455556666:export/*")
     error_message = "the export services write only for this account's exports"
   }
 }
@@ -307,7 +307,7 @@ run "ops_export_and_state_reads_are_exact" {
     error_message = "state is read at labs/* only"
   }
   assert {
-    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Action, "") == "s3:ListBucket"]).Resource == aws_s3_bucket.exports.arn
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Action, "") == "s3:ListBucket"]).Resource == aws_s3_bucket.exports[0].arn
     error_message = "ListBucket only on the export bucket"
   }
 }
@@ -463,5 +463,43 @@ run "encrypted_volumes_only_through_ec2" {
       one([for s in doc.Statement : s if s.Sid == "EbsEncryptionViaEC2"]).Condition.StringLike["kms:ViaService"] == "ec2.*.amazonaws.com" &&
     alltrue([for a in one([for s in doc.Statement : s if s.Sid == "EbsEncryptionViaEC2"]).Action : startswith(a, "kms:")])])
     error_message = "a hibernating lab machine's encrypted disk uses KMS only through EC2"
+  }
+}
+
+# An organization that enforces S3's account-wide block and denies billing exports to member accounts by SCP: the stack
+# leaves both alone, billed spend is off (empty export outputs) and the ops role reads no export.
+run "an_org_managed_account_skips_the_export_and_the_account_block" {
+  command = apply
+  variables {
+    billing_export              = false
+    account_public_access_block = false
+  }
+  assert {
+    condition     = length(aws_s3_account_public_access_block.labs) == 0
+    error_message = "no account-wide block when the organization manages it"
+  }
+  assert {
+    condition     = length(aws_bcmdataexports_export.labs) == 0 && length(aws_s3_bucket.exports) == 0 && length(aws_s3_bucket_policy.exports) == 0
+    error_message = "no billing export and no export bucket"
+  }
+  assert {
+    condition     = output.export_bucket == "" && output.export_name == "" && !output.billing_export && !output.account_public_access_block
+    error_message = "the outputs say both are off, so up turns billed spend off and labs-init keeps them off on a re-run"
+  }
+  assert {
+    condition     = length([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if startswith(try(s.Sid, ""), "ReadExport")]) == 0
+    error_message = "the ops role reads no export bucket"
+  }
+  assert {
+    condition     = output.lab_role_arn != "" && output.state_bucket == "crucible-444455556666-labstate"
+    error_message = "labs themselves are unaffected"
+  }
+}
+
+run "both_are_on_by_default" {
+  command = apply
+  assert {
+    condition     = length(aws_s3_account_public_access_block.labs) == 1 && length(aws_bcmdataexports_export.labs) == 1 && output.billing_export && output.account_public_access_block
+    error_message = "a lab account blocks public S3 account-wide and exports its bill unless told otherwise"
   }
 }

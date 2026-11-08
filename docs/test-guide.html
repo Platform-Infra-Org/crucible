@@ -228,7 +228,7 @@ body.hide-done .item.done { display: none; }
           <li><h3>Ask and approve</h3><p>The trainee sees an estimate and requests the lab; a person at the right cost tier approves.</p></li>
           <li><h3>Build and work</h3><p>Crucible assumes a role scoped to this one lab, and Terraform builds it. The trainee works in a workspace pod.</p></li>
           <li><h3>End and clean up</h3><p><code>terraform destroy</code>, a tag sweep, and an hourly reaper for anything left.</p></li>
-          <li><h3>Settle the bill</h3><p>The Ledger shows the estimate, the metered cost, then the billed cost once it settles.</p></li>
+          <li><h3>Settle the bill</h3><p>The Ledger shows the estimate, the metered cost, then the billed cost once it settles. Without a billing export (ours: <code>labs-init --billing-export=false</code>) it says so and shows no billed cost.</p></li>
         </ol>
         <p>How it is built is in <a href="deploy-architecture.html#awslab">an AWS lab, start to finish</a>. The roles are in
           <a href="deploy-architecture.html#iam-roles">IAM roles</a>, and what the boundary forbids is in

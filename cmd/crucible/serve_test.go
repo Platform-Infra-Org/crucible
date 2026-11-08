@@ -30,15 +30,33 @@ func without(k string) map[string]string {
 	return m
 }
 
-// Without the plan role there is no estimate, and without the export no billed spend: refuse to start, naming it.
+// Without the plan role there is no estimate, and an export bucket needs its name: refuse to start, naming it.
 func TestAWSSetupNeedsThePlanRoleAndExport(t *testing.T) {
 	newCloud := func(context.Context, awscloud.Config) (awscloud.Cloud, error) { return &awscloud.Fake{}, nil }
-	for _, k := range []string{"CRUCIBLE_AWS_PLAN_ROLE_ARN", "CRUCIBLE_AWS_EXPORT_BUCKET", "CRUCIBLE_AWS_EXPORT_NAME"} {
+	for _, k := range []string{"CRUCIBLE_AWS_PLAN_ROLE_ARN", "CRUCIBLE_AWS_EXPORT_NAME"} {
 		_, _, err := awsSetup(context.Background(), "1", &labs.AWSRunner{StateBucket: "b", StateRegion: "eu-west-1"}, labs.FixedRates{},
 			envOf(without(k)), newCloud, noPrices)
 		if err == nil || !strings.Contains(err.Error(), k) {
 			t.Errorf("missing %s must refuse to start, naming it: %v", k, err)
 		}
+	}
+}
+
+// A lab account without a billing export (labs-init --billing-export=false) still runs real labs: billed spend is off.
+func TestAWSSetupWithoutABillingExport(t *testing.T) {
+	var got awscloud.Config
+	newCloud := func(_ context.Context, c awscloud.Config) (awscloud.Cloud, error) {
+		got = c
+		return &awscloud.Fake{}, nil
+	}
+	env := without("CRUCIBLE_AWS_EXPORT_BUCKET")
+	delete(env, "CRUCIBLE_AWS_EXPORT_NAME")
+	if _, _, err := awsSetup(context.Background(), "1", &labs.AWSRunner{StateBucket: "b", StateRegion: "eu-west-1"}, labs.FixedRates{},
+		envOf(env), newCloud, noPrices); err != nil || got.ExportBucket != "" || got.PlanRoleARN != "plan" {
+		t.Fatalf("real labs start without an export: %+v %v", got, err)
+	}
+	if !noBillingExport("1", envOf(env)) || noBillingExport("1", envOf(real)) || noBillingExport("dryrun", envOf(nil)) {
+		t.Fatal("billed spend is off only for real labs without an export bucket (a dry run reads its fake's costs)")
 	}
 }
 

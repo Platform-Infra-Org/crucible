@@ -22,6 +22,8 @@ writes content edits back to git as a bot. Configuration and people live in Post
     `docs/runbooks/aws.md` changes.
   - `docs/ssm-access.html`: reaching the app over a Session Manager port-forward when the VPC has no inbound path.
   - `docs/terraform-vs-crossplane.html`: how each would run an AWS lab, with diagrams, and the trade-offs here.
+  - `docs/cli.md`: every `crucible` command and flag with its purpose, grouped by task. Update it when a command or flag
+    changes (`cmd/crucible`).
   - `docs/test-guide.html`: the manual test guide: what Crucible does in brief, and a checklist of every capability
     from a fresh local stack to a real AWS sandbox. Update it when a capability or a test step changes.
 
@@ -50,7 +52,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Content lint | `./bin/crucible lint examples/<repo>` |
 | Run the server / print the version | `crucible serve` (environment variables only) · `crucible version` |
 | Deploy a release to the AWS node | `crucible aws deploy --version vX.Y.Z` (a release or prerelease from GHCR) or `--build` (pushes `0.0.0-dev.g<sha>` from this tree; needs `docker login ghcr.io` and `helm registry login ghcr.io`); a `dev` binary with neither flag refuses. `crucible aws status` shows `release:` |
-| CI (`.github/workflows`) | `checks` (every PR and main), `release` (PR build; on merge: tag the merge commit, images, chart, GitHub Release with the changelog as notes; never pushes to main), `release-manual` (prerelease from any branch), `e2e` (manual); `bash scripts/lint-workflows.sh` |
+| CI (`.github/workflows`) | `checks` (every PR and main), `pr-title` (every PR), `release` (PR build; on merge: tag the merge commit, images, chart, GitHub Release with the changelog as notes; never pushes to main), `release-manual` (prerelease from any branch), `e2e` (manual). A change only to `docs/` (outside `docs/user`), root `*.md` or `.claude/` skips `checks` and `release`; `bash scripts/lint-workflows.sh` |
 | Invite someone to the AWS install's Cognito pool | `crucible aws invite EMAIL [--name "Full Name"]` (always `email_verified=true`; re-run resends an unused invite) |
 | Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |

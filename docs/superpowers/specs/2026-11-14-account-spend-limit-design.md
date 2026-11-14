@@ -46,10 +46,11 @@ change has neither output: `up` passes empty values and the server reads nothing
   `Fake` (`SetAccountSpend`, `FailAccountSpend`). A dry run's fake returns a fixed $12.34 so the Ledger has a figure.
 - A periodic job (`labs.AccountSpendArgs`) every 10 minutes. With `cost_explorer` it reads only when the last attempt is
   an hour old or more. It runs at start too, like the other AWS jobs.
-- **Refresh now** (admins): `POST /api/admin/account-spend/refresh`. One atomic
+- **Refresh now** (admins) is the Ledger's existing button (`POST /api/admin/finops/refresh`, which also re-reads billed
+  costs and runs the reaper). It also takes the shared 5-minute slot for the bill: one atomic
   `UPDATE aws_ops SET account_refresh_at = now() WHERE account_refresh_at IS NULL OR account_refresh_at <= now() - '5 minutes'`
-  wins; a loser gets 429 with the seconds left, so two admins clicking together cause one read. The reply carries the
-  new figure or the error.
+  wins and queues one read, so two admins clicking together cause one read; the Ledger's `refresh_after` says when the
+  bill may be read again.
 - Migration `00037_account_spend.sql`: `aws_ops` gains `account_usd double precision`, `account_read_at timestamptz` (the
   last success), `account_error text NOT NULL DEFAULT ''`, `account_error_at timestamptz`, `account_refresh_at
   timestamptz`; the settings table gains `account_monthly_limit_usd double precision NOT NULL DEFAULT 0`. With a Down.

@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import { AsleepLab, LabPage, LabWorkspace, WakingLab } from './Lab'
+import { AsleepLab, CapNote, LabPage, LabWorkspace, WakingLab } from './Lab'
 import type { LabView, ModuleLab } from '../types'
 
 const clusterInfo = { title: 'Cluster heat', runtime: 'cluster', runtime_ready: false, runtime_message: 'Your laptop agent is offline.', lab: null, contexts: [] } as unknown as ModuleLab
@@ -100,4 +100,11 @@ test('a workspace over its limit is warned', () => {
     ends_at: new Date(Date.now() + 3600e3).toISOString(), tasks: [{ id: 't1', status: 'open', title: 'T', body: '' }], terminals: [{ name: 'main' }],
   } as unknown as LabView} setLab={() => {}} title="Heat" back="/" /></MemoryRouter>)
   expect(h).toContain('Your workspace holds more than 20 GiB')
+})
+
+test('a request over the account limit says it waits for an admin; over a team cap, today\'s words', () => {
+  const note = (cap_reason: string) => renderToStaticMarkup(<CapNote lab={{ over_cap: true, cap_reason } as unknown as LabView} />)
+  expect(note('account')).toContain('Waiting for an admin: the forge&#x27;s monthly spend limit is reached.')
+  expect(note('team')).toContain('This would pass a budget cap, so only an admin can approve it.')
+  expect(renderToStaticMarkup(<CapNote lab={{ over_cap: false } as unknown as LabView} />)).toBe('')
 })

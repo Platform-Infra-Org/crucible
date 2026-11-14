@@ -474,6 +474,58 @@ ol.attempts .pre { margin: 0.25rem 0 0; }
 .bar.est, .swatch.est { background: var(--accent); opacity: 0.55; }
 .bar.act, .swatch.act { background: var(--accent-2); }
 .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; vertical-align: middle; }
+.account-meter { display: block; width: 100%; max-width: 32rem; margin: 0.25rem 0; }
+
+/* Billed timeline: the Ledger's last 24 hours. Hatched grey = in the AWS bill, molten = counted by Crucible; the green
+   account marker and a lab's own marker (text with an accent-2 ring) are sliders laid over the lanes. */
+.billed-head { margin: 0; }
+.billed-head h5 { margin-top: 0; }
+.billed-sum { margin: 0.25rem 0; }
+.billed-how { font-size: 0.85rem; margin: 0 0 0.75rem; }
+.bt-chart { --bt-name: 12rem; --bt-act: 8.5rem; --bt-top: 1.6rem; position: relative; padding-top: var(--bt-top); user-select: none;
+  overflow-x: clip; overflow-clip-margin: 8px; } /* nothing scrolls sideways at phone width */
+.billed-timeline.read-only .bt-chart { --bt-act: 0rem; --bt-top: 0.25rem; }
+.bt-row { display: grid; grid-template-columns: var(--bt-name) minmax(0, 1fr) var(--bt-act); align-items: center; min-height: 2.2rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.bt-row.bt-axis-row { min-height: 1.2rem; border-top: 0; }
+.bt-name { padding-right: 0.75rem; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bt-diamond { color: var(--accent-2); }
+.bt-act { justify-self: end; }
+.bt-lane { position: relative; height: 14px; }
+.bt-axis { height: 1.2rem; font-size: 0.68rem; color: var(--muted); }
+.bt-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.bt-axis span:first-child { transform: none; }
+.bt-axis span:last-child { transform: translateX(-100%); }
+.bt-bar { position: absolute; top: 0; height: 14px; min-width: 2px; display: flex; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.bt-bar .billed, .sw.billed { flex: none; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--muted) 45%, transparent) 0 4px, transparent 4px 8px); }
+.bt-bar .hot, .sw.hot { flex: 1; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.bt-over { position: absolute; top: 0; bottom: 0; left: var(--bt-name); right: var(--bt-act); pointer-events: none; }
+.bt-night, .sw.night { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--border) 70%, transparent) 0 6px, transparent 6px 12px); }
+.bt-night { position: absolute; top: calc(var(--bt-top) + 1.2rem); bottom: 0; border-left: 1px dashed var(--border); border-right: 1px dashed var(--border); }
+.bt-night em { position: absolute; top: 0.15rem; left: 50%; transform: translateX(-50%); font-size: 0.68rem; font-style: normal; color: var(--muted); white-space: nowrap; }
+.bt-marker, .bt-own { position: absolute; width: 16px; margin-left: -8px; cursor: ew-resize; touch-action: none; pointer-events: auto; }
+.bt-marker { top: 0; bottom: 0; }
+.bt-marker::before, .bt-own::before { content: ""; position: absolute; top: 0; bottom: 0; left: 7px; border-left: 2px solid var(--ok); }
+.bt-handle { position: absolute; top: 0; left: 50%; transform: translateX(-50%); padding: 0.1rem 0.55rem; border-radius: 999px; cursor: grab;
+  background: var(--ok); color: var(--bg); font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+.bt-marker.start .bt-handle { transform: translateX(-8px); }
+.bt-marker.end .bt-handle { transform: translateX(calc(-100% + 8px)); }
+.bt-own { top: -5px; height: 24px; z-index: 1; }
+.bt-own::before { border-left-color: var(--text); }
+.bt-own::after { content: ""; position: absolute; top: -4px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--text); box-shadow: 0 0 0 2px var(--accent-2); }
+.bt-marker:focus-visible, .bt-own:focus-visible { outline: none; } /* the ring moves to the handle and the knob */
+.bt-marker:focus-visible .bt-handle, .bt-own:focus-visible::after { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+.bt-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; list-style: none; padding: 0; margin: 0.9rem 0 0; font-size: 0.78rem; color: var(--muted); }
+.bt-legend .sw { display: inline-block; width: 18px; height: 10px; border-radius: 3px; margin-right: 0.35rem; vertical-align: -1px; }
+.bt-legend .sw.billed { background-color: var(--surface-2); }
+.sw.marker { background: var(--ok); }
+@media (max-width: 640px) { /* a phone: each lab's name and button sit above its bar, the lanes span the panel */
+  .bt-chart { --bt-name: 0rem; --bt-act: 0rem; }
+  .bt-row { grid-template-columns: minmax(0, 1fr) max-content; padding: 0.3rem 0; }
+  .bt-row .bt-lane { grid-column: 1 / -1; margin-top: 0.3rem; }
+  .bt-axis-row .bt-name { display: none; }
+  .bt-name { white-space: normal; }
+}
 
 /* rank card, badges, rank-up banner (never a modal) */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

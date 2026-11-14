@@ -52,7 +52,7 @@ export type LabView = {
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number
   can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string
-  log?: string[]; cluster_context?: string; health?: Health
+  log?: string[]; cluster_context?: string; health?: Health; cap_reason?: '' | 'team' | 'account'
 }
 export type TaskDetail = TaskView & { instructions: string; hints: string[] | null; setup_error?: string }
 export type CheckResult = { passed: boolean; output: string; timed_out: boolean; awarded: number; lab: LabView }
@@ -75,6 +75,7 @@ export type Approval = {
   runtime: string; hourly_usd: number; estimate_usd: number; ttl_s: number; tier: Tier; over_cap: boolean
   requested_at: string; escalate_at?: string; team_spend: Spend; program_spend: Spend; recent: RecentLab[]; schedule: ScheduleInfo
   kind: 'request' | 'extension'; extend_until?: string; requester_smith?: SmithRef
+  cap_reason?: '' | 'team' | 'account'; account_usd?: number; account_limit_usd?: number
 }
 export type KillSwitch = { enabled: boolean; changed_by?: string; changed_at?: string }
 export type AuditEntry = { at: string; actor: string; action: string; target: string; detail: Record<string, unknown>; commit_sha?: string }
@@ -122,8 +123,16 @@ export type Ledger = {
   teams: { id: string; name: string; spend: Spend; programs: { training: string; spend: Spend }[] }[]
   daily: { day: string; estimate_usd: number; actual_usd: number }[]
   running: LedgerLab[]; labs: LedgerLab[]; top_spenders: { requester: string; team: string; usd: number }[]
-  accuracy: Accuracy; findings?: Finding[]
+  accuracy: Accuracy; findings?: Finding[]; account?: AccountBlock
 }
+export type UsageInterval = { from: string; to: string; hourly_usd: number }
+export type UnbilledLab = { id: string; team: string; training: string; module: string; requester: string; hourly_usd: number
+  intervals: UsageInterval[]; own_mark?: string; unbilled_usd: number }
+export type UnbilledWindow = { from: string; to: string; slept_from?: string; slept_to?: string; account_mark?: string
+  labs: UnbilledLab[]; unbilled_usd: number }
+/** The Ledger's account line (admins and approvers with AWS labs on): the bill, Crucible's meter on top, reserved, the limit (0 = none). */
+export type AccountBlock = { billed_usd: number; read_at?: string; unbilled_usd: number; reserved_usd: number; limit_usd: number
+  source: '' | 'budget' | 'cost_explorer'; stale: boolean; error?: string; refresh_after?: string; can_mark: boolean; window: UnbilledWindow }
 
 export type SmithRef = { level: number; title: string }
 export type Sword = { training: string; title: string; level: number; rank: string; percent: number; next: { name: string; at: number } | null }
@@ -153,7 +162,7 @@ export type CatalogEntry = { id: string; title: string; description: string; est
 export type MyLab = { id: string; team: string; training: string; module: string; title: string; runtime: string; state: LabState; created_at: string; ends_at?: string; link: string }
 export type AdminSettings = {
   version: number; default_theme: string; cost_tiers: { auto_approve_usd: number; tier1_usd: number; tier2_usd: number } | null
-  escalation_hours: number
+  escalation_hours: number; account_monthly_limit_usd: number
   ranks: { ingot: number; tempered: number; blade: number; sword: number; masterwork: number }
   smith: { apprentice: number; journeyman: number; smith: number; master_smith: number; grandmaster: number }
 }

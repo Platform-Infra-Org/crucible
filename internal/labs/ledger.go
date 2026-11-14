@@ -311,5 +311,12 @@ func (s *Service) RefreshFinOps(ctx context.Context, u *auth.User) (*Ledger, err
 			return nil, err
 		}
 	}
+	if ok, _, err := s.claimAccountRefresh(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		if _, err := s.Jobs.Insert(ctx, AccountSpendArgs{Manual: true}, once); err != nil {
+			return nil, err
+		}
+	}
 	return s.Ledger(ctx, u)
 }

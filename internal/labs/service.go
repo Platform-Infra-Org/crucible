@@ -44,17 +44,18 @@ type Notifier interface {
 }
 
 type Service struct {
-	Notify     Notifier
-	DB         *pgxpool.Pool
-	Learn      *learn.Service
-	Runners    map[string]Runner
-	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
-	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
-	Now        func() time.Time
-	Log        *slog.Logger
-	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
-	Blobs      blob.Store       // transcripts (Task 6)
-	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
+	Notify      Notifier
+	DB          *pgxpool.Pool
+	Learn       *learn.Service
+	Runners     map[string]Runner
+	Kube        *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
+	Estimators  map[string]Estimator // by runtime; a runtime without one cannot be requested
+	Now         func() time.Time
+	SpendSource string // CRUCIBLE_AWS_SPEND_SOURCE: "cost_explorer" reads hourly; "budget" every 10 minutes
+	Log         *slog.Logger
+	Scoring     *scoring.Service // human review (M5); nil in tests that don't need it
+	Blobs       blob.Store       // transcripts (Task 6)
+	Cloud       awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	// NoBillingExport: the lab account has no billing export (an SCP may deny it), so billed spend is never read and
 	// spend stays metered or estimated.
 	NoBillingExport bool

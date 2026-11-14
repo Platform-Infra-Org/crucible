@@ -70,6 +70,23 @@ func (w *CostWorker) Work(ctx context.Context, _ *river.Job[CostArgs]) error {
 	return w.S.IngestCosts(ctx)
 }
 
+// AccountSpendArgs reads the AWS account's month-to-date bill (every 10 minutes; Cost Explorer at most hourly).
+// Manual is Refresh now, which already took the 5-minute slot.
+type AccountSpendArgs struct {
+	Manual bool `json:"manual"`
+}
+
+func (AccountSpendArgs) Kind() string { return "aws_account_spend" }
+
+type AccountSpendWorker struct {
+	river.WorkerDefaults[AccountSpendArgs]
+	S *Service
+}
+
+func (w *AccountSpendWorker) Work(ctx context.Context, j *river.Job[AccountSpendArgs]) error {
+	return w.S.ReadAccountSpend(ctx, j.Args.Manual)
+}
+
 // PriceArgs is the weekly refresh of list prices from the free public AWS Price List.
 type PriceArgs struct{}
 

@@ -142,7 +142,7 @@ func TestMarksAreForAdminsInTheWindowAndAudited(t *testing.T) {
 	if _, err := f.s.SetBilledMark(ctx, f.leader, MarkBody{BilledTo: &at}); !errors.Is(err, apperr.Forbidden) {
 		t.Fatalf("admins only: %v", err)
 	}
-	for _, bad := range []time.Time{now.Add(-25 * time.Hour), now.Add(time.Minute)} {
+	for _, bad := range []time.Time{now.Add(-25 * time.Hour), now.Add(3 * time.Minute), now.Add(-24*time.Hour - 3*time.Minute)} {
 		if _, err := f.s.SetBilledMark(ctx, f.admin, MarkBody{BilledTo: &bad}); !errors.Is(err, apperr.Invalid) || !strings.Contains(err.Error(), "Pick a time in the last 24 hours") {
 			t.Fatalf("%v must be refused: %v", bad, err)
 		}
@@ -176,17 +176,47 @@ func TestConcurrentMarksLastWriteWins(t *testing.T) {
 	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
 	now := f.clk.Now()
 	t1, t2 := now.Add(-3*time.Hour), now.Add(-2*time.Hour)
-	done := make(chan error, 2)
-	for _, at := range []time.Time{t1, t2} {
-		go func() { _, err := f.s.SetBilledMark(ctx, f.admin, MarkBody{BilledTo: &at}); done <- err }()
+	type res struct {
+		blk *AccountBlock
+		err error
 	}
-	if e1, e2 := <-done, <-done; e1 != nil || e2 != nil {
-		t.Fatal(e1, e2)
+	done := make(chan res, 2)
+	for _, at := range []time.Time{t1, t2} {
+		go func() { b, err := f.s.SetBilledMark(ctx, f.admin, MarkBody{BilledTo: &at}); done <- res{b, err} }()
+	}
+	for range 2 {
+		r := <-done
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if m := r.blk.Window.AccountMark; m == nil || (!m.Equal(t1) && !m.Equal(t2)) {
+			t.Fatalf("each reply is the server's state: %v", m)
+		}
 	}
 	var got time.Time
 	_ = f.s.DB.QueryRow(ctx, `SELECT billed_to FROM billed_marks WHERE lab_id = ''`).Scan(&got)
 	if !got.Equal(t1) && !got.Equal(t2) {
 		t.Fatalf("one of the two: %v", got)
+	}
+	var audits int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'account.billed_mark'`).Scan(&audits)
+	if audits != 2 {
+		t.Fatalf("both writes audited: %d", audits)
+	}
+}
+
+func TestMarksNearTheEdgesAreClamped(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	now := f.clk.Now()
+	for _, c := range []struct{ in, want time.Time }{
+		{now.Add(90 * time.Second), now},
+		{now.Add(-24*time.Hour - 90*time.Second), now.Add(-24 * time.Hour)},
+	} {
+		blk, err := f.s.SetBilledMark(ctx, f.admin, MarkBody{BilledTo: &c.in})
+		if err != nil || blk.Window.AccountMark == nil || !blk.Window.AccountMark.Equal(c.want.Truncate(time.Microsecond)) {
+			t.Fatalf("%v clamps to %v: %v %+v", c.in, c.want, err, blk)
+		}
 	}
 }
 
@@ -247,7 +277,9 @@ func TestADestroyedLabsOwnMarkKeepsCountingUntilItsUsageLeavesTheWindow(t *testi
 	lab := f.newAWSLab(t)
 	insertResource(t, f, lab.ID, "x", 1.0, now.Add(-10*time.Hour), tp(now.Add(-4*time.Hour)))
 	mark(t, f, lab.ID, now.Add(-6*time.Hour))
-	f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2 WHERE id = $1`, lab.ID, now.Add(-4*time.Hour))
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'destroyed', destroyed_at = $2 WHERE id = $1`, lab.ID, now.Add(-4*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if w, err := f.s.unbilled(ctx); err != nil || !closeTo(w.USD, 2) {
 		t.Fatalf("the destroyed lab counts after its mark: %v %+v", err, w)
 	}

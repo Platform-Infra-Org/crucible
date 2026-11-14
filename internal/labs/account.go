@@ -90,6 +90,7 @@ func (s *Service) claimAccountRefresh(ctx context.Context) (ok bool, wait time.D
 const (
 	unbilledWindow = 24 * time.Hour   // Crucible's own meter covers this much behind AWS's figure
 	markKeep       = 48 * time.Hour   // the sweep drops older marks
+	markSkew       = 2 * time.Minute  // a browser clock this far off is clamped, not refused
 	markStep       = 15 * time.Minute // the page snaps and steps marks by this much
 )
 
@@ -218,9 +219,11 @@ func (s *Service) SetBilledMark(ctx context.Context, u *auth.User, b MarkBody) (
 		_, err = tx.Exec(ctx, `DELETE FROM billed_marks WHERE lab_id = $1`, b.LabID)
 	default:
 		at := b.BilledTo.UTC()
-		if at.Before(now.Add(-unbilledWindow)) || at.After(now) {
+		lo := now.Add(-unbilledWindow)
+		if at.Before(lo.Add(-markSkew)) || at.After(now.Add(markSkew)) {
 			return nil, apperr.Wrap(apperr.Invalid, "Pick a time in the last 24 hours")
 		}
+		at = minTime(maxTime(at, lo), now) // a browser clock a little off is clamped to the window
 		if b.LabID != "" {
 			var used bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM lab_resources WHERE lab_id = $1 AND coalesce(ended_at, $2) > $3)`,
@@ -259,4 +262,11 @@ func (s *Service) accountBlock(ctx context.Context, _ *auth.User) (*AccountBlock
 		return nil, err
 	}
 	return &AccountBlock{Window: w}, nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }

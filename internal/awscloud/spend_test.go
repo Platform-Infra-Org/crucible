@@ -66,3 +66,12 @@ func TestAccountSpendWithoutASourceSaysWhatToRun(t *testing.T) {
 		t.Fatalf("no call, ErrNoSpendSource: %v %v", err, calls())
 	}
 }
+
+func TestCostExplorerWithNoResultsIsAnErrorNeverZero(t *testing.T) {
+	for _, reply := range []string{`{"ResultsByTime":[]}`, `{}`} {
+		c, _ := spendClient(t, "cost_explorer", func(string, map[string]any) string { return reply })
+		if usd, err := c.AccountSpend(context.Background()); err == nil || err.Error() != "Cost Explorer returned no results" {
+			t.Errorf("%s: must be an error, not $%v: %v", reply, usd, err)
+		}
+	}
+}

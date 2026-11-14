@@ -110,7 +110,7 @@ func (s *Service) CheckBudgets(ctx context.Context) error {
 		levels = append(levels, 100)
 	}
 	for _, lvl := range levels {
-		tag, err := s.DB.Exec(ctx, `INSERT INTO budget_alerts (scope, month, level) VALUES ('account', $1, $2) ON CONFLICT DO NOTHING`, month, lvl)
+		tag, err := s.DB.Exec(ctx, `INSERT INTO budget_alerts (scope, month, level) VALUES (':account', $1, $2) ON CONFLICT DO NOTHING`, month, lvl)
 		if err != nil {
 			return err
 		}
@@ -126,6 +126,9 @@ func (s *Service) CheckBudgets(ctx context.Context) error {
 		case 0:
 			subject, text = "Crucible can't read the AWS account's bill",
 				"The account's bill hasn't been read for 36 hours, so new paid lab requests need an admin. See the Ledger."
+			if t.Bill.ReadAt == nil {
+				text = "Crucible hasn't read the AWS account's bill yet, so new paid lab requests need an admin. See the Ledger."
+			}
 			if t.Bill.Error != "" {
 				text = strings.TrimSuffix(text, ".") + ": " + t.Bill.Error
 			}

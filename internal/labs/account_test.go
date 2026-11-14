@@ -109,6 +109,7 @@ func TestUnbilledIntegratesTheLast24HoursAfterTheMarks(t *testing.T) {
 	f := setup(t, true)
 	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
 	now := f.clk.Now()
+	billRead(t, f, now)
 	a, b := f.newAWSLab(t), f.newAWSLab(t)
 	insertResource(t, f, a.ID, "x", 1.0, now.Add(-30*time.Hour), tp(now.Add(-20*time.Hour))) // 4 h inside the window
 	insertResource(t, f, b.ID, "y", 2.0, now.Add(-2*time.Hour), nil)                         // open: 2 h up to now
@@ -132,6 +133,47 @@ func TestUnbilledIntegratesTheLast24HoursAfterTheMarks(t *testing.T) {
 		if l.ID == b.ID && (l.OwnMark == nil || len(l.Intervals) != 1) {
 			t.Fatalf("the lab's row carries its mark and intervals: %+v", l)
 		}
+	}
+}
+
+// billRead records a successful read of the account's bill at at.
+func billRead(t *testing.T, f *fx, at time.Time) {
+	t.Helper()
+	if _, err := f.s.DB.Exec(context.Background(), `UPDATE aws_ops SET account_usd = 0, account_read_at = $1`, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The meter never trusts a mark later than the last read of the bill, and reaches back to that read when it is older
+// than the window: what AWS has not been seen billing is always counted.
+func TestTheMeterNeverCountsFromLaterThanTheLastBillRead(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
+	now := f.clk.Now()
+	lab := f.newAWSLab(t)
+	insertResource(t, f, lab.ID, "x", 1.0, now.Add(-40*time.Hour), nil) // running throughout
+	mark(t, f, "", now.Add(-30*time.Minute))
+	mark(t, f, "cccccccccccc", now.Add(-30*time.Minute))
+
+	// (c) never read: no mark counts, the whole 24 h window does.
+	if w, err := f.s.unbilled(ctx); err != nil || !closeTo(w.USD, 24) || !w.From.Equal(now.Add(-24*time.Hour)) || w.ReadAt != nil {
+		t.Errorf("never read: marks ignored: %v %+v", err, w)
+	}
+	// (b) read 2 h ago, account mark 30 min ago: the last 2 h count, not 30 min.
+	billRead(t, f, now.Add(-2*time.Hour))
+	if w, _ := f.s.unbilled(ctx); !closeTo(w.USD, 2) || w.ReadAt == nil || !w.ReadAt.Equal(now.Add(-2*time.Hour).Truncate(time.Microsecond)) {
+		t.Errorf("read 2 h ago: %v (the page gets the read: %v)", w.USD, w.ReadAt)
+	}
+	// An own mark is capped the same way.
+	mark(t, f, lab.ID, now.Add(-10*time.Minute))
+	if w, _ := f.s.unbilled(ctx); !closeTo(w.USD, 2) {
+		t.Errorf("own mark, read 2 h ago: %v", w.USD)
+	}
+	// (a) read 30 h ago (not yet stale): the meter reaches back to the read.
+	billRead(t, f, now.Add(-30*time.Hour))
+	if w, _ := f.s.unbilled(ctx); !closeTo(w.USD, 30) || !w.From.Equal(now.Add(-30*time.Hour).Truncate(time.Microsecond)) {
+		t.Errorf("read 30 h ago: %v from %v", w.USD, w.From)
 	}
 }
 
@@ -279,6 +321,7 @@ func TestADestroyedLabsOwnMarkKeepsCountingUntilItsUsageLeavesTheWindow(t *testi
 	ctx := context.Background()
 	f := setup(t, true)
 	now := f.clk.Now()
+	billRead(t, f, now)
 	lab := f.newAWSLab(t)
 	insertResource(t, f, lab.ID, "x", 1.0, now.Add(-10*time.Hour), tp(now.Add(-4*time.Hour)))
 	mark(t, f, lab.ID, now.Add(-6*time.Hour))
@@ -437,6 +480,11 @@ func TestApprovingAfterTheLimitIsReachedGoesToAnAdmin(t *testing.T) {
 	if st, err := f.s.Decide(ctx, f.admin, inst.ID, true, "checked the bill"); err != nil || st != Provisioning {
 		t.Fatalf("an admin approves it as an override: %v %v", st, err)
 	}
+	var capReason string
+	_ = f.s.DB.QueryRow(ctx, `SELECT detail->>'cap_reason' FROM audit_log WHERE action = 'lab.budget_override' AND target = $1`, inst.ID).Scan(&capReason)
+	if capReason != "account" {
+		t.Fatalf("the override's audit says which limit: %q", capReason)
+	}
 }
 
 func TestAccountLimitAtRequestTimeSetsTheReason(t *testing.T) {
@@ -494,8 +542,25 @@ func TestAccountAlertsOncePerLevel(t *testing.T) {
 	if n := f.notes.count(notify.BudgetAlert); n != 3 {
 		t.Fatalf("then 100%% and stale, once each: %d", n)
 	}
-	if ev := f.notes.last(notify.BudgetAlert); !strings.Contains(ev.Subject, "can't read") {
+	if ev := f.notes.last(notify.BudgetAlert); !strings.Contains(ev.Subject, "can't read") || !strings.Contains(ev.Text, "hasn't been read for 36 hours") {
 		t.Fatalf("the stale alert: %+v", ev)
+	}
+	var n int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM budget_alerts WHERE scope = ':account'`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("the account's alerts are scoped ':account', which no team id can be: %d", n)
+	}
+}
+
+func TestTheStaleAlertForABillNeverReadSaysSo(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
+	setLimit(t, f, 100)
+	_ = f.s.CheckBudgets(ctx)
+	ev := f.notes.last(notify.BudgetAlert)
+	if !strings.Contains(ev.Text, "Crucible hasn't read the AWS account's bill yet") || strings.Contains(ev.Text, "36 hours") {
+		t.Fatalf("never read: %+v", ev)
 	}
 }
 
@@ -525,15 +590,25 @@ func TestTheLedgerShowsTheAccountToAdminsAndApproversOnly(t *testing.T) {
 	f.s.Cloud, f.s.SpendSource = cloud, "budget"
 	setLimit(t, f, 600)
 	_ = f.s.ReadAccountSpend(ctx, false)
+	cloud.FailAccountSpend(errors.New("AccessDenied: budgets:ViewBudget")) // admin detail to hide: an error and a refresh slot
+	_ = f.s.ReadAccountSpend(ctx, true)
+	if ok, _, err := f.s.claimAccountRefresh(ctx); !ok || err != nil {
+		t.Fatalf("refresh: %v %v", ok, err)
+	}
 	a, err := f.s.Ledger(ctx, f.admin)
-	if err != nil || a.Account == nil || a.Account.BilledUSD != 412.37 || a.Account.LimitUSD != 600 || !a.Account.CanMark || a.Account.Source != "budget" {
+	if err != nil || a.Account == nil || a.Account.BilledUSD != 412.37 || a.Account.LimitUSD != 600 || !a.Account.CanMark || a.Account.Source != "budget" ||
+		a.Account.Error == "" || a.Account.RefreshAfter == nil {
 		t.Fatalf("admin: %+v %v", a.Account, err)
 	}
 	ap, err := f.s.Ledger(ctx, f.approver)
-	if err != nil || ap.Account == nil || ap.Account.CanMark || ap.Account.Error != "" || ap.Account.RefreshAfter != nil {
+	if err != nil || ap.Account == nil || ap.Account.BilledUSD != 412.37 || ap.Account.CanMark || ap.Account.Error != "" || ap.Account.RefreshAfter != nil {
 		t.Fatalf("an approver sees the totals, read-only, without admin detail: %+v %v", ap.Account, err)
 	}
-	if m, err := f.s.Ledger(ctx, f.manager); err == nil && m.Account != nil {
+	m, err := f.s.Ledger(ctx, f.manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Account != nil {
 		t.Fatal("a program manager who doesn't approve doesn't see the account")
 	}
 }

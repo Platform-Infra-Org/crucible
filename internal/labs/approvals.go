@@ -523,8 +523,12 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 	if tag.RowsAffected() == 0 {
 		return "", apperr.Wrap(apperr.Conflict, "this request was already decided")
 	}
-	if err := audit.Log(ctx, tx, u.Email, action, inst.ID, map[string]any{"requester": email, "team": inst.Team,
-		"training": inst.Training, "module": inst.Module, "estimate_usd": inst.EstimateUSD, "note": note}, ""); err != nil {
+	detail := map[string]any{"requester": email, "team": inst.Team, "training": inst.Training, "module": inst.Module,
+		"estimate_usd": inst.EstimateUSD, "note": note}
+	if action == "lab.budget_override" {
+		detail["cap_reason"] = inst.CapReason // team | account
+	}
+	if err := audit.Log(ctx, tx, u.Email, action, inst.ID, detail, ""); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

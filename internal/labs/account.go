@@ -119,17 +119,23 @@ type UnbilledWindow struct {
 	SleptFrom   *time.Time    `json:"slept_from,omitempty"`
 	SleptTo     *time.Time    `json:"slept_to,omitempty"`
 	AccountMark *time.Time    `json:"account_mark,omitempty"`
+	ReadAt      *time.Time    `json:"read_at,omitempty"` // the last read of the bill: no cut is later; none until it exists
 	Labs        []UnbilledLab `json:"labs"`
 	USD         float64       `json:"unbilled_usd"`
 }
 
 // unbilled is Crucible's meter over the last 24 hours, after each lab's cut: its own mark, else the account mark, else
-// the window's start (never earlier). Labs are ordered by their first usage in the window.
+// the window's start (never earlier), and never later than the last read of the bill (R): AWS can't have billed what
+// Crucible hasn't seen it bill. Until R exists no mark counts; a bill older than 24 h (stale only after 36) moves the
+// window's start back to R. Labs are ordered by their first usage in the window.
 func (s *Service) unbilled(ctx context.Context) (UnbilledWindow, error) {
 	now := s.Now()
 	w := UnbilledWindow{From: now.Add(-unbilledWindow), To: now, Labs: []UnbilledLab{}}
-	if err := s.DB.QueryRow(ctx, `SELECT forge_slept_at, forge_woke_at FROM aws_ops`).Scan(&w.SleptFrom, &w.SleptTo); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT forge_slept_at, forge_woke_at, account_read_at FROM aws_ops`).Scan(&w.SleptFrom, &w.SleptTo, &w.ReadAt); err != nil {
 		return w, err
+	}
+	if w.ReadAt != nil {
+		w.From = minTime(w.From, w.ReadAt.UTC())
 	}
 	if w.SleptFrom != nil && (w.SleptTo == nil || w.SleptTo.Before(w.From) || w.SleptTo.Before(*w.SleptFrom)) {
 		w.SleptFrom, w.SleptTo = nil, nil // no night in this window
@@ -171,6 +177,11 @@ func (s *Service) unbilled(ctx context.Context) (UnbilledWindow, error) {
 			cut = maxTime(cut, *l.OwnMark)
 		} else if w.AccountMark != nil {
 			cut = maxTime(cut, *w.AccountMark)
+		}
+		if w.ReadAt == nil {
+			cut = w.From // never read: no mark counts
+		} else {
+			cut = minTime(cut, *w.ReadAt)
 		}
 		for _, iv := range l.Intervals {
 			if from := maxTime(iv.From, cut); iv.To.After(from) {
@@ -214,6 +225,7 @@ func (s *Service) accountTotals(ctx context.Context, p *config.Platform) (Accoun
 
 // lockAccount serializes approvals across teams while an account limit applies, so two can't both fit under it (the
 // team lock only covers one team). Taken after the team lock, always in that order.
+// ponytail: auto-tier Start is not serialized; overshoot ≤ one lab's estimate. Take the lock in Start too if that matters.
 func (s *Service) lockAccount(ctx context.Context, tx pgx.Tx, p *config.Platform) error {
 	if s.Cloud == nil || p.Settings.AccountMonthlyLimitUSD <= 0 {
 		return nil

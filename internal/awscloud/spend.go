@@ -46,6 +46,9 @@ func (c *Client) AccountSpend(ctx context.Context) (float64, error) {
 		if err != nil {
 			return 0, err
 		}
+		if len(out.ResultsByTime) == 0 {
+			return 0, errors.New("Cost Explorer returned no results") // never read as $0
+		}
 		var sum float64
 		for _, r := range out.ResultsByTime {
 			v, err := usdAmount(aws.ToString(r.Total["UnblendedCost"].Amount))

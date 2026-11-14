@@ -46,10 +46,10 @@ func TestHardCapRoutesToAdminAndTheOverrideIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.waitState(t, f.u, v.ID, Ready)
-	var action string
-	_ = f.s.DB.QueryRow(ctx, `SELECT action FROM audit_log WHERE target = $1`, v.ID).Scan(&action)
-	if action != "lab.budget_override" {
-		t.Fatalf("audited as %q", action)
+	var action, capReason string
+	_ = f.s.DB.QueryRow(ctx, `SELECT action, coalesce(detail->>'cap_reason', '') FROM audit_log WHERE target = $1`, v.ID).Scan(&action, &capReason)
+	if action != "lab.budget_override" || capReason != "team" {
+		t.Fatalf("audited as %q, cap_reason %q", action, capReason)
 	}
 }
 

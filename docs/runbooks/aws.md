@@ -198,7 +198,7 @@ AWS labs sleep with the platform, so a trainee's lab does not run (and bill) all
 
 The setting **Monthly account limit (USD)** (Administrator → Forge settings → Lab spending) caps the AWS account's real
 bill. Past it (billed + not yet billed + reserved + the request), paid labs need an admin. A bill not read for 36 hours
-does the same (fail closed). Admins are emailed at 80%, 100% and when the bill can't be read, once each per month.
+does the same (fail closed). Admins are emailed at 80%, at 100% and when the bill can't be read for 36 hours, once each per month.
 
 - **Where the bill comes from.** `labs-init --spend-source=budget` (the default) reads the AWS Budget
   `crucible-labs-monthly` every 10 minutes, free. The budget is always created now; its alert emails exist only with
@@ -210,7 +210,7 @@ does the same (fail closed). Admins are emailed at 80%, 100% and when the bill c
 **Verify on the account (by hand).**
 1. `labs-init` creates the budget. If our SCP refuses it, re-run with `--spend-source=cost-explorer`.
 2. The Ledger's *billed* figure matches the console's month-to-date cost.
-3. The next AWS bill shows no charge for Budgets reads (and, with Cost Explorer, about $0.24 a day of API requests).
+3. The next AWS bill shows no charge for Budgets reads (and, with Cost Explorer, about $0.24 on a day the node is up all day).
 
 ## AWS labs (runtime: terraform, cloud: aws)
 

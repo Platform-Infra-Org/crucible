@@ -36,6 +36,8 @@ AWS bills a day or so late, so the line adds **not yet billed**: Crucible's own 
 
 1. Open the AWS console's month-to-date cost and note the time it covers.
 2. Drag the green account marker to that time. Marks snap to clock quarter-hours; the arrow keys move one by 15 minutes.
+   A mark must be a time in the last 24 hours (*Pick a time in the last 24 hours*); a time a minute or two outside
+   it is clamped to the edge.
 3. For one lab that the account marker doesn't suit, **Set separately** gives it its own blue marker (◆);
    **Follow account** takes it back. **Count all 24 h** counts the whole window as unbilled.
 

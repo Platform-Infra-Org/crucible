@@ -124,7 +124,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - Money: approvals use tiers by estimate; budgets fail closed; cluster labs run on the trainee's own cluster through
   their agent and are free; aws labs are priced by Crucible from the free AWS Price List (a fresh price refresh is
   required; stale prices fail closed). Dry run (`CRUCIBLE_AWS_LABS=dryrun`) prices aws labs from
-  `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds fixture list prices so metering works; fixture prices never price a real lab. The account limit (Forge settings) counts the AWS account's bill (an AWS
+  `CRUCIBLE_DEV_LAB_USD_PER_HOUR` and seeds fixture list prices so metering works; fixture prices never price a real lab.
+  The account limit (Forge settings) counts the AWS account's bill (an AWS
   Budget, else Cost Explorer) + Crucible's meter for the last 24 h after admins' marks + what running labs reserve;
   past it, or with a bill older than 36 h, paid labs need an admin.
 - AWS labs sleep with the platform (`platform_bedtime`, states `asleep`/`waking`; the server's sweep carries out a

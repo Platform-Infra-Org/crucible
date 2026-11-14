@@ -30,9 +30,13 @@ bill last caught up (the last 24 hours, after your marks on the Ledger), and wha
 starting lab's estimate; a running, sleeping or waking lab's hourly price times its time left). If that, plus a new
 request's estimate, passes the limit, only an admin may approve the request, and it is audited as an override. Free
 labs are never held, running labs keep running, and team budgets and caps work as before. If Crucible hasn't read
-the bill for 36 hours, or never has, paid labs wait for an admin in the same way. Admins get an email at 80% and at
-100% of the limit, and when the bill can't be read for 36 hours, once each per month. The bill and its sources are
-set up by the operator: see [the runbook](/docs/admins/first-admin-audit-and-runbooks).
+the bill for 36 hours, or never has, paid labs wait for an admin in the same way. Admins are emailed at 80%, at
+100% and when the bill can't be read for 36 hours, once each per month. The bill and its sources are set up by the
+operator: see the operator's runbook, `docs/runbooks/aws.md`.
+
+The Ledger shows the sum as *AWS account this month*, with a timeline where you tell Crucible how much of the last 24
+hours AWS has already billed; see [The account limit and the billed timeline](/docs/leaders/ledger-and-content-versions).
+**Refresh now** on the Ledger also reads the bill, at most once every 5 minutes for all admins together.
 
 Also here: the **hours before a waiting request escalates**. The tiers go in as a set: give all three or none.
 

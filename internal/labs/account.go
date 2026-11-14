@@ -11,6 +11,7 @@ import (
 	"crucible/internal/apperr"
 	"crucible/internal/audit"
 	"crucible/internal/auth"
+	"crucible/internal/config"
 	"crucible/internal/rbac"
 )
 
@@ -179,6 +180,46 @@ func (s *Service) unbilled(ctx context.Context) (UnbilledWindow, error) {
 		w.USD += l.UnbilledUSD
 	}
 	return w, nil
+}
+
+// AccountTotals is the account's month against its limit: what AWS billed, what Crucible metered on top, and what
+// labs not yet ended may still spend.
+type AccountTotals struct {
+	BilledUSD, UnbilledUSD, ReservedUSD, LimitUSD float64
+	Stale                                         bool
+	Bill                                          AccountBill
+	Window                                        UnbilledWindow
+}
+
+func (t AccountTotals) TotalUSD() float64 { return t.BilledUSD + t.UnbilledUSD + t.ReservedUSD }
+
+// accountTotals: the bill, Crucible's meter since the marks, and what labs not yet ended may still spend (a starting
+// lab's estimate; a running, sleeping or waking lab's hourly price for its time left), across every team.
+func (s *Service) accountTotals(ctx context.Context, p *config.Platform) (AccountTotals, error) {
+	t := AccountTotals{LimitUSD: p.Settings.AccountMonthlyLimitUSD}
+	var err error
+	if t.Bill, err = s.accountBill(ctx); err != nil {
+		return t, err
+	}
+	t.BilledUSD, t.Stale = t.Bill.USD, t.Bill.Stale(s.Now())
+	if t.Window, err = s.unbilled(ctx); err != nil {
+		return t, err
+	}
+	t.UnbilledUSD = t.Window.USD
+	err = s.DB.QueryRow(ctx, `SELECT coalesce(sum(CASE WHEN state = 'provisioning' THEN estimate_usd
+			ELSE hourly_usd * extract(epoch FROM greatest(coalesce(ends_at, $1) - $1, interval '0'))::float8 / 3600 END), 0)
+		FROM lab_instances WHERE state IN ('provisioning', 'ready', 'asleep', 'waking')`, s.Now()).Scan(&t.ReservedUSD)
+	return t, err
+}
+
+// lockAccount serializes approvals across teams while an account limit applies, so two can't both fit under it (the
+// team lock only covers one team). Taken after the team lock, always in that order.
+func (s *Service) lockAccount(ctx context.Context, tx pgx.Tx, p *config.Platform) error {
+	if s.Cloud == nil || p.Settings.AccountMonthlyLimitUSD <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('crucible:account-limit'))`)
+	return err
 }
 
 func maxTime(a, b time.Time) time.Time {

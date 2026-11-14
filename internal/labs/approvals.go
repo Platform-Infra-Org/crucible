@@ -99,28 +99,31 @@ type ScheduleInfo struct {
 
 // Approval is one pending request with what an approver needs to decide (spec §9.1.3).
 type Approval struct {
-	ID             string       `json:"id"`
-	Requester      string       `json:"requester"`
-	RequesterName  string       `json:"requester_name"`
-	RequesterSmith smith.Ref    `json:"requester_smith"`
-	Team           string       `json:"team"`
-	Training       string       `json:"training"`
-	Module         string       `json:"module"`
-	LabTitle       string       `json:"lab_title"`
-	Runtime        string       `json:"runtime"`
-	HourlyUSD      float64      `json:"hourly_usd"`
-	EstimateUSD    float64      `json:"estimate_usd"`
-	TTLS           int          `json:"ttl_s"`
-	Tier           string       `json:"tier"`
-	OverCap        bool         `json:"over_cap"`
-	RequestedAt    time.Time    `json:"requested_at"`
-	EscalateAt     *time.Time   `json:"escalate_at,omitempty"`
-	TeamSpend      Spend        `json:"team_spend"`
-	ProgramSpend   Spend        `json:"program_spend"`
-	Recent         []RecentLab  `json:"recent"`
-	Schedule       ScheduleInfo `json:"schedule"`
-	Kind           string       `json:"kind"` // request | extension (spec §8.6)
-	ExtendUntil    *time.Time   `json:"extend_until,omitempty"`
+	ID              string       `json:"id"`
+	Requester       string       `json:"requester"`
+	RequesterName   string       `json:"requester_name"`
+	RequesterSmith  smith.Ref    `json:"requester_smith"`
+	Team            string       `json:"team"`
+	Training        string       `json:"training"`
+	Module          string       `json:"module"`
+	LabTitle        string       `json:"lab_title"`
+	Runtime         string       `json:"runtime"`
+	HourlyUSD       float64      `json:"hourly_usd"`
+	EstimateUSD     float64      `json:"estimate_usd"`
+	TTLS            int          `json:"ttl_s"`
+	Tier            string       `json:"tier"`
+	OverCap         bool         `json:"over_cap"`
+	CapReason       string       `json:"cap_reason,omitempty"`        // team | account
+	AccountUSD      float64      `json:"account_usd,omitempty"`       // cap_reason account: billed + not yet billed + reserved
+	AccountLimitUSD float64      `json:"account_limit_usd,omitempty"` // cap_reason account: the account's monthly limit
+	RequestedAt     time.Time    `json:"requested_at"`
+	EscalateAt      *time.Time   `json:"escalate_at,omitempty"`
+	TeamSpend       Spend        `json:"team_spend"`
+	ProgramSpend    Spend        `json:"program_spend"`
+	Recent          []RecentLab  `json:"recent"`
+	Schedule        ScheduleInfo `json:"schedule"`
+	Kind            string       `json:"kind"` // request | extension (spec §8.6)
+	ExtendUntil     *time.Time   `json:"extend_until,omitempty"`
 }
 
 func scheduleInfo(p *config.Platform, team, training string, now time.Time) ScheduleInfo {
@@ -227,10 +230,11 @@ func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, erro
 		if err != nil {
 			return nil, err
 		}
-		over, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
+		capped, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
 		if err != nil {
 			return nil, err
 		}
+		over := capped != ""
 		if !c.MayApprove(u.Email, email, inst.Team, inst.Training, inst.ExtEstimateUSD, over) {
 			continue
 		}
@@ -238,9 +242,20 @@ func (s *Service) Approvals(ctx context.Context, u *auth.User) ([]Approval, erro
 		if err != nil {
 			return nil, err
 		}
-		a.Kind, a.ExtendUntil, a.EstimateUSD, a.Tier, a.OverCap, a.EscalateAt = "extension", inst.ExtUntil, inst.ExtEstimateUSD, inst.ExtTier, over, nil
+		a.Kind, a.ExtendUntil, a.EstimateUSD, a.Tier, a.OverCap, a.CapReason, a.EscalateAt = "extension", inst.ExtUntil, inst.ExtEstimateUSD, inst.ExtTier, over, capped, nil
 		a.RequestedAt = *inst.ExtRequestedAt
 		out = append(out, *a)
+	}
+	if slices.ContainsFunc(out, func(a Approval) bool { return a.CapReason == "account" }) {
+		t, err := s.accountTotals(ctx, st.Platform)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			if out[i].CapReason == "account" {
+				out[i].AccountUSD, out[i].AccountLimitUSD = t.TotalUSD(), t.LimitUSD
+			}
+		}
 	}
 	emails := make([]string, len(out))
 	for i, a := range out {
@@ -290,10 +305,14 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, inst.Team); err != nil {
 		return err
 	}
-	over, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
+	if err := s.lockAccount(ctx, tx, p); err != nil {
+		return err
+	}
+	capped, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.ExtEstimateUSD-inst.EstimateUSD)
 	if err != nil {
 		return err
 	}
+	over := capped != ""
 	if !(rbac.Checker{P: p}).MayApprove(u.Email, email, inst.Team, inst.Training, inst.ExtEstimateUSD, over) {
 		return apperr.Wrap(apperr.Forbidden, "you can't decide this extension")
 	}
@@ -367,7 +386,7 @@ func (s *Service) DecideExtension(ctx context.Context, u *auth.User, labID strin
 func (s *Service) approval(ctx context.Context, st *gitsync.State, inst *Instance, email, name string) (*Approval, error) {
 	a := &Approval{ID: inst.ID, Requester: email, RequesterName: name, Team: inst.Team, Training: inst.Training,
 		Module: inst.Module, LabTitle: inst.Module, Runtime: inst.Runtime, HourlyUSD: inst.HourlyUSD, EstimateUSD: inst.EstimateUSD,
-		TTLS: int(inst.TTL.Seconds()), Tier: inst.Tier, OverCap: inst.OverCap, RequestedAt: inst.CreatedAt, EscalateAt: inst.EscalateAt,
+		TTLS: int(inst.TTL.Seconds()), Tier: inst.Tier, OverCap: inst.OverCap, CapReason: inst.CapReason, RequestedAt: inst.CreatedAt, EscalateAt: inst.EscalateAt,
 		Schedule: scheduleInfo(st.Platform, inst.Team, inst.Training, s.Now()), Kind: "request"}
 	if t := st.Training(inst.Training, inst.SHA); t != nil {
 		if m := t.Module(inst.Module); m != nil {
@@ -434,6 +453,9 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, inst.Team); err != nil {
 			return "", err
 		}
+		if err := s.lockAccount(ctx, tx, p); err != nil {
+			return "", err
+		}
 		if sc := p.ProgramSchedule(inst.Team, inst.Training); !sc.Open(s.Now()) {
 			return "", apperr.Wrap(apperr.Conflict, "The program's schedule window is closed; approve it when it opens.")
 		}
@@ -453,13 +475,13 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 			return "", apperr.Wrap(apperr.Conflict, bankingMsg)
 		}
 		if !inst.OverCap && inst.EstimateUSD > 0 {
-			over, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.EstimateUSD)
+			capped, err := s.overCap(ctx, p, inst.Team, inst.Training, inst.EstimateUSD)
 			if err != nil {
 				return "", err
 			}
-			if over {
-				tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET over_cap = true, tier = 'admin', escalate_at = $2
-					WHERE id = $1 AND state = 'pending_approval'`, inst.ID, escalateAt(p, inst.Team, inst.Training, now))
+			if capped != "" {
+				tag, err := s.DB.Exec(ctx, `UPDATE lab_instances SET over_cap = true, cap_reason = $3, tier = 'admin', escalate_at = $2
+					WHERE id = $1 AND state = 'pending_approval'`, inst.ID, escalateAt(p, inst.Team, inst.Training, now), capped)
 				if err != nil {
 					return "", err
 				}
@@ -469,9 +491,12 @@ func (s *Service) Decide(ctx context.Context, u *auth.User, labID string, approv
 				if !(rbac.Checker{P: p}).IsAdmin(u.Email) {
 					inst.Tier = string(rbac.TierAdmin)
 					s.notifyRequest(ctx, p, inst, email, notify.LabPending)
+					if capped == "account" {
+						return "", apperr.Wrap(apperr.Conflict, "approving this would now pass the account's monthly limit, so it has been passed to an admin")
+					}
 					return "", apperr.Wrap(apperr.Conflict, "approving this would now pass a budget cap, so it has been passed to an admin")
 				}
-				inst.OverCap = true // an admin approving it now is an audited override
+				inst.OverCap, inst.CapReason = true, capped // an admin approving it now is an audited override
 			}
 		}
 		if lab, _, err = s.labContent(ctx, inst); err != nil {

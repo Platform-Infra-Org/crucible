@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"crucible/internal/apperr"
 	"crucible/internal/awscloud"
+	"crucible/internal/notify"
+	"crucible/internal/rbac"
 )
 
 func TestReadAccountSpendStoresTheBillAndKeepsItOnFailure(t *testing.T) {
@@ -307,5 +310,189 @@ func TestNightStampsReachTheWindow(t *testing.T) {
 	w, err := f.s.unbilled(ctx)
 	if err != nil || w.SleptFrom == nil || w.SleptTo == nil || !w.SleptFrom.Equal(slept.Truncate(time.Microsecond)) || !w.SleptTo.Equal(f.clk.Now().Truncate(time.Microsecond)) {
 		t.Fatalf("the night: %v %+v", err, w)
+	}
+}
+
+func setLimit(t *testing.T, f *fx, usd float64) {
+	t.Helper()
+	f.plat.Settings.AccountMonthlyLimitUSD = usd
+}
+
+func TestAccountLimitSendsPaidRequestsToAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 600)
+	cloud.SetAccountSpend(590)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	reason, err := f.s.overCap(ctx, f.plat, "forge", "forge-101", 5)
+	if err != nil || reason != "" {
+		t.Fatalf("590 + 5 is under 600: %q %v", reason, err)
+	}
+	if reason, _ = f.s.overCap(ctx, f.plat, "forge", "forge-101", 11); reason != "account" {
+		t.Fatalf("590 + 11 passes 600: %q", reason)
+	}
+	f.spent(t, "bbbbbbbbbbb1", "forge-101", 249) // the team's $250 cap: team first
+	if reason, _ = f.s.overCap(ctx, f.plat, "forge", "forge-101", 11); reason != "team" {
+		t.Fatalf("past both: the team's cap is named: %q", reason)
+	}
+}
+
+func TestReservedAndUnbilledCountTowardTheLimit(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 100)
+	cloud.SetAccountSpend(80)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	now := f.clk.Now()
+	run := f.newAWSLab(t) // ready, $1/h, 5 h left
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET hourly_usd = 1, ends_at = $2 WHERE id = $1`, run.ID, now.Add(5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	insertResource(t, f, run.ID, "x", 1.0, now.Add(-10*time.Hour), nil) // 10 h unbilled
+	tot, err := f.s.accountTotals(ctx, f.plat)
+	if err != nil || !closeTo(tot.ReservedUSD, 5) || !closeTo(tot.UnbilledUSD, 10) || !closeTo(tot.TotalUSD(), 95) {
+		t.Fatalf("80 billed + 10 unbilled + 5 reserved: %+v %v", tot, err)
+	}
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 6); r != "account" {
+		t.Fatal("95 + 6 passes 100")
+	}
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 4); r != "" {
+		t.Fatalf("95 + 4 is under 100: %q", r)
+	}
+	starting := f.newAWSLab(t) // a starting lab reserves its whole estimate
+	if _, err := f.s.DB.Exec(ctx, `UPDATE lab_instances SET state = 'provisioning', estimate_usd = 3 WHERE id = $1`, starting.ID); err != nil {
+		t.Fatal(err)
+	}
+	if tot, _ = f.s.accountTotals(ctx, f.plat); !closeTo(tot.ReservedUSD, 8) {
+		t.Fatalf("5 + a starting lab's 3: %+v", tot)
+	}
+}
+
+func TestAStaleOrMissingBillFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 1000)
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 1); r != "account" {
+		t.Fatal("never read: an admin decides")
+	}
+	_ = f.s.ReadAccountSpend(ctx, false)
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 1); r != "" {
+		t.Fatal("fresh and far under")
+	}
+	f.clk.Add(37 * time.Hour)
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 1); r != "account" {
+		t.Fatal("37 h old: an admin decides")
+	}
+}
+
+func TestNoLimitOrNoAWSMeansNoAccountCheck(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	setLimit(t, f, 1)
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 1); r != "" {
+		t.Fatalf("no Cloud: no account bill, no account check: %q", r)
+	}
+	setLimit(t, f, 0)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now} // never read, but no limit set
+	if r, _ := f.s.overCap(ctx, f.plat, "forge", "forge-101", 1); r != "" {
+		t.Fatalf("no limit: no account check: %q", r)
+	}
+}
+
+func TestApprovingAfterTheLimitIsReachedGoesToAnAdmin(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 600)
+	cloud.SetAccountSpend(100)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	f.rates["first-heat"] = 2
+	inst := f.request(t, f.u) // waits for the team's approver, under the limit
+	if inst.State != PendingApproval || inst.Tier != rbac.TierApprover || inst.OverCap || inst.CapReason != "" {
+		t.Fatalf("under the limit: the approver decides: %+v", inst)
+	}
+	cloud.SetAccountSpend(599)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	if _, err := f.s.Decide(ctx, f.leader, inst.ID, true, ""); !errors.Is(err, apperr.Conflict) || !strings.Contains(err.Error(), "account's monthly limit") {
+		t.Fatalf("handed to an admin: %v", err)
+	}
+	var reason, tier string
+	_ = f.s.DB.QueryRow(ctx, `SELECT cap_reason, tier FROM lab_instances WHERE id = $1`, inst.ID).Scan(&reason, &tier)
+	if reason != "account" || tier != "admin" {
+		t.Fatalf("%q %q", reason, tier)
+	}
+	list, err := f.s.Approvals(ctx, f.admin)
+	if err != nil || len(list) != 1 || list[0].CapReason != "account" || !closeTo(list[0].AccountUSD, 599) || list[0].AccountLimitUSD != 600 {
+		t.Fatalf("the admin sees why: %+v %v", list, err)
+	}
+	if st, err := f.s.Decide(ctx, f.admin, inst.ID, true, "checked the bill"); err != nil || st != Provisioning {
+		t.Fatalf("an admin approves it as an override: %v %v", st, err)
+	}
+}
+
+func TestAccountLimitAtRequestTimeSetsTheReason(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 600)
+	cloud.SetAccountSpend(599)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	f.rates["first-heat"] = 2
+	v := f.request(t, f.u)
+	if v.Tier != rbac.TierAdmin || !v.OverCap || v.CapReason != "account" {
+		t.Fatalf("599 + 2 passes 600: %+v", v)
+	}
+	var reason string
+	_ = f.s.DB.QueryRow(ctx, `SELECT cap_reason FROM lab_instances WHERE id = $1`, v.ID).Scan(&reason)
+	if reason != "account" {
+		t.Fatalf("stored: %q", reason)
+	}
+}
+
+func TestFreeLabsAreNeverCheckedAgainstTheAccountLimit(t *testing.T) {
+	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now} // never read: would fail closed
+	setLimit(t, f, 1)
+	inst := f.request(t, f.u) // a free lab
+	if inst.OverCap || inst.CapReason != "" || inst.State != Provisioning {
+		t.Fatalf("a free lab never costs money: %+v", inst)
+	}
+}
+
+func TestAccountAlertsOncePerLevel(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud = cloud
+	setLimit(t, f, 100)
+	cloud.SetAccountSpend(85)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	_ = f.s.CheckBudgets(ctx)
+	_ = f.s.CheckBudgets(ctx)
+	if n := f.notes.count(notify.BudgetAlert); n != 1 {
+		t.Fatalf("80%%: one email: %d", n)
+	}
+	if ev := f.notes.last(notify.BudgetAlert); !strings.Contains(ev.Subject, "80%") || !slices.Contains(ev.To, "admin@crucible.local") {
+		t.Fatalf("to the admins: %+v", ev)
+	}
+	cloud.SetAccountSpend(101)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	_ = f.s.CheckBudgets(ctx)
+	f.clk.Add(37 * time.Hour)
+	_ = f.s.CheckBudgets(ctx)
+	_ = f.s.CheckBudgets(ctx)
+	if n := f.notes.count(notify.BudgetAlert); n != 3 {
+		t.Fatalf("then 100%% and stale, once each: %d", n)
+	}
+	if ev := f.notes.last(notify.BudgetAlert); !strings.Contains(ev.Subject, "can't read") {
+		t.Fatalf("the stale alert: %+v", ev)
 	}
 }

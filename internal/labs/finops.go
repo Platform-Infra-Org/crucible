@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"crucible/internal/apperr"
@@ -15,19 +16,30 @@ import (
 	"crucible/internal/rbac"
 )
 
-// overCap reports whether starting a lab of estimateUSD would push the team's or the program's month past its
-// hard cap. Committed spend counts labs still running to their end.
-func (s *Service) overCap(ctx context.Context, p *config.Platform, team, training string, estimateUSD float64) (bool, error) {
+// overCap says which limit starting a lab of estimateUSD would pass: "team" (the team's or the program's hard cap
+// this month, committed spend counting labs still running to their end), "account" (the AWS account's monthly limit:
+// billed + not yet billed + reserved; a stale bill fails closed), or "" for none. The team is checked first.
+func (s *Service) overCap(ctx context.Context, p *config.Platform, team, training string, estimateUSD float64) (string, error) {
 	for _, scope := range []string{"", training} {
 		sp, err := s.spend(ctx, p, team, scope)
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		if sp.CapUSD > 0 && sp.CommittedUSD+estimateUSD > sp.CapUSD {
-			return true, nil
+			return "team", nil
 		}
 	}
-	return false, nil
+	if s.Cloud == nil || p.Settings.AccountMonthlyLimitUSD <= 0 {
+		return "", nil
+	}
+	t, err := s.accountTotals(ctx, p)
+	if err != nil {
+		return "", err
+	}
+	if t.Stale || t.TotalUSD()+estimateUSD > t.LimitUSD {
+		return "account", nil // a stale bill fails closed: an admin decides
+	}
+	return "", nil
 }
 
 // alertLevels: 80 once spend reaches 80% of the budget, 100 once it reaches the hard cap.
@@ -79,6 +91,46 @@ func (s *Service) CheckBudgets(ctx context.Context) error {
 				s.notify(ctx, notify.Event{Kind: notify.BudgetAlert, To: to, Team: teamID, Subject: subject, Text: text, Link: "/teams/" + teamID})
 			}
 		}
+	}
+	if s.Cloud == nil || p.Settings.AccountMonthlyLimitUSD <= 0 {
+		return nil
+	}
+	t, err := s.accountTotals(ctx, p)
+	if err != nil {
+		return err
+	}
+	var levels []int
+	if t.Stale {
+		levels = append(levels, 0) // 0 = the bill could not be read
+	}
+	if t.TotalUSD() >= 0.8*t.LimitUSD {
+		levels = append(levels, 80)
+	}
+	if t.TotalUSD() >= t.LimitUSD {
+		levels = append(levels, 100)
+	}
+	for _, lvl := range levels {
+		tag, err := s.DB.Exec(ctx, `INSERT INTO budget_alerts (scope, month, level) VALUES ('account', $1, $2) ON CONFLICT DO NOTHING`, month, lvl)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			continue
+		}
+		subject, text := "The AWS account used 80% of its monthly limit",
+			fmt.Sprintf("The AWS account is at $%.2f of its $%.2f monthly limit (billed, not yet billed and reserved).", t.TotalUSD(), t.LimitUSD)
+		switch lvl {
+		case 100:
+			subject, text = "The AWS account reached its monthly limit",
+				fmt.Sprintf("The AWS account is at $%.2f, past its $%.2f monthly limit. New paid lab requests now need an admin.", t.TotalUSD(), t.LimitUSD)
+		case 0:
+			subject, text = "Crucible can't read the AWS account's bill",
+				"The account's bill hasn't been read for 36 hours, so new paid lab requests need an admin. See the Ledger."
+			if t.Bill.Error != "" {
+				text = strings.TrimSuffix(text, ".") + ": " + t.Bill.Error
+			}
+		}
+		s.notify(ctx, notify.Event{Kind: notify.BudgetAlert, To: p.Admins, Subject: subject, Text: text, Link: "/ledger"})
 	}
 	return nil
 }

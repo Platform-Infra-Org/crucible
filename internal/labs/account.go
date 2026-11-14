@@ -292,17 +292,45 @@ func (s *Service) SetBilledMark(ctx context.Context, u *auth.User, b MarkBody) (
 	return s.accountBlock(ctx, u)
 }
 
-// AccountBlock is the Ledger's account line (Task 7 adds the bill, the limit and the rest).
+// AccountBlock is the Ledger's account line: the bill, what Crucible has not seen billed yet, what running labs
+// reserve, the limit and the 24 h window. Admins and approvers only.
 type AccountBlock struct {
-	Window UnbilledWindow `json:"window"`
+	BilledUSD    float64        `json:"billed_usd"`
+	ReadAt       *time.Time     `json:"read_at,omitempty"`
+	UnbilledUSD  float64        `json:"unbilled_usd"`
+	ReservedUSD  float64        `json:"reserved_usd"`
+	LimitUSD     float64        `json:"limit_usd"` // 0 = none
+	Source       string         `json:"source"`    // budget | cost_explorer | ""
+	Stale        bool           `json:"stale"`
+	Error        string         `json:"error,omitempty"`         // admins only
+	RefreshAfter *time.Time     `json:"refresh_after,omitempty"` // admins only: when Refresh now may read the bill again
+	CanMark      bool           `json:"can_mark"`                // admins
+	Window       UnbilledWindow `json:"window"`
 }
 
-func (s *Service) accountBlock(ctx context.Context, _ *auth.User) (*AccountBlock, error) {
-	w, err := s.unbilled(ctx)
+func (s *Service) accountBlock(ctx context.Context, u *auth.User) (*AccountBlock, error) {
+	st, err := s.platform()
 	if err != nil {
 		return nil, err
 	}
-	return &AccountBlock{Window: w}, nil
+	c := rbac.Checker{P: st.Platform}
+	if s.Cloud == nil || !c.IsApprover(u.Email) {
+		return nil, nil
+	}
+	t, err := s.accountTotals(ctx, st.Platform)
+	if err != nil {
+		return nil, err
+	}
+	b := &AccountBlock{BilledUSD: t.BilledUSD, ReadAt: t.Bill.ReadAt, UnbilledUSD: t.UnbilledUSD, ReservedUSD: t.ReservedUSD,
+		LimitUSD: t.LimitUSD, Source: s.SpendSource, Stale: t.Stale, Window: t.Window}
+	if c.IsAdmin(u.Email) {
+		b.Error, b.CanMark = t.Bill.Error, true
+		if t.Bill.RefreshAt != nil {
+			after := t.Bill.RefreshAt.Add(accountRefreshEvery)
+			b.RefreshAfter = &after
+		}
+	}
+	return b, nil
 }
 
 func minTime(a, b time.Time) time.Time {

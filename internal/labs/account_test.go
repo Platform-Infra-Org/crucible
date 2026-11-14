@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"crucible/internal/apperr"
+	"crucible/internal/auth"
 	"crucible/internal/awscloud"
 	"crucible/internal/notify"
 	"crucible/internal/rbac"
@@ -211,6 +212,7 @@ func TestConcurrentMarksLastWriteWins(t *testing.T) {
 func TestMarksNearTheEdgesAreClamped(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
+	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
 	now := f.clk.Now()
 	for _, c := range []struct{ in, want time.Time }{
 		{now.Add(90 * time.Second), now},
@@ -494,5 +496,44 @@ func TestAccountAlertsOncePerLevel(t *testing.T) {
 	}
 	if ev := f.notes.last(notify.BudgetAlert); !strings.Contains(ev.Subject, "can't read") {
 		t.Fatalf("the stale alert: %+v", ev)
+	}
+}
+
+// withApproverAndManager adds a program approver and a program manager (not an approver) to the fixture's first program.
+func withApproverAndManager(t *testing.T, f *fx) {
+	t.Helper()
+	ctx := context.Background()
+	store := auth.Store{DB: f.s.DB}
+	f.approver, _ = store.UpsertUser(ctx, "s5", "approver@crucible.local", "Avi")
+	f.manager, _ = store.UpsertUser(ctx, "s6", "manager@crucible.local", "Mo")
+	for _, tm := range f.plat.Teams {
+		for _, p := range tm.Programs {
+			p.Roles.Approvers = append(p.Roles.Approvers, f.approver.Email)
+			p.Roles.Manager = append(p.Roles.Manager, f.manager.Email)
+			return
+		}
+	}
+	t.Fatal("no program")
+}
+
+func TestTheLedgerShowsTheAccountToAdminsAndApproversOnly(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	withApproverAndManager(t, f)
+	cloud := &awscloud.Fake{Now: f.clk.Now}
+	cloud.SetAccountSpend(412.37)
+	f.s.Cloud, f.s.SpendSource = cloud, "budget"
+	setLimit(t, f, 600)
+	_ = f.s.ReadAccountSpend(ctx, false)
+	a, err := f.s.Ledger(ctx, f.admin)
+	if err != nil || a.Account == nil || a.Account.BilledUSD != 412.37 || a.Account.LimitUSD != 600 || !a.Account.CanMark || a.Account.Source != "budget" {
+		t.Fatalf("admin: %+v %v", a.Account, err)
+	}
+	ap, err := f.s.Ledger(ctx, f.approver)
+	if err != nil || ap.Account == nil || ap.Account.CanMark || ap.Account.Error != "" || ap.Account.RefreshAfter != nil {
+		t.Fatalf("an approver sees the totals, read-only, without admin detail: %+v %v", ap.Account, err)
+	}
+	if m, err := f.s.Ledger(ctx, f.manager); err == nil && m.Account != nil {
+		t.Fatal("a program manager who doesn't approve doesn't see the account")
 	}
 }

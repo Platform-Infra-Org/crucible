@@ -88,7 +88,9 @@ function Cooldown({ until }: { until: string }) {
 export function LedgerPage() {
   const { data: l, error, reload } = useFetch<Ledger>('/api/ledger', 60_000)
   const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState<{ b: AccountBlock; of: Ledger }>() // a mark's reply, until the next read of the ledger
+  // A mark's reply, shown until a read of the ledger made after it lands: the save reloads the ledger, which drops any
+  // read already on its way, and the reply is pinned to the ledger on screen when it came.
+  const [saved, setSaved] = useState<{ b: AccountBlock; of?: Ledger }>()
   if (error) return <ErrorBox error={error} />
   if (!l) return <Loader label="Weighing the ledger…" />
   const refresh = async () => {
@@ -104,7 +106,8 @@ export function LedgerPage() {
   }
   const bars = barHeights(l.daily)
   const acc = accuracyPct(l.accuracy)
-  const account = saved?.of === l ? saved.b : l.account
+  if (saved && !saved.of) setSaved({ ...saved, of: l })
+  const account = saved && (!saved.of || saved.of === l) ? saved.b : l.account
   return (
     <section className="page">
       <h1>Ledger</h1>
@@ -144,7 +147,7 @@ export function LedgerPage() {
         </p>
       )}
 
-      {account && <Account a={account} onSaved={(b) => setSaved({ b, of: l })} />}
+      {account && <Account a={account} onSaved={(b) => { setSaved({ b }); reload() }} />}
 
       <h2>Budgets</h2>
       {l.teams.map((t) => (

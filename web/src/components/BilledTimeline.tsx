@@ -1,71 +1,67 @@
-import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { api } from '../api'
 import type { AccountBlock, UnbilledWindow } from '../types'
 import { toast } from '../lib/alerts'
 import { usd } from '../lib/money'
-import { at, cutFor, hhmm, snap, split, step, summary } from '../lib/billedTimeline'
+import { at, cutFor, hhmm, markGestures, split, summary, type Drag, type MarkCtx } from '../lib/billedTimeline'
 import { reportSaveError } from './Conflict'
 
 const H = 3600_000
 const MARKS = '/api/admin/account-spend/marks'
-type Drag = { key: string; t: number; orig: number } // key '' is the account marker, else a lab's id; orig is the saved time
 
 // BilledTimeline is the Ledger's last 24 hours: each paid lab's usage, hatched where the AWS bill already covers it and
 // molten where Crucible counts it. Admins drag the green account marker (or a lab's own) to what AWS has billed.
 export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; canMark: boolean; onSaved: (b: AccountBlock) => void }) {
   const from = Date.parse(w.from), to = Date.parse(w.to)
   const [drag, setDragState] = useState<Drag | null>(null)
+  const [busy, setBusy] = useState(false) // a row button's or Count all's save is on its way
   const dragRef = useRef<Drag | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const busyRef = useRef(false)
   const plot = useRef<HTMLDivElement>(null)
+  const [g] = useState(markGestures)
+  useEffect(() => () => g.dispose(), [g]) // no save fires after the Ledger is gone
   const setDrag = (d: Drag | null) => { dragRef.current = d; setDragState(d) }
 
   const accountAt = drag?.key === '' ? drag.t : Math.max(w.account_mark ? Date.parse(w.account_mark) : from, from)
   const accountMark = drag?.key === '' ? new Date(drag.t).toISOString() : w.account_mark
   const own: Record<string, number> = drag && drag.key !== '' ? { [drag.key]: drag.t } : {}
 
-  const send = async (body: object, done: string) => {
+  const put = async (body: object, done: string) => {
     try {
       onSaved(await api<AccountBlock>(MARKS, { method: 'PUT', json: body }))
       toast(done)
     } catch (e) {
-      reportSaveError(e) // the marker goes back to the saved time
-    } finally {
-      setDrag(null)
+      reportSaveError(e)
     }
   }
-  const save = () => {
-    const d = dragRef.current
-    if (d && d.t === d.orig) setDrag(null) // a click that moved nothing saves nothing
-    else if (d) void send({ lab_id: d.key, billed_to: new Date(d.t).toISOString() }, `Marked as billed up to ${hhmm(d.t)}.`)
+  // A moved marker: shown where it was dropped until the reply redraws it, or back where it was on a failure. Only this
+  // drag is cleared, never one started meanwhile.
+  const ctx: MarkCtx = {
+    from, to, width: () => plot.current?.getBoundingClientRect().width ?? 0, get: () => dragRef.current, set: setDrag,
+    save: (d) => void put({ lab_id: d.key, billed_to: new Date(d.t).toISOString() }, `Marked as billed up to ${hhmm(d.t)}.`)
+      .finally(() => { if (dragRef.current === d) setDrag(null) }),
   }
-  const timeAt = (clientX: number) => {
-    const b = plot.current!.getBoundingClientRect()
-    return snap(from + ((clientX - b.left) / b.width) * (to - from), from, to)
+  // A button's save: one at a time, so a double click sends once.
+  const act = async (body: object, done: string) => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    await put(body, done)
+    busyRef.current = false
+    setBusy(false)
   }
   const slider = (key: string, t: number, label: string) => ({
     role: 'slider', tabIndex: 0, 'aria-label': label, 'aria-valuemin': from, 'aria-valuemax': to, 'aria-valuenow': t, 'aria-valuetext': hhmm(t),
     style: { left: `${at(t, from, to)}%` },
-    onPointerDown: (e: PointerEvent<HTMLElement>) => { e.currentTarget.setPointerCapture(e.pointerId); setDrag({ key, t: timeAt(e.clientX), orig: t }) },
-    onPointerMove: (e: PointerEvent<HTMLElement>) => { const d = dragRef.current; if (d?.key === key) setDrag({ ...d, t: timeAt(e.clientX) }) },
-    onPointerUp: () => { if (dragRef.current?.key === key) save() },
-    onPointerCancel: () => setDrag(null),
-    onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
-      const d = dragRef.current?.key === key ? dragRef.current : { key, t, orig: t }
-      const next = { ArrowLeft: step(d.t, -1, from, to), ArrowRight: step(d.t, 1, from, to), Home: from, End: to }[e.key]
-      if (next === undefined) return
-      e.preventDefault()
-      clearTimeout(timer.current)
-      setDrag({ ...d, t: next })
-    },
-    onKeyUp: (e: KeyboardEvent<HTMLElement>) => {
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
-      clearTimeout(timer.current)
-      timer.current = setTimeout(save, 400) // one save after the keys settle
-    },
+    onPointerDown: (e: PointerEvent<HTMLElement>) => { e.currentTarget.setPointerCapture(e.pointerId); g.down(ctx, key, t, e.clientX) },
+    onPointerMove: (e: PointerEvent<HTMLElement>) => g.move(ctx, key, e.clientX),
+    onPointerUp: () => g.up(ctx, key),
+    onPointerCancel: () => g.cancel(ctx),
+    onKeyDown: (e: KeyboardEvent<HTMLElement>) => { if (g.key(ctx, key, t, e.key)) e.preventDefault() },
+    onKeyUp: (e: KeyboardEvent<HTMLElement>) => g.keyUp(ctx, e.key),
   })
   const reset = () => {
-    if (window.confirm('Count all of the last 24 hours on top of the AWS bill? This removes every mark.')) void send({ reset: true }, 'Counting all of the last 24 hours.')
+    if (window.confirm('Count all of the last 24 hours on top of the AWS bill? This removes every mark.')) void act({ reset: true }, 'Counting all of the last 24 hours.')
   }
 
   const sleptFrom = w.slept_from ? Math.max(Date.parse(w.slept_from), from) : undefined
@@ -76,7 +72,7 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
       <div className="row billed-head">
         <h5 id="billed-timeline-h">Not yet on the AWS bill · last 24 hours</h5>
         <span className="spacer" />
-        {canMark && <button type="button" className="ghost small" onClick={reset}>Count all 24 h</button>}
+        {canMark && <button type="button" className="ghost small" disabled={busy} onClick={reset}>Count all 24 h</button>}
       </div>
       <p role="status" className="billed-sum">{summary(w, accountMark, own)}</p>
       <p className="muted billed-how">
@@ -112,8 +108,8 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
                   {canMark && mine && <div className="bt-own" {...slider(l.id, cut, `Billed up to, ${name}, set on its own`)} />}
                 </div>
                 {canMark && (mine
-                  ? <button type="button" className="ghost small bt-act" onClick={() => void send({ lab_id: l.id, billed_to: null }, 'Following the account marker again.')}>Follow account</button>
-                  : <button type="button" className="ghost small bt-act" onClick={() => void send({ lab_id: l.id, billed_to: new Date(accountAt).toISOString() }, `Marked as billed up to ${hhmm(accountAt)}.`)}>Set separately</button>)}
+                  ? <button type="button" className="ghost small bt-act" disabled={busy} onClick={() => void act({ lab_id: l.id, billed_to: null }, 'Following the account marker again.')}>Follow account</button>
+                  : <button type="button" className="ghost small bt-act" disabled={busy} onClick={() => void act({ lab_id: l.id, billed_to: new Date(accountAt).toISOString() }, `Marked as billed up to ${hhmm(accountAt)}.`)}>Set separately</button>)}
               </div>
             )
           })}

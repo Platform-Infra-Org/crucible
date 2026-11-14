@@ -109,8 +109,12 @@ func (s *Service) Morning(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
-	if _, err := tx.Exec(ctx, `DELETE FROM platform_bedtime`); err != nil {
+	if tag, err := tx.Exec(ctx, `DELETE FROM platform_bedtime`); err != nil {
 		return err
+	} else if tag.RowsAffected() > 0 { // the night ends only if there was one
+		if _, err := tx.Exec(ctx, `UPDATE aws_ops SET forge_woke_at = $1`, s.Now()); err != nil {
+			return err
+		}
 	}
 	var since *time.Time
 	err = tx.QueryRow(ctx, `SELECT changed_at FROM kill_switch WHERE enabled AND changed_by = $1 FOR UPDATE`, TeardownActor).Scan(&since)
@@ -198,7 +202,9 @@ func (s *Service) bedtimeStep(ctx context.Context) {
 		s.sleepSoon(ctx, inst)
 	}
 	if awake, err := AwakeAWSLabs(ctx, s.DB); err == nil && len(awake) == 0 {
-		_, _ = s.DB.Exec(ctx, `UPDATE platform_bedtime SET phase = 'asleep'`)
+		if tag, _ := s.DB.Exec(ctx, `UPDATE platform_bedtime SET phase = 'asleep' WHERE phase <> 'asleep'`); tag.RowsAffected() > 0 {
+			_, _ = s.DB.Exec(ctx, `UPDATE aws_ops SET forge_slept_at = $1`, s.Now())
+		}
 	}
 }
 

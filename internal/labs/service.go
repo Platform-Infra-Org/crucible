@@ -1546,6 +1546,9 @@ func (s *Service) Sweep(ctx context.Context) {
 		paused = true // escalation and expiry of pending requests wait until labs are re-enabled
 	}
 	s.bedtimeStep(ctx)
+	if _, err := s.DB.Exec(ctx, `DELETE FROM billed_marks WHERE billed_to < $1`, now.Add(-markKeep)); err != nil {
+		s.Log.Error("purging old billed marks failed", "err", err)
+	}
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'asleep' AND ends_at <= $1)
 		   OR (state = 'waking' AND waking_since < $1 - interval '20 minutes')

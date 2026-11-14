@@ -95,6 +95,15 @@ variable "account_public_access_block" {
   default     = true
   description = "Block public S3 access account-wide. false: the organization already does (and an SCP may deny the call)."
 }
+variable "spend_source" {
+  type        = string
+  default     = "budget"
+  description = "Where Crucible reads the account's bill: budget (the labs AWS Budget, free) or cost_explorer ($0.01 per call, read hourly)."
+  validation {
+    condition     = contains(["budget", "cost_explorer"], var.spend_source)
+    error_message = "spend_source is budget or cost_explorer"
+  }
+}
 variable "billing_export" {
   type        = bool
   default     = true
@@ -357,7 +366,10 @@ resource "aws_iam_role_policy" "ops" {
       { Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"], Resource = "*" },
       # Billed spend comes from the free CUR 2.0 export, metering from lab state: no Cost Explorer (paid per call).
       { Sid = "ReadLabState", Effect = "Allow", Action = "s3:GetObject", Resource = "${local.state}/labs/*" },
-      ], [for b in aws_s3_bucket.exports : [
+      ], [var.spend_source == "budget"
+      ? { Sid = "ReadAccountSpend", Effect = "Allow", Action = "budgets:ViewBudget", Resource = "arn:aws:budgets::${local.account}:budget/${var.name}-labs-monthly" }
+      : { Sid = "ReadAccountSpend", Effect = "Allow", Action = "ce:GetCostAndUsage", Resource = "*" }],
+      [for b in aws_s3_bucket.exports : [
         { Sid = "ReadExport", Effect = "Allow", Action = "s3:ListBucket", Resource = b.arn },
         { Sid = "ReadExportFiles", Effect = "Allow", Action = "s3:GetObject", Resource = "${b.arn}/*" },
     ]]...)
@@ -505,16 +517,16 @@ resource "aws_bcmdataexports_export" "labs" {
   depends_on = [aws_s3_bucket_policy.exports]
 }
 
-# Free backstop under Crucible's own budgets.
+# The account's bill this month, which Crucible reads (spend_source = budget); alerts only with budget_emails.
 resource "aws_budgets_budget" "labs" {
-  count        = length(var.budget_emails) > 0 ? 1 : 0
+  count        = var.spend_source == "budget" || length(var.budget_emails) > 0 ? 1 : 0
   name         = "${var.name}-labs-monthly"
   budget_type  = "COST"
   time_unit    = "MONTHLY"
   limit_amount = tostring(var.budget_monthly_usd)
   limit_unit   = "USD"
   dynamic "notification" {
-    for_each = [80, 100]
+    for_each = length(var.budget_emails) > 0 ? [80, 100] : []
     content {
       comparison_operator        = "GREATER_THAN"
       threshold                  = notification.value
@@ -543,6 +555,8 @@ output "regions" { value = join(",", local.regions) }
 # labs-init passes these back when re-run without --budget-usd/--budget-email, so a re-run keeps the budget.
 output "budget_monthly_usd" { value = var.budget_monthly_usd }
 output "budget_emails" { value = var.budget_emails }
+output "spend_source" { value = var.spend_source }
+output "budget_name" { value = var.spend_source == "budget" ? "${var.name}-labs-monthly" : "" }
 output "lab_instance_profile" { value = aws_iam_instance_profile.lab_instance.name }
 output "lab_instance_role_arn" { value = aws_iam_role.lab_instance.arn }
 output "lab_subnet_cidrs" { value = join(",", [for id in var.lab_subnet_ids : data.aws_subnet.lab[id].cidr_block]) }

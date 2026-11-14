@@ -263,12 +263,43 @@ run "export_and_budget" {
   }
 }
 
-run "no_budget_without_emails" {
+run "the_budget_exists_without_emails_and_alerts_nobody" {
   command = apply
   assert {
-    condition     = length(aws_budgets_budget.labs) == 0
-    error_message = "no budget without someone to tell"
+    condition     = length(aws_budgets_budget.labs) == 1 && length(aws_budgets_budget.labs[0].notification) == 0
+    error_message = "Crucible reads the budget's actual spend, so it always exists; it alerts only with emails"
   }
+  assert {
+    condition     = output.spend_source == "budget" && output.budget_name == "crucible-labs-monthly"
+    error_message = "the server learns where to read the bill"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadAccountSpend"]).Action == "budgets:ViewBudget" && one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadAccountSpend"]).Resource == "arn:aws:budgets::444455556666:budget/crucible-labs-monthly"
+    error_message = "the ops role may view only that budget"
+  }
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.ops.policy, "ce:")
+    error_message = "no Cost Explorer with the budget source"
+  }
+}
+
+run "cost_explorer_source_reads_ce_and_makes_no_budget" {
+  command = apply
+  variables { spend_source = "cost_explorer" }
+  assert {
+    condition     = length(aws_budgets_budget.labs) == 0 && output.spend_source == "cost_explorer" && output.budget_name == ""
+    error_message = "no budget unless alerts are wanted"
+  }
+  assert {
+    condition     = one([for s in jsondecode(aws_iam_role_policy.ops.policy).Statement : s if try(s.Sid, "") == "ReadAccountSpend"]).Action == "ce:GetCostAndUsage"
+    error_message = "the ops role reads Cost Explorer"
+  }
+}
+
+run "spend_source_is_one_of_two" {
+  command = plan
+  variables { spend_source = "invoice" }
+  expect_failures = [var.spend_source]
 }
 
 run "plan_role_actions_fit_the_boundary" {

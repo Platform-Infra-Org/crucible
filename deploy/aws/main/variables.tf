@@ -169,6 +169,15 @@ variable "lab_export_name" {
   type    = string
   default = ""
 }
+variable "lab_spend_source" {
+  type        = string
+  default     = ""
+  description = "Set by up from the labs stack: budget or cost_explorer; empty: the account's bill is not read"
+}
+variable "lab_budget_name" {
+  type    = string
+  default = ""
+}
 variable "lab_vpc_id" {
   type        = string
   default     = ""

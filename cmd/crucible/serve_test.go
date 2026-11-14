@@ -18,7 +18,8 @@ func noPrices(context.Context) (pricing.Lookup, error) { return nil, pricing.Err
 
 // real labs: the variables every real aws lab install sets (deploy/aws/labs outputs).
 var real = map[string]string{"CRUCIBLE_AWS_LAB_ROLE_ARN": "lab", "CRUCIBLE_AWS_OPS_ROLE_ARN": "ops", "CRUCIBLE_AWS_PLAN_ROLE_ARN": "plan",
-	"CRUCIBLE_AWS_EXPORT_BUCKET": "exports", "CRUCIBLE_AWS_EXPORT_NAME": "crucible-labs"}
+	"CRUCIBLE_AWS_EXPORT_BUCKET": "exports", "CRUCIBLE_AWS_EXPORT_NAME": "crucible-labs",
+	"CRUCIBLE_AWS_SPEND_SOURCE": "budget", "CRUCIBLE_AWS_BUDGET_NAME": "b"}
 
 func without(k string) map[string]string {
 	m := map[string]string{}
@@ -113,6 +114,9 @@ func TestRealAWSLabsEstimateFromATerraformPlan(t *testing.T) {
 		got.ExportBucket != "exports" || got.ExportPrefix != "cur" || got.ExportName != "crucible-labs" || got.ExportRegion != "eu-west-1" {
 		t.Fatalf("roles and export (prefix defaults to cur; the export bucket is in the labs stack's region): %+v", got)
 	}
+	if got.SpendSource != "budget" || got.BudgetName != "b" {
+		t.Fatalf("where the account's bill is read: %+v", got)
+	}
 	if fetch == nil || fetch.Base != "https://pricing.us-east-1.amazonaws.com" {
 		t.Fatalf("real labs refresh prices from the public AWS Price List: %+v", fetch)
 	}
@@ -130,6 +134,16 @@ func TestDryrunNeverConstructsTheSDKClient(t *testing.T) {
 		}, noPrices)
 	if _, fake := ar.Cloud.(*awscloud.Fake); err != nil || !fake || ar.DryRun == nil {
 		t.Fatalf("dryrun runs on the fake cloud: %T %v", ar.Cloud, err)
+	}
+}
+
+func TestDryRunHasAnAccountBill(t *testing.T) {
+	ar := &labs.AWSRunner{}
+	if _, _, err := awsSetup(context.Background(), "dryrun", ar, labs.FixedRates{}, envOf(nil), nil, noPrices); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := ar.Cloud.AccountSpend(context.Background()); err != nil || v != 12.34 {
+		t.Fatalf("the Ledger's account line has a figure in a dry run: %v %v", v, err)
 	}
 }
 

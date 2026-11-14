@@ -108,6 +108,10 @@ if helm template t "$chart" $(sed "s/--set awsLabs.planRoleArn=[^ ]*//" <<<"$aws
 if helm template t "$chart" $(sed "s/--set awsLabs.exportName=[^ ]*//" <<<"$aws") >/dev/null 2>&1; then echo "an export bucket needs awsLabs.exportName"; exit 1; fi
 noexp=$(helm template t "$chart" $(sed "s/--set awsLabs.exportBucket=[^ ]*//; s/--set awsLabs.exportName=[^ ]*//" <<<"$aws")) || { echo "aws labs must render without a billing export"; exit 1; }
 grep -q -- 'name: CRUCIBLE_AWS_EXPORT_BUCKET, value: ""' <<<"$noexp" || { echo "no export: CRUCIBLE_AWS_EXPORT_BUCKET is empty"; exit 1; }
+spend=$(helm template t "$chart" $aws --set awsLabs.spendSource=budget --set awsLabs.budgetName=crucible-labs-monthly)
+for want in 'name: CRUCIBLE_AWS_SPEND_SOURCE, value: "budget"' 'name: CRUCIBLE_AWS_BUDGET_NAME, value: "crucible-labs-monthly"'; do
+  grep -q -- "$want" <<<"$spend" || { echo "missing: $want"; exit 1; }
+done
 dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
 grep -q -- 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' <<<"$dry" || { echo "missing in dry run: CRUCIBLE_AWS_LABS=dryrun"; exit 1; }
 awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)

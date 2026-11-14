@@ -147,28 +147,32 @@ test('past the account limit a paid lab waits for an admin, who approves it as a
   await admin.goto('/admin/settings')
   await admin.getByLabel('Monthly account limit (USD)').fill('1') // the dry run's bill is $12.34
   await saveSettings(admin)
+  try {
+    const leader = await login(browser, 'leader')
+    await addParticipant(leader, 'forge-401', 'trainee@crucible.local')
+    const trainee = await login(browser, 'trainee')
+    await trainee.goto('/p/forge/forge-401/m/01-cloud-heat/lab')
+    await trainee.getByRole('button', { name: 'Request approval ($0.04)' }).click()
+    await expect(trainee.getByText("Waiting for an admin: the forge's monthly spend limit is reached.")).toBeVisible()
 
-  const leader = await login(browser, 'leader')
-  await addParticipant(leader, 'forge-401', 'trainee@crucible.local')
-  const trainee = await login(browser, 'trainee')
-  await trainee.goto('/p/forge/forge-401/m/01-cloud-heat/lab')
-  await trainee.getByRole('button', { name: 'Request approval ($0.04)' }).click()
-  await expect(trainee.getByText("Waiting for an admin: the forge's monthly spend limit is reached.")).toBeVisible()
+    await leader.getByRole('link', { name: 'Approvals' }).click()
+    await expect(leader.getByRole('heading', { name: 'Approvals' })).toBeVisible() // the page has loaded
+    await expect(leader.getByRole('listitem', { name: 'Request from trainee@crucible.local' })).toHaveCount(0)
 
-  await leader.getByRole('link', { name: 'Approvals' }).click()
-  await expect(leader.getByRole('listitem', { name: 'Request from trainee@crucible.local' })).toHaveCount(0)
+    await admin.getByRole('link', { name: 'Ledger' }).click()
+    await expect(admin.getByText(/AWS account this month: \$12\.34 billed/)).toBeVisible()
+    await admin.getByRole('link', { name: 'Approvals' }).click()
+    const req = admin.getByRole('listitem', { name: 'Request from trainee@crucible.local' })
+    await expect(req.getByText(/Would pass the account's monthly limit \(\$\d+\.\d\d of \$1\.00\): only an admin can approve it\./)).toBeVisible()
+    await req.getByRole('button', { name: 'Approve' }).click()
+    await expect(trainee.getByRole('tab', { name: 'workspace', exact: true })).toBeVisible({ timeout: 10 * 60_000 })
 
-  await admin.getByRole('link', { name: 'Ledger' }).click()
-  await expect(admin.getByText(/AWS account this month: \$12\.34 billed/)).toBeVisible()
-  await admin.getByRole('link', { name: 'Approvals' }).click()
-  const req = admin.getByRole('listitem', { name: 'Request from trainee@crucible.local' })
-  await expect(req.getByText(/Would pass the account's monthly limit \(\$\d+\.\d\d of \$1\.00\): only an admin can approve it\./)).toBeVisible()
-  await req.getByRole('button', { name: 'Approve' }).click()
-  await expect(trainee.getByRole('tab', { name: 'workspace', exact: true })).toBeVisible({ timeout: 10 * 60_000 })
-
-  await trainee.getByRole('button', { name: 'End lab' }).click()
-  await expect(trainee.getByRole('heading', { name: 'The forge has cooled' })).toBeVisible({ timeout: 5 * 60_000 })
-  await admin.goto('/admin/settings') // leave the forge as the other journeys expect it
-  await admin.getByLabel('Monthly account limit (USD)').fill('')
-  await saveSettings(admin)
+    await trainee.getByRole('button', { name: 'End lab' }).click()
+    await expect(trainee.getByRole('heading', { name: 'The forge has cooled' })).toBeVisible({ timeout: 5 * 60_000 })
+  } finally {
+    // leave the forge as the other journeys expect it, even when the journey failed
+    await admin.goto('/admin/settings')
+    await admin.getByLabel('Monthly account limit (USD)').fill('')
+    await saveSettings(admin)
+  }
 })

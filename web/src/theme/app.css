@@ -484,7 +484,8 @@ ol.attempts .pre { margin: 0.25rem 0 0; }
 .billed-how { font-size: 0.85rem; margin: 0 0 0.75rem; }
 .bt-chart { --bt-name: 12rem; --bt-act: 8.5rem; --bt-top: 1.6rem; position: relative; padding-top: var(--bt-top); user-select: none;
   overflow-x: clip; overflow-clip-margin: 8px; } /* nothing scrolls sideways at phone width */
-.billed-timeline.read-only .bt-chart { --bt-act: 0rem; --bt-top: 0.25rem; }
+.billed-timeline.read-only .bt-chart { --bt-act: 0rem; }
+.billed-timeline.read-only :is(.bt-marker, .bt-handle) { cursor: default; pointer-events: none; } /* shown, not moved */
 .bt-row { display: grid; grid-template-columns: var(--bt-name) minmax(0, 1fr) var(--bt-act); align-items: center; min-height: 2.2rem;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
 .bt-row.bt-axis-row { min-height: 1.2rem; border-top: 0; }

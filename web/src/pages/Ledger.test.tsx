@@ -77,6 +77,16 @@ test('a stale bill says paid labs need an admin, and admins see why', () => {
   expect(h).toContain('Out of date: new paid labs need an admin until the bill is read again. Last error: no spend source: re-run labs-init, then up')
 })
 
+test('a stale bill with no limit set only says it is out of date', () => {
+  ledger = { ...base, prices_stale: false, account: account({ stale: true, limit_usd: 0 }) } as Ledger
+  let h = page()
+  expect(h).toMatch(/<p role="status" data-testid="account-status" class="error">Out of date\.<\/p>/)
+  expect(h).not.toContain('need an admin')
+  ledger = { ...base, prices_stale: false, account: account({ stale: true, limit_usd: 0, error: 'AccessDenied' }) } as Ledger
+  h = page()
+  expect(h).toContain('Out of date. Last error: AccessDenied')
+})
+
 test('the Refresh button says when the AWS bill can be read again', () => {
   ledger = { ...base, can_refresh: true, prices_stale: false, account: account({ refresh_after: new Date(Date.now() + 125_000).toISOString() }) } as Ledger
   expect(page()).toMatch(/The AWS bill can be read again in 2:0\d\./)

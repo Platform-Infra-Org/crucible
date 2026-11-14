@@ -129,6 +129,8 @@ export type UsageInterval = { from: string; to: string; hourly_usd: number }
 export type UnbilledLab = { id: string; team: string; training: string; module: string; requester: string; hourly_usd: number
   intervals: UsageInterval[]; own_mark?: string; unbilled_usd: number }
 export type UnbilledWindow = { from: string; to: string; slept_from?: string; slept_to?: string; account_mark?: string
+  /** the last read of the bill: no lab is counted from later; before any read, no mark counts */
+  read_at?: string
   labs: UnbilledLab[]; unbilled_usd: number }
 /** The Ledger's account line (admins and approvers with AWS labs on): the bill, Crucible's meter on top, reserved, the limit (0 = none). */
 export type AccountBlock = { billed_usd: number; read_at?: string; unbilled_usd: number; reserved_usd: number; limit_usd: number

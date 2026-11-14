@@ -3,10 +3,9 @@ import { api } from '../api'
 import type { AccountBlock, UnbilledWindow } from '../types'
 import { toast } from '../lib/alerts'
 import { usd } from '../lib/money'
-import { at, cutFor, hhmm, markGestures, split, summary, type Drag, type MarkCtx } from '../lib/billedTimeline'
+import { at, cutFor, hhmm, markGestures, markOf, split, summary, type Drag, type MarkCtx } from '../lib/billedTimeline'
 import { reportSaveError } from './Conflict'
 
-const H = 3600_000
 const MARKS = '/api/admin/account-spend/marks'
 
 // BilledTimeline is the Ledger's last 24 hours: each paid lab's usage, hatched where the AWS bill already covers it and
@@ -66,7 +65,7 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
 
   const sleptFrom = w.slept_from ? Math.max(Date.parse(w.slept_from), from) : undefined
   const sleptTo = w.slept_to ? Math.min(Date.parse(w.slept_to), to) : to
-  const ticks = [0, 4, 8, 12, 16, 20, 24].map((h) => from + h * H)
+  const ticks = [0, 1, 2, 3, 4, 5, 6].map((i) => from + (i * (to - from)) / 6) // every 4 h; wider when the window reaches back to an older bill
   return (
     <section className={`panel billed-timeline${canMark ? '' : ' read-only'}`} aria-labelledby="billed-timeline-h">
       <div className="row billed-head">
@@ -76,8 +75,8 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
       </div>
       <p role="status" className="billed-sum">{summary(w, accountMark, own)}</p>
       <p className="muted billed-how">
-        {canMark ? "Check the month-to-date cost in the AWS console, then drag the green marker to the time it covers. Time left of a marker is already in the bill; Crucible adds only what's right of it."
-          : 'An admin marks how far the AWS bill reaches; Crucible adds only the time after it.'}
+        {canMark ? "Check the month-to-date cost in the AWS console, then drag the green marker to the time it covers. Time left of a marker is already in the bill; Crucible adds what's right of it, and never counts from later than its last read of the bill."
+          : 'An admin marks how far the AWS bill reaches; Crucible adds the time after it, and never counts from later than its last read of the bill.'}
       </p>
       {w.labs.length === 0 ? <p className="muted empty">No paid lab ran in the last 24 hours.</p> : (
         <div className="bt-chart">
@@ -89,7 +88,7 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
           </div>
           {w.labs.map((l) => {
             const mine = drag?.key === l.id || !!l.own_mark
-            const cut = cutFor(l, accountMark, own, from)
+            const cut = cutFor(l, accountMark, own, from, w.read_at)
             const name = `${l.training} (${l.requester})`
             return (
               <div key={l.id} className={`bt-row${mine ? ' own' : ''}`}>
@@ -105,7 +104,7 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
                       </div>
                     )
                   })}
-                  {canMark && mine && <div className="bt-own" {...slider(l.id, cut, `Billed up to, ${name}, set on its own`)} />}
+                  {canMark && mine && <div className="bt-own" {...slider(l.id, markOf(l, accountMark, own, from), `Billed up to, ${name}, set on its own`)} />}
                 </div>
                 {canMark && (mine
                   ? <button type="button" className="ghost small bt-act" disabled={busy} onClick={() => void act({ lab_id: l.id, billed_to: null }, 'Following the account marker again.')}>Follow account</button>
@@ -117,18 +116,17 @@ export function BilledTimeline({ w, canMark, onSaved }: { w: UnbilledWindow; can
             {sleptFrom !== undefined && sleptTo > sleptFrom && (
               <div className="bt-night" style={{ left: `${at(sleptFrom, from, to)}%`, width: `${at(sleptTo, from, to) - at(sleptFrom, from, to)}%` }}><em>forge asleep</em></div>
             )}
-            {canMark && (
-              <div className={`bt-marker${at(accountAt, from, to) < 15 ? ' start' : at(accountAt, from, to) > 85 ? ' end' : ''}`} {...slider('', accountAt, 'Account: AWS has billed usage up to')}>
-                <span className="bt-handle">Account billed up to {hhmm(accountAt)} <span aria-hidden="true">⇆</span></span>
-              </div>
-            )}
+            <div className={`bt-marker${at(accountAt, from, to) < 15 ? ' start' : at(accountAt, from, to) > 85 ? ' end' : ''}`}
+              {...(canMark ? slider('', accountAt, 'Account: AWS has billed usage up to') : { style: { left: `${at(accountAt, from, to)}%` } })}>
+              <span className="bt-handle">Account billed up to {hhmm(accountAt)}{canMark && <> <span aria-hidden="true">⇆</span></>}</span>
+            </div>
           </div>
         </div>
       )}
       <ul className="bt-legend">
         <li><i className="sw billed" aria-hidden="true" />In the AWS bill</li>
         <li><i className="sw hot" aria-hidden="true" />Counted by Crucible</li>
-        {canMark && <li><i className="sw marker" aria-hidden="true" />Account marker</li>}
+        <li><i className="sw marker" aria-hidden="true" />Account marker</li>
         <li>◆ This lab set on its own</li>
         {sleptFrom !== undefined && <li><i className="sw night" aria-hidden="true" />Forge asleep</li>}
       </ul>

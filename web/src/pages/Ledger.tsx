@@ -61,7 +61,7 @@ function Account({ a, onSaved }: { a: AccountBlock; onSaved: (b: AccountBlock) =
       <p className="muted">AWS updates the bill a few times a day; reserved is what running labs may still spend.</p>
       {(a.stale || a.error) && (
         <p role="status" data-testid="account-status" className="error">
-          {a.stale && 'Out of date: new paid labs need an admin until the bill is read again.'}
+          {a.stale && (a.limit_usd > 0 ? 'Out of date: new paid labs need an admin until the bill is read again.' : 'Out of date.')}
           {a.stale && a.error && ' '}
           {a.error && `Last error: ${a.error}`}
         </p>

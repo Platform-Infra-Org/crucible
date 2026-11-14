@@ -3,11 +3,17 @@ import type { UnbilledLab, UnbilledWindow, UsageInterval } from '../types'
 const Q = 15 * 60_000 // marks snap and step by 15 minutes
 const ms = (s?: string) => (s ? Date.parse(s) : undefined)
 
-// cutFor: a lab's own mark, else the account mark, else the window's start; never before the window.
+// markOf: where a lab's marker sits: its own mark, else the account mark, else the window's start; never before the window.
 // `own` holds a lab's mark while it is being dragged, before the server's reply; `lab.own_mark` is the saved one.
-export function cutFor(lab: UnbilledLab, accountMark: string | undefined, own: Record<string, number>, from: number): number {
+export function markOf(lab: UnbilledLab, accountMark: string | undefined, own: Record<string, number>, from: number): number {
   const c = own[lab.id] ?? ms(lab.own_mark) ?? ms(accountMark) ?? from
   return Math.max(c, from)
+}
+
+// cutFor: where Crucible starts counting a lab, as the server does: its marker, never later than the last read of the
+// bill (`read`); before any read, no mark counts.
+export function cutFor(lab: UnbilledLab, accountMark: string | undefined, own: Record<string, number>, from: number, read: string | undefined): number {
+  return read ? Math.min(markOf(lab, accountMark, own, from), Date.parse(read)) : from
 }
 
 // split: how much of an interval lies left of the cut (already billed), and the dollars right of it.
@@ -20,7 +26,7 @@ export function split(iv: UsageInterval, cut: number): { billedFrac: number; usd
 export function unbilledTotal(w: UnbilledWindow, accountMark: string | undefined, own: Record<string, number>) {
   let usd = 0, labs = 0
   for (const l of w.labs) {
-    const cut = cutFor(l, accountMark, own, Date.parse(w.from))
+    const cut = cutFor(l, accountMark, own, Date.parse(w.from), w.read_at)
     const u = l.intervals.reduce((s, iv) => s + split(iv, cut).usd, 0)
     if (u > 0.004) { usd += u; labs++ }
   }
@@ -90,7 +96,7 @@ export function markGestures() {
       if (timer !== undefined && c.get()?.key !== key) commit(c)
       const cur = c.get()
       const d = cur?.key === key ? cur : { key, t, orig: t }
-      const next = name === 'Home' ? c.from : name === 'End' ? c.to : step(d.t, name === 'ArrowLeft' ? -1 : 1, c.from, c.to)
+      const next = name === 'Home' ? c.from : name === 'End' ? c.to : step(d.t, name === 'ArrowLeft' || name === 'ArrowDown' ? -1 : 1, c.from, c.to)
       clearTimeout(timer)
       timer = undefined
       c.set({ ...d, t: next })
@@ -104,4 +110,4 @@ export function markGestures() {
     dispose() { clearTimeout(timer) },
   }
 }
-const NAV = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+const NAV = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']

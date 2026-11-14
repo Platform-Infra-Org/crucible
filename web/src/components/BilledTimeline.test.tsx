@@ -8,7 +8,7 @@ const H = 3600_000
 const to = Date.parse('2026-11-14T14:00:00Z'), from = to - 24 * H
 const iso = (ms: number) => new Date(ms).toISOString()
 const mark = from + 19 * H // 09:00 UTC
-const win = (extra: Partial<UnbilledWindow> = {}): UnbilledWindow => ({ from: iso(from), to: iso(to), unbilled_usd: 0, account_mark: iso(mark), labs: [
+const win = (extra: Partial<UnbilledWindow> = {}): UnbilledWindow => ({ from: iso(from), to: iso(to), read_at: iso(to), unbilled_usd: 0, account_mark: iso(mark), labs: [
   { id: 'a', team: 't', training: 'forge-401', module: 'm', requester: 'dana@x', hourly_usd: 0.24, unbilled_usd: 0,
     intervals: [{ from: iso(from + 1 * H), to: iso(from + 5 * H), hourly_usd: 0.24 }] },
   { id: 'b', team: 't', training: 'forge-402', module: 'm', requester: 'omer@x', hourly_usd: 2, unbilled_usd: 0,
@@ -46,13 +46,30 @@ test('a lab set on its own has a ◆, its own slider, and Follow account', () =>
   expect(h).toContain('Crucible adds $2.00 from 1 lab on top of the AWS bill · 1 lab set on its own')
 })
 
-test('an approver sees the bars and the summary, nothing to move', () => {
+test('an approver sees the bars, the summary and the account marker, nothing to move', () => {
   const h = html(win(), false)
   expect(h).toContain('Crucible adds $4.00 from 1 lab on top of the AWS bill')
   expect(h).toContain('class="billed"')
   expect(h).toContain('class="hot"')
+  expect(h).toContain(`Account billed up to ${hhmm(mark)}`)
+  expect(h).toContain('Account marker')
   expect(h).not.toContain('role="slider"')
+  expect(h).not.toContain('tabindex')
   expect(h).not.toContain('<button')
+})
+
+test('nothing is cut later than the last read of the bill', () => {
+  // read at 17:00 the day before, the account marker at 09:00: forge-401 counts from 17:00
+  const h = html(win({ read_at: iso(from + 3 * H) }), true)
+  expect(h).toMatch(/<p role="status"[^>]*>Crucible adds \$4\.48 from 2 labs on top of the AWS bill<\/p>/)
+  expect(h).toContain(`aria-valuenow="${mark}"`) // the marker stays where the admin put it
+  expect(h).toContain('never counts from later than its last read of the bill')
+})
+
+test('a window reaching back past 24 hours still ends at now', () => {
+  const f = to - 30 * H
+  const h = html(win({ from: iso(f), read_at: iso(f) }), true)
+  expect(h).toContain('style="left:100%">now<')
 })
 
 test('the night the forge slept is a band in words', () => {

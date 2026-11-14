@@ -1,24 +1,44 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cutFor, split, unbilledTotal, snap, step, at, summary, markGestures, type Drag, type MarkCtx } from './billedTimeline'
+import { cutFor, markOf, split, unbilledTotal, snap, step, at, summary, markGestures, type Drag, type MarkCtx } from './billedTimeline'
 import type { UnbilledWindow } from '../types'
 
 const H = 3600_000
 const to = Date.parse('2026-11-14T14:00:00Z'), from = to - 24 * H
 const iso = (ms: number) => new Date(ms).toISOString()
-const win = (extra: Partial<UnbilledWindow> = {}): UnbilledWindow => ({ from: iso(from), to: iso(to), unbilled_usd: 0, labs: [
+const win = (extra: Partial<UnbilledWindow> = {}): UnbilledWindow => ({ from: iso(from), to: iso(to), read_at: iso(to), unbilled_usd: 0, labs: [
   { id: 'a', team: 't', training: 'forge-401', module: 'm', requester: 'dana@x', hourly_usd: 1, unbilled_usd: 0,
     intervals: [{ from: iso(from + 1 * H), to: iso(from + 5 * H), hourly_usd: 1 }] },
   { id: 'b', team: 't', training: 'forge-402', module: 'm', requester: 'omer@x', hourly_usd: 2, unbilled_usd: 0,
     intervals: [{ from: iso(to - 2 * H), to: iso(to), hourly_usd: 2 }] },
 ], ...extra })
 
-test('a lab is cut at its own mark, else the account mark, else the window start', () => {
+test('a lab\'s marker is its own mark, else the account mark, else the window start', () => {
   const w = win({ account_mark: iso(from + 3 * H) })
-  expect(cutFor(w.labs[0], w.account_mark, {}, from)).toBe(from + 3 * H)
-  expect(cutFor(w.labs[0], w.account_mark, { a: from + 4 * H }, from)).toBe(from + 4 * H)
-  expect(cutFor(w.labs[0], undefined, {}, from)).toBe(from)
-  expect(cutFor(w.labs[0], iso(from - 5 * H), {}, from)).toBe(from) // clamped
-  expect(cutFor({ ...w.labs[0], own_mark: iso(from + 2 * H) }, w.account_mark, {}, from)).toBe(from + 2 * H) // the saved own mark
+  expect(markOf(w.labs[0], w.account_mark, {}, from)).toBe(from + 3 * H)
+  expect(markOf(w.labs[0], w.account_mark, { a: from + 4 * H }, from)).toBe(from + 4 * H)
+  expect(markOf(w.labs[0], undefined, {}, from)).toBe(from)
+  expect(markOf(w.labs[0], iso(from - 5 * H), {}, from)).toBe(from) // clamped
+  expect(markOf({ ...w.labs[0], own_mark: iso(from + 2 * H) }, w.account_mark, {}, from)).toBe(from + 2 * H) // the saved own mark
+})
+
+test('the cut is the marker, never later than the last read of the bill; before any read no mark counts', () => {
+  const w = win({ account_mark: iso(from + 3 * H) })
+  expect(cutFor(w.labs[0], w.account_mark, {}, from, iso(to))).toBe(from + 3 * H)
+  expect(cutFor(w.labs[0], w.account_mark, { a: from + 4 * H }, from, iso(from + 2 * H))).toBe(from + 2 * H)
+  expect(cutFor(w.labs[0], w.account_mark, {}, from, undefined)).toBe(from)
+  expect(unbilledTotal({ ...w, read_at: undefined }, w.account_mark, {})).toEqual({ usd: 4 + 4, labs: 2 })
+})
+
+test('ArrowUp steps like ArrowRight and ArrowDown like ArrowLeft', () => {
+  let drag: Drag | null = null
+  const c: MarkCtx = { from, to, width: () => 240, get: () => drag, set: (d) => { drag = d }, save: () => {} }
+  const g = markGestures(), m = from + 19 * H
+  expect(g.key(c, '', m, 'ArrowUp')).toBe(true)
+  expect(drag).toEqual({ key: '', t: m + 15 * 60_000, orig: m })
+  expect(g.key(c, '', m, 'ArrowDown')).toBe(true)
+  expect(g.key(c, '', m, 'ArrowDown')).toBe(true)
+  expect(drag).toEqual({ key: '', t: m - 15 * 60_000, orig: m })
+  g.dispose()
 })
 
 test('an interval splits into its billed and counted parts at the cut', () => {

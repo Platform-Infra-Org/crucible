@@ -154,3 +154,16 @@ func TestFakeSleepAndWakeRefuseAnInvalidLabID(t *testing.T) {
 		t.Fatal("wake")
 	}
 }
+
+func TestFakeAccountSpend(t *testing.T) {
+	f := &Fake{}
+	f.SetAccountSpend(12.34)
+	if usd, err := f.AccountSpend(context.Background()); usd != 12.34 || err != nil {
+		t.Fatalf("%v %v", usd, err)
+	}
+	e := errors.New("boom")
+	f.FailAccountSpend(e)
+	if usd, err := f.AccountSpend(context.Background()); usd != 0 || err != e || f.AccountSpendCalls != 2 {
+		t.Fatalf("%v %v %d", usd, err, f.AccountSpendCalls)
+	}
+}

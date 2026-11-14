@@ -90,6 +90,9 @@ type Cloud interface {
 	Wake(ctx context.Context, region string, c Credentials, labID string) error
 	// Costs is daily cost per lab for [from, to); untagged spend is left out.
 	Costs(ctx context.Context, from, to time.Time) ([]DailyCost, error)
+	// AccountSpend is the account's month-to-date bill (budget or Cost Explorer, per Config.SpendSource);
+	// ErrNoSpendSource when none is set.
+	AccountSpend(ctx context.Context) (float64, error)
 	// LabWrites lists successful create calls by lab sessions since `since` whose request had no lab tag.
 	// ErrTruncated (with the events read so far) when it stopped before the end.
 	LabWrites(ctx context.Context, region string, since time.Time) ([]TrailEvent, error)

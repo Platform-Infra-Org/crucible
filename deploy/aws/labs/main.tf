@@ -364,7 +364,7 @@ resource "aws_iam_role_policy" "ops" {
     Version = "2012-10-17"
     Statement = concat([
       { Effect = "Allow", Action = ["tag:GetResources", "s3:ListAllMyBuckets", "cloudtrail:LookupEvents"], Resource = "*" },
-      # Billed spend comes from the free CUR 2.0 export, metering from lab state: no Cost Explorer (paid per call).
+      # Billed spend comes from the free CUR 2.0 export, metering from lab state; the account bill from the budget (Cost Explorer only if chosen: paid per call).
       { Sid = "ReadLabState", Effect = "Allow", Action = "s3:GetObject", Resource = "${local.state}/labs/*" },
       ], [var.spend_source == "budget"
       ? { Sid = "ReadAccountSpend", Effect = "Allow", Action = "budgets:ViewBudget", Resource = "arn:aws:budgets::${local.account}:budget/${var.name}-labs-monthly" }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -334,5 +335,47 @@ func TestSmithThresholdsAreStoredAndAudited(t *testing.T) {
 	b.Smith = config.SmithThresholds{Apprentice: 600, Journeyman: 500}
 	if err := s.SetSettings(ctx, "admin@x", b); !errors.Is(err, apperr.Invalid) {
 		t.Fatalf("falling thresholds refused: %v", err)
+	}
+}
+
+func currentSettings(t *testing.T, s *Store) SettingsBody {
+	t.Helper()
+	var v int64
+	if err := s.DB.QueryRow(context.Background(), `SELECT version FROM settings WHERE id = 1`).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	var st config.Settings
+	if err := s.settings(context.Background(), &st); err != nil {
+		t.Fatal(err)
+	}
+	return SettingsBody{Version: v, DefaultTheme: st.DefaultTheme, CostTiers: okTiers(),
+		EscalationHours: st.EscalationHours, Ranks: st.Ranks, Smith: st.Smith, AccountMonthlyLimitUSD: st.AccountMonthlyLimitUSD}
+}
+
+func TestAccountLimitIsSavedLoadedAndAudited(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	ctx := context.Background()
+	b := currentSettings(t, s)
+	b.AccountMonthlyLimitUSD = 600
+	if err := s.SetSettings(ctx, "admin@x", b); err != nil {
+		t.Fatal(err)
+	}
+	var st config.Settings
+	if err := s.settings(ctx, &st); err != nil || st.AccountMonthlyLimitUSD != 600 {
+		t.Fatalf("loaded %v: %v", st.AccountMonthlyLimitUSD, err)
+	}
+	if d := settingsAuditDetail(t, s, 0); d["account_monthly_limit_usd"] != float64(600) {
+		t.Fatalf("the audit row records the limit: %v", d)
+	}
+}
+
+func TestAccountLimitMustBeFiniteAndNotNegative(t *testing.T) {
+	s := &Store{DB: dbtest.New(t)}
+	for _, v := range []float64{-1, math.NaN(), math.Inf(1)} {
+		b := currentSettings(t, s)
+		b.AccountMonthlyLimitUSD = v
+		if err := s.SetSettings(context.Background(), "admin@x", b); !errors.Is(err, apperr.Invalid) {
+			t.Errorf("%v must be refused: %v", v, err)
+		}
 	}
 }

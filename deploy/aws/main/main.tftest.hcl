@@ -221,15 +221,33 @@ run "aws_labs_wiring" {
   }
 }
 
-run "aws_labs_need_the_plan_role_and_export" {
+run "aws_labs_need_the_plan_role" {
   command = plan
   variables {
-    lab_role_arn     = "arn:aws:iam::444455556666:role/crucible-lab"
-    lab_ops_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-ops"
-    lab_state_bucket = "crucible-444455556666-labstate"
-    lab_state_region = "eu-west-1"
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "eu-west-1"
+    lab_export_bucket = "crucible-444455556666-exports"
+    lab_export_name   = "crucible-labs"
   }
   expect_failures = [var.lab_role_arn]
+}
+
+# A labs stack made with --billing-export=false (an SCP denies the export) has empty export outputs: billed spend is off.
+run "aws_labs_without_a_billing_export" {
+  command = plan
+  variables {
+    lab_role_arn      = "arn:aws:iam::444455556666:role/crucible-lab"
+    lab_ops_role_arn  = "arn:aws:iam::444455556666:role/crucible-lab-ops"
+    lab_state_bucket  = "crucible-444455556666-labstate"
+    lab_state_region  = "eu-west-1"
+    lab_plan_role_arn = "arn:aws:iam::444455556666:role/crucible-lab-plan"
+  }
+  assert {
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.enabled && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.exportBucket == "" && yamldecode(aws_ssm_parameter.helm_values.value).awsLabs.exportName == ""
+    error_message = "aws labs run without a billing export"
+  }
 }
 
 run "secret_key_reaches_the_api_when_init_made_it" {

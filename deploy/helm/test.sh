@@ -102,9 +102,12 @@ for want in 'name: crucible-bedtime' 'schedule: "0 19 \* \* 0-4"' 'timeZone: "Eu
 done
 if grep -E '^ *(workspaceImage|terraformImage):' "$chart/values.yaml" | grep -vq '@sha256:'; then echo "lab/runner image defaults must be digest-pinned"; exit 1; fi
 if grep -q CRUCIBLE_GIT_ALLOW_FILE <<<"$out$boot$awsout"; then echo "file git transport must never be rendered"; exit 1; fi
-for k in planRoleArn exportBucket exportName; do   # real labs: no estimate without the plan role, no billed spend without the export
-  if helm template t "$chart" $(sed "s/--set awsLabs.$k=[^ ]*//" <<<"$aws") >/dev/null 2>&1; then echo "aws labs need awsLabs.$k"; exit 1; fi
-done
+# Real labs: no estimate without the plan role. The billing export is optional (an SCP may deny it): without it, billed
+# spend is off; a bucket needs its export name.
+if helm template t "$chart" $(sed "s/--set awsLabs.planRoleArn=[^ ]*//" <<<"$aws") >/dev/null 2>&1; then echo "aws labs need awsLabs.planRoleArn"; exit 1; fi
+if helm template t "$chart" $(sed "s/--set awsLabs.exportName=[^ ]*//" <<<"$aws") >/dev/null 2>&1; then echo "an export bucket needs awsLabs.exportName"; exit 1; fi
+noexp=$(helm template t "$chart" $(sed "s/--set awsLabs.exportBucket=[^ ]*//; s/--set awsLabs.exportName=[^ ]*//" <<<"$aws")) || { echo "aws labs must render without a billing export"; exit 1; }
+grep -q -- 'name: CRUCIBLE_AWS_EXPORT_BUCKET, value: ""' <<<"$noexp" || { echo "no export: CRUCIBLE_AWS_EXPORT_BUCKET is empty"; exit 1; }
 dry=$(helm template t "$chart" $base --set awsLabs.enabled=true --set awsLabs.dryRun=true)
 grep -q -- 'name: CRUCIBLE_AWS_LABS, value: "dryrun"' <<<"$dry" || { echo "missing in dry run: CRUCIBLE_AWS_LABS=dryrun"; exit 1; }
 awsrbac=$(helm template t "$chart" $aws --show-only templates/rbac.yaml)

@@ -130,8 +130,8 @@ variable "lab_role_arn" {
   type    = string
   default = ""
   validation {
-    condition     = var.lab_role_arn == "" || (var.lab_plan_role_arn != "" && var.lab_export_bucket != "" && var.lab_export_name != "")
-    error_message = "aws labs need the plan role and the billing export (lab_plan_role_arn, lab_export_bucket, lab_export_name): re-run `crucible aws labs-init`, then `crucible aws up`."
+    condition     = var.lab_role_arn == "" || (var.lab_plan_role_arn != "" && (var.lab_export_bucket == "") == (var.lab_export_name == ""))
+    error_message = "aws labs need the plan role (lab_plan_role_arn), and an export bucket goes with its name (lab_export_bucket, lab_export_name): re-run `crucible aws labs-init`, then `crucible aws up`."
   }
 }
 variable "lab_ops_role_arn" {
@@ -159,7 +159,7 @@ variable "lab_plan_role_arn" {
 variable "lab_export_bucket" {
   type        = string
   default     = ""
-  description = "The billing export (CUR 2.0) bucket billed spend is read from"
+  description = "The billing export (CUR 2.0) bucket billed spend is read from; empty: billed spend is off (labs-init --billing-export=false)"
 }
 variable "lab_export_prefix" {
   type    = string

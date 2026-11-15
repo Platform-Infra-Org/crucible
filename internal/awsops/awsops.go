@@ -286,7 +286,8 @@ func commaList(s string) []string {
 // so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
 // allowedRegions (the regions labs may use) must include region; left empty it keeps the stack's current list, and a
 // new stack allows region alone. net, both fields or neither, sets the lab network; empty keeps the stack's current one.
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet) error {
+// switches sets the stack's on/off settings by variable name (labSwitches); one left out keeps the stack's current value.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, switches map[string]bool) error {
 	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
 		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
 	}
@@ -336,6 +337,13 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 		b, _ := json.Marshal(subnets) // a JSON list is an HCL list
 		args = append(args, "-var", "lab_vpc_id="+vpc, "-var", "lab_subnet_ids="+string(b))
 	}
+	for _, k := range labSwitches {
+		if v, ok := switches[k]; ok {
+			args = append(args, "-var", k+"="+strconv.FormatBool(v))
+		} else if v := cur[k]; v != "" {
+			args = append(args, "-var", k+"="+v)
+		}
+	}
 	// The roles trust the node role by exact ARN: a guessed name fails silently, at the first AssumeLab.
 	if m, err := o.outputs(ctx, "main"); err == nil && m["node_role_name"] != "" {
 		args = append(args, "-var", "node_role_name="+m["node_role_name"])
@@ -353,6 +361,10 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	}
 	return o.backupState(ctx, "labs", "labs-stack.tfstate") // outside labs/, which lab sessions and the ops role read
 }
+
+// labSwitches are the labs stack's on/off settings (labs-init --account-public-access-block, --billing-export): off
+// where an organization already blocks public S3 account-wide, or denies billing exports to member accounts by SCP.
+var labSwitches = []string{"account_public_access_block", "billing_export"}
 
 // labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.
 func labVars(l map[string]string) []string {

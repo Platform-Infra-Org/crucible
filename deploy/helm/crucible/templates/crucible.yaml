@@ -94,7 +94,7 @@ spec:
             {{- end }}
             {{- if .Values.awsLabs.enabled }}
             {{- if not .Values.clusterLabs.enabled }}{{ fail "awsLabs.enabled needs clusterLabs.enabled: the workspace and terraform pods run in the cluster" }}{{ end }}
-            {{- if and (not .Values.awsLabs.dryRun) (or (not .Values.awsLabs.labRoleArn) (not .Values.awsLabs.opsRoleArn) (not .Values.awsLabs.stateBucket) (not .Values.awsLabs.planRoleArn) (not .Values.awsLabs.exportBucket) (not .Values.awsLabs.exportName)) }}{{ fail "awsLabs needs labRoleArn, opsRoleArn, stateBucket, planRoleArn, exportBucket and exportName (the deploy/aws/labs outputs)" }}{{ end }}
+            {{- if and (not .Values.awsLabs.dryRun) (or (not .Values.awsLabs.labRoleArn) (not .Values.awsLabs.opsRoleArn) (not .Values.awsLabs.stateBucket) (not .Values.awsLabs.planRoleArn) (and .Values.awsLabs.exportBucket (not .Values.awsLabs.exportName))) }}{{ fail "awsLabs needs labRoleArn, opsRoleArn, stateBucket and planRoleArn, and exportName with exportBucket (the deploy/aws/labs outputs; no exportBucket: billed spend is off)" }}{{ end }}
             - { name: CRUCIBLE_AWS_LABS, value: {{ ternary "dryrun" "1" .Values.awsLabs.dryRun | quote }} }
             - { name: CRUCIBLE_AWS_LAB_ROLE_ARN, value: {{ .Values.awsLabs.labRoleArn | quote }} }
             - { name: CRUCIBLE_AWS_OPS_ROLE_ARN, value: {{ .Values.awsLabs.opsRoleArn | quote }} }

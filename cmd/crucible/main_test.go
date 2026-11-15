@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -160,5 +161,19 @@ func TestLintWantsAnEncryptedRootForHibernation(t *testing.T) {
 	out.Reset()
 	if code := lint(dir, &out); code != 0 {
 		t.Fatalf("an encrypted root may hibernate: exit %d\n%s", code, out.String())
+	}
+}
+
+// Only the switches given reach labs-init, so a re-run without them keeps the stack's setting.
+func TestLabSwitchesAreOnlyTheFlagsGiven(t *testing.T) {
+	fs := flag.NewFlagSet("labs-init", flag.ContinueOnError)
+	fs.Bool("billing-export", true, "")
+	fs.Bool("account-public-access-block", true, "")
+	fs.Bool("yes", false, "")
+	if err := fs.Parse([]string{"--billing-export=false", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := labSwitches(fs); len(got) != 1 || got["billing_export"] {
+		t.Fatalf("only billing_export=false: %v", got)
 	}
 }

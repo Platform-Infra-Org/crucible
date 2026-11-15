@@ -30,6 +30,7 @@ const usage = `usage:
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
   crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
+                         [--billing-export=false] [--account-public-access-block=false]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
   crucible aws deploy [--version vX.Y.Z | --build]
   crucible aws snapshot | wake | status
@@ -54,6 +55,9 @@ init --access ssm makes an install with no way in: no domain, no Elastic IP, no 
 http://localhost:<--local-port> through ` + "`crucible aws connect`" + `. A re-run without --access, --domain or --local-port
 keeps the current ones. labs-init --vpc-id and --subnet-ids (both or neither) are where lab modules launch, for an
 account without a default VPC; a re-run without them keeps the current ones.
+labs-init --billing-export=false and --account-public-access-block=false skip what an organization's SCP denies to a
+member account (the billing export: billed spend is then off, spend is metered and estimated; the account-wide S3 block:
+the organization's own applies); a re-run without them keeps the current setting, =true turns one back on.
 invite adds someone to the Cognito user pool with a verified email (Crucible refuses unverified ones); run it again to
 resend an invite that has not been used yet.
 connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager plugin and your SSO login needed) and keeps it open until Ctrl-C.
@@ -64,6 +68,18 @@ the regions labs may use; a re-run without it keeps the current list, and a new 
 --no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
 func main() { os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr)) }
+
+// labSwitches maps the labs-init on/off flags that were given to the labs stack's variables; one left out keeps the
+// stack's current setting.
+func labSwitches(fs *flag.FlagSet) map[string]bool {
+	out := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "billing-export" || f.Name == "account-public-access-block" {
+			out[strings.ReplaceAll(f.Name, "-", "_")] = f.Value.String() == "true"
+		}
+	})
+	return out
+}
 
 func runMain(args []string, out, errw io.Writer) int {
 	if len(args) == 0 {
@@ -123,6 +139,8 @@ func awsCmd(args []string) int {
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
 	allowed := fs.String("allowed-regions", "", "labs-init: comma-separated regions labs may use, including --region (default: keep the current list, or --region alone)")
+	fs.Bool("billing-export", true, "labs-init: create the billing export billed spend is read from; false where an SCP denies it (default: keep the current setting)")
+	fs.Bool("account-public-access-block", true, "labs-init: block public S3 access account-wide; false where the organization already does (default: keep the current setting)")
 	version := fs.String("version", "", "up/deploy: the GHCR release to run (default: this binary's own version)")
 	build := fs.Bool("build", false, "up/deploy: build this tree, push it to GHCR as a dev release and run it")
 	var budgetEmails []string
@@ -183,7 +201,7 @@ func awsCmd(args []string) int {
 				subnets = append(subnets, s)
 			}
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets})
+		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, labSwitches(fs))
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs, dep)
 	case "deploy":

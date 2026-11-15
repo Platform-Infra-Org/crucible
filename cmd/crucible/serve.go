@@ -308,7 +308,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("CRUCIBLE_AWS_LABS must be 1, dryrun or empty, not %q", mode)
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
-		Now: time.Now, Log: slog.Default(), Cloud: cloud, AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch,
+		Now: time.Now, Log: slog.Default(), Cloud: cloud, NoBillingExport: noBillingExport(os.Getenv("CRUCIBLE_AWS_LABS"), os.Getenv), AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch,
 		NodeStorage: os.Getenv("CRUCIBLE_NODE_STORAGE")}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
@@ -434,10 +434,11 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 	if ar.StateBucket == "" || ar.StateRegion == "" {
 		return nil, nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_STATE_BUCKET and CRUCIBLE_AWS_STATE_REGION")
 	}
-	for _, k := range []string{"CRUCIBLE_AWS_PLAN_ROLE_ARN", "CRUCIBLE_AWS_EXPORT_BUCKET", "CRUCIBLE_AWS_EXPORT_NAME"} {
-		if getenv(k) == "" {
-			return nil, nil, fmt.Errorf("CRUCIBLE_AWS_LABS=1 needs %s (a deploy/aws/labs output)", k)
-		}
+	if getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN") == "" {
+		return nil, nil, errors.New("CRUCIBLE_AWS_LABS=1 needs CRUCIBLE_AWS_PLAN_ROLE_ARN (a deploy/aws/labs output)")
+	}
+	if getenv("CRUCIBLE_AWS_EXPORT_BUCKET") != "" && getenv("CRUCIBLE_AWS_EXPORT_NAME") == "" {
+		return nil, nil, errors.New("CRUCIBLE_AWS_EXPORT_BUCKET needs CRUCIBLE_AWS_EXPORT_NAME (a deploy/aws/labs output)")
 	}
 	prefix := getenv("CRUCIBLE_AWS_EXPORT_PREFIX")
 	if prefix == "" {
@@ -451,6 +452,12 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 	}
 	ar.Cloud = c
 	return &labs.TerraformEstimator{Plan: ar, Prices: prices}, &pricing.Fetcher{Base: "https://pricing.us-east-1.amazonaws.com"}, nil
+}
+
+// noBillingExport says real aws labs run without the billing export (labs-init --billing-export=false, where an SCP
+// denies it): billed spend is off, and spend stays metered or estimated. A dry run reads its fake's costs.
+func noBillingExport(mode string, getenv func(string) string) bool {
+	return mode == "1" && getenv("CRUCIBLE_AWS_EXPORT_BUCKET") == ""
 }
 
 func must(k string) string {

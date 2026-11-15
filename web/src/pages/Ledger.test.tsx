@@ -38,3 +38,10 @@ test('stale price data is said in words, in the danger colour, with the reason w
   ledger = { ...base, prices_stale: true } as Ledger
   expect(page()).toContain('No price data yet.')
 })
+
+test('without a billing export the Ledger says why Billed stays empty, not that it is late', () => {
+  ledger = { ...base, actuals_as_of: undefined, no_billing_export: true, prices_stale: false } as Ledger
+  const h = page()
+  expect(h).toContain('<p role="status" data-testid="actuals-status" class="muted">This install reads no AWS bill (no billing export), so Billed stays empty: spend comes from metered costs and estimates.</p>')
+  expect(h).not.toContain('No AWS costs have been read yet.')
+})

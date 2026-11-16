@@ -32,11 +32,88 @@ lists the commands and what each one is for.
 | Run Crucible on my laptop | `crucible local up` / `down` / `status` |
 | Check a training repo | `crucible lint <dir>` / `crucible preview <dir>` |
 
+## The configuration file
+
+`crucible.yaml` holds everything an operator decides, so there are no flags to remember on a new machine. It is read
+from `$CRUCIBLE_CONFIG`, else `crucible.yaml` in the platform's configuration directory (`~/.config/crucible/` on Linux,
+`~/Library/Application Support/crucible/` on macOS); `--config FILE` overrides both. Give it mode `0600`: it holds tokens.
+
+Any value may be written `${VAR}` to take it from the environment instead; a referenced variable that is unset is an
+error naming it, never an empty token. An unknown key is an error too, so a typo cannot silently drop a setting.
+
+**An absent key keeps what is deployed.** Deleting the `labs:` block does not destroy the AWS Budget, and deleting
+`access:` does not flip the install back to public. Precedence is flag, then the file, then the deployed value, then the
+Terraform default. Removing a guardrail is done on purpose, with a flag, not by deleting lines.
+
+```yaml
+install:
+  name: crucible                 # stack name and the SSM prefix
+  region: il-central-1
+
+aws:                             # optional: leave it out to use ~/.aws/config
+  sso_start_url: https://identitycenter.amazonaws.com/ssoins-…
+  sso_region: il-central-1
+  sso_session: Platform-AWS      # when ~/.aws/config uses an [sso-session]; keys the token cache as the CLI keys it
+  account: "111122223333"        # optional: discovered at login when there is only one
+  role: Workload-Admin-PS        # optional: likewise
+
+access:                          # exactly one mode
+  mode: ssm                      # no inbound path: everyone uses `crucible aws connect`
+  subnet_id: subnet-…
+  local_port: 18080              # the same for everyone, or sign-in breaks
+# access:
+#   mode: public
+#   domain: crucible.example.com
+#   acme_email: ops@example.com
+#   route53_zone_id: Z0123456789
+
+server:
+  bootstrap_admin: you@example.com
+  ghcr_pull_token: ${GHCR_TOKEN} # classic PAT, read:packages only
+  git_credentials: https://crucible-bot:TOKEN@github.com
+  git_bot_name: Crucible Bot
+  git_bot_email: crucible-bot@example.com
+
+machine:                         # every block below here is optional
+  instance_type: t3a.xlarge
+  disk_gb: 100
+
+schedule:
+  enabled: true
+  timezone: Europe/Bucharest
+  labs_bedtime: "0 19 * * 1-5"
+  backup: "15 19 * * *"
+  sleep: "cron(30 19 ? * MON-FRI *)"
+  wake: "cron(30 7 ? * MON-FRI *)"
+
+email:                           # omit entirely for no email
+  smtp_addr: email-smtp.il-central-1.amazonaws.com:587
+  smtp_from: Crucible <crucible@example.com>
+  smtp_username: AKIA…
+  smtp_password: ${SMTP_PASSWORD}
+
+labs:                            # omit entirely to run without AWS labs
+  regions: [il-central-1]
+  vpc_id: vpc-…
+  subnet_ids: [subnet-…, subnet-…]
+  budget_usd: 200
+  budget_emails: [you@example.com]
+  billing_export: false          # our organization's SCP denies it
+  account_public_access_block: false
+
+terraform_vars:                  # anything the schema above does not name
+  k3s_version: v1.34.1+k3s1
+```
+
+The Cognito client, the public URL, the `lab_*` wiring and the sysbox checksums are deliberately absent: `up` reads
+those from the stacks. `terraform_vars` may not name a setting the schema owns, so no variable has two sources.
+
 ## AWS: `crucible aws …`
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
 They call AWS through the SDK built into `crucible`, so the AWS CLI is not required; `crucible aws login` signs you in.
-`--var-file` defaults to `deploy/aws/main/crucible.tfvars`. Commands that might lose the node's disk (`up`, `sleep`,
+Operator settings come from `crucible.yaml` (above); `--var-file`, which defaults to
+`deploy/aws/main/crucible.tfvars`, stays for developers working in a checkout. Commands that might lose the node's disk (`up`, `sleep`,
 `teardown`) take a snapshot first and stop if it fails; `--no-snapshot` skips it, and everything since the last backup is
 lost if the disk goes.
 

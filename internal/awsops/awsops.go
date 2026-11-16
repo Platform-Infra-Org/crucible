@@ -31,6 +31,7 @@ type Ops struct {
 	Sleep    func(time.Duration)
 	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
+	Config   *Config                                  // crucible.yaml; nil = no file, every value from flags
 	Endpoint string                                   // tests only: every AWS service at this URL
 	Log      io.Writer
 	Now      func() time.Time // nil = time.Now

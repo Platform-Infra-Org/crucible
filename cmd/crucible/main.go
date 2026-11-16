@@ -124,6 +124,7 @@ func awsCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init, labs-init)")
+	configPath := fs.String("config", "", "path to crucible.yaml (default: $CRUCIBLE_CONFIG, else the config directory)")
 	ssoStartURL := fs.String("sso-start-url", "", "login: the Identity Center start URL (default: aws.sso_start_url, else ~/.aws/config)")
 	ssoRegion := fs.String("sso-region", "", "login: the region Identity Center itself lives in")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
@@ -171,7 +172,17 @@ func awsCmd(args []string) int {
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	api, apiErr := awsops.NewAWS(ctx, awsops.AWSConfig{Region: *region})
+	cfg, cfgErr := awsops.LoadConfig(*configPath)
+	if cfgErr != nil {
+		fmt.Fprintln(os.Stderr, cfgErr)
+		return 1
+	}
+	ops.Config = cfg
+	awsCfg := cfg.AWSConfig()
+	if *region != "" { // the flag wins over the file
+		awsCfg.Region = *region
+	}
+	api, apiErr := awsops.NewAWS(ctx, awsCfg)
 	if apiErr != nil {
 		fmt.Fprintln(os.Stderr, apiErr)
 		return 1
@@ -226,7 +237,14 @@ func awsCmd(args []string) int {
 	case "teardown":
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot, *keepLabs)
 	case "login":
-		err = ops.Login(ctx, awsops.LoginOpts{StartURL: *ssoStartURL, SSORegion: *ssoRegion})
+		in := cfg.LoginOpts()
+		if *ssoStartURL != "" {
+			in.StartURL = *ssoStartURL
+		}
+		if *ssoRegion != "" {
+			in.SSORegion = *ssoRegion
+		}
+		err = ops.Login(ctx, in)
 	case "connect":
 		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
 	case "invite":

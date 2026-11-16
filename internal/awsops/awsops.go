@@ -477,10 +477,9 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 		return errors.New("this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up")
 	}
 	// The release the node runs now, so a failed rollout can put it back ("": none recorded yet).
-	prev, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--query", "Parameter.Value", "--output", "text")
+	prev, err := o.AWS.In(m["region"]).GetParameter(ctx, releaseParam(m), false)
 	if err != nil {
-		if !strings.Contains(err.Error(), "ParameterNotFound") {
+		if !errors.Is(err, ErrParameterNotFound) {
 			return fmt.Errorf("couldn't read the node's current release: %w", err)
 		}
 		prev = ""
@@ -501,7 +500,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 		// The node still runs prev: point /<name>/release back at it, so status and the next boot agree.
 		var undo error
 		if prev == "" {
-			undo = o.Exec(ctx, o.Root, "aws", "ssm", "delete-parameter", "--region", m["region"], "--name", releaseParam(m))
+			undo = o.AWS.In(m["region"]).DeleteParameter(ctx, releaseParam(m))
 		} else {
 			undo = o.putRelease(ctx, m, prev)
 		}
@@ -518,8 +517,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 }
 
 func (o Ops) putRelease(ctx context.Context, m map[string]string, version string) error {
-	return o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--type", "String", "--value", version, "--overwrite")
+	return o.AWS.In(m["region"]).PutParameter(ctx, releaseParam(m), version, false)
 }
 
 // buildAndPush pushes a dev build of this tree to GHCR (server image and chart) and returns its release name.
@@ -608,15 +606,15 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 
 // ssmOut is ssm, returning the command's standard output.
 func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (string, error) {
-	params, _ := json.Marshal(map[string][]string{"commands": {command}})
+	api := o.AWS.In(m["region"])
+	params := map[string][]string{"commands": {command}}
 	var id string
 	var err error
 	for attempt := 0; attempt < 40; attempt++ { // a fresh node needs a few minutes to register with SSM
-		if id, err = o.Output(ctx, o.Root, "aws", "ssm", "send-command", "--region", m["region"], "--instance-ids", m["instance_id"],
-			"--document-name", "AWS-RunShellScript", "--parameters", string(params), "--query", "Command.CommandId", "--output", "text"); err == nil {
+		if id, err = api.SendCommand(ctx, m["instance_id"], "AWS-RunShellScript", params); err == nil {
 			break
 		}
-		if !strings.Contains(err.Error(), "InvalidInstanceId") && !strings.Contains(err.Error(), "not registered") {
+		if !errors.Is(err, ErrInstanceNotReady) {
 			return "", fmt.Errorf("ssm send-command: %w", err) // AccessDenied, ExpiredToken, …: retrying won't help
 		}
 		o.Sleep(15 * time.Second)
@@ -627,16 +625,14 @@ func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (s
 	}
 	deadline := time.Now().Add(45 * time.Minute)
 	for time.Now().Before(deadline) {
-		st, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-			"--instance-id", m["instance_id"], "--query", "Status", "--output", "text")
+		// A failed probe keeps the poll going, as it did before: this loop spans
+		// 45 minutes of a node's bootstrap and one throttle must not end a deploy.
+		st, stdout, stderr, _ := api.CommandResult(ctx, id, m["instance_id"])
 		switch st {
 		case "Success":
-			return o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-				"--instance-id", m["instance_id"], "--query", "StandardOutputContent", "--output", "text")
+			return stdout, nil
 		case "Failed", "Cancelled", "TimedOut":
-			msg, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-				"--instance-id", m["instance_id"], "--query", "StandardErrorContent", "--output", "text")
-			return "", fmt.Errorf("node command %s: %s", st, msg)
+			return "", fmt.Errorf("node command %s: %s", st, stderr)
 		}
 		o.Sleep(5 * time.Second)
 	}
@@ -840,8 +836,7 @@ func serialTCP(region string) []string {
 }
 
 func (o Ops) printRelease(ctx context.Context, m map[string]string) {
-	rel, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--query", "Parameter.Value", "--output", "text")
+	rel, err := o.AWS.In(m["region"]).GetParameter(ctx, releaseParam(m), false)
 	if rel = strings.TrimSpace(rel); err != nil || rel == "" {
 		rel = "none chosen (run crucible aws deploy)"
 	}
@@ -878,10 +873,10 @@ func (o Ops) Status(ctx context.Context) error {
 		return nil
 	}
 	r := m["region"]
-	ping, err := o.Output(ctx, o.Root, "aws", "ssm", "describe-instance-information", "--region", r,
-		"--filters", "Key=InstanceIds,Values="+m["instance_id"], "--query", "InstanceInformationList[0].PingStatus", "--output", "text")
-	if ping = strings.TrimSpace(ping); err != nil || ping == "" || ping == "None" {
-		ping = "not registered"
+	online, err := o.AWS.In(r).InstanceOnline(ctx, m["instance_id"])
+	ping := "not registered"
+	if err == nil && online {
+		ping = "Online"
 	}
 	fmt.Fprintf(o.Log, "ssm: %s\n", ping)
 	if ping != "Online" {

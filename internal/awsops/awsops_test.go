@@ -25,6 +25,7 @@ type recorder struct {
 func (r *recorder) ops(root string) Ops {
 	return Ops{
 		Root: root,
+		AWS:  &fakeAPI{r: r},
 		Exec: func(_ context.Context, _ string, name string, args ...string) error {
 			r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 			if name == "helm" && args[0] == "package" { // the chart archive lands in -d

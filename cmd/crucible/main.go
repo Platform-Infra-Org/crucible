@@ -168,6 +168,12 @@ func awsCmd(args []string) int {
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	api, apiErr := awsops.NewAWS(ctx, awsops.AWSConfig{Region: *region})
+	if apiErr != nil {
+		fmt.Fprintln(os.Stderr, apiErr)
+		return 1
+	}
+	ops.AWS = api
 	var err error
 	switch args[0] {
 	case "init":

@@ -103,6 +103,9 @@ type InitOpts struct {
 }
 
 func (o Ops) Init(ctx context.Context, in InitOpts) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
 	d := o.dir("persistent")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -149,7 +152,11 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
 	}
-	return o.backupState(ctx, "persistent", "persistent.tfstate")
+	if err := o.backupState(ctx, "persistent", "persistent.tfstate"); err != nil {
+		return err
+	}
+	cur, _ = o.outputs(ctx, "persistent")
+	return o.publishInstall(ctx, cur)
 }
 
 // restoreState fetches a stack's backup (backupState) when this machine has no local state, so init and labs-init on
@@ -217,6 +224,9 @@ func mainVars(p map[string]string) []string {
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
 // noLabs turns aws labs off; without it, Up refuses to drop the lab wiring main already has.
 func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, dep DeployOpts) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
 	if _, err := releaseChoice(dep); err != nil {
 		return err // before anything is applied
 	}
@@ -259,6 +269,11 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, de
 	if err != nil {
 		return err
 	}
+	// Everything but init, labs-init, up and teardown reads this instead of
+	// Terraform, so an operator needs neither Terraform nor a checkout.
+	if err := o.publishInstall(ctx, m); err != nil {
+		return err
+	}
 	if m["access"] == "ssm" {
 		fmt.Fprintln(o.Log, "access ssm: no DNS record to point; once it's deployed, reach it with `crucible aws connect`.")
 	} else {
@@ -292,6 +307,9 @@ func commaList(s string) []string {
 // new stack allows region alone. net, both fields or neither, sets the lab network; empty keeps the stack's current one.
 // switches sets the stack's on/off settings by variable name (labSwitches); one left out keeps the stack's current value.
 func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, switches map[string]bool) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
 	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
 		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
 	}
@@ -464,7 +482,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 	if err != nil {
 		return err
 	}
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -642,7 +660,7 @@ func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (s
 }
 
 func (o Ops) Snapshot(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -679,7 +697,7 @@ func labsOnNode(args string) string {
 
 // SleepNode puts the AWS labs to sleep, snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
 func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err error) {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -725,7 +743,7 @@ func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err erro
 }
 
 func (o Ops) Wake(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -845,7 +863,7 @@ func (o Ops) printRelease(ctx context.Context, m map[string]string) {
 }
 
 func (o Ops) Status(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -892,7 +910,7 @@ func (o Ops) Status(ctx context.Context) error {
 	fmt.Fprintf(o.Log, "healthz: %s\n", health)
 	var extra []string
 	note := ""
-	if p, err := o.outputs(ctx, "persistent"); err == nil && p["cognito_login_url"] != "" {
+	if p, err := o.install(ctx); err == nil && p["cognito_login_url"] != "" {
 		extra = append(extra, strings.TrimPrefix(p["cognito_login_url"], "https://"))
 	} else {
 		note = ", but not the Cognito login domain (couldn't read it)"
@@ -913,6 +931,9 @@ func (o Ops) Status(ctx context.Context) error {
 }
 
 func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keepLabs bool) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
 	if !yes {
 		return errors.New("teardown destroys the node (buckets and snapshots are kept); re-run with --yes to confirm")
 	}
@@ -995,7 +1016,7 @@ func (o Ops) Invite(ctx context.Context, email, name string) error {
 	if strings.ContainsFunc(name, unicode.IsControl) || len(name) > 256 {
 		return errors.New("--name must be at most 256 characters, with no control characters")
 	}
-	p, err := o.outputs(ctx, "persistent")
+	p, err := o.install(ctx)
 	if err != nil {
 		return err
 	}

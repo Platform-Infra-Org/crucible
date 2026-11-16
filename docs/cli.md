@@ -112,6 +112,12 @@ those from the stacks. `terraform_vars` may not name a setting the schema owns, 
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
 They call AWS through the SDK built into `crucible`, so the AWS CLI is not required; `crucible aws login` signs you in.
+
+**Terraform is needed by four commands only** — `init`, `labs-init`, `up` and `teardown`, the ones that create or destroy
+AWS resources. Every other command reads the install's details from `/<name>/install` in SSM, which those four publish
+after a successful apply, so a machine that only deploys and connects needs no Terraform and no checkout. `crucible`
+never downloads Terraform; install it yourself. The first command you run against an install created by an older
+release must be `crucible aws up`, which publishes that parameter.
 Operator settings come from `crucible.yaml` (above); `--var-file`, which defaults to
 `deploy/aws/main/crucible.tfvars`, stays for developers working in a checkout. Commands that might lose the node's disk (`up`, `sleep`,
 `teardown`) take a snapshot first and stop if it fails; `--no-snapshot` skips it, and everything since the last backup is

@@ -62,7 +62,15 @@ func (f *fakeAPI) Account(ctx context.Context) (string, error) {
 
 func (f *fakeAPI) GetParameter(ctx context.Context, name string, decrypt bool) (string, error) {
 	out, err := f.call("aws ssm get-parameter --region " + f.at() + " --name " + name)
-	return strings.TrimSpace(out), err
+	if err != nil {
+		return "", err
+	}
+	// A parameter this recorder wrote reads back, so a round trip is a round
+	// trip; anything else is answered by the recorder's output hook.
+	if v, ok := f.r.params[name]; ok {
+		return v, nil
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func (f *fakeAPI) PutParameter(ctx context.Context, name, value string, secure bool) error {
@@ -72,11 +80,21 @@ func (f *fakeAPI) PutParameter(ctx context.Context, name, value string, secure b
 	}
 	_, err := f.call("aws ssm put-parameter --region " + f.at() + " --name " + name +
 		" --type " + t + " --value " + value + " --overwrite")
-	return err
+	if err != nil {
+		return err
+	}
+	if f.r.params == nil {
+		f.r.params = map[string]string{}
+	}
+	f.r.params[name] = value
+	return nil
 }
 
 func (f *fakeAPI) DeleteParameter(ctx context.Context, name string) error {
 	_, err := f.call("aws ssm delete-parameter --region " + f.at() + " --name " + name)
+	if err == nil {
+		delete(f.r.params, name)
+	}
 	return err
 }
 

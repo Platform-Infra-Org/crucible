@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ type recorder struct {
 	calls     []string
 	output    func(cmd string) string
 	outErr    func(cmd string) error // optional: make an Output call fail
+	params    map[string]string      // SSM parameters this recorder has written
 	region    string                 // the signed-in region; "" in ops() means eu-west-1
 	log       bytes.Buffer
 	unhealthy bool // /healthz never answers
@@ -76,6 +79,8 @@ func fakeAWS(cmd string) string {
 	switch {
 	case strings.Contains(cmd, "labs output -json"): // a labs stack after its apply
 		return `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"}}`
+	case strings.Contains(cmd, "/install"): // what up publishes: the same values, flattened
+		return flattenOutputs(fakeAWS("main output -json"))
 	case strings.Contains(cmd, "output -json"):
 		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"public_ip":{"value":"203.0.113.7"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
 	case strings.HasPrefix(cmd, "git rev-parse"):
@@ -92,6 +97,23 @@ func fakeAWS(cmd string) string {
 		return "Online"
 	}
 	return ""
+}
+
+// flattenOutputs turns terraform's {"k":{"value":v}} into the flat JSON the
+// install parameter holds, so a test defines its install once.
+func flattenOutputs(tf string) string {
+	var out map[string]struct{ Value any }
+	if err := json.Unmarshal([]byte(tf), &out); err != nil {
+		panic(err)
+	}
+	m := map[string]string{"name": "crucible"}
+	for k, v := range out {
+		if v.Value == nil {
+			continue
+		}
+		m[k] = fmt.Sprint(v.Value)
+	}
+	return installJSON(m)
 }
 
 func indexOf(calls []string, sub string) int {
@@ -251,7 +273,7 @@ func failingRollout(prev string) *recorder {
 		return fakeAWS(cmd)
 	}
 	r.outErr = func(cmd string) error {
-		if prev == "" && strings.Contains(cmd, "ssm get-parameter") {
+		if prev == "" && strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "/crucible/release") {
 			return errors.New("exit status 254: An error occurred (ParameterNotFound) when calling the GetParameter operation")
 		}
 		return nil
@@ -461,6 +483,11 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 			return `{"instance_id":{"value":null}}`
 		}
 		return fakeAWS(cmd)
+	}, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "/crucible/install") {
+			return errors.New("An error occurred (ParameterNotFound) when calling GetParameter")
+		}
+		return nil
 	}}
 	o := r.ops(t.TempDir())
 	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
@@ -931,6 +958,9 @@ func TestLabsInitNeedsBothVPCAndSubnets(t *testing.T) {
 
 // fakeSSM is fakeAWS for an access = ssm install in il-central-1.
 func fakeSSM(cmd string) string {
+	if strings.Contains(cmd, "/install") {
+		return flattenOutputs(fakeSSM("output -json"))
+	}
 	if strings.Contains(cmd, "output -json") {
 		return `{"instance_id":{"value":"i-123"},"region":{"value":"il-central-1"},"data_bucket":{"value":"bkt"},"domain":{"value":""},"url":{"value":"http://localhost:18080"},"public_ip":{"value":""},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.il-central-1.amazonaws.com/il-central-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"il-central-1_abc"}}`
 	}
@@ -989,8 +1019,10 @@ func TestSSMModeStatusReportsBlockedHosts(t *testing.T) {
 
 func TestSSMModeStatusChecksTheCognitoHost(t *testing.T) {
 	r := &recorder{output: func(cmd string) string {
-		if strings.Contains(cmd, "output -json") && strings.Contains(cmd, "persistent") {
-			return `{"state_bucket":{"value":"st"},"cognito_login_url":{"value":"https://crucible-x.auth.il-central-1.amazoncognito.com"}}`
+		if strings.Contains(cmd, "/install") {
+			return flattenOutputs(`{"state_bucket":{"value":"st"},"cognito_login_url":{"value":"https://crucible-x.auth.il-central-1.amazoncognito.com"},` +
+				`"instance_id":{"value":"i-123"},"region":{"value":"il-central-1"},"url":{"value":"http://localhost:18080"},` +
+				`"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"data_bucket":{"value":"bkt"}}`)
 		}
 		if strings.Contains(cmd, "StandardOutputContent") {
 			return ""
@@ -1376,9 +1408,15 @@ func TestInviteRefusesBadInputAndStopsOnOtherErrors(t *testing.T) {
 }
 
 func TestReleasePointerFollowsTheStackName(t *testing.T) {
+	named := func(cmd string) string {
+		return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"name":{"value":"forge"},"instance_id"`, 1)
+	}
 	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "/install") {
+			return flattenOutputs(named("main output -json"))
+		}
 		if strings.Contains(cmd, "output -json") {
-			return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"name":{"value":"forge"},"instance_id"`, 1)
+			return named(cmd)
 		}
 		return fakeAWS(cmd)
 	}}
@@ -1447,7 +1485,8 @@ func TestReleaseChoiceRefusesSourceBuilds(t *testing.T) {
 
 func TestStatusSaysWhenNoReleaseIsChosen(t *testing.T) {
 	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
-		if strings.Contains(cmd, "ssm get-parameter") {
+		// The install is there; only the release parameter is missing.
+		if strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "/release") {
 			return errors.New("ParameterNotFound")
 		}
 		return nil

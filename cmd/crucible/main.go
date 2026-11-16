@@ -34,6 +34,7 @@ const usage = `usage:
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
   crucible aws deploy [--version vX.Y.Z | --build]
   crucible aws snapshot | wake | status
+  crucible aws login [--sso-start-url URL] [--sso-region REGION]
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws invite EMAIL [--name "Full Name"]
   crucible aws sleep [--no-snapshot] [--keep-labs]
@@ -123,6 +124,8 @@ func awsCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init, labs-init)")
+	ssoStartURL := fs.String("sso-start-url", "", "login: the Identity Center start URL (default: aws.sso_start_url, else ~/.aws/config)")
+	ssoRegion := fs.String("sso-region", "", "login: the region Identity Center itself lives in")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
 	access := fs.String("access", "", "init: public (a domain, an Elastic IP, Let's Encrypt) or ssm (no way in; `crucible aws connect`); default: keep the current one, else public")
 	subnetID := fs.String("subnet-id", "", "init, access ssm: the existing subnet the node runs in (default: keep the current one)")
@@ -222,6 +225,8 @@ func awsCmd(args []string) int {
 		err = ops.Status(ctx)
 	case "teardown":
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot, *keepLabs)
+	case "login":
+		err = ops.Login(ctx, awsops.LoginOpts{StartURL: *ssoStartURL, SSORegion: *ssoRegion})
 	case "connect":
 		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
 	case "invite":

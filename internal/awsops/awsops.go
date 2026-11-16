@@ -25,6 +25,7 @@ import (
 
 type Ops struct {
 	Root     string // repo root
+	AWS      AWS    // the AWS API; nil until the caller builds one with NewAWS
 	Exec     func(ctx context.Context, dir, name string, args ...string) error
 	Output   func(ctx context.Context, dir, name string, args ...string) (string, error)
 	Sleep    func(time.Duration)

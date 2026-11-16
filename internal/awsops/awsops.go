@@ -134,8 +134,7 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 		return errors.New("--subnet-id is only for --access ssm: public uses the default VPC")
 	}
 	if access == "ssm" { // read-only: a typo fails here, not halfway through up
-		if _, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-subnets", "--subnet-ids", subnet, "--region", in.Region,
-			"--query", "Subnets[0].SubnetId", "--output", "text"); err != nil {
+		if _, _, err := o.AWS.In(in.Region).Subnet(ctx, subnet); err != nil {
 			return fmt.Errorf("subnet %s in %s: %w", subnet, in.Region, err)
 		}
 	}
@@ -355,8 +354,7 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
 	}
-	if on, err := o.Output(ctx, o.Root, "aws", "ec2", "get-serial-console-access-status", "--region", region,
-		"--query", "SerialConsoleAccessEnabled", "--output", "text"); err == nil && strings.TrimSpace(on) != "True" {
+	if on, err := o.AWS.In(region).SerialConsoleEnabled(ctx); err == nil && !on {
 		fmt.Fprintf(o.Log, "note: EC2 Serial Console access is off in %s, so labs can't reach a machine's GRUB or boot console. "+
 			"An account admin turns it on (account-wide): aws ec2 enable-serial-console-access --region %s\n", region, region)
 	}
@@ -651,8 +649,7 @@ func (o Ops) Snapshot(ctx context.Context) error {
 }
 
 func (o Ops) state(ctx context.Context, m map[string]string) (string, error) {
-	st, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", m["region"], "--instance-ids", m["instance_id"],
-		"--query", "Reservations[0].Instances[0].State.Name", "--output", "text")
+	st, err := o.AWS.In(m["region"]).InstanceState(ctx, m["instance_id"])
 	if err != nil || st == "" {
 		return "", fmt.Errorf("cannot determine node state: %v", err)
 	}
@@ -715,12 +712,12 @@ func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err erro
 	} else {
 		fmt.Fprintln(o.Log, "WARNING: --no-snapshot: stopping without a snapshot; everything since the last backup may be LOST if the disk is lost")
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "stop-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).StopInstance(ctx, m["instance_id"]); err != nil {
 		return err
 	}
 	stopped = true
 	fmt.Fprintln(o.Log, "the forge is banked for the night 🌙")
-	return o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-stopped", "--region", m["region"], "--instance-ids", m["instance_id"])
+	return o.AWS.In(m["region"]).WaitInstance(ctx, m["instance_id"], "stopped")
 }
 
 func (o Ops) Wake(ctx context.Context) error {
@@ -728,10 +725,10 @@ func (o Ops) Wake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "start-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).StartInstance(ctx, m["instance_id"]); err != nil {
 		return err
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-running", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).WaitInstance(ctx, m["instance_id"], "running"); err != nil {
 		return err
 	}
 	return o.waitLive(ctx, m)
@@ -1062,29 +1059,21 @@ func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 		return errors.New("no region: pass --region (or set one with `aws configure set region …`)")
 	}
 	name := cmp.Or(in.Name, "crucible")
-	out, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", region,
-		"--filters", "Name=tag:Name,Values="+name, "Name=instance-state-name,Values=running",
-		"--query", "Reservations[].Instances[].[InstanceId,Tags[?Key==`crucible:public-url`]|[0].Value]", "--output", "text")
+	nodes, err := o.AWS.In(region).FindInstances(ctx, name, "running")
 	if err != nil {
 		return fmt.Errorf("finding the node: %w", err)
-	}
-	var nodes []string
-	for _, l := range strings.Split(out, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			nodes = append(nodes, l)
-		}
 	}
 	switch {
 	case len(nodes) == 0:
 		return fmt.Errorf("no running instance named %s in %s: if it's asleep, run `crucible aws wake`", name, region)
 	case len(nodes) > 1:
-		return fmt.Errorf("%d running instances are named %s in %s (%s): pass --name for the one you want", len(nodes), name, region, strings.Join(nodes, "; "))
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return fmt.Errorf("%d running instances are named %s in %s (%s): pass --name for the one you want", len(nodes), name, region, strings.Join(ids, "; "))
 	}
-	f := strings.Fields(nodes[0])
-	id, url := f[0], ""
-	if len(f) > 1 && f[1] != "None" {
-		url = f[1]
-	}
+	id, url := nodes[0].ID, nodes[0].PublicURL
 	switch {
 	case url == "":
 		return fmt.Errorf("%s has no crucible:public-url tag: run `crucible aws up` with this version of Crucible first", id)

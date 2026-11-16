@@ -40,6 +40,15 @@ type AWS interface {
 	SendCommand(ctx context.Context, instanceID, document string, params map[string][]string) (string, error)
 	CommandResult(ctx context.Context, commandID, instanceID string) (status, stdout, stderr string, err error)
 	InstanceOnline(ctx context.Context, instanceID string) (bool, error)
+
+	// EC2: the node itself, and the subnet init validates before any apply.
+	FindInstances(ctx context.Context, nameTag string, states ...string) ([]Instance, error)
+	InstanceState(ctx context.Context, id string) (string, error)
+	Subnet(ctx context.Context, id string) (vpcID, cidr string, err error)
+	StartInstance(ctx context.Context, id string) error
+	StopInstance(ctx context.Context, id string) error
+	WaitInstance(ctx context.Context, id, state string) error
+	SerialConsoleEnabled(ctx context.Context) (bool, error)
 }
 
 // AWSConfig says who to sign in as. An empty SSOStartURL means "use the shared

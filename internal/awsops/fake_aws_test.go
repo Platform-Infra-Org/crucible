@@ -121,3 +121,72 @@ func (f *fakeAPI) InstanceOnline(ctx context.Context, instanceID string) (bool, 
 	}
 	return strings.TrimSpace(out) == "Online", nil
 }
+
+func (f *fakeAPI) FindInstances(ctx context.Context, nameTag string, states ...string) ([]Instance, error) {
+	out, err := f.call("aws ec2 describe-instances --region " + f.at() +
+		" --filters Name=tag:Name,Values=" + nameTag + " Name=instance-state-name,Values=" + strings.Join(states, ",") +
+		" --query Reservations[].Instances[].[InstanceId,Tags[?Key==`crucible:public-url`]|[0].Value] --output text")
+	if err != nil {
+		return nil, err
+	}
+	var found []Instance
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		inst := Instance{ID: fields[0], State: "running"}
+		if len(fields) > 1 && fields[1] != "None" {
+			inst.PublicURL = fields[1]
+		}
+		found = append(found, inst)
+	}
+	return found, nil
+}
+
+func (f *fakeAPI) InstanceState(ctx context.Context, id string) (string, error) {
+	out, err := f.call("aws ec2 describe-instances --region " + f.at() + " --instance-ids " + id +
+		" --query Reservations[0].Instances[0].State.Name --output text")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (f *fakeAPI) Subnet(ctx context.Context, id string) (string, string, error) {
+	out, err := f.call("aws ec2 describe-subnets --subnet-ids " + id + " --region " + f.at() +
+		" --query Subnets[0].SubnetId --output text")
+	if err != nil {
+		return "", "", err
+	}
+	// A missing subnet comes back from EC2 as an error, which the recorder
+	// injects through outErr; an empty answer is not a failure here.
+	if vpc := strings.TrimSpace(out); vpc != "" {
+		return vpc, "10.0.0.0/24", nil
+	}
+	return "vpc-0fake", "10.0.0.0/24", nil
+}
+
+func (f *fakeAPI) StartInstance(ctx context.Context, id string) error {
+	_, err := f.call("aws ec2 start-instances --region " + f.at() + " --instance-ids " + id)
+	return err
+}
+
+func (f *fakeAPI) StopInstance(ctx context.Context, id string) error {
+	_, err := f.call("aws ec2 stop-instances --region " + f.at() + " --instance-ids " + id)
+	return err
+}
+
+func (f *fakeAPI) WaitInstance(ctx context.Context, id, state string) error {
+	_, err := f.call("aws ec2 wait instance-" + state + " --region " + f.at() + " --instance-ids " + id)
+	return err
+}
+
+func (f *fakeAPI) SerialConsoleEnabled(ctx context.Context) (bool, error) {
+	out, err := f.call("aws ec2 get-serial-console-access-status --region " + f.at() +
+		" --query SerialConsoleAccessEnabled --output text")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "True", nil
+}

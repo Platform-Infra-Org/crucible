@@ -31,6 +31,7 @@ type Ops struct {
 	Sleep    func(time.Duration)
 	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
+	Home     string                                   // where the stacks and the persistent stack's state live; "" = AppDir()
 	Config   *Config                                  // crucible.yaml; nil = no file, every value from flags
 	Endpoint string                                   // tests only: every AWS service at this URL
 	Log      io.Writer
@@ -63,8 +64,6 @@ func Default(root string) Ops {
 }
 
 var subnetID = regexp.MustCompile(`^subnet-[0-9a-f]+$`)
-
-func (o Ops) dir(stack string) string { return filepath.Join(o.Root, "deploy", "aws", stack) }
 
 func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, error) {
 	raw, err := o.Output(ctx, o.Root, "terraform", "-chdir="+o.dir(stack), "output", "-json")

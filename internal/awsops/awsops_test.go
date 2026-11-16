@@ -30,6 +30,7 @@ type recorder struct {
 func (r *recorder) ops(root string) Ops {
 	return Ops{
 		Root: root,
+		Home: root, // never the operator's real application directory
 		AWS:  &fakeAPI{r: r, region: noneAsEmpty(cmp.Or(r.region, "eu-west-1"))},
 		Exec: func(_ context.Context, _ string, name string, args ...string) error {
 			r.calls = append(r.calls, name+" "+strings.Join(args, " "))

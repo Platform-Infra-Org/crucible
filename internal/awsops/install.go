@@ -115,3 +115,6 @@ func installJSON(m map[string]string) string {
 	b, _ := json.Marshal(m)
 	return string(b)
 }
+
+// execLookPath is exec.LookPath, behind a name the package can share.
+func execLookPath(file string) (string, error) { return exec.LookPath(file) }

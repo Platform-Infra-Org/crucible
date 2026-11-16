@@ -185,6 +185,7 @@ func (c *Config) AWSConfig() AWSConfig {
 		Region:      c.Install.Region,
 		Profile:     c.AWS.Profile,
 		SSOStartURL: c.AWS.SSOStartURL,
+		SSOSession:  c.AWS.SSOSession,
 		SSORegion:   c.AWS.SSORegion,
 		Account:     c.AWS.Account,
 		Role:        c.AWS.Role,
@@ -319,4 +320,88 @@ func (c *Config) LabsVars(deployed map[string]string) map[string]string {
 		v["account_public_access_block"] = strconv.FormatBool(*c.Labs.AccountPublicAccessBlock)
 	}
 	return v
+}
+
+// WriteTFVars renders the variables an apply passes into a tfvars file in the
+// application directory, so that crucible.yaml — and not a file in a checkout —
+// is the operator's input. Returns the path it wrote.
+func (c *Config) WriteTFVars(dir string, deployed map[string]string) (string, error) {
+	vars, err := c.TFVars(deployed)
+	if err != nil {
+		return "", err
+	}
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("# Generated from crucible.yaml by `crucible aws up`. Edit crucible.yaml, not this file.\n")
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s = %q\n", k, vars[k])
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "crucible.tfvars")
+	// It holds the GHCR token, the git credentials and any SMTP password.
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// FillInit puts crucible.yaml's values behind init's flags: a flag that was
+// given wins, and anything it left empty comes from the file, so a new machine
+// needs no flags at all. A nil Config fills in nothing.
+func (c *Config) FillInit(region, domain, access, subnetID *string, localPort *int) {
+	if c == nil {
+		return
+	}
+	fill(region, c.Install.Region)
+	fill(access, c.Access.Mode)
+	fill(subnetID, c.Access.SubnetID)
+	fill(domain, c.Access.Domain)
+	if *localPort == 0 {
+		*localPort = c.Access.LocalPort
+	}
+}
+
+// FillLabsInit does the same for labs-init.
+func (c *Config) FillLabsInit(region *string, regions *[]string, vpcID *string, subnetIDs *[]string,
+	budgetUSD *float64, budgetEmails *[]string, switches map[string]bool) {
+	if c == nil {
+		return
+	}
+	fill(region, c.Install.Region)
+	fill(vpcID, c.Labs.VPCID)
+	if len(*regions) == 0 {
+		*regions = c.Labs.Regions
+	}
+	if len(*subnetIDs) == 0 {
+		*subnetIDs = c.Labs.SubnetIDs
+	}
+	if *budgetUSD == 0 && c.Labs.BudgetUSD != nil {
+		*budgetUSD = *c.Labs.BudgetUSD
+	}
+	if len(*budgetEmails) == 0 {
+		*budgetEmails = c.Labs.BudgetEmails
+	}
+	for name, val := range map[string]*bool{
+		"billing-export":              c.Labs.BillingExport,
+		"account-public-access-block": c.Labs.AccountPublicAccessBlock,
+	} {
+		if val == nil {
+			continue
+		}
+		if _, given := switches[name]; !given {
+			switches[name] = *val
+		}
+	}
+}
+
+func fill(dst *string, from string) {
+	if *dst == "" {
+		*dst = from
+	}
 }

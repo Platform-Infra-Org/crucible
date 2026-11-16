@@ -161,8 +161,13 @@ func awsCmd(args []string) int {
 	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
 		root = strings.TrimSpace(string(top))
 	}
+	// Only default --var-file inside a checkout. Elsewhere, leaving it empty is
+	// what makes crucible.yaml the operator's input: up renders the variables
+	// from it instead of being handed a path that does not exist.
 	if *varFile == "" {
-		*varFile = filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars")
+		if p := filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars"); fileExists(p) {
+			*varFile = p
+		}
 	}
 	if *version != "" && *build {
 		fmt.Fprintln(os.Stderr, "--version and --build are exclusive")
@@ -196,11 +201,15 @@ func awsCmd(args []string) int {
 	var err error
 	switch args[0] {
 	case "init":
-		if *region == "" {
-			fmt.Fprintln(os.Stderr, "--region is required")
+		// crucible.yaml fills in what no flag gave, so a new machine needs no
+		// flags at all; a flag still wins.
+		in := awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, SubnetID: *subnetID, LocalPort: *localPort}
+		cfg.FillInit(&in.Region, &in.Domain, &in.Access, &in.SubnetID, &in.LocalPort)
+		if in.Region == "" {
+			fmt.Fprintln(os.Stderr, "--region is required (or set install.region in crucible.yaml)")
 			return 2
 		}
-		err = ops.Init(ctx, awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, SubnetID: *subnetID, LocalPort: *localPort})
+		err = ops.Init(ctx, in)
 	case "labs-init":
 		if *region == "" {
 			fmt.Fprintln(os.Stderr, "--region is required")
@@ -226,7 +235,9 @@ func awsCmd(args []string) int {
 				subnets = append(subnets, s)
 			}
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, labSwitches(fs))
+		labsRegion, net, switches := *region, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, labSwitches(fs)
+		cfg.FillLabsInit(&labsRegion, &regions, &net.VPCID, &net.SubnetIDs, budgetUSD, &budgetEmails, switches)
+		err = ops.LabsInit(ctx, labsRegion, *crucibleAccount, *budgetUSD, budgetEmails, regions, net, switches)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs, dep)
 	case "deploy":
@@ -310,4 +321,9 @@ func shellcheck(dir string) []content.Problem {
 		return nil
 	})
 	return probs
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }

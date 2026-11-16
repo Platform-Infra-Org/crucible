@@ -19,12 +19,12 @@ lists the commands and what each one is for.
 |---|---|
 | Set up AWS the first time | `crucible aws init`, (`crucible aws labs-init`), `crucible aws up` |
 | Ship a release to the node | `crucible aws deploy --version vX.Y.Z` |
-| Change a setting in `crucible.tfvars` | `crucible aws up` |
+| Change a setting in `crucible.yaml` | `crucible aws up` |
 | Stop paying for compute tonight, keeping labs | `crucible aws sleep` |
 | Start the node before the schedule | `crucible aws wake` |
 | Check the node, the release and the labs | `crucible aws status` |
-| Take a backup now | `crucible aws where` | Prints the configuration file, the application directory (the one thing worth backing up: it holds the persistent stack's state), each stack's directory and the Terraform in use. This is what the fourteen-resource recovery below needs in order to run `terraform import` by hand. |
-| `crucible aws snapshot` |
+| Take a backup now | `crucible aws snapshot` |
+| See where the config, the stacks and the state live | `crucible aws where` |
 | Destroy the node (data kept in S3) | `crucible aws teardown --yes` |
 | Reach an `--access ssm` install | `crucible aws connect` |
 | Let someone sign in | `crucible aws invite EMAIL` |
@@ -112,7 +112,8 @@ those from the stacks. `terraform_vars` may not name a setting the schema owns, 
 ## AWS: `crucible aws …`
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
-They call AWS through the SDK built into `crucible`, so the AWS CLI is not required; `crucible aws login` signs you in.
+They call AWS through the SDK built into `crucible`, so the AWS CLI is not required — with one exception, `connect`,
+which still runs `aws ssm start-session`. `crucible aws login` signs you in.
 
 **Terraform is needed by four commands only** — `init`, `labs-init`, `up` and `teardown`, the ones that create or destroy
 AWS resources. Every other command reads the install's details from `/<name>/install` in SSM, which those four publish
@@ -142,9 +143,10 @@ lost if the disk goes.
 | `crucible aws deploy --version vX.Y.Z` | Records the release in SSM (`/<name>/release`) and runs the node's `deploy.sh`: pull chart `X.Y.Z` from GHCR, refresh the secrets from SSM and `helm upgrade --install`. If the rollout fails it points `/<name>/release` back at the old one. |
 | `crucible aws deploy --build` | Builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, and deploys it. Needs your own `docker login ghcr.io` and `helm registry login ghcr.io` with a `write:packages` token. |
 | `crucible aws deploy` | Deploys this binary's own release. A binary built from source names no release, so it refuses. |
+| `crucible aws where` | Prints the configuration file, the application directory (the one thing worth backing up: it holds the persistent stack's state), each stack's directory and the Terraform in use. This is what the fourteen-resource recovery needs in order to run `terraform import` by hand. |
 | `crucible aws status` | The node's state and address, `release:`, SSM reachability, `/healthz`, the hosts the node can't reach, the bedtime, and the AWS labs by state. |
 | `crucible aws snapshot` | Runs the backup now (a `pg_dump` to the data bucket) and waits for it. |
-| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs the Session Manager plugin and your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
+| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. **The one command that still needs the AWS CLI v2**, because it runs `aws ssm start-session`; also the Session Manager plugin and your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
 | `crucible aws invite EMAIL [--name "Full Name"]` | Adds someone to the Cognito pool with a verified email and sends the invite. Run it again to resend an unused invite. |
 
 ### Night, morning and teardown

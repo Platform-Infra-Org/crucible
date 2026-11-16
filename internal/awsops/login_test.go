@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/credentials/ssocreds"
 )
 
 // ssoFor serves the Identity Center device flow and the account/role listings,
@@ -178,5 +180,77 @@ func TestLoginKeepsAGivenAccountAndRole(t *testing.T) {
 	}
 	if acct != "999988887777" || role != "Given-Role" {
 		t.Errorf("resolved %q/%q, want the configured pair kept", acct, role)
+	}
+}
+
+// An operator whose ~/.aws/config uses an [sso-session] block signs in once and
+// must stay signed in: login writes the cache under the session's key, so the
+// credential provider has to read it under the same key. Keyed differently, the
+// file is there, every command misses it, and "run `crucible aws login`" repeats
+// for ever.
+func TestTheTokenCacheKeyMatchesWhatCredentialsRead(t *testing.T) {
+	o, _ := ssoFor(t, deviceFlow(t, 0, oneAccount, oneRole))
+	in := LoginOpts{
+		StartURL:  "https://example/start",
+		SSORegion: "il-central-1",
+		Session:   "Platform-AWS",
+		Account:   "111122223333",
+		Role:      "Admin",
+		Open:      func(string) error { return nil },
+	}
+	if err := o.Login(context.Background(), in); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	written, err := ssocreds.StandardCachedTokenFilepath(in.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(written); err != nil {
+		t.Fatalf("login did not write %s: %v", written, err)
+	}
+	// The path NewAWS's provider will look in, for the same configuration.
+	read := cacheKeyFor(AWSConfig{
+		SSOStartURL: in.StartURL,
+		SSOSession:  in.Session,
+		SSORegion:   in.SSORegion,
+	})
+	wantPath, err := ssocreds.StandardCachedTokenFilepath(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantPath != written {
+		t.Fatalf("login wrote %s but credentials read %s: the operator would be told to sign in for ever", written, wantPath)
+	}
+}
+
+func TestConfigCarriesTheSessionIntoAWSConfig(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, minimalConfig+
+		"\naws:\n  sso_start_url: https://example/start\n  sso_region: il-central-1\n  sso_session: Platform-AWS\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.AWSConfig().SSOSession; got != "Platform-AWS" {
+		t.Errorf("AWSConfig().SSOSession = %q, want the file's sso_session", got)
+	}
+}
+
+// Discovering the account and role is useless unless the operator is told to
+// write them down: the credential provider reads them from crucible.yaml, and
+// without them every later command reports being signed out.
+func TestLoginSaysWhatToPutInTheConfig(t *testing.T) {
+	o, _ := ssoFor(t, deviceFlow(t, 0, oneAccount, oneRole))
+	var log strings.Builder
+	o.Log = &log
+	if err := o.Login(context.Background(), LoginOpts{
+		StartURL:  "https://example/start",
+		SSORegion: "il-central-1",
+		Open:      func(string) error { return nil },
+	}); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	for _, want := range []string{"crucible.yaml", "111122223333", "Workload-Admin-PS"} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("the output must name %s:\n%s", want, log.String())
+		}
 	}
 }

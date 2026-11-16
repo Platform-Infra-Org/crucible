@@ -266,6 +266,22 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, de
 	} else if wired != "" {
 		fmt.Fprintf(o.Log, "WARNING: --no-labs: turning aws labs off; running aws labs lose their credentials and cleanup\n")
 	}
+	// crucible.yaml is the operator's input: with no --var-file, the variables
+	// are rendered from it into the application directory. A --var-file still
+	// wins, so a developer's workflow is unchanged.
+	if varFile == "" {
+		if o.Config == nil {
+			return errors.New("no variables: write a crucible.yaml (see docs/cli.md) or pass --var-file")
+		}
+		home, err := o.home()
+		if err != nil {
+			return err
+		}
+		if varFile, err = o.Config.WriteTFVars(home, p); err != nil {
+			return err
+		}
+		fmt.Fprintf(o.Log, "variables rendered from crucible.yaml into %s\n", varFile)
+	}
 	abs, _ := filepath.Abs(varFile)
 	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, vars...)...); err != nil {
 		return err
@@ -275,8 +291,19 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, de
 		return err
 	}
 	// Everything but init, labs-init, up and teardown reads this instead of
-	// Terraform, so an operator needs neither Terraform nor a checkout.
-	if err := o.publishInstall(ctx, m); err != nil {
+	// Terraform, so an operator needs neither Terraform nor a checkout. Both
+	// stacks' values go in: cognito_user_pool_id, state_bucket, local_port and
+	// subnet_id are the persistent stack's, and invite and status need them, so
+	// publishing only main's would make the documented single-up upgrade leave
+	// them empty.
+	both := map[string]string{}
+	for k, v := range p {
+		both[k] = v
+	}
+	for k, v := range m {
+		both[k] = v
+	}
+	if err := o.publishInstall(ctx, both); err != nil {
 		return err
 	}
 	if m["access"] == "ssm" {
@@ -1114,6 +1141,13 @@ func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 	if _, err := look("session-manager-plugin"); err != nil {
 		return errors.New("the AWS Session Manager plugin isn't installed (session-manager-plugin): " +
 			"https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html")
+	}
+	// connect is the one command that still shells out: it runs
+	// `aws ssm start-session`, because the port-forward's data channel is not
+	// in the SDK. Every other command needs no AWS CLI.
+	if _, err := look("aws"); err != nil {
+		return errors.New("`crucible aws connect` runs `aws ssm start-session`, so it needs the AWS CLI v2 installed " +
+			"(every other command does not): https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
 	}
 	fmt.Fprintf(o.Log, "Crucible is at %s while this runs; Ctrl-C closes it.\n", url)
 	err = o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,

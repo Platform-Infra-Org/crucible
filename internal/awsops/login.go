@@ -93,7 +93,8 @@ func (o Ops) LoginAndResolve(ctx context.Context, in LoginOpts) (string, string,
 	if err != nil {
 		return "", "", err
 	}
-	if err := writeTokenCache(cmp2(in.Session, in.StartURL), in, region, reg, tok); err != nil {
+	key := cacheKeyFor(AWSConfig{SSOStartURL: in.StartURL, SSOSession: in.Session})
+	if err := writeTokenCache(key, in, region, reg, tok); err != nil {
 		return "", "", fmt.Errorf("signed in, but caching the token failed: %w", err)
 	}
 
@@ -102,6 +103,13 @@ func (o Ops) LoginAndResolve(ctx context.Context, in LoginOpts) (string, string,
 		return "", "", err
 	}
 	fmt.Fprintf(o.Log, "signed in to %s as %s\n", account, role)
+	// Discovery is not enough on its own: the credential provider is built from
+	// crucible.yaml, so without these two keys it asks for an empty account and
+	// role and every command reports being signed out. Say what to write.
+	if in.Account == "" || in.Role == "" {
+		fmt.Fprintf(o.Log, "add these to crucible.yaml under aws:, or the next command cannot use this sign-in:\n"+
+			"  account: %q\n  role: %s\n", account, role)
+	}
 	return account, role, nil
 }
 

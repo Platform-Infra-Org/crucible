@@ -1,6 +1,7 @@
 package awsops
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,5 +209,105 @@ func TestAWSConfigIsEmptyWithoutTheBlock(t *testing.T) {
 	}
 	if got := c.AWSConfig(); got.SSOStartURL != "" {
 		t.Errorf("SSOStartURL = %q, want empty so the default chain is used", got.SSOStartURL)
+	}
+}
+
+// The headline goal: an operator writes crucible.yaml, runs up on a machine
+// with no checkout, and the file's values reach Terraform. Without this the
+// documented sequence fails on a missing crucible.tfvars.
+func TestUpGeneratesTheVarFileFromTheConfig(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, minimalConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	r := &recorder{output: fakeAWS}
+	o := r.ops(t.TempDir())
+	o.Home, o.Config = home, cfg
+	if err := o.Up(context.Background(), "", true, true, DeployOpts{Version: "v1.4.0"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	generated := filepath.Join(home, "crucible.tfvars")
+	b, err := os.ReadFile(generated)
+	if err != nil {
+		t.Fatalf("up must generate %s from crucible.yaml: %v", generated, err)
+	}
+	body := string(b)
+	for _, want := range []string{
+		`bootstrap_admin = "you@example.com"`,
+		`ghcr_pull_token = "ghp_tok"`,
+		`git_credentials = "https://bot:t@github.com"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the generated tfvars lacks %s:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(strings.Join(r.calls, "\n"), "-var-file="+generated) {
+		t.Errorf("the apply must use the generated file:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestUpPrefersAnExplicitVarFile(t *testing.T) {
+	// A developer's --var-file still wins over the config file.
+	cfg, err := LoadConfig(writeConfig(t, minimalConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(t.TempDir(), "mine.tfvars")
+	if err := os.WriteFile(own, []byte("bootstrap_admin = \"dev@example.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &recorder{output: fakeAWS}
+	o := r.ops(t.TempDir())
+	o.Home, o.Config = t.TempDir(), cfg
+	if err := o.Up(context.Background(), own, true, true, DeployOpts{Version: "v1.4.0"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if !strings.Contains(strings.Join(r.calls, "\n"), "-var-file="+own) {
+		t.Errorf("--var-file must win:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestUpWithNoConfigAndNoVarFileSaysWhatIsMissing(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	o := r.ops(t.TempDir())
+	o.Home = t.TempDir()
+	err := o.Up(context.Background(), "", true, true, DeployOpts{Version: "v1.4.0"})
+	if err == nil {
+		t.Fatal("with neither a config nor a var file, up must say so rather than hand terraform a missing path")
+	}
+	if !strings.Contains(err.Error(), "crucible.yaml") {
+		t.Errorf("the error must name crucible.yaml: %v", err)
+	}
+}
+
+func TestFillInitPutsTheFileBehindTheFlags(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, minimalConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nothing given: every value comes from the file.
+	region, domain, access, subnet := "", "", "", ""
+	port := 0
+	c.FillInit(&region, &domain, &access, &subnet, &port)
+	if region != "il-central-1" || access != "ssm" || subnet != "subnet-0abc" || port != 18080 {
+		t.Errorf("got %q/%q/%q/%d, want the file's values", region, access, subnet, port)
+	}
+	// A flag wins.
+	region, access = "eu-west-1", "public"
+	c.FillInit(&region, &domain, &access, &subnet, &port)
+	if region != "eu-west-1" || access != "public" {
+		t.Errorf("a flag must win: got %q/%q", region, access)
+	}
+}
+
+func TestFillInitOnANilConfigChangesNothing(t *testing.T) {
+	var c *Config
+	region := "eu-west-1"
+	port := 0
+	empty := ""
+	c.FillInit(&region, &empty, &empty, &empty, &port)
+	if region != "eu-west-1" || port != 0 {
+		t.Errorf("a nil config must fill nothing: %q/%d", region, port)
 	}
 }

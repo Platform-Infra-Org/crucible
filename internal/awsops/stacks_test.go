@@ -3,10 +3,13 @@ package awsops
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"crucible/deploy"
 )
 
 func TestMaterialiseWritesTheEmbeddedFiles(t *testing.T) {
@@ -179,5 +182,105 @@ func TestInitProceedsWhenTheBackupIsAbsent(t *testing.T) {
 	}
 	if indexOf(r.calls, "persistent apply") < 0 {
 		t.Fatalf("the apply must happen:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// The build tree's gitignored files must never reach the binary: deploy/aws
+// holds terraform.tfstate, .terraform/ and crucible.tfvars on any machine that
+// has run `crucible aws init`, and shipping them would publish the secret key
+// and the GHCR token — and, worse, materialise would write that snapshot over
+// the operator's live state.
+func TestEmbeddedStacksCarryNoStateOrSecrets(t *testing.T) {
+	var bad []string
+	err := fs.WalkDir(deploy.Stacks, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := d.Name()
+		switch {
+		case d.IsDir() && name == ".terraform":
+			bad = append(bad, p)
+		case d.IsDir():
+		case strings.HasPrefix(name, "terraform.tfstate"),
+			strings.HasSuffix(name, ".tfvars"),
+			strings.Contains(p, "/.terraform/"):
+			bad = append(bad, p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bad) > 0 {
+		t.Fatalf("the binary carries files it must not: %v", bad)
+	}
+	// And the files it does need are all there.
+	for _, want := range []string{
+		"aws/main/main.tf", "aws/main/variables.tf", "aws/main/.terraform.lock.hcl",
+		"aws/persistent/.terraform.lock.hcl", "aws/labs/.terraform.lock.hcl",
+	} {
+		if _, err := fs.Stat(deploy.Stacks, want); err != nil {
+			t.Errorf("%s is missing from the binary: %v", want, err)
+		}
+	}
+}
+
+func TestMaterialiseWritesOnlyStackFiles(t *testing.T) {
+	home := t.TempDir()
+	r := &recorder{output: fakeAWS}
+	o := r.ops(t.TempDir())
+	o.Home = home
+	dst := filepath.Join(home, "deploy", "aws", "main")
+	if err := os.MkdirAll(filepath.Join(dst, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The operator's live state, and a file a later release renamed away.
+	live := filepath.Join(dst, "terraform.tfstate")
+	if err := os.WriteFile(live, []byte(`{"serial":42}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(dst, "retired.tf")
+	if err := os.WriteFile(orphan, []byte("# removed in a later release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.materialise("main"); err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+	got, err := os.ReadFile(live)
+	if err != nil || string(got) != `{"serial":42}` {
+		t.Fatalf("live state = %q (%v): materialise must never write over it", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".terraform")); err != nil {
+		t.Errorf(".terraform/ must be left alone: %v", err)
+	}
+	if _, err := os.Stat(orphan); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a stack file no longer in the binary must be pruned, or terraform reads both: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "main.tf")); err != nil {
+		t.Errorf("main.tf was not written: %v", err)
+	}
+}
+
+// connect still runs `aws ssm start-session`, so the AWS CLI is a prerequisite
+// for it until the in-process tunnel exists. A missing CLI must say so, not
+// surface as exec's "executable file not found" on the one route into the app.
+func TestConnectSaysWhenTheAWSCLIIsMissing(t *testing.T) {
+	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080")}
+	o := r.ops(t.TempDir())
+	o.LookPath = func(file string) (string, error) {
+		if file == "aws" {
+			return "", errors.New("executable file not found in $PATH")
+		}
+		return "/usr/local/bin/" + file, nil
+	}
+	err := o.Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
+	if err == nil {
+		t.Fatal("connect without the AWS CLI must fail with an explanation")
+	}
+	if !strings.Contains(err.Error(), "AWS CLI") {
+		t.Errorf("the error must name the AWS CLI: %v", err)
+	}
+	if indexOf(r.calls, "start-session") >= 0 {
+		t.Errorf("nothing may be started:\n%s", strings.Join(r.calls, "\n"))
 	}
 }

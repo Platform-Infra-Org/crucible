@@ -175,3 +175,54 @@ func TestTerraformMissingOnlyAffectsTheFourCommands(t *testing.T) {
 		})
 	}
 }
+
+// The documented upgrade is one `crucible aws up`. After it, invite and status
+// must work — so up has to publish the persistent stack's values too, not only
+// the main stack's. cognito_user_pool_id, state_bucket, local_port and subnet_id
+// are all persistent outputs; main outputs none of them.
+func TestUpPublishesBothStacksValues(t *testing.T) {
+	r := &recorder{output: func(cmd string) string {
+		switch {
+		case strings.Contains(cmd, "persistent output -json"):
+			return `{"region":{"value":"eu-west-1"},"cognito_user_pool_id":{"value":"eu-west-1_abc"},` +
+				`"state_bucket":{"value":"st"},"access":{"value":"public"},"domain":{"value":"c.example.com"},` +
+				`"oidc_issuer":{"value":"https://issuer"},"oidc_client_id":{"value":"client123"}}`
+		case strings.Contains(cmd, "main output -json"):
+			return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"url":{"value":"https://c.example.com"},` +
+				`"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"public_ip":{"value":"203.0.113.7"}}`
+		case strings.Contains(cmd, "/install"):
+			return ""
+		}
+		return fakeAWS(cmd)
+	}}
+	o := r.ops(t.TempDir())
+	if err := o.Up(context.Background(), "x.tfvars", true, true, DeployOpts{Version: "v1.4.0"}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	published := r.params["/crucible/install"]
+	for _, want := range []string{"cognito_user_pool_id", "state_bucket", "instance_id"} {
+		if !strings.Contains(published, want) {
+			t.Errorf("the install parameter lacks %s, so invite and status would fail obscurely:\n%s", want, published)
+		}
+	}
+}
+
+// A read that fails for any reason other than "not there" must not be treated
+// as an empty install: the write that follows would replace the whole parameter
+// with one stack's half.
+func TestPublishInstallRefusesToOverwriteOnAFailedRead(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "get-parameter") && strings.Contains(cmd, "/install") {
+			return errors.New("ThrottlingException: Rate exceeded")
+		}
+		return nil
+	}}
+	o := r.ops(t.TempDir())
+	err := o.publishInstall(context.Background(), map[string]string{"instance_id": "i-123"})
+	if err == nil {
+		t.Fatal("a throttled read must not be followed by a blind overwrite")
+	}
+	if indexOf(r.calls, "put-parameter --region eu-west-1 --name /crucible/install") >= 0 {
+		t.Fatalf("nothing may be written:\n%s", strings.Join(r.calls, "\n"))
+	}
+}

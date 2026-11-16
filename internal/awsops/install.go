@@ -54,9 +54,17 @@ func (o Ops) publishInstall(ctx context.Context, m map[string]string) error {
 		region = o.installRegion()
 	}
 	api := o.AWS.In(region)
+	// Read before merging, and tolerate only "it is not there". A throttle or a
+	// denied GetParameter must not look like an empty install, because the write
+	// below would then replace the whole parameter with this stack's half and
+	// invite would start failing with nothing to explain why.
 	merged := map[string]string{}
-	if raw, err := api.GetParameter(ctx, o.installParam(), false); err == nil && raw != "" {
+	raw, err := api.GetParameter(ctx, o.installParam(), false)
+	switch {
+	case err == nil && raw != "":
 		_ = json.Unmarshal([]byte(raw), &merged) // a corrupt value is replaced, not fatal
+	case err != nil && !errors.Is(err, ErrParameterNotFound):
+		return fmt.Errorf("applied, but reading %s before updating it failed (%w); run `crucible aws up` again", o.installParam(), err)
 	}
 	for k, v := range m {
 		if v != "" {

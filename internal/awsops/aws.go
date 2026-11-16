@@ -71,6 +71,7 @@ type AWSConfig struct {
 	Region      string
 	Profile     string // empty = the shared configuration's default
 	SSOStartURL string // empty = resolve credentials from the default chain
+	SSOSession  string // the [sso-session] name, when ~/.aws/config uses one
 	SSORegion   string
 	Account     string // the account to assume into; empty = discovered at login
 	Role        string // the permission set to assume; empty = discovered at login
@@ -119,7 +120,7 @@ func ssoProvider(cl *awsClient, c AWSConfig) aws.CredentialsProvider {
 	oidcCfg.Region = region
 	ssoCfg := oidcCfg
 
-	cache, err := ssocreds.StandardCachedTokenFilepath(c.SSOStartURL)
+	cache, err := ssocreds.StandardCachedTokenFilepath(cacheKeyFor(c))
 	tokenOpts := func(o *ssocreds.SSOTokenProviderOptions) {}
 	if err == nil {
 		tokenOpts = func(o *ssocreds.SSOTokenProviderOptions) { o.CachedTokenFilepath = cache }
@@ -138,6 +139,13 @@ func ssoProvider(cl *awsClient, c AWSConfig) aws.CredentialsProvider {
 		o.SSOTokenProvider = ssocreds.NewSSOTokenProvider(oidcClient, cache, tokenOpts)
 	})
 }
+
+// cacheKeyFor is the key the shared SSO token cache is filed under, and it must
+// be the same one `crucible aws login` writes: the AWS CLI keys an sso-session
+// profile's token on the session name and a legacy profile's on the start URL.
+// Key them differently and the token is there, every command misses it, and the
+// operator is told to sign in for ever.
+func cacheKeyFor(c AWSConfig) string { return cmp2(c.SSOSession, c.SSOStartURL) }
 
 func (c *awsClient) Region() string { return c.cfg.Region }
 
@@ -175,8 +183,11 @@ func signInError(err error) error {
 	var api smithy.APIError
 	if errors.As(err, &api) {
 		switch api.ErrorCode() {
-		case "ExpiredToken", "ExpiredTokenException", "InvalidGrantException",
-			"UnauthorizedException", "AccessDeniedException", "InvalidClientException":
+		// Only the codes that mean "there is no usable session". An
+		// AccessDeniedException means the session is fine and the permission is
+		// not, and relabelling it sends the operator round a sign-in loop while
+		// the real cause is never named.
+		case "ExpiredToken", "ExpiredTokenException", "InvalidGrantException", "InvalidClientException":
 			return fmt.Errorf("%w: %w", ErrNotSignedIn, err)
 		}
 	}

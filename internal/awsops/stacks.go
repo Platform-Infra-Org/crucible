@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"crucible/deploy"
 )
@@ -64,8 +65,37 @@ func (o Ops) materialise(stack string) error {
 	if err != nil {
 		return fmt.Errorf("no embedded stack %q: %w", stack, err)
 	}
+	// Prune first: a release that renames or drops a .tf file would otherwise
+	// leave the old one behind, and Terraform reads every .tf in the directory —
+	// so the next apply would either re-create what the release removed or fail
+	// on duplicate declarations, with nothing on the operator's disk to explain
+	// why. Only stack files are pruned; state and .terraform/ are never touched.
+	shipped := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			shipped[e.Name()] = true
+		}
+	}
+	existing, err := os.ReadDir(dst)
+	if err != nil {
+		return err
+	}
+	for _, e := range existing {
+		if e.IsDir() || shipped[e.Name()] || !isStackFile(e.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dst, e.Name())); err != nil {
+			return err
+		}
+	}
 	for _, e := range entries {
 		if e.IsDir() {
+			continue
+		}
+		// Belt and braces: the embed patterns already exclude state and
+		// secrets, and this makes it impossible to write one even if they
+		// change.
+		if !isStackFile(e.Name()) {
 			continue
 		}
 		b, err := fs.ReadFile(deploy.Stacks, filepath.ToSlash(filepath.Join(src, e.Name())))
@@ -151,4 +181,22 @@ func (o Ops) materialiseAll() error {
 		}
 	}
 	return nil
+}
+
+// isStackFile is what a stack is made of, and so what materialise may write and
+// prune: the Terraform sources, the templates they render and the provider lock.
+// terraform.tfstate, .terraform/ and any .tfvars are deliberately not included —
+// state is the only link to the real resources, and a .tfvars holds tokens.
+func isStackFile(name string) bool {
+	switch {
+	case name == ".terraform.lock.hcl":
+		return true
+	case strings.HasSuffix(name, ".tfvars"), strings.HasSuffix(name, ".tfvars.example"):
+		return false
+	case strings.HasPrefix(name, "terraform.tfstate"):
+		return false
+	case strings.HasSuffix(name, ".tf"), strings.HasSuffix(name, ".tftpl"):
+		return true
+	}
+	return false
 }

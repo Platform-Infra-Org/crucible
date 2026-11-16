@@ -127,3 +127,32 @@ func TestConfigDirHonoursOverride(t *testing.T) {
 		t.Errorf("ConfigDir() = %q, want %q", got, want)
 	}
 }
+
+// An IAM denial is not a sign-in problem. Labelling it one sends the operator
+// round a sign-in loop while the real cause — a missing permission — is never
+// named.
+func TestAccessDeniedIsNotReportedAsSignedOut(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"__type":"AccessDeniedException","message":"User is not authorized to perform ssm:PutParameter"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIATEST")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
+
+	a, err := NewAWS(context.Background(), AWSConfig{Region: "il-central-1", Endpoint: srv.URL})
+	if err != nil {
+		t.Fatalf("NewAWS: %v", err)
+	}
+	err = a.PutParameter(context.Background(), "/crucible/install", "{}", false)
+	if err == nil {
+		t.Fatal("a denied PutParameter must be an error")
+	}
+	if errors.Is(err, ErrNotSignedIn) {
+		t.Errorf("an authorization failure must not be reported as being signed out: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ssm:PutParameter") {
+		t.Errorf("the error must still name what was denied: %v", err)
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -21,12 +23,7 @@ type fakeAPI struct {
 
 var _ AWS = (*fakeAPI)(nil)
 
-func (f *fakeAPI) at() string {
-	if f.region == "" {
-		return "eu-west-1"
-	}
-	return f.region
-}
+func (f *fakeAPI) at() string { return f.region }
 
 func (f *fakeAPI) In(region string) AWS {
 	if region == "" {
@@ -189,4 +186,89 @@ func (f *fakeAPI) SerialConsoleEnabled(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(out) == "True", nil
+}
+
+func (f *fakeAPI) HeadObject(ctx context.Context, bucket, key string) (bool, error) {
+	out, err := f.call("aws s3api head-object --bucket " + bucket + " --key " + key + " --region " + f.at())
+	if err != nil {
+		// The recorder injects "(404)" for an absent backup, as the CLI printed it.
+		if strings.Contains(err.Error(), "(404)") || strings.Contains(err.Error(), "Not Found") {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(out) != "absent", nil
+}
+
+func (f *fakeAPI) GetObject(ctx context.Context, bucket, key, toFile string) error {
+	out, err := f.call("aws s3 cp s3://" + bucket + "/" + key + " " + toFile + " --region " + f.at() + " --only-show-errors")
+	if err != nil {
+		return err
+	}
+	if out == "" {
+		out = "{}"
+	}
+	if err := os.MkdirAll(filepath.Dir(toFile), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(toFile, []byte(out), 0o600)
+}
+
+func (f *fakeAPI) PutObject(ctx context.Context, bucket, key, fromFile string) error {
+	_, err := f.call("aws s3 cp " + fromFile + " s3://" + bucket + "/" + key + " --region " + f.at() + " --only-show-errors")
+	return err
+}
+
+// attrsJSON is the shape the CLI was given, kept so that the package's test for
+// a comma inside a name still says what it meant.
+func attrsJSON(kv ...string) string {
+	var a []map[string]string
+	for i := 0; i < len(kv); i += 2 {
+		a = append(a, map[string]string{"Name": kv[i], "Value": kv[i+1]})
+	}
+	b, _ := json.Marshal(a)
+	return string(b)
+}
+
+func (f *fakeAPI) CreateUser(ctx context.Context, poolID, email, name string) error {
+	kv := []string{"email", email, "email_verified", "true"}
+	if name != "" {
+		kv = append(kv, "name", name)
+	}
+	_, err := f.call("aws cognito-idp admin-create-user --region " + f.at() + " --user-pool-id " + poolID +
+		" --username " + email + " --user-attributes " + attrsJSON(kv...) + " --desired-delivery-mediums EMAIL")
+	return err
+}
+
+func (f *fakeAPI) ResendInvite(ctx context.Context, poolID, email string) error {
+	_, err := f.call("aws cognito-idp admin-create-user --region " + f.at() + " --user-pool-id " + poolID +
+		" --username " + email + " --message-action RESEND --desired-delivery-mediums EMAIL")
+	return err
+}
+
+func (f *fakeAPI) VerifyEmail(ctx context.Context, poolID, email string) error {
+	_, err := f.call("aws cognito-idp admin-update-user-attributes --region " + f.at() + " --user-pool-id " + poolID +
+		" --username " + email + " --user-attributes " + attrsJSON("email_verified", "true"))
+	return err
+}
+
+func (f *fakeAPI) UserStatus(ctx context.Context, poolID, email string) (string, error) {
+	out, err := f.call("aws cognito-idp admin-get-user --region " + f.at() + " --user-pool-id " + poolID +
+		" --username " + email + " --query UserStatus --output text")
+	if err != nil {
+		if strings.Contains(err.Error(), "UserNotFoundException") {
+			return "", fmt.Errorf("%w: %s", ErrUserNotFound, email)
+		}
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (f *fakeAPI) TaggedResources(ctx context.Context, tag string) ([]string, error) {
+	out, err := f.call("aws resourcegroupstaggingapi get-resources --region " + f.at() +
+		" --tag-filters Key=" + tag + " --query ResourceTagMappingList[].ResourceARN --output text")
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
 }

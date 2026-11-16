@@ -35,6 +35,7 @@ lists the commands and what each one is for.
 ## AWS: `crucible aws …`
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
+They call AWS through the SDK built into `crucible`, so the AWS CLI is not required; `crucible aws login` signs you in.
 `--var-file` defaults to `deploy/aws/main/crucible.tfvars`. Commands that might lose the node's disk (`up`, `sleep`,
 `teardown`) take a snapshot first and stop if it fails; `--no-snapshot` skips it, and everything since the last backup is
 lost if the disk goes.
@@ -58,7 +59,7 @@ lost if the disk goes.
 | `crucible aws deploy` | Deploys this binary's own release. A binary built from source names no release, so it refuses. |
 | `crucible aws status` | The node's state and address, `release:`, SSM reachability, `/healthz`, the hosts the node can't reach, the bedtime, and the AWS labs by state. |
 | `crucible aws snapshot` | Runs the backup now (a `pg_dump` to the data bucket) and waits for it. |
-| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs the AWS CLI, the Session Manager plugin and your SSO login. Use Crucible's own port, or sign-in breaks. |
+| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs the Session Manager plugin and your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
 | `crucible aws invite EMAIL [--name "Full Name"]` | Adds someone to the Cognito pool with a verified email and sends the invite. Run it again to resend an unused invite. |
 
 ### Night, morning and teardown

@@ -337,7 +337,7 @@ svg .ahm { fill: var(--muted); }
       <thead><tr><th scope="col">Tool</th><th scope="col">Version</th><th scope="col">Used for</th></tr></thead>
       <tbody>
         <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>All three stacks (<code>required_version = "&gt;= 1.10"</code>).</td></tr>
-        <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Recording the release, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
+        <tr><th scope="row">AWS CLI</th><td>not needed</td><td><code>crucible</code> calls AWS itself, through the SDK compiled into it. Sign in with <code>crucible aws login</code>, or keep using <code>aws sso login</code> if you have the CLI for other reasons: both write the same token cache, and Terraform reads the same credentials.</td></tr>
         <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>For <code>aws ssm start-session</code>, a shell on the node: the AWS CLI needs it for every interactive session. Install it from AWS's <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin page</a>; <code>session-manager-plugin --version</code> checks it.</td></tr>
         <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Only for <code>deploy --build</code>: building the <code>linux/amd64</code> server image and pushing it to GHCR. Deploying a released version needs neither Docker nor Helm.</td></tr>
         <tr><th scope="row">Helm</th><td>3</td><td>Only for <code>deploy --build</code>: packaging and pushing the chart (<code>helm package</code>, <code>helm push</code>).</td></tr>

@@ -159,19 +159,21 @@ func (o Ops) restoreState(ctx context.Context, stack, suffix, key, region string
 	if _, err := os.Stat(local); !errors.Is(err, fs.ErrNotExist) {
 		return err // a local state (nil) is never replaced
 	}
-	account, err := o.Output(ctx, o.Root, "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text")
+	api := o.AWS.In(region)
+	account, err := api.Account(ctx)
 	if err != nil {
 		return fmt.Errorf("no local %s state, and looking for its backup failed: %w", stack, err)
 	}
 	bucket := "crucible-" + account + "-" + suffix
 	src := "s3://" + bucket + "/" + key
-	if _, err := o.Output(ctx, o.Root, "aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", region); err != nil {
-		if strings.Contains(err.Error(), "(404)") {
-			return nil
-		}
+	there, err := api.HeadObject(ctx, bucket, key)
+	if err != nil {
 		return fmt.Errorf("no local %s state, and can't tell whether %s exists (%w); fix access or copy it to %s by hand", stack, src, err, local)
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, local, "--region", region, "--only-show-errors"); err != nil {
+	if !there {
+		return nil
+	}
+	if err := api.GetObject(ctx, bucket, key, local); err != nil {
 		return fmt.Errorf("restoring %s: %w", src, err)
 	}
 	fmt.Fprintf(o.Log, "no local %s state: restored it from %s\n", stack, src)
@@ -188,7 +190,7 @@ func (o Ops) backupState(ctx context.Context, stack, key string) error {
 	}
 	src, dst := filepath.Join(o.dir(stack), "terraform.tfstate"), "s3://"+out["state_bucket"]+"/"+key
 	region := cmp.Or(out["state_region"], out["region"]) // labs names it state_region
-	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, dst, "--region", region, "--only-show-errors"); err != nil {
+	if err := o.AWS.In(region).PutObject(ctx, out["state_bucket"], key, src); err != nil {
 		return fmt.Errorf("applied, but backing up the state failed (%w); copy it by hand: aws s3 cp %s %s --region %s", err, src, dst, region)
 	}
 	fmt.Fprintf(o.Log, "state backed up to %s\n", dst)
@@ -962,13 +964,12 @@ func (o Ops) reportLeftovers(ctx context.Context) {
 	l := map[string]string{"regions": parsed.Regions.Value}
 	found := false
 	for r := range strings.SplitSeq(l["regions"], ",") {
-		out, err := o.Output(ctx, o.Root, "aws", "resourcegroupstaggingapi", "get-resources", "--region", r,
-			"--tag-filters", "Key=crucible:lab-id", "--query", "ResourceTagMappingList[].ResourceARN", "--output", "text")
+		arns, err := o.AWS.In(r).TaggedResources(ctx, "crucible:lab-id")
 		if err != nil {
 			fmt.Fprintf(o.Log, "lab leftovers in %s: not checked (%v)\n", r, err)
 			continue
 		}
-		if arns := strings.Fields(out); len(arns) > 0 {
+		if len(arns) > 0 {
 			found = true
 			fmt.Fprintf(o.Log, "still tagged crucible:lab-id in %s (delete these by hand, e.g. aws ec2 terminate-instances):\n  %s\n", r, strings.Join(arns, "\n  "))
 		}
@@ -996,26 +997,11 @@ func (o Ops) Invite(ctx context.Context, email, name string) error {
 	if err != nil {
 		return err
 	}
-	pool := []string{"--region", p["region"], "--user-pool-id", p["cognito_user_pool_id"], "--username", email}
-	idp := func(op string, args ...string) error {
-		return o.Exec(ctx, o.Root, "aws", append(append([]string{"cognito-idp", op}, pool...), args...)...)
-	}
-	attrs := func(kv ...string) string {
-		var a []map[string]string
-		for i := 0; i < len(kv); i += 2 {
-			a = append(a, map[string]string{"Name": kv[i], "Value": kv[i+1]})
-		}
-		b, _ := json.Marshal(a)
-		return string(b)
-	}
-	status, err := o.Output(ctx, o.Root, "aws", append(append([]string{"cognito-idp", "admin-get-user"}, pool...), "--query", "UserStatus", "--output", "text")...)
+	api, pool := o.AWS.In(p["region"]), p["cognito_user_pool_id"]
+	status, err := api.UserStatus(ctx, pool, email)
 	switch {
-	case err != nil && strings.Contains(err.Error(), "UserNotFoundException"):
-		kv := []string{"email", email, "email_verified", "true"}
-		if name != "" {
-			kv = append(kv, "name", name)
-		}
-		if err := idp("admin-create-user", "--user-attributes", attrs(kv...), "--desired-delivery-mediums", "EMAIL"); err != nil {
+	case errors.Is(err, ErrUserNotFound):
+		if err := api.CreateUser(ctx, pool, email, name); err != nil {
 			return err
 		}
 		hint := ""
@@ -1027,14 +1013,14 @@ func (o Ops) Invite(ctx context.Context, email, name string) error {
 	case err != nil:
 		return fmt.Errorf("looking up %s in the user pool: %w", email, err)
 	}
-	if err := idp("admin-update-user-attributes", "--user-attributes", attrs("email_verified", "true")); err != nil {
+	if err := api.VerifyEmail(ctx, pool, email); err != nil {
 		return err
 	}
 	if status != "FORCE_CHANGE_PASSWORD" {
 		fmt.Fprintf(o.Log, "%s already has an account (%s): marked the email verified, sent nothing\n", email, status)
 		return nil
 	}
-	if err := idp("admin-create-user", "--message-action", "RESEND", "--desired-delivery-mediums", "EMAIL"); err != nil {
+	if err := api.ResendInvite(ctx, pool, email); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.Log, "%s had not signed in yet: marked the email verified and resent the invite with a new temporary password\n", email)
@@ -1053,7 +1039,7 @@ type ConnectOpts struct {
 func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 	region := in.Region
 	if region == "" {
-		region, _ = o.Output(ctx, o.Root, "aws", "configure", "get", "region") // empty when none is set
+		region = o.AWS.Region() // empty when the shared configuration sets none
 	}
 	if region == "" {
 		return errors.New("no region: pass --region (or set one with `aws configure set region …`)")

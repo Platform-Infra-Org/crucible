@@ -2,6 +2,7 @@ package awsops
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -17,6 +18,7 @@ type recorder struct {
 	calls     []string
 	output    func(cmd string) string
 	outErr    func(cmd string) error // optional: make an Output call fail
+	region    string                 // the signed-in region; "" in ops() means eu-west-1
 	log       bytes.Buffer
 	unhealthy bool // /healthz never answers
 	noPlugin  bool // session-manager-plugin is not installed
@@ -25,7 +27,7 @@ type recorder struct {
 func (r *recorder) ops(root string) Ops {
 	return Ops{
 		Root: root,
-		AWS:  &fakeAPI{r: r},
+		AWS:  &fakeAPI{r: r, region: noneAsEmpty(cmp.Or(r.region, "eu-west-1"))},
 		Exec: func(_ context.Context, _ string, name string, args ...string) error {
 			r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 			if name == "helm" && args[0] == "package" { // the chart archive lands in -d
@@ -59,6 +61,15 @@ func (r *recorder) ops(root string) Ops {
 			return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
 		},
 	}
+}
+
+// noneAsEmpty lets a test model credentials that resolved to no region at all,
+// which "" cannot express because it means "use the default".
+func noneAsEmpty(region string) string {
+	if region == "none" {
+		return ""
+	}
+	return region
 }
 
 func fakeAWS(cmd string) string {
@@ -1136,17 +1147,14 @@ func TestConnectNeedsThePlugin(t *testing.T) {
 	}
 }
 
+// Without --region, connect uses the region the credentials resolved to, which
+// is the shared configuration's when crucible.yaml names none.
 func TestConnectRegion(t *testing.T) {
-	r := &recorder{output: func(cmd string) string {
-		if strings.Contains(cmd, "configure get region") {
-			return "il-central-1"
-		}
-		return fakeNode("i-0abc\thttp://localhost:18080")(cmd)
-	}}
+	r := &recorder{region: "il-central-1", output: fakeNode("i-0abc\thttp://localhost:18080")}
 	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err != nil || indexOf(r.calls, "describe-instances --region il-central-1") < 0 {
-		t.Fatalf("region from the AWS CLI's config: %v\n%s", err, strings.Join(r.calls, "\n"))
+		t.Fatalf("region from the resolved AWS configuration: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
-	r = &recorder{output: fakeAWS} // fakeAWS answers "configure get region" with ""
+	r = &recorder{region: "none", output: fakeAWS} // "none" means the resolver found no region
 	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Fatalf("no region anywhere: %v", err)
 	}
@@ -1199,7 +1207,14 @@ func TestStateBackupSkippedWhenApplyFailsAndLoudWhenItFails(t *testing.T) {
 		t.Fatalf("a failed or cancelled apply copies nothing: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 
-	r.calls, failOn = nil, "terraform.tfstate s3://" // the backup, not a restore
+	// The backup is an S3 PutObject now, not a subprocess: fail it there.
+	r.calls, failOn = nil, "never matches"
+	r.outErr = func(cmd string) error {
+		if strings.Contains(cmd, "terraform.tfstate s3://") {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
 	err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"})
 	if err == nil || !strings.Contains(err.Error(), "aws s3 cp") || !strings.Contains(err.Error(), "s3://st/persistent.tfstate") {
 		t.Fatalf("a failed backup must say so, with the command to run by hand: %v", err)

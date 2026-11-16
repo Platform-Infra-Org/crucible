@@ -49,6 +49,20 @@ type AWS interface {
 	StopInstance(ctx context.Context, id string) error
 	WaitInstance(ctx context.Context, id, state string) error
 	SerialConsoleEnabled(ctx context.Context) (bool, error)
+
+	// S3: the state backups the persistent and labs stacks depend on.
+	HeadObject(ctx context.Context, bucket, key string) (bool, error)
+	GetObject(ctx context.Context, bucket, key, toFile string) error
+	PutObject(ctx context.Context, bucket, key, fromFile string) error
+
+	// Cognito: who may sign in.
+	CreateUser(ctx context.Context, poolID, email, name string) error
+	ResendInvite(ctx context.Context, poolID, email string) error
+	VerifyEmail(ctx context.Context, poolID, email string) error
+	UserStatus(ctx context.Context, poolID, email string) (string, error)
+
+	// Resource Groups Tagging: lab leftovers a teardown cannot delete.
+	TaggedResources(ctx context.Context, tag string) ([]string, error)
 }
 
 // AWSConfig says who to sign in as. An empty SSOStartURL means "use the shared

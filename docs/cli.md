@@ -23,7 +23,8 @@ lists the commands and what each one is for.
 | Stop paying for compute tonight, keeping labs | `crucible aws sleep` |
 | Start the node before the schedule | `crucible aws wake` |
 | Check the node, the release and the labs | `crucible aws status` |
-| Take a backup now | `crucible aws snapshot` |
+| Take a backup now | `crucible aws where` | Prints the configuration file, the application directory (the one thing worth backing up: it holds the persistent stack's state), each stack's directory and the Terraform in use. This is what the fourteen-resource recovery below needs in order to run `terraform import` by hand. |
+| `crucible aws snapshot` |
 | Destroy the node (data kept in S3) | `crucible aws teardown --yes` |
 | Reach an `--access ssm` install | `crucible aws connect` |
 | Let someone sign in | `crucible aws invite EMAIL` |

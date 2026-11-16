@@ -140,3 +140,15 @@ func (o Ops) Where() error {
 // osLookPath is exec.LookPath, named so stacks.go needs no os/exec import name
 // collision with the Ops seam.
 var osLookPath = func(file string) (string, error) { return execLookPath(file) }
+
+// materialiseAll writes every stack out and adopts any state a checkout holds.
+// The four Terraform commands call it: each reads more than one stack's outputs,
+// so all three have to be on disk before any of them runs.
+func (o Ops) materialiseAll() error {
+	for _, stack := range []string{"persistent", "main", "labs"} {
+		if err := o.materialise(stack); err != nil {
+			return err
+		}
+	}
+	return nil
+}

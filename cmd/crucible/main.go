@@ -33,7 +33,7 @@ const usage = `usage:
                          [--billing-export=false] [--account-public-access-block=false]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
   crucible aws deploy [--version vX.Y.Z | --build]
-  crucible aws snapshot | wake | status
+  crucible aws snapshot | wake | status | where
   crucible aws login [--sso-start-url URL] [--sso-region REGION]
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws invite EMAIL [--name "Full Name"]
@@ -178,6 +178,11 @@ func awsCmd(args []string) int {
 		return 1
 	}
 	ops.Config = cfg
+	// Where the stacks and the persistent stack's state live when there is no
+	// checkout. A checkout still wins, so a developer's workflow is unchanged.
+	if home, err := awsops.AppDir(); err == nil {
+		ops.Home = home
+	}
 	awsCfg := cfg.AWSConfig()
 	if *region != "" { // the flag wins over the file
 		awsCfg.Region = *region
@@ -236,6 +241,8 @@ func awsCmd(args []string) int {
 		err = ops.Status(ctx)
 	case "teardown":
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot, *keepLabs)
+	case "where":
+		err = ops.Where()
 	case "login":
 		in := cfg.LoginOpts()
 		if *ssoStartURL != "" {

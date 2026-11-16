@@ -342,7 +342,7 @@ svg .ahm { fill: var(--muted); }
         <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Only for <code>deploy --build</code>: building the <code>linux/amd64</code> server image and pushing it to GHCR. Deploying a released version needs neither Docker nor Helm.</td></tr>
         <tr><th scope="row">Helm</th><td>3</td><td>Only for <code>deploy --build</code>: packaging and pushing the chart (<code>helm package</code>, <code>helm push</code>).</td></tr>
         <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old. <code>make tools</code> installs the repo's pinned Go and Terraform (and kind) into <code>.local/tools</code>, checksum-verified; it's git-ignored, so a fresh clone runs it once. Then put it first on your <code>PATH</code>.</td></tr>
-        <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository, for the Terraform stacks. <code>deploy</code> ships a published release (or, with <code>--build</code>, your checked-out tree), not whatever the clone holds.</td></tr>
+        <tr><th scope="row">git</th><td>not needed</td><td>The Terraform stacks ship inside the binary and are written to the application directory, so an operator needs no clone. Developers keep using the repository, which still wins when you run from one. <code>crucible aws where</code> prints every path.</td></tr>
       </tbody>
     </table></div>
     <p>Run every command from the repository root. Install the command once, then type <code>crucible …</code>. If you'd rather not,

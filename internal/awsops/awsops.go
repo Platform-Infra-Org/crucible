@@ -105,6 +105,9 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	if err := o.needTerraform(); err != nil {
 		return err
 	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	d := o.dir("persistent")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -226,6 +229,9 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, de
 	if err := o.needTerraform(); err != nil {
 		return err
 	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	if _, err := releaseChoice(dep); err != nil {
 		return err // before anything is applied
 	}
@@ -307,6 +313,9 @@ func commaList(s string) []string {
 // switches sets the stack's on/off settings by variable name (labSwitches); one left out keeps the stack's current value.
 func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, switches map[string]bool) error {
 	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
 		return err
 	}
 	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
@@ -931,6 +940,9 @@ func (o Ops) Status(ctx context.Context) error {
 
 func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keepLabs bool) error {
 	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
 		return err
 	}
 	if !yes {

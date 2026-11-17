@@ -1,4 +1,4 @@
-.PHONY: test build web local-check cluster-check toolbox tools workspace
+.PHONY: test build web local-check cluster-check toolbox tools plugins workspace
 test:
 	go test ./...
 build:
@@ -12,6 +12,9 @@ cluster-check:
 	./scripts/cluster-check.sh
 tools: # pinned Go, Terraform and kind into .local/tools, checksum-verified (scripts/tools.sh --dry-run shows what)
 	./scripts/tools.sh
+
+plugins: # AWS's Session Manager plugin into internal/awsops/blobs, so a locally built binary can run `aws connect` (--clear undoes it)
+	./scripts/plugin-blobs.sh
 
 TOOLBOX_TAG ?= dev
 toolbox:

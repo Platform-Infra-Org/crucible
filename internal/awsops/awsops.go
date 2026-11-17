@@ -25,11 +25,16 @@ import (
 
 type Ops struct {
 	Root     string // repo root
+	AWS      AWS    // the AWS API; nil until the caller builds one with NewAWS
 	Exec     func(ctx context.Context, dir, name string, args ...string) error
 	Output   func(ctx context.Context, dir, name string, args ...string) (string, error)
 	Sleep    func(time.Duration)
 	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
+	Plugin   []byte                                   // gzipped session-manager-plugin; nil = the copy embedded in this binary
+	Home     string                                   // where the stacks and the persistent stack's state live; "" = AppDir()
+	Config   *Config                                  // crucible.yaml; nil = no file, every value from flags
+	Endpoint string                                   // tests only: every AWS service at this URL
 	Log      io.Writer
 	Now      func() time.Time // nil = time.Now
 }
@@ -60,8 +65,6 @@ func Default(root string) Ops {
 }
 
 var subnetID = regexp.MustCompile(`^subnet-[0-9a-f]+$`)
-
-func (o Ops) dir(stack string) string { return filepath.Join(o.Root, "deploy", "aws", stack) }
 
 func (o Ops) outputs(ctx context.Context, stack string) (map[string]string, error) {
 	raw, err := o.Output(ctx, o.Root, "terraform", "-chdir="+o.dir(stack), "output", "-json")
@@ -100,6 +103,12 @@ type InitOpts struct {
 }
 
 func (o Ops) Init(ctx context.Context, in InitOpts) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	d := o.dir("persistent")
 	if err := o.Exec(ctx, o.Root, "terraform", "-chdir="+d, "init"); err != nil {
 		return err
@@ -133,8 +142,7 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 		return errors.New("--subnet-id is only for --access ssm: public uses the default VPC")
 	}
 	if access == "ssm" { // read-only: a typo fails here, not halfway through up
-		if _, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-subnets", "--subnet-ids", subnet, "--region", in.Region,
-			"--query", "Subnets[0].SubnetId", "--output", "text"); err != nil {
+		if _, _, err := o.AWS.In(in.Region).Subnet(ctx, subnet); err != nil {
 			return fmt.Errorf("subnet %s in %s: %w", subnet, in.Region, err)
 		}
 	}
@@ -147,7 +155,11 @@ func (o Ops) Init(ctx context.Context, in InitOpts) error {
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
 	}
-	return o.backupState(ctx, "persistent", "persistent.tfstate")
+	if err := o.backupState(ctx, "persistent", "persistent.tfstate"); err != nil {
+		return err
+	}
+	cur, _ = o.outputs(ctx, "persistent")
+	return o.publishInstall(ctx, cur)
 }
 
 // restoreState fetches a stack's backup (backupState) when this machine has no local state, so init and labs-init on
@@ -159,19 +171,21 @@ func (o Ops) restoreState(ctx context.Context, stack, suffix, key, region string
 	if _, err := os.Stat(local); !errors.Is(err, fs.ErrNotExist) {
 		return err // a local state (nil) is never replaced
 	}
-	account, err := o.Output(ctx, o.Root, "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text")
+	api := o.AWS.In(region)
+	account, err := api.Account(ctx)
 	if err != nil {
 		return fmt.Errorf("no local %s state, and looking for its backup failed: %w", stack, err)
 	}
 	bucket := "crucible-" + account + "-" + suffix
 	src := "s3://" + bucket + "/" + key
-	if _, err := o.Output(ctx, o.Root, "aws", "s3api", "head-object", "--bucket", bucket, "--key", key, "--region", region); err != nil {
-		if strings.Contains(err.Error(), "(404)") {
-			return nil
-		}
+	there, err := api.HeadObject(ctx, bucket, key)
+	if err != nil {
 		return fmt.Errorf("no local %s state, and can't tell whether %s exists (%w); fix access or copy it to %s by hand", stack, src, err, local)
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, local, "--region", region, "--only-show-errors"); err != nil {
+	if !there {
+		return nil
+	}
+	if err := api.GetObject(ctx, bucket, key, local); err != nil {
 		return fmt.Errorf("restoring %s: %w", src, err)
 	}
 	fmt.Fprintf(o.Log, "no local %s state: restored it from %s\n", stack, src)
@@ -188,7 +202,7 @@ func (o Ops) backupState(ctx context.Context, stack, key string) error {
 	}
 	src, dst := filepath.Join(o.dir(stack), "terraform.tfstate"), "s3://"+out["state_bucket"]+"/"+key
 	region := cmp.Or(out["state_region"], out["region"]) // labs names it state_region
-	if err := o.Exec(ctx, o.Root, "aws", "s3", "cp", src, dst, "--region", region, "--only-show-errors"); err != nil {
+	if err := o.AWS.In(region).PutObject(ctx, out["state_bucket"], key, src); err != nil {
 		return fmt.Errorf("applied, but backing up the state failed (%w); copy it by hand: aws s3 cp %s %s --region %s", err, src, dst, region)
 	}
 	fmt.Fprintf(o.Log, "state backed up to %s\n", dst)
@@ -213,6 +227,12 @@ func mainVars(p map[string]string) []string {
 // Up applies the main stack (snapshotting a running node first, in case the apply replaces it), then deploys.
 // noLabs turns aws labs off; without it, Up refuses to drop the lab wiring main already has.
 func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, dep DeployOpts) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	if _, err := releaseChoice(dep); err != nil {
 		return err // before anything is applied
 	}
@@ -247,12 +267,44 @@ func (o Ops) Up(ctx context.Context, varFile string, noSnapshot, noLabs bool, de
 	} else if wired != "" {
 		fmt.Fprintf(o.Log, "WARNING: --no-labs: turning aws labs off; running aws labs lose their credentials and cleanup\n")
 	}
+	// crucible.yaml is the operator's input: with no --var-file, the variables
+	// are rendered from it into the application directory. A --var-file still
+	// wins, so a developer's workflow is unchanged.
+	if varFile == "" {
+		if o.Config == nil {
+			return errors.New("no variables: write a crucible.yaml (see docs/cli.md) or pass --var-file")
+		}
+		home, err := o.home()
+		if err != nil {
+			return err
+		}
+		if varFile, err = o.Config.WriteTFVars(home, p); err != nil {
+			return err
+		}
+		fmt.Fprintf(o.Log, "variables rendered from crucible.yaml into %s\n", varFile)
+	}
 	abs, _ := filepath.Abs(varFile)
 	if err := o.Exec(ctx, o.Root, "terraform", append([]string{"-chdir=" + d, "apply", "-var-file=" + abs}, vars...)...); err != nil {
 		return err
 	}
 	m, err := o.outputs(ctx, "main")
 	if err != nil {
+		return err
+	}
+	// Everything but init, labs-init, up and teardown reads this instead of
+	// Terraform, so an operator needs neither Terraform nor a checkout. Both
+	// stacks' values go in: cognito_user_pool_id, state_bucket, local_port and
+	// subnet_id are the persistent stack's, and invite and status need them, so
+	// publishing only main's would make the documented single-up upgrade leave
+	// them empty.
+	both := map[string]string{}
+	for k, v := range p {
+		both[k] = v
+	}
+	for k, v := range m {
+		both[k] = v
+	}
+	if err := o.publishInstall(ctx, both); err != nil {
 		return err
 	}
 	if m["access"] == "ssm" {
@@ -288,6 +340,12 @@ func commaList(s string) []string {
 // new stack allows region alone. net, both fields or neither, sets the lab network; empty keeps the stack's current one.
 // settings sets the stack's on/off and choice settings by variable name (labSettings); one left out keeps the stack's current value.
 func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, settings map[string]string) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	if len(allowedRegions) > 0 && !slices.Contains(allowedRegions, region) {
 		return fmt.Errorf("the allowed regions %s must include --region %s (the lab state bucket's region)", strings.Join(allowedRegions, ","), region)
 	}
@@ -354,8 +412,7 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	if err := o.Exec(ctx, o.Root, "terraform", args...); err != nil {
 		return err
 	}
-	if on, err := o.Output(ctx, o.Root, "aws", "ec2", "get-serial-console-access-status", "--region", region,
-		"--query", "SerialConsoleAccessEnabled", "--output", "text"); err == nil && strings.TrimSpace(on) != "True" {
+	if on, err := o.AWS.In(region).SerialConsoleEnabled(ctx); err == nil && !on {
 		fmt.Fprintf(o.Log, "note: EC2 Serial Console access is off in %s, so labs can't reach a machine's GRUB or boot console. "+
 			"An account admin turns it on (account-wide): aws ec2 enable-serial-console-access --region %s\n", region, region)
 	}
@@ -463,7 +520,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 	if err != nil {
 		return err
 	}
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -478,10 +535,9 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 		return errors.New("this node was built before releases came from GHCR: run crucible aws teardown --yes, then crucible aws up")
 	}
 	// The release the node runs now, so a failed rollout can put it back ("": none recorded yet).
-	prev, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--query", "Parameter.Value", "--output", "text")
+	prev, err := o.AWS.In(m["region"]).GetParameter(ctx, releaseParam(m), false)
 	if err != nil {
-		if !strings.Contains(err.Error(), "ParameterNotFound") {
+		if !errors.Is(err, ErrParameterNotFound) {
 			return fmt.Errorf("couldn't read the node's current release: %w", err)
 		}
 		prev = ""
@@ -502,7 +558,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 		// The node still runs prev: point /<name>/release back at it, so status and the next boot agree.
 		var undo error
 		if prev == "" {
-			undo = o.Exec(ctx, o.Root, "aws", "ssm", "delete-parameter", "--region", m["region"], "--name", releaseParam(m))
+			undo = o.AWS.In(m["region"]).DeleteParameter(ctx, releaseParam(m))
 		} else {
 			undo = o.putRelease(ctx, m, prev)
 		}
@@ -519,8 +575,7 @@ func (o Ops) Deploy(ctx context.Context, in DeployOpts) error {
 }
 
 func (o Ops) putRelease(ctx context.Context, m map[string]string, version string) error {
-	return o.Exec(ctx, o.Root, "aws", "ssm", "put-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--type", "String", "--value", version, "--overwrite")
+	return o.AWS.In(m["region"]).PutParameter(ctx, releaseParam(m), version, false)
 }
 
 // buildAndPush pushes a dev build of this tree to GHCR (server image and chart) and returns its release name.
@@ -609,15 +664,15 @@ func (o Ops) ssm(ctx context.Context, m map[string]string, command string) error
 
 // ssmOut is ssm, returning the command's standard output.
 func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (string, error) {
-	params, _ := json.Marshal(map[string][]string{"commands": {command}})
+	api := o.AWS.In(m["region"])
+	params := map[string][]string{"commands": {command}}
 	var id string
 	var err error
 	for attempt := 0; attempt < 40; attempt++ { // a fresh node needs a few minutes to register with SSM
-		if id, err = o.Output(ctx, o.Root, "aws", "ssm", "send-command", "--region", m["region"], "--instance-ids", m["instance_id"],
-			"--document-name", "AWS-RunShellScript", "--parameters", string(params), "--query", "Command.CommandId", "--output", "text"); err == nil {
+		if id, err = api.SendCommand(ctx, m["instance_id"], "AWS-RunShellScript", params); err == nil {
 			break
 		}
-		if !strings.Contains(err.Error(), "InvalidInstanceId") && !strings.Contains(err.Error(), "not registered") {
+		if !errors.Is(err, ErrInstanceNotReady) {
 			return "", fmt.Errorf("ssm send-command: %w", err) // AccessDenied, ExpiredToken, …: retrying won't help
 		}
 		o.Sleep(15 * time.Second)
@@ -628,16 +683,14 @@ func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (s
 	}
 	deadline := time.Now().Add(45 * time.Minute)
 	for time.Now().Before(deadline) {
-		st, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-			"--instance-id", m["instance_id"], "--query", "Status", "--output", "text")
+		// A failed probe keeps the poll going, as it did before: this loop spans
+		// 45 minutes of a node's bootstrap and one throttle must not end a deploy.
+		st, stdout, stderr, _ := api.CommandResult(ctx, id, m["instance_id"])
 		switch st {
 		case "Success":
-			return o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-				"--instance-id", m["instance_id"], "--query", "StandardOutputContent", "--output", "text")
+			return stdout, nil
 		case "Failed", "Cancelled", "TimedOut":
-			msg, _ := o.Output(ctx, o.Root, "aws", "ssm", "get-command-invocation", "--region", m["region"], "--command-id", id,
-				"--instance-id", m["instance_id"], "--query", "StandardErrorContent", "--output", "text")
-			return "", fmt.Errorf("node command %s: %s", st, msg)
+			return "", fmt.Errorf("node command %s: %s", st, stderr)
 		}
 		o.Sleep(5 * time.Second)
 	}
@@ -645,7 +698,7 @@ func (o Ops) ssmOut(ctx context.Context, m map[string]string, command string) (s
 }
 
 func (o Ops) Snapshot(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -656,8 +709,7 @@ func (o Ops) Snapshot(ctx context.Context) error {
 }
 
 func (o Ops) state(ctx context.Context, m map[string]string) (string, error) {
-	st, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", m["region"], "--instance-ids", m["instance_id"],
-		"--query", "Reservations[0].Instances[0].State.Name", "--output", "text")
+	st, err := o.AWS.In(m["region"]).InstanceState(ctx, m["instance_id"])
 	if err != nil || st == "" {
 		return "", fmt.Errorf("cannot determine node state: %v", err)
 	}
@@ -683,7 +735,7 @@ func labsOnNode(args string) string {
 
 // SleepNode puts the AWS labs to sleep, snapshots, then stops the instance (compute billing stops; disk + IP keep costing ~$9/month).
 func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err error) {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
@@ -720,23 +772,23 @@ func (o Ops) SleepNode(ctx context.Context, noSnapshot, keepLabs bool) (err erro
 	} else {
 		fmt.Fprintln(o.Log, "WARNING: --no-snapshot: stopping without a snapshot; everything since the last backup may be LOST if the disk is lost")
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "stop-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).StopInstance(ctx, m["instance_id"]); err != nil {
 		return err
 	}
 	stopped = true
 	fmt.Fprintln(o.Log, "the forge is banked for the night 🌙")
-	return o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-stopped", "--region", m["region"], "--instance-ids", m["instance_id"])
+	return o.AWS.In(m["region"]).WaitInstance(ctx, m["instance_id"], "stopped")
 }
 
 func (o Ops) Wake(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "start-instances", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).StartInstance(ctx, m["instance_id"]); err != nil {
 		return err
 	}
-	if err := o.Exec(ctx, o.Root, "aws", "ec2", "wait", "instance-running", "--region", m["region"], "--instance-ids", m["instance_id"]); err != nil {
+	if err := o.AWS.In(m["region"]).WaitInstance(ctx, m["instance_id"], "running"); err != nil {
 		return err
 	}
 	return o.waitLive(ctx, m)
@@ -841,8 +893,7 @@ func serialTCP(region string) []string {
 }
 
 func (o Ops) printRelease(ctx context.Context, m map[string]string) {
-	rel, err := o.Output(ctx, o.Root, "aws", "ssm", "get-parameter", "--region", m["region"], "--name", releaseParam(m),
-		"--query", "Parameter.Value", "--output", "text")
+	rel, err := o.AWS.In(m["region"]).GetParameter(ctx, releaseParam(m), false)
 	if rel = strings.TrimSpace(rel); err != nil || rel == "" {
 		rel = "none chosen (run crucible aws deploy)"
 	}
@@ -850,7 +901,7 @@ func (o Ops) printRelease(ctx context.Context, m map[string]string) {
 }
 
 func (o Ops) Status(ctx context.Context) error {
-	m, err := o.outputs(ctx, "main")
+	m, err := o.installOrDiscover(ctx)
 	if err != nil {
 		return err
 	}
@@ -879,10 +930,10 @@ func (o Ops) Status(ctx context.Context) error {
 		return nil
 	}
 	r := m["region"]
-	ping, err := o.Output(ctx, o.Root, "aws", "ssm", "describe-instance-information", "--region", r,
-		"--filters", "Key=InstanceIds,Values="+m["instance_id"], "--query", "InstanceInformationList[0].PingStatus", "--output", "text")
-	if ping = strings.TrimSpace(ping); err != nil || ping == "" || ping == "None" {
-		ping = "not registered"
+	online, err := o.AWS.In(r).InstanceOnline(ctx, m["instance_id"])
+	ping := "not registered"
+	if err == nil && online {
+		ping = "Online"
 	}
 	fmt.Fprintf(o.Log, "ssm: %s\n", ping)
 	if ping != "Online" {
@@ -897,10 +948,13 @@ func (o Ops) Status(ctx context.Context) error {
 	fmt.Fprintf(o.Log, "healthz: %s\n", health)
 	var extra []string
 	note := ""
-	if p, err := o.outputs(ctx, "persistent"); err == nil && p["cognito_login_url"] != "" {
+	if p, err := o.install(ctx); err == nil && p["cognito_login_url"] != "" {
 		extra = append(extra, strings.TrimPrefix(p["cognito_login_url"], "https://"))
 	} else {
-		note = ", but not the Cognito login domain (couldn't read it)"
+		// Not a failed probe: its URL is only in the install parameter, so
+		// there was nothing to probe. Saying "couldn't read it" of the domain
+		// reads as a network problem that is not there.
+		note = " (the Cognito login domain was not checked: its URL is only in " + o.installParam() + ")"
 	}
 	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(r, extra...), serialTCP(r)))
 	switch {
@@ -918,6 +972,12 @@ func (o Ops) Status(ctx context.Context) error {
 }
 
 func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keepLabs bool) error {
+	if err := o.needTerraform(); err != nil {
+		return err
+	}
+	if err := o.materialiseAll(); err != nil {
+		return err
+	}
 	if !yes {
 		return errors.New("teardown destroys the node (buckets and snapshots are kept); re-run with --yes to confirm")
 	}
@@ -971,13 +1031,12 @@ func (o Ops) reportLeftovers(ctx context.Context) {
 	l := map[string]string{"regions": parsed.Regions.Value}
 	found := false
 	for r := range strings.SplitSeq(l["regions"], ",") {
-		out, err := o.Output(ctx, o.Root, "aws", "resourcegroupstaggingapi", "get-resources", "--region", r,
-			"--tag-filters", "Key=crucible:lab-id", "--query", "ResourceTagMappingList[].ResourceARN", "--output", "text")
+		arns, err := o.AWS.In(r).TaggedResources(ctx, "crucible:lab-id")
 		if err != nil {
 			fmt.Fprintf(o.Log, "lab leftovers in %s: not checked (%v)\n", r, err)
 			continue
 		}
-		if arns := strings.Fields(out); len(arns) > 0 {
+		if len(arns) > 0 {
 			found = true
 			fmt.Fprintf(o.Log, "still tagged crucible:lab-id in %s (delete these by hand, e.g. aws ec2 terminate-instances):\n  %s\n", r, strings.Join(arns, "\n  "))
 		}
@@ -1001,30 +1060,15 @@ func (o Ops) Invite(ctx context.Context, email, name string) error {
 	if strings.ContainsFunc(name, unicode.IsControl) || len(name) > 256 {
 		return errors.New("--name must be at most 256 characters, with no control characters")
 	}
-	p, err := o.outputs(ctx, "persistent")
+	p, err := o.install(ctx)
 	if err != nil {
 		return err
 	}
-	pool := []string{"--region", p["region"], "--user-pool-id", p["cognito_user_pool_id"], "--username", email}
-	idp := func(op string, args ...string) error {
-		return o.Exec(ctx, o.Root, "aws", append(append([]string{"cognito-idp", op}, pool...), args...)...)
-	}
-	attrs := func(kv ...string) string {
-		var a []map[string]string
-		for i := 0; i < len(kv); i += 2 {
-			a = append(a, map[string]string{"Name": kv[i], "Value": kv[i+1]})
-		}
-		b, _ := json.Marshal(a)
-		return string(b)
-	}
-	status, err := o.Output(ctx, o.Root, "aws", append(append([]string{"cognito-idp", "admin-get-user"}, pool...), "--query", "UserStatus", "--output", "text")...)
+	api, pool := o.AWS.In(p["region"]), p["cognito_user_pool_id"]
+	status, err := api.UserStatus(ctx, pool, email)
 	switch {
-	case err != nil && strings.Contains(err.Error(), "UserNotFoundException"):
-		kv := []string{"email", email, "email_verified", "true"}
-		if name != "" {
-			kv = append(kv, "name", name)
-		}
-		if err := idp("admin-create-user", "--user-attributes", attrs(kv...), "--desired-delivery-mediums", "EMAIL"); err != nil {
+	case errors.Is(err, ErrUserNotFound):
+		if err := api.CreateUser(ctx, pool, email, name); err != nil {
 			return err
 		}
 		hint := ""
@@ -1036,14 +1080,14 @@ func (o Ops) Invite(ctx context.Context, email, name string) error {
 	case err != nil:
 		return fmt.Errorf("looking up %s in the user pool: %w", email, err)
 	}
-	if err := idp("admin-update-user-attributes", "--user-attributes", attrs("email_verified", "true")); err != nil {
+	if err := api.VerifyEmail(ctx, pool, email); err != nil {
 		return err
 	}
 	if status != "FORCE_CHANGE_PASSWORD" {
 		fmt.Fprintf(o.Log, "%s already has an account (%s): marked the email verified, sent nothing\n", email, status)
 		return nil
 	}
-	if err := idp("admin-create-user", "--message-action", "RESEND", "--desired-delivery-mediums", "EMAIL"); err != nil {
+	if err := api.ResendInvite(ctx, pool, email); err != nil {
 		return err
 	}
 	fmt.Fprintf(o.Log, "%s had not signed in yet: marked the email verified and resent the invite with a new temporary password\n", email)
@@ -1062,35 +1106,27 @@ type ConnectOpts struct {
 func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 	region := in.Region
 	if region == "" {
-		region, _ = o.Output(ctx, o.Root, "aws", "configure", "get", "region") // empty when none is set
+		region = o.AWS.Region() // empty when the shared configuration sets none
 	}
 	if region == "" {
 		return errors.New("no region: pass --region (or set one with `aws configure set region …`)")
 	}
 	name := cmp.Or(in.Name, "crucible")
-	out, err := o.Output(ctx, o.Root, "aws", "ec2", "describe-instances", "--region", region,
-		"--filters", "Name=tag:Name,Values="+name, "Name=instance-state-name,Values=running",
-		"--query", "Reservations[].Instances[].[InstanceId,Tags[?Key==`crucible:public-url`]|[0].Value]", "--output", "text")
+	nodes, err := o.AWS.In(region).FindInstances(ctx, name, "running")
 	if err != nil {
 		return fmt.Errorf("finding the node: %w", err)
-	}
-	var nodes []string
-	for _, l := range strings.Split(out, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			nodes = append(nodes, l)
-		}
 	}
 	switch {
 	case len(nodes) == 0:
 		return fmt.Errorf("no running instance named %s in %s: if it's asleep, run `crucible aws wake`", name, region)
 	case len(nodes) > 1:
-		return fmt.Errorf("%d running instances are named %s in %s (%s): pass --name for the one you want", len(nodes), name, region, strings.Join(nodes, "; "))
+		ids := make([]string, len(nodes))
+		for i, n := range nodes {
+			ids[i] = n.ID
+		}
+		return fmt.Errorf("%d running instances are named %s in %s (%s): pass --name for the one you want", len(nodes), name, region, strings.Join(ids, "; "))
 	}
-	f := strings.Fields(nodes[0])
-	id, url := f[0], ""
-	if len(f) > 1 && f[1] != "None" {
-		url = f[1]
-	}
+	id, url := nodes[0].ID, nodes[0].PublicURL
 	switch {
 	case url == "":
 		return fmt.Errorf("%s has no crucible:public-url tag: run `crucible aws up` with this version of Crucible first", id)
@@ -1104,17 +1140,47 @@ func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 	if in.Port != 0 && in.Port != port {
 		return fmt.Errorf("crucible's address is %s: a different port (%d) breaks sign-in and saving, so use --port %d or leave it out", url, in.Port, port)
 	}
-	look := o.LookPath
-	if look == nil {
-		look = exec.LookPath
+	plugin, err := o.sessionPlugin()
+	if err != nil {
+		return err
 	}
-	if _, err := look("session-manager-plugin"); err != nil {
-		return errors.New("the AWS Session Manager plugin isn't installed (session-manager-plugin): " +
-			"https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html")
+
+	// The data channel's protocol — framed messages multiplexed inside one
+	// WebSocket — is implemented only by AWS's plugin, so Crucible opens the
+	// session through the SDK and hands the plugin the same six arguments the
+	// AWS CLI would. That is why connect needs no AWS CLI.
+	const document = "AWS-StartPortForwardingSession"
+	params := map[string][]string{
+		"portNumber":      {"80"},
+		"localPortNumber": {strconv.Itoa(port)},
 	}
+	sess, err := o.AWS.In(region).StartSession(ctx, id, document, params)
+	if err != nil {
+		return fmt.Errorf("opening the session: %w", err)
+	}
+	response, err := json.Marshal(map[string]string{
+		"SessionId": sess.ID, "TokenValue": sess.Token, "StreamUrl": sess.StreamURL,
+	})
+	if err != nil {
+		return err
+	}
+	request, err := json.Marshal(map[string]any{
+		"Target": id, "DocumentName": document, "Parameters": params,
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := o.Endpoint
+	if endpoint == "" {
+		endpoint = "https://ssm." + region + ".amazonaws.com"
+	}
+
 	fmt.Fprintf(o.Log, "Crucible is at %s while this runs; Ctrl-C closes it.\n", url)
-	err = o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,
-		"--document-name", "AWS-StartPortForwardingSession", "--parameters", fmt.Sprintf("portNumber=80,localPortNumber=%d", port))
+	// Argument order is the plugin's own: the StartSession response, the
+	// region, the operation, the profile (empty: it resolves credentials the
+	// same way the rest of Crucible does), the request parameters, and the
+	// endpoint.
+	err = o.Exec(ctx, o.Root, plugin, string(response), region, "StartSession", "", string(request), endpoint)
 	if ctx.Err() != nil {
 		return nil // Ctrl-C is how the tunnel is meant to close
 	}

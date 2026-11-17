@@ -33,7 +33,8 @@ const usage = `usage:
                          [--billing-export=false] [--account-public-access-block=false] [--spend-source budget|cost-explorer]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
   crucible aws deploy [--version vX.Y.Z | --build]
-  crucible aws snapshot | wake | status
+  crucible aws snapshot | wake | status | where
+  crucible aws login [--sso-start-url URL] [--sso-region REGION]
   crucible aws connect [--region REGION] [--port PORT] [--name crucible]
   crucible aws invite EMAIL [--name "Full Name"]
   crucible aws sleep [--no-snapshot] [--keep-labs]
@@ -60,7 +61,7 @@ member account (the billing export: billed spend is then off, spend is metered a
 the organization's own applies); a re-run without them keeps the current setting, =true turns one back on.
 invite adds someone to the Cognito user pool with a verified email (Crucible refuses unverified ones); run it again to
 resend an invite that has not been used yet.
-connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager plugin and your SSO login needed) and keeps it open until Ctrl-C.
+connect opens the tunnel to an --access ssm install (nothing to install: it carries the Session Manager plugin; your SSO login is all it needs) and keeps it open until Ctrl-C.
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
 the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.
@@ -136,6 +137,9 @@ func awsCmd(args []string) int {
 	}
 	fs := flag.NewFlagSet("aws "+args[0], flag.ExitOnError)
 	region := fs.String("region", "", "AWS region (init, labs-init)")
+	configPath := fs.String("config", "", "path to crucible.yaml (default: $CRUCIBLE_CONFIG, else the config directory)")
+	ssoStartURL := fs.String("sso-start-url", "", "login: the Identity Center start URL (default: aws.sso_start_url, else ~/.aws/config)")
+	ssoRegion := fs.String("sso-region", "", "login: the region Identity Center itself lives in")
 	domain := fs.String("domain", "", "public hostname, e.g. crucible.example.com (init)")
 	access := fs.String("access", "", "init: public (a domain, an Elastic IP, Let's Encrypt) or ssm (no way in; `crucible aws connect`); default: keep the current one, else public")
 	subnetID := fs.String("subnet-id", "", "init, access ssm: the existing subnet the node runs in (default: keep the current one)")
@@ -171,8 +175,13 @@ func awsCmd(args []string) int {
 	if top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output(); err == nil {
 		root = strings.TrimSpace(string(top))
 	}
+	// Only default --var-file inside a checkout. Elsewhere, leaving it empty is
+	// what makes crucible.yaml the operator's input: up renders the variables
+	// from it instead of being handed a path that does not exist.
 	if *varFile == "" {
-		*varFile = filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars")
+		if p := filepath.Join(root, "deploy", "aws", "main", "crucible.tfvars"); fileExists(p) {
+			*varFile = p
+		}
 	}
 	if *version != "" && *build {
 		fmt.Fprintln(os.Stderr, "--version and --build are exclusive")
@@ -182,14 +191,39 @@ func awsCmd(args []string) int {
 	ops := awsops.Default(root)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	cfg, cfgErr := awsops.LoadConfig(*configPath)
+	if cfgErr != nil {
+		fmt.Fprintln(os.Stderr, cfgErr)
+		return 1
+	}
+	ops.Config = cfg
+	// Where the stacks and the persistent stack's state live when there is no
+	// checkout. A checkout still wins, so a developer's workflow is unchanged.
+	if home, err := awsops.AppDir(); err == nil {
+		ops.Home = home
+	}
+	awsCfg := cfg.AWSConfig()
+	if *region != "" { // the flag wins over the file
+		awsCfg.Region = *region
+	}
+	api, apiErr := awsops.NewAWS(ctx, awsCfg)
+	if apiErr != nil {
+		fmt.Fprintln(os.Stderr, apiErr)
+		return 1
+	}
+	ops.AWS = api
 	var err error
 	switch args[0] {
 	case "init":
-		if *region == "" {
-			fmt.Fprintln(os.Stderr, "--region is required")
+		// crucible.yaml fills in what no flag gave, so a new machine needs no
+		// flags at all; a flag still wins.
+		in := awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, SubnetID: *subnetID, LocalPort: *localPort}
+		cfg.FillInit(&in.Region, &in.Domain, &in.Access, &in.SubnetID, &in.LocalPort)
+		if in.Region == "" {
+			fmt.Fprintln(os.Stderr, "--region is required (or set install.region in crucible.yaml)")
 			return 2
 		}
-		err = ops.Init(ctx, awsops.InitOpts{Region: *region, Domain: *domain, Access: *access, SubnetID: *subnetID, LocalPort: *localPort})
+		err = ops.Init(ctx, in)
 	case "labs-init":
 		if *region == "" {
 			fmt.Fprintln(os.Stderr, "--region is required")
@@ -220,7 +254,9 @@ func awsCmd(args []string) int {
 			fmt.Fprintln(os.Stderr, serr)
 			return 2
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, settings)
+		labsRegion, net := *region, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}
+		cfg.FillLabsInit(&labsRegion, &regions, &net.VPCID, &net.SubnetIDs, budgetUSD, &budgetEmails, settings)
+		err = ops.LabsInit(ctx, labsRegion, *crucibleAccount, *budgetUSD, budgetEmails, regions, net, settings)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs, dep)
 	case "deploy":
@@ -235,6 +271,17 @@ func awsCmd(args []string) int {
 		err = ops.Status(ctx)
 	case "teardown":
 		err = ops.Teardown(ctx, *varFile, *yes, *noSnapshot, *keepLabs)
+	case "where":
+		err = ops.Where()
+	case "login":
+		in := cfg.LoginOpts()
+		if *ssoStartURL != "" {
+			in.StartURL = *ssoStartURL
+		}
+		if *ssoRegion != "" {
+			in.SSORegion = *ssoRegion
+		}
+		err = ops.Login(ctx, in)
 	case "connect":
 		err = ops.Connect(ctx, awsops.ConnectOpts{Region: *region, Name: *name, Port: *port})
 	case "invite":
@@ -293,4 +340,9 @@ func shellcheck(dir string) []content.Problem {
 		return nil
 	})
 	return probs
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }

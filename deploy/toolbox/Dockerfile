@@ -7,6 +7,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd cmd
 COPY internal internal
+# internal/awsops embeds the Terraform stacks through this package; the whole
+# of cmd/crucible is built here, so it is needed even though the toolbox only
+# runs `crucible ready`.
+COPY deploy/stacks.go deploy/
+COPY deploy/aws deploy/aws
 COPY docs/user docs/user
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /crucible ./cmd/crucible

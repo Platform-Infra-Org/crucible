@@ -19,11 +19,12 @@ lists the commands and what each one is for.
 |---|---|
 | Set up AWS the first time | `crucible aws init`, (`crucible aws labs-init`), `crucible aws up` |
 | Ship a release to the node | `crucible aws deploy --version vX.Y.Z` |
-| Change a setting in `crucible.tfvars` | `crucible aws up` |
+| Change a setting in `crucible.yaml` | `crucible aws up` |
 | Stop paying for compute tonight, keeping labs | `crucible aws sleep` |
 | Start the node before the schedule | `crucible aws wake` |
 | Check the node, the release and the labs | `crucible aws status` |
 | Take a backup now | `crucible aws snapshot` |
+| See where the config, the stacks and the state live | `crucible aws where` |
 | Destroy the node (data kept in S3) | `crucible aws teardown --yes` |
 | Reach an `--access ssm` install | `crucible aws connect` |
 | Let someone sign in | `crucible aws invite EMAIL` |
@@ -32,10 +33,95 @@ lists the commands and what each one is for.
 | Run Crucible on my laptop | `crucible local up` / `down` / `status` |
 | Check a training repo | `crucible lint <dir>` / `crucible preview <dir>` |
 
+## The configuration file
+
+`crucible.yaml` holds everything an operator decides, so there are no flags to remember on a new machine. It is read
+from `$CRUCIBLE_CONFIG`, else `crucible.yaml` in the platform's configuration directory (`~/.config/crucible/` on Linux,
+`~/Library/Application Support/crucible/` on macOS); `--config FILE` overrides both. Give it mode `0600`: it holds tokens.
+
+Any value may be written `${VAR}` to take it from the environment instead; a referenced variable that is unset is an
+error naming it, never an empty token. An unknown key is an error too, so a typo cannot silently drop a setting.
+
+**An absent key keeps what is deployed.** Deleting the `labs:` block does not destroy the AWS Budget, and deleting
+`access:` does not flip the install back to public. Precedence is flag, then the file, then the deployed value, then the
+Terraform default. Removing a guardrail is done on purpose, with a flag, not by deleting lines.
+
+```yaml
+install:
+  name: crucible                 # stack name and the SSM prefix
+  region: il-central-1
+
+aws:                             # optional: leave it out to use ~/.aws/config
+  sso_start_url: https://identitycenter.amazonaws.com/ssoins-…
+  sso_region: il-central-1
+  sso_session: Platform-AWS      # when ~/.aws/config uses an [sso-session]; keys the token cache as the CLI keys it
+  account: "111122223333"        # optional: discovered at login when there is only one
+  role: Workload-Admin-PS        # optional: likewise
+
+access:                          # exactly one mode
+  mode: ssm                      # no inbound path: everyone uses `crucible aws connect`
+  subnet_id: subnet-…
+  local_port: 18080              # the same for everyone, or sign-in breaks
+# access:
+#   mode: public
+#   domain: crucible.example.com
+#   acme_email: ops@example.com
+#   route53_zone_id: Z0123456789
+
+server:
+  bootstrap_admin: you@example.com
+  ghcr_pull_token: ${GHCR_TOKEN} # classic PAT, read:packages only
+  git_credentials: https://crucible-bot:TOKEN@github.com
+  git_bot_name: Crucible Bot
+  git_bot_email: crucible-bot@example.com
+
+machine:                         # every block below here is optional
+  instance_type: t3a.xlarge
+  disk_gb: 100
+
+schedule:
+  enabled: true
+  timezone: Europe/Bucharest
+  labs_bedtime: "0 19 * * 1-5"
+  backup: "15 19 * * *"
+  sleep: "cron(30 19 ? * MON-FRI *)"
+  wake: "cron(30 7 ? * MON-FRI *)"
+
+email:                           # omit entirely for no email
+  smtp_addr: email-smtp.il-central-1.amazonaws.com:587
+  smtp_from: Crucible <crucible@example.com>
+  smtp_username: AKIA…
+  smtp_password: ${SMTP_PASSWORD}
+
+labs:                            # omit entirely to run without AWS labs
+  regions: [il-central-1]
+  vpc_id: vpc-…
+  subnet_ids: [subnet-…, subnet-…]
+  budget_usd: 200
+  budget_emails: [you@example.com]
+  billing_export: false          # our organization's SCP denies it
+  account_public_access_block: false
+
+terraform_vars:                  # anything the schema above does not name
+  k3s_version: v1.34.1+k3s1
+```
+
+The Cognito client, the public URL, the `lab_*` wiring and the sysbox checksums are deliberately absent: `up` reads
+those from the stacks. `terraform_vars` may not name a setting the schema owns, so no variable has two sources.
+
 ## AWS: `crucible aws …`
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
-`--var-file` defaults to `deploy/aws/main/crucible.tfvars`. Commands that might lose the node's disk (`up`, `sleep`,
+They call AWS through the SDK built into `crucible`, so the AWS CLI is not required at all: even `connect`,
+which drives AWS's Session Manager plugin, carries that plugin inside the binary. `crucible aws login` signs you in.
+
+**Terraform is needed by four commands only** — `init`, `labs-init`, `up` and `teardown`, the ones that create or destroy
+AWS resources. Every other command reads the install's details from `/<name>/install` in SSM, which those four publish
+after a successful apply, so a machine that only deploys and connects needs no Terraform and no checkout. `crucible`
+never downloads Terraform; install it yourself. The first command you run against an install created by an older
+release must be `crucible aws up`, which publishes that parameter.
+Operator settings come from `crucible.yaml` (above); `--var-file`, which defaults to
+`deploy/aws/main/crucible.tfvars`, stays for developers working in a checkout. Commands that might lose the node's disk (`up`, `sleep`,
 `teardown`) take a snapshot first and stop if it fails; `--no-snapshot` skips it, and everything since the last backup is
 lost if the disk goes.
 
@@ -43,6 +129,7 @@ lost if the disk goes.
 
 | Command | Purpose |
 |---|---|
+| `crucible aws login [--sso-start-url URL] [--sso-region R]` | Signs you in through IAM Identity Center: it opens your browser, you approve, and the token is cached where the AWS CLI caches it — so `aws sso login` and this are interchangeable and you are never signed in twice. With no account or role configured and exactly one of each available, it uses and names them; with several it lists them and asks you to set `aws.account` and `aws.role`. |
 | `crucible aws init --region R --domain HOST` | Creates the **persistent stack**: the Terraform state and data buckets, the Cognito user pool and the secret key that seals repository credentials. Nothing in it is ever destroyed. A re-run on another machine restores its state from the bucket. |
 | `crucible aws init --region R --access ssm --subnet-id S [--local-port 18080]` | The same, for an install with no way in from outside (no domain, Elastic IP or Let's Encrypt): everyone opens it at `http://localhost:<port>` through `crucible aws connect`. A re-run without `--access`, `--domain` or `--local-port` keeps the current ones. |
 | `crucible aws labs-init --region R [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]… [--spend-source budget|cost-explorer] [--vpc-id V --subnet-ids S1,S2]` | Run with **lab-account** credentials. Creates the **labs stack**: the role and permission boundary AWS labs run under, the regions they may use, the lab network, and the AWS Budget `crucible-labs-monthly` (always made; alert emails only with `--budget-email`). `--spend-source` picks where the monthly account limit reads the bill: the budget (default, free, every 10 minutes) or `cost-explorer` ($0.01 a call, hourly: about $0.24 on a day the node is up all day, about $7 a month around the clock or about $2.60 a month on the default weekday schedule). A re-run without a flag keeps its current value. Run `crucible aws up` afterwards to turn AWS labs on. |
@@ -56,9 +143,10 @@ lost if the disk goes.
 | `crucible aws deploy --version vX.Y.Z` | Records the release in SSM (`/<name>/release`) and runs the node's `deploy.sh`: pull chart `X.Y.Z` from GHCR, refresh the secrets from SSM and `helm upgrade --install`. If the rollout fails it points `/<name>/release` back at the old one. |
 | `crucible aws deploy --build` | Builds this tree, pushes the server image and chart to GHCR as `0.0.0-dev.g<sha>`, and deploys it. Needs your own `docker login ghcr.io` and `helm registry login ghcr.io` with a `write:packages` token. |
 | `crucible aws deploy` | Deploys this binary's own release. A binary built from source names no release, so it refuses. |
+| `crucible aws where` | Prints the configuration file, the application directory (the one thing worth backing up: it holds the persistent stack's state), each stack's directory and the Terraform in use. This is what the fourteen-resource recovery needs in order to run `terraform import` by hand. |
 | `crucible aws status` | The node's state and address, `release:`, SSM reachability, `/healthz`, the hosts the node can't reach, the bedtime, and the AWS labs by state. |
 | `crucible aws snapshot` | Runs the backup now (a `pg_dump` to the data bucket) and waits for it. |
-| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs the AWS CLI, the Session Manager plugin and your SSO login. Use Crucible's own port, or sign-in breaks. |
+| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs nothing installed: it starts the session through the SDK and runs the Session Manager plugin carried inside the binary, which it unpacks into `~/.config/crucible/bin` the first time. All it needs of you is your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
 | `crucible aws invite EMAIL [--name "Full Name"]` | Adds someone to the Cognito pool with a verified email and sends the invite. Run it again to resend an unused invite. |
 
 ### Night, morning and teardown

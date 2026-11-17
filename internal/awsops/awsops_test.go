@@ -2,8 +2,11 @@ package awsops
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +20,8 @@ type recorder struct {
 	calls     []string
 	output    func(cmd string) string
 	outErr    func(cmd string) error // optional: make an Output call fail
+	params    map[string]string      // SSM parameters this recorder has written
+	region    string                 // the signed-in region; "" in ops() means eu-west-1
 	log       bytes.Buffer
 	unhealthy bool // /healthz never answers
 	noPlugin  bool // session-manager-plugin is not installed
@@ -25,6 +30,8 @@ type recorder struct {
 func (r *recorder) ops(root string) Ops {
 	return Ops{
 		Root: root,
+		Home: root, // never the operator's real application directory
+		AWS:  &fakeAPI{r: r, region: noneAsEmpty(cmp.Or(r.region, "eu-west-1"))},
 		Exec: func(_ context.Context, _ string, name string, args ...string) error {
 			r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 			if name == "helm" && args[0] == "package" { // the chart archive lands in -d
@@ -43,8 +50,9 @@ func (r *recorder) ops(root string) Ops {
 			}
 			return r.output(cmd), nil
 		},
-		Sleep: func(time.Duration) {},
-		Log:   &r.log,
+		Sleep:  func(time.Duration) {},
+		Log:    &r.log,
+		Plugin: stubPluginGz(), // never the 13 MB copy embedded in a release build
 		LookPath: func(string) (string, error) {
 			if r.noPlugin {
 				return "", errors.New("not found")
@@ -60,10 +68,21 @@ func (r *recorder) ops(root string) Ops {
 	}
 }
 
+// noneAsEmpty lets a test model credentials that resolved to no region at all,
+// which "" cannot express because it means "use the default".
+func noneAsEmpty(region string) string {
+	if region == "none" {
+		return ""
+	}
+	return region
+}
+
 func fakeAWS(cmd string) string {
 	switch {
 	case strings.Contains(cmd, "labs output -json"): // a labs stack after its apply
 		return `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"}}`
+	case strings.Contains(cmd, "/install"): // what up publishes: the same values, flattened
+		return flattenOutputs(fakeAWS("main output -json"))
 	case strings.Contains(cmd, "output -json"):
 		return `{"instance_id":{"value":"i-123"},"region":{"value":"eu-west-1"},"data_bucket":{"value":"bkt"},"domain":{"value":"c.example.com"},"url":{"value":"https://c.example.com"},"public_ip":{"value":"203.0.113.7"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"eu-west-1_abc"}}`
 	case strings.HasPrefix(cmd, "git rev-parse"):
@@ -80,6 +99,23 @@ func fakeAWS(cmd string) string {
 		return "Online"
 	}
 	return ""
+}
+
+// flattenOutputs turns terraform's {"k":{"value":v}} into the flat JSON the
+// install parameter holds, so a test defines its install once.
+func flattenOutputs(tf string) string {
+	var out map[string]struct{ Value any }
+	if err := json.Unmarshal([]byte(tf), &out); err != nil {
+		panic(err)
+	}
+	m := map[string]string{"name": "crucible"}
+	for k, v := range out {
+		if v.Value == nil {
+			continue
+		}
+		m[k] = fmt.Sprint(v.Value)
+	}
+	return installJSON(m)
 }
 
 func indexOf(calls []string, sub string) int {
@@ -239,7 +275,7 @@ func failingRollout(prev string) *recorder {
 		return fakeAWS(cmd)
 	}
 	r.outErr = func(cmd string) error {
-		if prev == "" && strings.Contains(cmd, "ssm get-parameter") {
+		if prev == "" && strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "/crucible/release") {
 			return errors.New("exit status 254: An error occurred (ParameterNotFound) when calling the GetParameter operation")
 		}
 		return nil
@@ -449,10 +485,21 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 			return `{"instance_id":{"value":null}}`
 		}
 		return fakeAWS(cmd)
+	}, outErr: func(cmd string) error {
+		if strings.Contains(cmd, "/crucible/install") {
+			return errors.New("An error occurred (ParameterNotFound) when calling GetParameter")
+		}
+		return nil
 	}}
 	o := r.ops(t.TempDir())
-	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
+	// status now answers from the node's tags when the parameter is missing, so
+	// the demand for an `up` moves from the error to the report: it must still
+	// be said, or a thinner report reads as a healthy one.
+	if err := o.Status(context.Background()); err != nil {
 		t.Fatalf("main: %v", err)
+	}
+	if !strings.Contains(r.log.String(), "crucible aws up") {
+		t.Fatalf("status must still say the install's details are not in SSM:\n%s", r.log.String())
 	}
 	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
 		t.Fatalf("persistent: %v", err)
@@ -919,6 +966,9 @@ func TestLabsInitNeedsBothVPCAndSubnets(t *testing.T) {
 
 // fakeSSM is fakeAWS for an access = ssm install in il-central-1.
 func fakeSSM(cmd string) string {
+	if strings.Contains(cmd, "/install") {
+		return flattenOutputs(fakeSSM("output -json"))
+	}
 	if strings.Contains(cmd, "output -json") {
 		return `{"instance_id":{"value":"i-123"},"region":{"value":"il-central-1"},"data_bucket":{"value":"bkt"},"domain":{"value":""},"url":{"value":"http://localhost:18080"},"public_ip":{"value":""},"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"state_bucket":{"value":"st"},"oidc_issuer":{"value":"https://cognito-idp.il-central-1.amazonaws.com/il-central-1_abc"},"oidc_client_id":{"value":"client123"},"cognito_user_pool_id":{"value":"il-central-1_abc"}}`
 	}
@@ -977,8 +1027,10 @@ func TestSSMModeStatusReportsBlockedHosts(t *testing.T) {
 
 func TestSSMModeStatusChecksTheCognitoHost(t *testing.T) {
 	r := &recorder{output: func(cmd string) string {
-		if strings.Contains(cmd, "output -json") && strings.Contains(cmd, "persistent") {
-			return `{"state_bucket":{"value":"st"},"cognito_login_url":{"value":"https://crucible-x.auth.il-central-1.amazoncognito.com"}}`
+		if strings.Contains(cmd, "/install") {
+			return flattenOutputs(`{"state_bucket":{"value":"st"},"cognito_login_url":{"value":"https://crucible-x.auth.il-central-1.amazoncognito.com"},` +
+				`"instance_id":{"value":"i-123"},"region":{"value":"il-central-1"},"url":{"value":"http://localhost:18080"},` +
+				`"access":{"value":"ssm"},"public_url":{"value":"http://localhost:18080"},"data_bucket":{"value":"bkt"}}`)
 		}
 		if strings.Contains(cmd, "StandardOutputContent") {
 			return ""
@@ -1129,23 +1181,22 @@ func TestConnectNeedsTheTag(t *testing.T) {
 
 func TestConnectNeedsThePlugin(t *testing.T) {
 	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080"), noPlugin: true}
-	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
+	o := r.ops(t.TempDir())
+	o.Plugin = []byte{} // a build from source with no embedded plugin
+	err := o.Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
 	if err == nil || !strings.Contains(err.Error(), "session-manager-plugin") || indexOf(r.calls, "start-session") >= 0 {
 		t.Fatalf("missing plugin: %v", err)
 	}
 }
 
+// Without --region, connect uses the region the credentials resolved to, which
+// is the shared configuration's when crucible.yaml names none.
 func TestConnectRegion(t *testing.T) {
-	r := &recorder{output: func(cmd string) string {
-		if strings.Contains(cmd, "configure get region") {
-			return "il-central-1"
-		}
-		return fakeNode("i-0abc\thttp://localhost:18080")(cmd)
-	}}
+	r := &recorder{region: "il-central-1", output: fakeNode("i-0abc\thttp://localhost:18080")}
 	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err != nil || indexOf(r.calls, "describe-instances --region il-central-1") < 0 {
-		t.Fatalf("region from the AWS CLI's config: %v\n%s", err, strings.Join(r.calls, "\n"))
+		t.Fatalf("region from the resolved AWS configuration: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
-	r = &recorder{output: fakeAWS} // fakeAWS answers "configure get region" with ""
+	r = &recorder{region: "none", output: fakeAWS} // "none" means the resolver found no region
 	if err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{}); err == nil || !strings.Contains(err.Error(), "--region") {
 		t.Fatalf("no region anywhere: %v", err)
 	}
@@ -1198,7 +1249,14 @@ func TestStateBackupSkippedWhenApplyFailsAndLoudWhenItFails(t *testing.T) {
 		t.Fatalf("a failed or cancelled apply copies nothing: %v\n%s", err, strings.Join(r.calls, "\n"))
 	}
 
-	r.calls, failOn = nil, "terraform.tfstate s3://" // the backup, not a restore
+	// The backup is an S3 PutObject now, not a subprocess: fail it there.
+	r.calls, failOn = nil, "never matches"
+	r.outErr = func(cmd string) error {
+		if strings.Contains(cmd, "terraform.tfstate s3://") {
+			return errors.New("exit status 1")
+		}
+		return nil
+	}
 	err := o.Init(context.Background(), InitOpts{Region: "eu-west-1", Domain: "c.example.com"})
 	if err == nil || !strings.Contains(err.Error(), "aws s3 cp") || !strings.Contains(err.Error(), "s3://st/persistent.tfstate") {
 		t.Fatalf("a failed backup must say so, with the command to run by hand: %v", err)
@@ -1360,9 +1418,15 @@ func TestInviteRefusesBadInputAndStopsOnOtherErrors(t *testing.T) {
 }
 
 func TestReleasePointerFollowsTheStackName(t *testing.T) {
+	named := func(cmd string) string {
+		return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"name":{"value":"forge"},"instance_id"`, 1)
+	}
 	r := &recorder{output: func(cmd string) string {
+		if strings.Contains(cmd, "/install") {
+			return flattenOutputs(named("main output -json"))
+		}
 		if strings.Contains(cmd, "output -json") {
-			return strings.Replace(fakeAWS(cmd), `{"instance_id"`, `{"name":{"value":"forge"},"instance_id"`, 1)
+			return named(cmd)
 		}
 		return fakeAWS(cmd)
 	}}
@@ -1431,7 +1495,8 @@ func TestReleaseChoiceRefusesSourceBuilds(t *testing.T) {
 
 func TestStatusSaysWhenNoReleaseIsChosen(t *testing.T) {
 	r := &recorder{output: fakeAWS, outErr: func(cmd string) error {
-		if strings.Contains(cmd, "ssm get-parameter") {
+		// The install is there; only the release parameter is missing.
+		if strings.Contains(cmd, "ssm get-parameter") && strings.Contains(cmd, "/release") {
 			return errors.New("ParameterNotFound")
 		}
 		return nil

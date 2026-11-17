@@ -332,21 +332,40 @@ svg .ahm { fill: var(--muted); }
   <section id="before" aria-labelledby="before-h">
     <div class="head"><span class="eyebrow">Prerequisites</span><h2 id="before-h">Before you start</h2></div>
 
-    <h3>Tools</h3>
+    <h3>What you install</h3>
+    <p>One download, and a second only if you are creating an install.</p>
+    <div class="note">
+      <p><strong>Joining an install that already exists.</strong> <code>crucible</code> for your platform. Nothing
+        else: no AWS CLI, no Session Manager plugin, no Terraform, no Go, no clone of this repository.</p>
+      <div class="cmd"><pre><code>crucible aws login
+crucible aws connect            <span class="c"># then open http://localhost:18080</span></code></pre></div>
+      <p><strong>Creating an install.</strong> Add Terraform, which the four commands that create or destroy AWS
+        resources need and nothing else does.</p>
+      <div class="cmd"><pre><code>crucible aws login
+<span class="c"># write crucible.yaml — see docs/cli.md for every key</span>
+crucible aws init --region il-central-1 --access ssm --subnet-id subnet-XXXX
+crucible aws up --version vX.Y.Z
+crucible aws invite you@example.com
+crucible aws connect</code></pre></div>
+      <p>Not covered yet: there is no Windows build, so both sequences are macOS and Linux for now. A two-account
+        install (Crucible in one account, labs in another) uses <code>labs-init</code>'s own flags and
+        <code>--var-file</code> rather than <code>crucible.yaml</code>'s single <code>aws:</code> block.</p>
+    </div>
+
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Tool</th><th scope="col">Version</th><th scope="col">Used for</th></tr></thead>
       <tbody>
-        <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>All three stacks (<code>required_version = "&gt;= 1.10"</code>).</td></tr>
-        <tr><th scope="row">AWS CLI</th><td>v2, logged in</td><td>Recording the release, running commands on the node, starting and stopping it. Terraform uses the same credentials.</td></tr>
-        <tr><th scope="row">Session Manager plugin</th><td>for the AWS CLI</td><td>For <code>aws ssm start-session</code>, a shell on the node: the AWS CLI needs it for every interactive session. Install it from AWS's <a href="https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html">Session Manager plugin page</a>; <code>session-manager-plugin --version</code> checks it.</td></tr>
+        <tr><th scope="row">Terraform</th><td>1.10 or later</td><td>Only <code>init</code>, <code>labs-init</code>, <code>up</code> and <code>teardown</code> — the four commands that create or destroy AWS resources. Every other command reads the install's details from SSM, so a machine that only deploys and connects needs no Terraform at all. <code>crucible</code> never downloads it: install it from <a href="https://developer.hashicorp.com/terraform/install">terraform.io</a>.</td></tr>
+        <tr><th scope="row">AWS CLI</th><td>not needed</td><td>Every command calls AWS through the SDK compiled into <code>crucible</code>. Sign in with <code>crucible aws login</code>; if you have the CLI anyway, <code>aws sso login</code> stays interchangeable, because both write the same token cache, and Terraform reads the same credentials.</td></tr>
+        <tr><th scope="row">Session Manager plugin</th><td>not needed</td><td>AWS publishes it only as a compiled binary, and the port-forward's data channel is in no SDK, so a release binary of <code>crucible</code> carries AWS's own plugin (Apache-2.0, its licence and notice beside it) and unpacks it into <code>~/.config/crucible/bin</code> the first time <code>connect</code> runs. A <code>crucible</code> built from source without <code>make plugins</code> falls back to a <code>session-manager-plugin</code> on your <code>PATH</code> and says so if there is none.</td></tr>
         <tr><th scope="row">Docker with buildx</th><td>any recent</td><td>Only for <code>deploy --build</code>: building the <code>linux/amd64</code> server image and pushing it to GHCR. Deploying a released version needs neither Docker nor Helm.</td></tr>
         <tr><th scope="row">Helm</th><td>3</td><td>Only for <code>deploy --build</code>: packaging and pushing the chart (<code>helm package</code>, <code>helm push</code>).</td></tr>
-        <tr><th scope="row">Go</th><td>1.26</td><td>Building the <code>crucible</code> command. The system Go may be too old. <code>make tools</code> installs the repo's pinned Go and Terraform (and kind) into <code>.local/tools</code>, checksum-verified; it's git-ignored, so a fresh clone runs it once. Then put it first on your <code>PATH</code>.</td></tr>
-        <tr><th scope="row">git</th><td>any</td><td>A clone of the Crucible repository, for the Terraform stacks. <code>deploy</code> ships a published release (or, with <code>--build</code>, your checked-out tree), not whatever the clone holds.</td></tr>
+        <tr><th scope="row">Go</th><td>not needed</td><td>Only to build <code>crucible</code> from source. Download the binary for your platform from the releases page instead. Developers working on Crucible run <code>make tools</code>, which installs the repo's pinned Go, Terraform and kind into <code>.local/tools</code>, checksum-verified.</td></tr>
+        <tr><th scope="row">git</th><td>not needed</td><td>The Terraform stacks ship inside the binary and are written to the application directory, so an operator needs no clone. Developers keep using the repository, which still wins when you run from one. <code>crucible aws where</code> prints every path.</td></tr>
       </tbody>
     </table></div>
-    <p>Run every command from the repository root. Install the command once, then type <code>crucible …</code>. If you'd rather not,
-      type <code>go run ./cmd/crucible</code> wherever this page says <code>crucible</code>.</p>
+    <p>An operator runs these from anywhere: the stacks come out of the binary and the settings out of <code>crucible.yaml</code>.
+      In a checkout the repository wins and <code>--var-file</code> still works, so a developer's workflow is unchanged.</p>
     <div class="cmd"><pre><code><span class="c"># only if you use the repo's own toolchain</span>
 make tools                     <span class="c"># once per clone; scripts/tools.sh --dry-run shows what it fetches</span>
 export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH
@@ -974,7 +993,7 @@ crucible aws deploy --version vX.Y.Z    <span class="c"># otherwise</span></code
         <dt>Cause and fix</dt><dd><ul>
           <li><b>Another port:</b> <code>crucible's address is http://localhost:18080: a different port … breaks sign-in and saving</code>. Use the port it names, or leave <code>--port</code> out.</li>
           <li><b>No tag:</b> <code>… has no crucible:public-url tag</code>. The node was built before this version; run <code>crucible aws up</code>.</li>
-          <li><b>No plugin:</b> <code>the AWS Session Manager plugin isn't installed</code>. Install <code>session-manager-plugin</code>.</li>
+          <li><b>No plugin:</b> <code>this build carries no Session Manager plugin and session-manager-plugin is not installed</code>. You are running a <code>crucible</code> built from source: use a release binary, run <code>make plugins</code> and rebuild, or install the plugin by hand.</li>
           <li><b>No node:</b> <code>no running instance named crucible</code>. If it sleeps, run <code>crucible aws wake</code>. With two nodes, pass <code>--name</code>.</li>
           <li><b>No region:</b> pass <code>--region</code>, or set one with <code>aws configure set region</code>.</li>
         </ul></dd>

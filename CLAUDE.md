@@ -29,6 +29,9 @@ writes content edits back to git as a bot. Configuration and people live in Post
 
 ## Toolchain
 
+**Developers only.** An operator installs no toolchain: they download the `crucible` binary and Terraform (for the four commands that create or destroy resources; `crucible` carries the stacks and AWS's Session Manager plugin inside it), and
+`crucible aws login` signs them in (see `docs/aws-deploy.html`).
+
 The system Go (1.20) and Terraform are too old. The repo brings its own Go 1.26 and Terraform in `.local/tools`
 (git-ignored): `make tools` installs the pinned Go, Terraform and kind there, checksum-verified, and does nothing when
 they are already there (`scripts/tools.sh --dry-run` prints what it would fetch). Prefix every shell that builds or tests:
@@ -44,6 +47,7 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | What | Command |
 |---|---|
 | Build binaries (`bin/crucible`, the only program) | `make build` |
+| Embed AWS's Session Manager plugin so a locally built `crucible aws connect` works | `make plugins` (`scripts/plugin-blobs.sh --clear` undoes it; the blobs in `internal/awsops/blobs` are committed empty and filled per platform by `scripts/release-binaries.sh`) |
 | Go checks | `gofmt -l cmd internal`, `go vet ./...`, `go test -race ./...` |
 | Cluster integration test (build tag) | `go vet -tags cluster ./internal/labs` |
 | Web | `cd web && npm test && npx tsc -b && npm run build && npm run lint` |
@@ -54,7 +58,9 @@ Docker Desktop (arm64, ~8 GiB) is required for tests (Postgres testcontainers), 
 | Deploy a release to the AWS node | `crucible aws deploy --version vX.Y.Z` (a release or prerelease from GHCR) or `--build` (pushes `0.0.0-dev.g<sha>` from this tree; needs `docker login ghcr.io` and `helm registry login ghcr.io`); a `dev` binary with neither flag refuses. `crucible aws status` shows `release:` |
 | CI (`.github/workflows`) | `checks` (every PR and main), `pr-title` (every PR), `release` (PR build; on merge: tag the merge commit, images, chart, GitHub Release with the changelog as notes; never pushes to main), `release-manual` (prerelease from any branch), `e2e` (manual). A change only to `docs/` (outside `docs/user`), root `*.md` or `.claude/` skips `checks` and `release`; `bash scripts/lint-workflows.sh` |
 | Invite someone to the AWS install's Cognito pool | `crucible aws invite EMAIL [--name "Full Name"]` (always `email_verified=true`; re-run resends an unused invite) |
-| Reach an `--access ssm` install | `crucible aws connect` (needs the AWS CLI, the Session Manager plugin and your SSO login; keeps the tunnel open until Ctrl-C) |
+| Sign in to AWS | `crucible aws login` (Identity Center device flow; writes the same token cache the AWS CLI uses, so `aws sso login` is interchangeable) |
+| Reach an `--access ssm` install | `crucible aws connect` (needs only your sign-in: it opens the session through the SDK and runs the Session Manager plugin embedded in the binary; keeps the tunnel open until Ctrl-C) |
+| See where the config, stacks and state live | `crucible aws where` |
 | Browser end-to-end, local stack | `KEYCLOAK_PORT=8082 make local-check` (port 8081 is taken on this machine) |
 | Browser end-to-end on kind (cluster + AWS dry run) | `KEYCLOAK_PORT=8082 make cluster-check` |
 | Leave either stack running afterwards | prefix with `KEEP=1` |
@@ -76,7 +82,8 @@ Local users (password = username): `trainee`, `senior`, `leader`, `admin`. App a
 - `.claude/skills/crucible-ui/` — the UI design skill (tokens, components, motion, accessibility, how to check a page)
 - `examples/` — training repos (seeded into `.local/git` by `scripts/seed-git.sh`) and `platform`, the configuration
   seed every e2e starts from (imported into Postgres by `CRUCIBLE_SEED_DIR`)
-- `deploy/compose` (local), `deploy/helm` (k3s), `deploy/aws/{persistent,main,labs}` (Terraform)
+- `deploy/compose` (local), `deploy/helm` (k3s), `deploy/aws/{persistent,main,labs}` (Terraform, embedded into the
+  binary by `deploy/stacks.go`, so an operator needs no checkout; a checkout still wins when you run from one)
 
 ## Hard rules
 

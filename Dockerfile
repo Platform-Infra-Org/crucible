@@ -13,6 +13,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
+# internal/awsops embeds the Terraform stacks through this package, so the
+# server image cannot be built without it.
+COPY deploy/stacks.go deploy/
+COPY deploy/aws/ deploy/aws/
 COPY docs/user/ docs/user/
 ARG CRUCIBLE_VERSION=dev
 ARG TARGETOS TARGETARCH

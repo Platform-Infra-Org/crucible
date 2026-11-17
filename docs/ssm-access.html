@@ -237,8 +237,9 @@ pre .c { color: var(--muted); }
       </li>
       <li>
         <h3>The plugin opens a local port</h3>
-        <p>For port forwarding, <code>session-manager-plugin</code> — a separate binary from the AWS CLI — opens a plain port on
-          your laptop and shuttles bytes between it and the tunnel.</p>
+        <p>For port forwarding, <code>session-manager-plugin</code> opens a plain port on your laptop and shuttles bytes
+          between it and the tunnel. It is AWS's own binary, carried inside <code>crucible</code> and unpacked on first
+          use, so there is nothing to install.</p>
       </li>
     </ol>
     <div class="note">
@@ -263,21 +264,14 @@ pre .c { color: var(--muted); }
     <div class="head"><span class="eyebrow">Once per person</span><h2 id="setup-h">One-time setup</h2></div>
     <ol class="steps">
       <li>
-        <h3>Install the AWS CLI v2</h3>
-        <p>Version 2 specifically; the v1 packages in most distributions will not do.</p>
-      </li>
-      <li>
-        <h3>Install <code>session-manager-plugin</code></h3>
-        <p>It is not bundled with the CLI and has its own installer per operating system. This is the step people miss.
-          <code>crucible aws connect</code> checks for it and says so if it is missing.</p>
-      </li>
-      <li>
-        <h3>Point the CLI at our Identity Center</h3>
-        <p><code>aws configure sso</code>, then pick the <code>Workload-Admin-PS</code> role.</p>
-      </li>
-      <li>
         <h3>Get the <code>crucible</code> command</h3>
-        <p>From a clone of the repository: <code>go install ./cmd/crucible</code>. It needs no Terraform state; it finds the node by its tag.</p>
+        <p>Download the binary for your platform from the releases page. It carries the Session Manager plugin and needs
+          no Terraform state; it finds the node by its tag. No AWS CLI, and nothing to install alongside it.</p>
+      </li>
+      <li>
+        <h3>Sign in to our Identity Center</h3>
+        <p><code>crucible aws login</code> opens your browser and caches the token where the AWS CLI caches it, so
+          <code>aws sso login</code> stays interchangeable if you happen to have the CLI.</p>
       </li>
     </ol>
   </section>
@@ -286,15 +280,14 @@ pre .c { color: var(--muted); }
     <div class="head"><span class="eyebrow">Every session</span><h2 id="connect-h">Connecting</h2></div>
     <p>Sign in, then run one command. It stays open while you use the app.</p>
     <div class="cmd">
-<pre><code>aws sso login --profile workload-admin-ps
-export AWS_PROFILE=workload-admin-ps
+<pre><code>crucible aws login
 crucible aws connect --region il-central-1</code></pre>
     </div>
     <p>It finds the running instance named <code>crucible</code>, reads the port from the node's <code>crucible:public-url</code> tag, and prints
       <code>Crucible is at http://localhost:18080 while this runs; Ctrl-C closes it.</code> Then it opens the tunnel. Open that address in a browser.
       Ctrl-C ends the tunnel; it exits quietly.</p>
     <ul>
-      <li><code>--region</code> falls back to your AWS CLI region. <code>--name</code> picks another node name, if two are running.</li>
+      <li><code>--region</code> falls back to the region your credentials resolved to. <code>--name</code> picks another node name, if two are running.</li>
       <li><code>--port</code> is refused unless it is the port in Crucible's address. A different port breaks sign-in and saving, so leave it out.</li>
       <li>It refuses with a message if the node has no <code>crucible:public-url</code> tag (run <code>crucible aws up</code>), if the install has a public URL (open that instead), or if the plugin is missing.</li>
     </ul>

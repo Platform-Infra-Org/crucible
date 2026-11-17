@@ -1496,12 +1496,12 @@ func TestTeardownEndsEveryLabFirst(t *testing.T) {
 }
 
 func TestTeardownRefusesAStoppedNodeUnlessKeepLabs(t *testing.T) {
-	stopped := func(cmd string) string {
+	stopped := labsOn(func(cmd string) string {
 		if strings.Contains(cmd, "describe-instances") {
 			return "stopped"
 		}
 		return fakeAWS(cmd)
-	}
+	})
 	r := &recorder{output: stopped}
 	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
 	if err == nil || !strings.Contains(err.Error(), "crucible aws wake") || indexOf(r.calls, " destroy ") >= 0 {
@@ -1639,5 +1639,72 @@ func TestLabsInitPassesAndKeepsTheSpendSource(t *testing.T) {
 	}
 	if indexOf(r.calls, "-var spend_source=cost_explorer") < 0 {
 		t.Fatalf("kept on a re-run:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+// labsOn makes the main stack wired to a labs stack (lab_role_arn set): AWS labs are on.
+func labsOn(base func(string) string) func(string) string {
+	return func(cmd string) string {
+		if strings.Contains(cmd, filepath.Join("deploy", "aws", "main")+" output -json") {
+			out := base(cmd)
+			return strings.Replace(out, "{", `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},`, 1)
+		}
+		return base(cmd)
+	}
+}
+
+// oldNode fails the stop-all the way a node running a release from before `crucible labs` does: its crucible prints usage.
+func oldNode(cmd string) error {
+	if strings.Contains(cmd, "send-command") && strings.Contains(cmd, "stop-all") {
+		return errors.New("node command Failed: usage:")
+	}
+	return nil
+}
+
+// With AWS labs off there is nothing in AWS to end: a node that can't end its labs (too old, or stopped) doesn't block
+// the teardown, and the operator is told why.
+func TestTeardownWithAWSLabsOffGoesOnWhenTheNodeCantEndLabs(t *testing.T) {
+	r := &recorder{output: fakeAWS, outErr: oldNode}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false); err != nil {
+		t.Fatalf("an old node with AWS labs off tears down: %v", err)
+	}
+	if indexOf(r.calls, " destroy -auto-approve") < 0 || !strings.Contains(r.log.String(), "AWS labs are off on this install") {
+		t.Fatalf("destroyed, and says why: %s %v", r.log.String(), r.calls)
+	}
+	r = &recorder{output: stateAWS("stopped")}
+	if err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false); err != nil || indexOf(r.calls, " destroy -auto-approve") < 0 {
+		t.Fatalf("a stopped node with AWS labs off tears down: %v", err)
+	}
+	if indexOf(r.calls, "stop-all") >= 0 {
+		t.Fatal("no lab command against a stopped node")
+	}
+}
+
+// With AWS labs on, an old node can't end them: refuse, say what it is and what to do, and never claim the kill switch
+// was turned on (the command never ran).
+func TestTeardownWithAWSLabsOnRefusesANodeTooOldToEndThem(t *testing.T) {
+	r := &recorder{output: labsOn(fakeAWS), outErr: oldNode}
+	err := r.ops(t.TempDir()).Teardown(context.Background(), "x.tfvars", true, false, false)
+	if err == nil || !strings.Contains(err.Error(), "before v0.2.0") || !strings.Contains(err.Error(), "--keep-labs") ||
+		strings.Contains(err.Error(), "kill switch stays on") || indexOf(r.calls, " destroy ") >= 0 {
+		t.Fatalf("%v %v", err, r.calls)
+	}
+}
+
+// The AWS CLI opens $PAGER when it writes to a terminal, which stalls crucible aws behind a less/vim window: every
+// command crucible aws runs gets AWS_PAGER set empty, whatever the operator's shell says.
+func TestCommandsRunWithoutAnAWSPager(t *testing.T) {
+	t.Setenv("AWS_PAGER", "less")
+	dir := t.TempDir()
+	o := Default(dir)
+	out, err := o.Output(context.Background(), dir, "sh", "-c", `printf '%s' "${AWS_PAGER-unset}"`)
+	if err != nil || out != "" {
+		t.Fatalf("Output: AWS_PAGER=%q %v", out, err)
+	}
+	if err := o.Exec(context.Background(), dir, "sh", "-c", `printf '%s' "${AWS_PAGER-unset}" > pager`); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "pager")); string(b) != "" {
+		t.Fatalf("Exec: AWS_PAGER=%q", b)
 	}
 }

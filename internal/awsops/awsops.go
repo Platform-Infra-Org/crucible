@@ -35,18 +35,26 @@ type Ops struct {
 }
 
 // Default runs real commands: Exec streams to the terminal, Output captures stdout.
+// command runs name in dir with the operator's environment, minus the AWS CLI's pager: on a terminal the CLI pipes its
+// JSON replies (put-parameter, admin-create-user, …) through $PAGER, which would stall crucible aws behind a less window.
+func command(ctx context.Context, dir, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir, cmd.Env = dir, append(os.Environ(), "AWS_PAGER=")
+	return cmd
+}
+
 func Default(root string) Ops {
 	return Ops{
 		Root: root,
 		Exec: func(ctx context.Context, dir, name string, args ...string) error {
-			cmd := exec.CommandContext(ctx, name, args...)
-			cmd.Dir, cmd.Stdout, cmd.Stderr, cmd.Stdin = dir, os.Stdout, os.Stderr, os.Stdin
+			cmd := command(ctx, dir, name, args...)
+			cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 			return cmd.Run()
 		},
 		Output: func(ctx context.Context, dir, name string, args ...string) (string, error) {
 			var stderr strings.Builder
-			cmd := exec.CommandContext(ctx, name, args...)
-			cmd.Dir, cmd.Stderr = dir, io.MultiWriter(os.Stderr, &stderr)
+			cmd := command(ctx, dir, name, args...)
+			cmd.Stderr = io.MultiWriter(os.Stderr, &stderr)
 			out, err := cmd.Output()
 			if err != nil && stderr.Len() > 0 { // callers match on the AWS error code
 				err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
@@ -925,6 +933,10 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keep
 	if err != nil {
 		return err
 	}
+	// Without a labs stack wired in, AWS labs were never on: nothing in AWS can be left behind, so a node that can't end
+	// its labs (stopped, or too old to know `crucible labs`) doesn't block the teardown.
+	awsLabs := m["lab_role_arn"] != ""
+	const labsOff = "AWS labs are off on this install, so no AWS lab is left behind; laptop and cluster labs lose their server"
 	if keepLabs {
 		fmt.Fprintln(o.Log, "WARNING: --keep-labs: running labs are left as they are; nothing will clean them up, and they keep billing")
 	} else {
@@ -932,13 +944,23 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keep
 		if err != nil {
 			return fmt.Errorf("not tearing down: %w (use --keep-labs to skip ending the labs)", err)
 		}
-		if st != "running" {
-			return fmt.Errorf("the node is %s, so it can't end its labs: wake it first (crucible aws wake), or pass --keep-labs", st)
+		err = errNodeNotRunning
+		if st == "running" {
+			_, err = o.ssmOut(ctx, m, labsOnNode("stop-all --wait 30m"))
 		}
-		if _, err := o.ssmOut(ctx, m, labsOnNode("stop-all --wait 30m")); err != nil {
+		switch {
+		case err == nil:
+			fmt.Fprintln(o.Log, "every lab has ended; the rebuilt server reopens labs when it starts")
+		case !awsLabs && (errors.Is(err, errNodeNotRunning) || predatesLabsCLI(err)):
+			fmt.Fprintf(o.Log, "the node can't end its labs (%s); %s\n", nodeCant(st, err), labsOff)
+		case errors.Is(err, errNodeNotRunning):
+			return fmt.Errorf("the node is %s, so it can't end its labs: wake it first (crucible aws wake), or pass --keep-labs", st)
+		case predatesLabsCLI(err):
+			return errors.New("the node runs a Crucible release from before v0.2.0, which can't end labs (it has no `crucible labs`), so nothing was torn down: " +
+				"end the AWS labs in the app (Forge status: pause all labs) and wait until none is running, then run `crucible aws teardown --yes --keep-labs`")
+		default:
 			return fmt.Errorf("the labs did not all end, so nothing was torn down. The kill switch stays on until the server restarts, so labs stay paused; run `crucible aws teardown --yes` again to continue (`--keep-labs` tears down anyway): %w", err)
 		}
-		fmt.Fprintln(o.Log, "every lab has ended; the rebuilt server reopens labs when it starts")
 	}
 	if err := o.snapshotFirst(ctx, m, noSnapshot, "tearing down"); err != nil {
 		return err
@@ -953,6 +975,19 @@ func (o Ops) Teardown(ctx context.Context, varFile string, yes, noSnapshot, keep
 	}
 	o.reportLeftovers(ctx)
 	return nil
+}
+
+var errNodeNotRunning = errors.New("the node isn't running")
+
+// predatesLabsCLI: the node's crucible answered `crucible labs stop-all` with its usage, so it is a release from before
+// v0.2.0 (no `crucible labs`); a current one never prints usage for that well-formed command.
+func predatesLabsCLI(err error) bool { return strings.Contains(err.Error(), "usage:") }
+
+func nodeCant(state string, err error) string {
+	if errors.Is(err, errNodeNotRunning) {
+		return "it is " + state
+	}
+	return "its release predates `crucible labs`"
 }
 
 // reportLeftovers lists anything still tagged crucible:lab-id in the lab regions, with how to remove it. It deletes

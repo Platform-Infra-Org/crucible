@@ -103,15 +103,16 @@ func (n *fakeNotifier) last(kind notify.Kind) *notify.Event {
 }
 
 type fx struct {
-	s             *Service
-	run           *fakeRunner
-	clk           *clock
-	u, other      *auth.User
-	leader, admin *auth.User
-	notes         *fakeNotifier
-	rates         FixedRates
-	plat          *config.Platform
-	sc            *scoring.Service
+	s                 *Service
+	run               *fakeRunner
+	clk               *clock
+	u, other          *auth.User
+	leader, admin     *auth.User
+	approver, manager *auth.User // a program approver and a program manager who is not one; roles set by withApproverAndManager
+	notes             *fakeNotifier
+	rates             FixedRates
+	plat              *config.Platform
+	sc                *scoring.Service
 }
 
 func setup(t *testing.T, unlock bool) *fx {

@@ -41,6 +41,8 @@ type Config struct {
 	ExportBucket, ExportPrefix, ExportName string
 	ExportRegion                           string // the export bucket's region: the labs stack's (CRUCIBLE_AWS_STATE_REGION)
 	Endpoint                               string // tests only: every service at this URL (S3 path-style)
+	SpendSource                            string // "budget" | "cost_explorer" | "": where the account's bill is read (labs stack output spend_source)
+	BudgetName                             string // the labs stack's budget (output budget_name)
 }
 
 // Client is the real lab account. Its own identity is the default credential chain: the node's instance role.
@@ -48,7 +50,15 @@ type Client struct {
 	cfg  Config
 	node aws.Config
 	ops  aws.Config
-	poll time.Duration // 0 = 5 s; tests shorten it
+	poll time.Duration    // 0 = 5 s; tests shorten it
+	now  func() time.Time // nil = time.Now; tests set it
+}
+
+func (c *Client) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
 }
 
 var _ Cloud = (*Client)(nil)

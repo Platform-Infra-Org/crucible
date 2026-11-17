@@ -68,6 +68,13 @@ function firstOpen(lab: LabView): string {
   return (lab.tasks.find((t) => t.status === 'open' || t.status === 'setup_failed') ?? lab.tasks[lab.tasks.length - 1]).id
 }
 
+// CapNote says why a waiting request needs an admin: the account's monthly limit, or a team's budget cap.
+export function CapNote({ lab }: { lab: LabView }) {
+  if (!lab.over_cap) return null
+  return <p className="warn">{lab.cap_reason === 'account' ? "Waiting for an admin: the forge's monthly spend limit is reached."
+    : 'This would pass a budget cap, so only an admin can approve it.'}</p>
+}
+
 export function LabPage() {
   const { team, training, module } = useParams()
   const modPath = `/api/programs/${team}/${training}/modules/${module}/lab`
@@ -158,7 +165,7 @@ export function LabPage() {
             Waiting for approval from {tierLabel[lab.tier]} · estimated {usd(lab.estimate_usd)}
             {lab.escalate_at && <> · moves up a tier at {new Date(lab.escalate_at).toLocaleString()}</>}
           </p>
-          {lab.over_cap && <p className="warn">This would pass a budget cap, so only an admin can approve it.</p>}
+          <CapNote lab={lab} />
           <button className="ghost" onClick={withdraw}>Withdraw request</button>
         </div>
       )}

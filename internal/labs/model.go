@@ -46,6 +46,7 @@ type Instance struct {
 	HourlyUSD, EstimateUSD                      float64
 	Tier                                        string
 	OverCap                                     bool
+	CapReason                                   string // "" | team | account: which limit OverCap passed
 	EscalateAt, DecidedAt                       *time.Time
 	DecidedBy, DecisionNote                     string
 	ExtUntil, ExtRequestedAt                    *time.Time // a pending extension (spec §8.6); nil = none

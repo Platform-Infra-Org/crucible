@@ -32,13 +32,14 @@ type Platform struct {
 }
 
 type Settings struct {
-	DefaultTheme    string               `yaml:"default_theme"`
-	CostTiers       *CostTiers           `yaml:"cost_tiers"`
-	EscalationHours float64              `yaml:"escalation_hours"` // default 4, counted inside the program's schedule
-	Schedules       map[string]*Schedule `yaml:"schedules"`
-	Smith           SmithThresholds      `yaml:"smith"` // smith rank experience thresholds; missing keys take DefaultSmith
-	Ranks           RankThresholds       `yaml:"ranks"` // sword rank thresholds; missing keys take DefaultRanks
-	Quotes          []string             `yaml:"-"`
+	DefaultTheme           string               `yaml:"default_theme"`
+	CostTiers              *CostTiers           `yaml:"cost_tiers"`
+	EscalationHours        float64              `yaml:"escalation_hours"`          // default 4, counted inside the program's schedule
+	AccountMonthlyLimitUSD float64              `yaml:"account_monthly_limit_usd"` // the AWS account's bill this month past which paid labs need an admin; 0 = none
+	Schedules              map[string]*Schedule `yaml:"schedules"`
+	Smith                  SmithThresholds      `yaml:"smith"` // smith rank experience thresholds; missing keys take DefaultSmith
+	Ranks                  RankThresholds       `yaml:"ranks"` // sword rank thresholds; missing keys take DefaultRanks
+	Quotes                 []string             `yaml:"-"`
 }
 
 // CostTiers routes lab requests by estimate (spec §9.1). There are no built-in defaults: platform.yaml must set them.
@@ -520,6 +521,9 @@ func Load(dir string) (*Platform, error) {
 	}
 	if p.Settings.EscalationHours < 0 {
 		errs = append(errs, errors.New("platform.yaml: escalation_hours must be positive"))
+	}
+	if v := p.Settings.AccountMonthlyLimitUSD; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		errs = append(errs, errors.New("platform.yaml: account_monthly_limit_usd must be 0 or more"))
 	}
 	if raw, _ := os.ReadFile(filepath.Join(dir, "platform.yaml")); len(raw) > 0 {
 		var top map[string]yaml.Node // a present-but-empty ranks list is a mistake, not "use the defaults"

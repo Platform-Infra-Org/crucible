@@ -46,7 +46,7 @@ type table struct {
 }
 
 var exportTables = []table{
-	{name: "settings", defaults: `'{"smith_apprentice":150,"smith_journeyman":500,"smith_smith":1200,"smith_master":2500,"smith_grandmaster":5000}'`},
+	{name: "settings", defaults: `'{"smith_apprentice":150,"smith_journeyman":500,"smith_smith":1200,"smith_master":2500,"smith_grandmaster":5000,"account_monthly_limit_usd":0}'`},
 	{name: "schedules"}, {name: "quotes"}, {name: "admins"}, {name: "repositories"}, {name: "trainings"},
 	{name: "teams"}, {name: "team_members"}, {name: "team_webhooks"}, {name: "team_budgets"},
 	{name: "programs"}, {name: "training_roles"},

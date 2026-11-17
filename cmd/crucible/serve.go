@@ -309,7 +309,7 @@ func run(ctx context.Context) error {
 	}
 	labSvc := &labs.Service{Notify: notifySvc, DB: pool, Learn: learnSvc, Runners: runners, Estimators: estimators,
 		Now: time.Now, Log: slog.Default(), Cloud: cloud, NoBillingExport: noBillingExport(os.Getenv("CRUCIBLE_AWS_LABS"), os.Getenv), AWSRegions: awsRegions, Kube: kube, Prices: priceStore, PriceFetch: priceFetch,
-		NodeStorage: os.Getenv("CRUCIBLE_NODE_STORAGE")}
+		NodeStorage: os.Getenv("CRUCIBLE_NODE_STORAGE"), SpendSource: os.Getenv("CRUCIBLE_AWS_SPEND_SOURCE")}
 	var blobs blob.Store = blob.Disk{Dir: filepath.Join(env("CRUCIBLE_DATA_DIR", "/data"), "blobs")}
 	if bucket := os.Getenv("CRUCIBLE_BLOB_BUCKET"); bucket != "" {
 		s3store, err := blob.NewS3(ctx, bucket, os.Getenv("CRUCIBLE_BLOB_REGION"), os.Getenv("CRUCIBLE_BLOB_ENDPOINT"))
@@ -334,6 +334,7 @@ func run(ctx context.Context) error {
 	river.AddWorker(workers, &labs.BudgetWorker{S: labSvc})
 	river.AddWorker(workers, &labs.ReapWorker{S: labSvc})
 	river.AddWorker(workers, &labs.CostWorker{S: labSvc})
+	river.AddWorker(workers, &labs.AccountSpendWorker{S: labSvc})
 	river.AddWorker(workers, &labs.PriceWorker{S: labSvc})
 	river.AddWorker(workers, &notify.EmailWorker{S: notifySvc})
 	river.AddWorker(workers, &notify.WebhookWorker{S: notifySvc})
@@ -426,6 +427,7 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 	newCloud func(context.Context, awscloud.Config) (awscloud.Cloud, error), prices func(context.Context) (pricing.Lookup, error)) (labs.Estimator, *pricing.Fetcher, error) {
 	if mode == "dryrun" {
 		fake := &awscloud.Fake{}
+		fake.SetAccountSpend(12.34) // the Ledger's account line has a figure in a dry run
 		ar.Cloud, ar.DryRun = fake, fake
 		slog.Warn("CRUCIBLE_AWS_LABS=dryrun: aws labs run without AWS (terraform pods only unpack the module; a fake lab account stands in) " +
 			"and are priced from CRUCIBLE_DEV_LAB_USD_PER_HOUR. Development only")
@@ -446,7 +448,8 @@ func awsSetup(ctx context.Context, mode string, ar *labs.AWSRunner, rates labs.E
 	}
 	c, err := newCloud(ctx, awscloud.Config{LabRoleARN: getenv("CRUCIBLE_AWS_LAB_ROLE_ARN"), OpsRoleARN: getenv("CRUCIBLE_AWS_OPS_ROLE_ARN"),
 		PlanRoleARN: getenv("CRUCIBLE_AWS_PLAN_ROLE_ARN"), ExportBucket: getenv("CRUCIBLE_AWS_EXPORT_BUCKET"), ExportPrefix: prefix,
-		ExportName: getenv("CRUCIBLE_AWS_EXPORT_NAME"), ExportRegion: ar.StateRegion}) // the labs stack keeps both buckets in its region
+		ExportName: getenv("CRUCIBLE_AWS_EXPORT_NAME"), ExportRegion: ar.StateRegion,
+		SpendSource: getenv("CRUCIBLE_AWS_SPEND_SOURCE"), BudgetName: getenv("CRUCIBLE_AWS_BUDGET_NAME")}) // the labs stack keeps both buckets in its region
 	if err != nil {
 		return nil, nil, fmt.Errorf("aws labs: %w", err)
 	}
@@ -478,6 +481,7 @@ var (
 // End (tagging and CloudTrail lookups are free); billed-spend ingestion stays at 6 h; list prices refresh weekly.
 func periodicJobs() []jobs.Periodic {
 	return []jobs.Periodic{{Every: 15 * time.Second, Args: labs.SweepArgs{}}, {Every: 5 * time.Minute, Args: labs.BudgetArgs{}},
+		{Every: 10 * time.Minute, Args: labs.AccountSpendArgs{}},
 		{Every: time.Hour, Args: labs.ReapArgs{}}, {Every: 6 * time.Hour, Args: labs.CostArgs{}},
 		{Every: 7 * 24 * time.Hour, Args: labs.PriceArgs{}}}
 }

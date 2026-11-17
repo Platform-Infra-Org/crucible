@@ -33,6 +33,25 @@ func (c Checker) IsAdmin(email string) bool {
 	return slices.Contains(c.P.Admins, strings.ToLower(email))
 }
 
+// IsApprover: anyone who can decide a lab request somewhere (admins, team leaders, program approvers).
+func (c Checker) IsApprover(email string) bool {
+	if c.IsAdmin(email) {
+		return true
+	}
+	email = strings.ToLower(email)
+	for _, t := range c.P.Teams {
+		if slices.Contains(t.Leaders, email) {
+			return true
+		}
+		for _, p := range t.Programs {
+			if slices.Contains(p.Roles.Approvers, email) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c Checker) Can(actor string, a Action, team, training, subject string) bool {
 	actor, subject = strings.ToLower(actor), strings.ToLower(subject)
 

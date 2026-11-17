@@ -676,6 +676,9 @@ nc -z -w 3 &lt;the node's private IP&gt; 22; echo $?</code></pre></div>
           <li class="item" data-id="mo-extend"><label><input type="checkbox" id="c-mo-extend"><span class="t">Extensions that cost more</span></label>
             <div class="body"><p>In a running priced lab, <b>Extend</b> past what the current tier allows.</p>
               <p class="expect"><b>Expect</b><i>Extension pending</i> on the timer and an <b>Extension:</b> request in the approvals queue; the lab keeps running meanwhile.</p></div></li>
+          <li class="item" data-id="mo-account-limit"><label><input type="checkbox" id="c-mo-account-limit"><span class="t">Account limit</span></label>
+            <div class="body"><p>As admin, set <b>Monthly account limit (USD)</b> under Forge settings to a low figure, then request a paid lab as a trainee. Open the Ledger, drag the green marker and watch the total change.</p>
+              <p class="expect"><b>Expect</b>the request waits for an admin (<i>Would pass the account's monthly limit</i> in Approvals; <i>Waiting for an admin: the forge's monthly spend limit is reached</i> for the trainee); the Ledger's account line adds up billed + not yet billed + reserved, and the total moves with the marker.</p></div></li>
           <li class="item" data-id="mo-budget"><label><input type="checkbox" id="c-mo-budget"><span class="t">Budgets and caps</span></label>
             <div class="body"><p>Set a team budget a little above current spend, run a priced lab past 80%, then to the cap.</p>
               <p class="expect"><b>Expect</b>an alert at 80% and at the cap; a lab ends when its cost would reach the cap; the timer says which limit ends it.</p></div></li>

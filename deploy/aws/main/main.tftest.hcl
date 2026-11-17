@@ -197,10 +197,12 @@ run "aws_labs_wiring" {
     lab_export_bucket = "crucible-444455556666-exports"
     lab_export_prefix = "cur"
     lab_export_name   = "crucible-labs"
+    lab_spend_source  = "budget"
+    lab_budget_name   = "crucible-labs-monthly"
   }
 
   assert {
-    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "", instanceProfile = "", subnetCidrs = "" }
+    condition     = yamldecode(aws_ssm_parameter.helm_values.value).awsLabs == { enabled = true, labRoleArn = "arn:aws:iam::444455556666:role/crucible-lab", opsRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-ops", stateBucket = "crucible-444455556666-labstate", stateRegion = "eu-west-1", regions = "eu-west-1", planRoleArn = "arn:aws:iam::444455556666:role/crucible-lab-plan", exportBucket = "crucible-444455556666-exports", exportPrefix = "cur", exportName = "crucible-labs", vpcId = "", subnetIds = "", instanceProfile = "", subnetCidrs = "", spendSource = "budget", budgetName = "crucible-labs-monthly" }
     error_message = "helm values carry the labs stack outputs"
   }
   assert {

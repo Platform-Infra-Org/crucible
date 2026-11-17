@@ -10,7 +10,7 @@ let admins = ['a@x']
 vi.mock('../useFetch', () => ({
   useFetch: (path: string) => {
     const data: Record<string, unknown> = {
-      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, escalation_hours: 4, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 }, smith: { apprentice: 150, journeyman: 500, smith: 1200, master_smith: 2500, grandmaster: 5000 } },
+      '/api/admin/settings': { version: 1, default_theme: 'forge', cost_tiers: tiers, escalation_hours: 4, account_monthly_limit_usd: 600, ranks: { ingot: 20, tempered: 45, blade: 75, sword: 90, masterwork: 100 }, smith: { apprentice: 150, journeyman: 500, smith: 1200, master_smith: 2500, grandmaster: 5000 } },
       '/api/admin/admins': { admins },
       '/api/admin/platform': { schedules: {}, programs: [{ team: 't', training: 'forge-101' }, { team: 'u', training: 'forge-101' }] },
       '/api/meta': { quotes: [] },
@@ -78,4 +78,10 @@ test('a 409 offers a reload', () => {
   const h = renderToStaticMarkup(<Conflict onReload={() => {}} message="Someone changed this, reload to see the latest." />)
   expect(h).toContain('Someone changed this, reload')
   expect(h).toContain('Reload')
+})
+
+test('the monthly account limit shows its saved value and says what it is', () => {
+  const h = page()
+  expect(h).toMatch(/Monthly account limit \(USD\) <input type="number" min="0" step="0.01"[^>]*value="600"/)
+  expect(h).toContain("The AWS account&#x27;s whole bill this month, as AWS reports it. Past it, new paid labs need an admin.")
 })

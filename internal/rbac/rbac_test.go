@@ -251,3 +251,15 @@ func TestManagingComesFromBeingNamed(t *testing.T) {
 		}
 	}
 }
+
+func TestIsApprover(t *testing.T) {
+	p := &config.Platform{Admins: []string{"admin@x"}, Teams: map[string]*config.Team{"t": {
+		Leaders:  []string{"lead@x"},
+		Programs: map[string]*config.Program{"p": {Roles: config.Roles{Approvers: []string{"appr@x"}, Manager: []string{"mgr@x"}}}}}}}
+	c := Checker{P: p}
+	for email, want := range map[string]bool{"admin@x": true, "ADMIN@x": true, "lead@x": true, "appr@x": true, "Appr@x": true, "mgr@x": false, "trainee@x": false} {
+		if got := c.IsApprover(email); got != want {
+			t.Errorf("%s: got %v want %v", email, got, want)
+		}
+	}
+}

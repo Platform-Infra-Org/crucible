@@ -102,6 +102,7 @@ func TestRefreshQueuesUniqueJobsRateLimitedAndAudited(t *testing.T) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &CostWorker{S: f.s})
 	river.AddWorker(workers, &ReapWorker{S: f.s})
+	river.AddWorker(workers, &AccountSpendWorker{S: f.s})
 	client, err := jobs.New(f.s.DB, workers, nil, slog.Default()) // never started: insert only
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +123,11 @@ func TestRefreshQueuesUniqueJobsRateLimitedAndAudited(t *testing.T) {
 	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'finops.refresh' AND actor = 'admin@crucible.local'`).Scan(&audits)
 	if n != 2 || audits != 2 {
 		t.Fatalf("jobs stay unique while queued (got %d), both refreshes audited (got %d)", n, audits)
+	}
+	var acct int
+	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind = 'aws_account_spend'`).Scan(&acct)
+	if acct != 1 {
+		t.Fatalf("the bill is read once per 5 minutes however many refreshes: got %d", acct)
 	}
 }
 

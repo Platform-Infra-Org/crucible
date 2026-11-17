@@ -44,17 +44,18 @@ type Notifier interface {
 }
 
 type Service struct {
-	Notify     Notifier
-	DB         *pgxpool.Pool
-	Learn      *learn.Service
-	Runners    map[string]Runner
-	Kube       *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
-	Estimators map[string]Estimator // by runtime; a runtime without one cannot be requested
-	Now        func() time.Time
-	Log        *slog.Logger
-	Scoring    *scoring.Service // human review (M5); nil in tests that don't need it
-	Blobs      blob.Store       // transcripts (Task 6)
-	Cloud      awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
+	Notify      Notifier
+	DB          *pgxpool.Pool
+	Learn       *learn.Service
+	Runners     map[string]Runner
+	Kube        *ClusterRunner       // Crucible's own cluster: aws lab workspaces, and the namespaces of retired cluster labs
+	Estimators  map[string]Estimator // by runtime; a runtime without one cannot be requested
+	Now         func() time.Time
+	SpendSource string // CRUCIBLE_AWS_SPEND_SOURCE: "cost_explorer" reads hourly; "budget" every 10 minutes
+	Log         *slog.Logger
+	Scoring     *scoring.Service // human review (M5); nil in tests that don't need it
+	Blobs       blob.Store       // transcripts (Task 6)
+	Cloud       awscloud.Cloud   // the shared AWS lab account; nil when aws labs are off
 	// NoBillingExport: the lab account has no billing export (an SCP may deny it), so billed spend is never read and
 	// spend stays metered or estimated.
 	NoBillingExport bool
@@ -143,6 +144,7 @@ type View struct {
 	EstimateUSD      float64            `json:"estimate_usd"`
 	Tier             string             `json:"tier"`
 	OverCap          bool               `json:"over_cap"`
+	CapReason        string             `json:"cap_reason,omitempty"` // team | account
 	EscalateAt       *time.Time         `json:"escalate_at,omitempty"`
 	DecidedBy        string             `json:"decided_by,omitempty"`
 	DecisionNote     string             `json:"decision_note,omitempty"`
@@ -191,7 +193,7 @@ type ModuleLab struct {
 
 const instCols = `id, user_id, team, training, module, sha, runtime, state, error, created_at, ready_at, ends_at,
 	limit_reason, end_reason, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s, extended,
-	hourly_usd, estimate_usd, tier, over_cap, escalate_at, decided_by, decided_at, decision_note,
+	hourly_usd, estimate_usd, tier, over_cap, cap_reason, escalate_at, decided_by, decided_at, decision_note,
 	ext_until, ext_estimate_usd, ext_tier, ext_requested_at, cluster_context, slept_at, slept_as, woke_at, waking_since`
 
 func scanInst(row pgx.Row) (*Instance, error) {
@@ -199,7 +201,7 @@ func scanInst(row pgx.Row) (*Instance, error) {
 	var ttl, idle, warn, ext int
 	err := row.Scan(&in.ID, &in.UserID, &in.Team, &in.Training, &in.Module, &in.SHA, &in.Runtime, &in.State, &in.Error,
 		&in.CreatedAt, &in.ReadyAt, &in.EndsAt, &in.LimitReason, &in.EndReason, &in.LastActivityAt, &ttl, &idle, &warn, &ext, &in.Extended,
-		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
+		&in.HourlyUSD, &in.EstimateUSD, &in.Tier, &in.OverCap, &in.CapReason, &in.EscalateAt, &in.DecidedBy, &in.DecidedAt, &in.DecisionNote,
 		&in.ExtUntil, &in.ExtEstimateUSD, &in.ExtTier, &in.ExtRequestedAt, &in.ClusterContext,
 		&in.SleptAt, &in.SleptAs, &in.WokeAt, &in.WakingSince)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -428,7 +430,7 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
 		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
-		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SleptAs: inst.SleptAs, SleptAt: inst.SleptAt, WokeAt: inst.WokeAt, SelfReported: selfReported(inst.Runtime), Complete: true,
+		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, CapReason: inst.CapReason, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SleptAs: inst.SleptAs, SleptAt: inst.SleptAt, WokeAt: inst.WokeAt, SelfReported: selfReported(inst.Runtime), Complete: true,
 		LabReview: rv.Feedback()}
 	for _, t := range lab.Tasks {
 		tv := TaskView{ID: t.ID, Title: taskTitle(lab, t), Status: statuses[t.ID], Points: t.Points,
@@ -593,7 +595,8 @@ type quote struct {
 	HourlyUSD   float64
 	EstimateUSD float64
 	Tier        string
-	OverCap     bool   // would pass a team or program hard cap (Task 8)
+	OverCap     bool   // would pass a team or program hard cap, or the account's monthly limit
+	CapReason   string // "" | team | account
 	Blocked     string // why no request can be made right now (Tasks 7, 8); "" = it can
 }
 
@@ -626,12 +629,12 @@ func (s *Service) quote(ctx context.Context, p *config.Platform, u *auth.User, t
 		}
 	}
 	if hourly > 0 { // a free lab never costs money, so a spent budget never blocks it; over-cap routes to an admin, even after a recent approval
-		over, err := s.overCap(ctx, p, team, training, q.EstimateUSD)
+		reason, err := s.overCap(ctx, p, team, training, q.EstimateUSD)
 		if err != nil {
 			return nil, err
 		}
-		if over {
-			q.OverCap, q.Tier = true, rbac.TierAdmin
+		if reason != "" {
+			q.OverCap, q.Tier, q.CapReason = true, rbac.TierAdmin, reason
 		}
 	}
 	// Blocked precedence: kill switch, bedtime, then schedule window.
@@ -707,11 +710,11 @@ func (s *Service) recentlyApproved(ctx context.Context, userID int64, team, trai
 func (s *Service) insert(ctx context.Context, in *Instance) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO lab_instances (id, user_id, team, training, module, sha, runtime, state,
 		created_at, last_activity_at, ttl_s, idle_timeout_s, idle_warning_s, max_extension_s,
-		hourly_usd, estimate_usd, tier, over_cap, escalate_at, cluster_context)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		hourly_usd, estimate_usd, tier, over_cap, cap_reason, escalate_at, cluster_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		in.ID, in.UserID, in.Team, in.Training, in.Module, in.SHA, in.Runtime, in.State, in.CreatedAt,
 		int(in.TTL.Seconds()), int(in.IdleTimeout.Seconds()), int(in.IdleWarning.Seconds()), int(in.MaxExtension.Seconds()),
-		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.EscalateAt, in.ClusterContext)
+		in.HourlyUSD, in.EstimateUSD, in.Tier, in.OverCap, in.CapReason, in.EscalateAt, in.ClusterContext)
 	return err
 }
 
@@ -767,7 +770,7 @@ func (s *Service) Start(ctx context.Context, u *auth.User, team, training, modul
 	inst := &Instance{ID: newLabID(), UserID: u.ID, Team: team, Training: training, Module: module, SHA: sha,
 		Runtime: m.Lab.Runtime, State: Provisioning, CreatedAt: now, LastActivityAt: now,
 		TTL: q.Timing.TTL, IdleTimeout: q.Timing.IdleTimeout, IdleWarning: q.Timing.IdleWarning, MaxExtension: q.Timing.MaxExtension,
-		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap, ClusterContext: opt.Context}
+		HourlyUSD: q.HourlyUSD, EstimateUSD: q.EstimateUSD, Tier: q.Tier, OverCap: q.OverCap, CapReason: q.CapReason, ClusterContext: opt.Context}
 	if q.Tier == rbac.TierAuto {
 		if err := r.Available(inst); err != nil {
 			return nil, err
@@ -1372,9 +1375,11 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 	}
 	if st := s.Learn.State(); inst.HourlyUSD > 0 && st != nil && st.Platform != nil {
 		extra := inst.HourlyUSD * end.Sub(*inst.EndsAt).Hours()
-		if over, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, extra); err != nil {
+		if capped, err := s.overCap(ctx, st.Platform, inst.Team, inst.Training, extra); err != nil {
 			return nil, err
-		} else if over {
+		} else if capped == "account" {
+			return nil, apperr.Wrap(apperr.Conflict, "this extension would pass the account's monthly limit; ask an admin")
+		} else if capped != "" {
 			return nil, apperr.Wrap(apperr.Conflict, "this extension would pass the budget hard cap; ask an admin")
 		}
 	}
@@ -1396,9 +1401,9 @@ func (s *Service) Extend(ctx context.Context, u *auth.User, labID string) (*View
 func (s *Service) requestExtension(ctx context.Context, u *auth.User, p *config.Platform, inst *Instance, until time.Time, estimate float64) (*View, error) {
 	c := rbac.Checker{P: p}
 	tier := rbac.Tier(inst.Runtime, estimate, *p.Settings.CostTiers)
-	if over, err := s.overCap(ctx, p, inst.Team, inst.Training, estimate-inst.EstimateUSD); err != nil {
+	if capped, err := s.overCap(ctx, p, inst.Team, inst.Training, estimate-inst.EstimateUSD); err != nil {
 		return nil, err
-	} else if over {
+	} else if capped != "" {
 		tier = rbac.TierAdmin
 	}
 	tier = c.Route(tier, inst.Team, inst.Training, u.Email)
@@ -1545,6 +1550,9 @@ func (s *Service) Sweep(ctx context.Context) {
 		paused = true // escalation and expiry of pending requests wait until labs are re-enabled
 	}
 	s.bedtimeStep(ctx)
+	if _, err := s.DB.Exec(ctx, `DELETE FROM billed_marks WHERE billed_to < $1`, now.Add(-markKeep)); err != nil {
+		s.Log.Error("purging old billed marks failed", "err", err)
+	}
 	rows, err := s.DB.Query(ctx, `SELECT `+instCols+` FROM lab_instances
 		WHERE (state = 'asleep' AND ends_at <= $1)
 		   OR (state = 'waking' AND waking_since < $1 - interval '20 minutes')

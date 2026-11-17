@@ -11,6 +11,8 @@ order: 50
 **Ledger** shows in the top bar for team leaders, trainings' admins and Crucible admins. It covers this month's lab
 spend for the teams you may see:
 
+- **AWS account this month** (admins and approvers): *$X billed (as of HH:MM) + $Y not yet billed + $Z reserved by
+  running labs = $T of $L*, with a meter. Approvers see it read-only; the next section covers what the limit does.
 - **Budgets**: how much of each team's and training's budget is spent.
 - **Day by day**: spend per day.
 - **Running now** and **Labs this month**: each lab with who asked, its runtime and state, and four figures:
@@ -22,6 +24,28 @@ spend for the teams you may see:
     about a day late, and shows "(so far)" until it settles. An install whose AWS account may not have a billing export
     says so under the prices line, and Billed stays empty: spend then comes from Metered and Estimate.
 - **Top spenders**.
+
+### The account limit and the billed timeline
+
+When the account's monthly limit is set (**Administrator → Forge settings → Lab spending**), a paid lab that would pass
+it waits for an admin: Approvals says *Would pass the account's monthly limit ($X of $L): only an admin can approve
+it.*, and the trainee sees *Waiting for an admin: the forge's monthly spend limit is reached.*
+
+AWS bills a day or so late, so the line adds **not yet billed**: Crucible's own meter for the last 24 hours. Under
+**Not yet on the AWS bill · last 24 hours** a timeline decides which part of that the bill already covers. Admins:
+
+1. Open the AWS console's month-to-date cost and note the time it covers.
+2. Drag the green account marker to that time. Marks snap to clock quarter-hours; the arrow keys move one by 15 minutes.
+   A mark must be a time in the last 24 hours (*Pick a time in the last 24 hours*); a time a minute or two outside
+   it is clamped to the edge.
+3. For one lab that the account marker doesn't suit, **Set separately** gives it a marker of its own, with a ◆ by the lab's name;
+   **Follow account** takes it back. **Count all 24 h** counts the whole window as unbilled.
+
+Crucible never counts from later than its last read of the bill, wherever a marker sits: until the bill has been read
+once no mark counts, and when the last read is more than 24 hours old the timeline reaches back to it.
+
+A band marks the hours the forge was asleep. **Refresh now** also reads the bill, at most once every 5 minutes for all
+admins together. Approvers see the timeline but can't move the markers.
 
 Cluster labs run on the trainee's own cluster and cost nothing in Crucible, so they are not in the Ledger.
 

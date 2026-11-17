@@ -324,3 +324,11 @@ func TestSmithThresholdsDefaultAndValidate(t *testing.T) {
 		t.Fatalf("a billion is allowed: %v", err)
 	}
 }
+
+func TestLoadRefusesANegativeAccountLimit(t *testing.T) {
+	tiers := "cost_tiers: {auto_approve_usd: 1, tier1_usd: 5, tier2_usd: 25}\n"
+	_, err := Load(platformDir(t, map[string]string{"platform.yaml": tiers + "account_monthly_limit_usd: -5\n"}))
+	if err == nil || !strings.Contains(err.Error(), "account_monthly_limit_usd") {
+		t.Fatalf("a negative limit must be refused: %v", err)
+	}
+}

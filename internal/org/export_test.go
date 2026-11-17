@@ -261,7 +261,7 @@ func TestImportFillsColumnsAnOlderFileLacks(t *testing.T) {
 	if json.Unmarshal(file, &x) != nil || json.Unmarshal(x["tables"], &tables) != nil {
 		t.Fatal("unreadable export")
 	}
-	for _, k := range []string{"smith_apprentice", "smith_journeyman", "smith_smith", "smith_master", "smith_grandmaster"} {
+	for _, k := range []string{"smith_apprentice", "smith_journeyman", "smith_smith", "smith_master", "smith_grandmaster", "account_monthly_limit_usd"} {
 		delete(tables["settings"][0], k)
 	}
 	for _, r := range tables["sword_ranks"] {
@@ -274,12 +274,12 @@ func TestImportFillsColumnsAnOlderFileLacks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var j, g int
-	var points float64
-	if err := dst.DB.QueryRow(context.Background(), `SELECT smith_journeyman, smith_grandmaster, (SELECT points FROM sword_ranks)
-		FROM settings`).Scan(&j, &g, &points); err != nil {
+	var points, limit float64
+	if err := dst.DB.QueryRow(context.Background(), `SELECT smith_journeyman, smith_grandmaster, (SELECT points FROM sword_ranks),
+		account_monthly_limit_usd FROM settings`).Scan(&j, &g, &points, &limit); err != nil {
 		t.Fatal(err)
 	}
-	if j != 500 || g != 5000 || points != 0 {
-		t.Errorf("defaults: journeyman %d, grandmaster %d, points %v", j, g, points)
+	if j != 500 || g != 5000 || points != 0 || limit != 0 {
+		t.Errorf("defaults: journeyman %d, grandmaster %d, points %v, limit %v", j, g, points, limit)
 	}
 }

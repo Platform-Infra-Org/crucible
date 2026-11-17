@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useFetch } from '../useFetch'
-import type { Ledger, LedgerLab, Spend } from '../types'
+import type { AccountBlock, Ledger, LedgerLab, Spend } from '../types'
 import { ErrorBox } from '../components/ErrorBox'
 import { Loader } from '../components/Loader'
 import { toast } from '../lib/alerts'
 import { usd } from '../lib/money'
 import { accuracyPct, barHeights, limitOf } from '../lib/ledger'
+import { hhmm } from '../lib/billedTimeline'
+import { BilledTimeline } from '../components/BilledTimeline'
 
 function Burn({ label, s }: { label: string; s: Spend }) {
   const limit = limitOf(s)
@@ -40,9 +42,55 @@ function LabRows({ labs, testid }: { labs: LedgerLab[]; testid: string }) {
   )
 }
 
+// Account is the AWS account's whole month: the bill, Crucible's meter for what AWS has not billed yet, and what running
+// labs may still spend, against the monthly limit.
+function Account({ a, onSaved }: { a: AccountBlock; onSaved: (b: AccountBlock) => void }) {
+  const total = a.billed_usd + a.unbilled_usd + a.reserved_usd
+  const read = a.read_at ? new Date(a.read_at) : undefined
+  const asOf = !read ? ' (not read yet)'
+    : ` (as of ${read.toDateString() === new Date(a.window.to).toDateString() ? hhmm(read.getTime()) : read.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})`
+  return (
+    <>
+      <p data-testid="account-line">
+        AWS account this month: {usd(a.billed_usd)} billed{asOf} + {usd(a.unbilled_usd)} not yet billed + {usd(a.reserved_usd)} reserved by running labs
+        = {usd(total)}{a.limit_usd > 0 && ` of ${usd(a.limit_usd)}`}
+      </p>
+      {a.limit_usd > 0 && (
+        <meter className="account-meter" aria-label="AWS account spend this month" min={0} max={a.limit_usd} low={a.limit_usd * 0.8} high={a.limit_usd} optimum={0} value={total} />
+      )}
+      <p className="muted">AWS updates the bill a few times a day; reserved is what running labs may still spend.</p>
+      {(a.stale || a.error) && (
+        <p role="status" data-testid="account-status" className="error">
+          {a.stale && (a.limit_usd > 0 ? 'Out of date: new paid labs need an admin until the bill is read again.' : 'Out of date.')}
+          {a.stale && a.error && ' '}
+          {a.error && `Last error: ${a.error}`}
+        </p>
+      )}
+      <BilledTimeline w={a.window} canMark={a.can_mark} onSaved={onSaved} />
+    </>
+  )
+}
+
+// Cooldown ticks down to when the AWS bill may be read again; it says nothing once that time has come. Not a live
+// region: a tick each second would be read aloud.
+function Cooldown({ until }: { until: string }) {
+  const [now, setNow] = useState(() => Date.now())
+  const left = Math.ceil((Date.parse(until) - now) / 1000)
+  useEffect(() => {
+    if (left <= 0) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [left])
+  if (left <= 0) return null
+  return <span className="muted"> The AWS bill can be read again in {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}.</span>
+}
+
 export function LedgerPage() {
   const { data: l, error, reload } = useFetch<Ledger>('/api/ledger', 60_000)
   const [busy, setBusy] = useState(false)
+  // A mark's reply, shown until a read of the ledger made after it lands: the save reloads the ledger, which drops any
+  // read already on its way, and the reply is pinned to the ledger on screen when it came.
+  const [saved, setSaved] = useState<{ b: AccountBlock; of?: Ledger }>()
   if (error) return <ErrorBox error={error} />
   if (!l) return <Loader label="Weighing the ledger…" />
   const refresh = async () => {
@@ -58,6 +106,8 @@ export function LedgerPage() {
   }
   const bars = barHeights(l.daily)
   const acc = accuracyPct(l.accuracy)
+  if (saved && !saved.of) setSaved({ ...saved, of: l })
+  const account = saved && (!saved.of || saved.of === l) ? saved.b : l.account
   return (
     <section className="page">
       <h1>Ledger</h1>
@@ -90,7 +140,14 @@ export function LedgerPage() {
           {l.reaper_error && ` Last error: ${l.reaper_error}`}
         </p>
       )}
-      {l.can_refresh && <button onClick={refresh} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh now'}</button>}
+      {l.can_refresh && (
+        <p>
+          <button onClick={refresh} disabled={busy}>{busy ? 'Refreshing…' : 'Refresh now'}</button>
+          {account?.refresh_after && <Cooldown key={account.refresh_after} until={account.refresh_after} />}
+        </p>
+      )}
+
+      {account && <Account a={account} onSaved={(b) => { setSaved({ b }); reload() }} />}
 
       <h2>Budgets</h2>
       {l.teams.map((t) => (

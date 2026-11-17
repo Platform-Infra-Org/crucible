@@ -30,7 +30,7 @@ const usage = `usage:
   crucible preview <content-dir> [--port 8090] [--image crucible:dev] [--free]
   crucible aws init --region REGION (--domain HOSTNAME | --access ssm --subnet-id SUBNET [--local-port 18080])
   crucible aws labs-init --region REGION [--allowed-regions R1,R2] [--crucible-account ID] [--budget-usd N] [--budget-email ADDR]... [--vpc-id VPC --subnet-ids S1,S2]
-                         [--billing-export=false] [--account-public-access-block=false]
+                         [--billing-export=false] [--account-public-access-block=false] [--spend-source budget|cost-explorer]
   crucible aws up [--var-file FILE] [--no-snapshot] [--no-labs] [--version vX.Y.Z | --build]
   crucible aws deploy [--version vX.Y.Z | --build]
   crucible aws snapshot | wake | status
@@ -64,21 +64,34 @@ connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager pl
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
 the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.
+labs-init --spend-source picks where the account's monthly bill is read for the account limit: budget (default, free)
+or cost-explorer ($0.01 a call, read hourly).
 --var-file defaults to deploy/aws/main/crucible.tfvars in the repo root.
 --no-snapshot skips the safety snapshot: changes since the last backup may be lost.`
 
 func main() { os.Exit(runMain(os.Args[1:], os.Stdout, os.Stderr)) }
 
-// labSwitches maps the labs-init on/off flags that were given to the labs stack's variables; one left out keeps the
+// labSwitches maps the labs-init flags that were given to the labs stack's variables; one left out keeps the
 // stack's current setting.
-func labSwitches(fs *flag.FlagSet) map[string]bool {
-	out := map[string]bool{}
+func labSwitches(fs *flag.FlagSet) (map[string]string, error) {
+	out := map[string]string{}
+	var err error
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "billing-export" || f.Name == "account-public-access-block" {
-			out[strings.ReplaceAll(f.Name, "-", "_")] = f.Value.String() == "true"
+		switch f.Name {
+		case "billing-export", "account-public-access-block":
+			out[strings.ReplaceAll(f.Name, "-", "_")] = f.Value.String()
+		case "spend-source":
+			switch v := f.Value.String(); v {
+			case "budget":
+				out["spend_source"] = v
+			case "cost-explorer":
+				out["spend_source"] = "cost_explorer"
+			default:
+				err = fmt.Errorf("--spend-source is budget or cost-explorer, not %q", v)
+			}
 		}
 	})
-	return out
+	return out, err
 }
 
 func runMain(args []string, out, errw io.Writer) int {
@@ -139,6 +152,7 @@ func awsCmd(args []string) int {
 	noLabs := fs.Bool("no-labs", false, "up: turn aws labs off (running aws labs lose credentials and cleanup)")
 	budgetUSD := fs.Float64("budget-usd", 0, "labs-init: the lab account's monthly AWS Budget in USD (0: keep the current one, or the stack's default)")
 	allowed := fs.String("allowed-regions", "", "labs-init: comma-separated regions labs may use, including --region (default: keep the current list, or --region alone)")
+	fs.String("spend-source", "", "labs-init: where Crucible reads the account's bill: budget (an AWS Budget, free) or cost-explorer ($0.01 a call, hourly); default: keep the current one, else budget")
 	fs.Bool("billing-export", true, "labs-init: create the billing export billed spend is read from; false where an SCP denies it (default: keep the current setting)")
 	fs.Bool("account-public-access-block", true, "labs-init: block public S3 access account-wide; false where the organization already does (default: keep the current setting)")
 	version := fs.String("version", "", "up/deploy: the GHCR release to run (default: this binary's own version)")
@@ -201,7 +215,12 @@ func awsCmd(args []string) int {
 				subnets = append(subnets, s)
 			}
 		}
-		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, labSwitches(fs))
+		settings, serr := labSwitches(fs)
+		if serr != nil {
+			fmt.Fprintln(os.Stderr, serr)
+			return 2
+		}
+		err = ops.LabsInit(ctx, *region, *crucibleAccount, *budgetUSD, budgetEmails, regions, awsops.LabNet{VPCID: *vpcID, SubnetIDs: subnets}, settings)
 	case "up":
 		err = ops.Up(ctx, *varFile, *noSnapshot, *noLabs, dep)
 	case "deploy":

@@ -53,10 +53,26 @@ func TestCostExplorerIsReadAtMostHourly(t *testing.T) {
 	}
 }
 
+// Only Cost Explorer costs money per read, so only it has the shared 5-minute slot; a budget read is free and Refresh now
+// reads it every time (the 30-second guard on the button still applies).
+func TestABudgetBillHasNoRefreshCooldown(t *testing.T) {
+	ctx := context.Background()
+	f := setup(t, true)
+	f.s.Cloud, f.s.SpendSource = &awscloud.Fake{Now: f.clk.Now}, "budget"
+	for i := range 3 {
+		if ok, wait, err := f.s.claimAccountRefresh(ctx); err != nil || !ok || wait != 0 {
+			t.Fatalf("refresh %d: a budget read is free: %v %v %v", i, ok, wait, err)
+		}
+	}
+	if l, err := f.s.Ledger(ctx, f.admin); err != nil || l.Account == nil || l.Account.RefreshAfter != nil {
+		t.Fatalf("no cooldown to show: %+v %v", l, err)
+	}
+}
+
 func TestManualRefreshIsOncePerFiveMinutesForEveryone(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
-	f.s.Cloud = &awscloud.Fake{Now: f.clk.Now}
+	f.s.Cloud, f.s.SpendSource = &awscloud.Fake{Now: f.clk.Now}, "cost_explorer"
 	ok, wait, err := f.s.claimAccountRefresh(ctx)
 	if err != nil || !ok {
 		t.Fatalf("the first refresh wins: %v %v", ok, err)
@@ -587,16 +603,16 @@ func TestTheLedgerShowsTheAccountToAdminsAndApproversOnly(t *testing.T) {
 	withApproverAndManager(t, f)
 	cloud := &awscloud.Fake{Now: f.clk.Now}
 	cloud.SetAccountSpend(412.37)
-	f.s.Cloud, f.s.SpendSource = cloud, "budget"
+	f.s.Cloud, f.s.SpendSource = cloud, "cost_explorer" // the refresh slot (admin detail) exists only with Cost Explorer
 	setLimit(t, f, 600)
 	_ = f.s.ReadAccountSpend(ctx, false)
-	cloud.FailAccountSpend(errors.New("AccessDenied: budgets:ViewBudget")) // admin detail to hide: an error and a refresh slot
+	cloud.FailAccountSpend(errors.New("AccessDenied: ce:GetCostAndUsage")) // admin detail to hide: an error and a refresh slot
 	_ = f.s.ReadAccountSpend(ctx, true)
 	if ok, _, err := f.s.claimAccountRefresh(ctx); !ok || err != nil {
 		t.Fatalf("refresh: %v %v", ok, err)
 	}
 	a, err := f.s.Ledger(ctx, f.admin)
-	if err != nil || a.Account == nil || a.Account.BilledUSD != 412.37 || a.Account.LimitUSD != 600 || !a.Account.CanMark || a.Account.Source != "budget" ||
+	if err != nil || a.Account == nil || a.Account.BilledUSD != 412.37 || a.Account.LimitUSD != 600 || !a.Account.CanMark || a.Account.Source != "cost_explorer" ||
 		a.Account.Error == "" || a.Account.RefreshAfter == nil {
 		t.Fatalf("admin: %+v %v", a.Account, err)
 	}

@@ -206,7 +206,7 @@ does the same (fail closed). Admins are emailed at 80%, at 100% and when the bil
   `--budget-email`. `--spend-source=cost-explorer` needs no budget: it reads Cost Explorer hourly at $0.01 a call:
   about $0.24 on a day the node is up all day, about $7 a month around the clock or about $2.60 a month on the default
   weekday schedule. The ops role may read only that one thing (`budgets:ViewBudget` or `ce:GetCostAndUsage`). Refresh
-  now on the Ledger also reads the bill, at most once every 5 minutes.
+  now on the Ledger also reads the bill: every time with the budget (free), at most once every 5 minutes with Cost Explorer.
 - **Our account.** Step 6 needs nothing new: the budget is the default.
 
 **Verify on the account (by hand).**

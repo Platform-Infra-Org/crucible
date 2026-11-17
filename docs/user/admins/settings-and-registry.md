@@ -36,7 +36,7 @@ operator: see the operator's runbook, `docs/runbooks/aws.md`.
 
 The Ledger shows the sum as *AWS account this month*, with a timeline where you tell Crucible how much of the last 24
 hours AWS has already billed; see [The account limit and the billed timeline](/docs/leaders/ledger-and-content-versions).
-**Refresh now** on the Ledger also reads the bill, at most once every 5 minutes for all admins together.
+**Refresh now** on the Ledger also reads the bill. An AWS Budget read is free, so it reads every time; with Cost Explorer, which charges per read, it reads at most once every 5 minutes for all admins together.
 
 Also here: the **hours before a waiting request escalates**. The tiers go in as a set: give all three or none.
 

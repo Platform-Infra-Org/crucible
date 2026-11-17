@@ -369,7 +369,7 @@ func (c *Config) FillInit(region, domain, access, subnetID *string, localPort *i
 
 // FillLabsInit does the same for labs-init.
 func (c *Config) FillLabsInit(region *string, regions *[]string, vpcID *string, subnetIDs *[]string,
-	budgetUSD *float64, budgetEmails *[]string, switches map[string]bool) {
+	budgetUSD *float64, budgetEmails *[]string, settings map[string]string) {
 	if c == nil {
 		return
 	}
@@ -387,15 +387,18 @@ func (c *Config) FillLabsInit(region *string, regions *[]string, vpcID *string, 
 	if len(*budgetEmails) == 0 {
 		*budgetEmails = c.Labs.BudgetEmails
 	}
+	// labSwitches keys these by Terraform variable name (underscores) and
+	// carries them as strings, because --spend-source is a choice, not a
+	// switch. A flag given on the command line always wins over the file.
 	for name, val := range map[string]*bool{
-		"billing-export":              c.Labs.BillingExport,
-		"account-public-access-block": c.Labs.AccountPublicAccessBlock,
+		"billing_export":              c.Labs.BillingExport,
+		"account_public_access_block": c.Labs.AccountPublicAccessBlock,
 	} {
 		if val == nil {
 			continue
 		}
-		if _, given := switches[name]; !given {
-			switches[name] = *val
+		if _, given := settings[name]; !given {
+			settings[name] = strconv.FormatBool(*val)
 		}
 	}
 }

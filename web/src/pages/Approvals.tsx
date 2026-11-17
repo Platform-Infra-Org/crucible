@@ -66,7 +66,9 @@ function ApprovalCard({ a, onDone }: { a: Approval; onDone: () => void }) {
         <dd>
           {tierLabel[a.tier]}
           {a.escalate_at && <span className="muted"> · escalates {new Date(a.escalate_at).toLocaleString()}</span>}
-          {a.over_cap && <strong className="warn"> · would pass a budget cap: approving is an audited admin override</strong>}
+          {a.over_cap && <strong className="warn"> · {a.cap_reason === 'account'
+            ? `Would pass the account's monthly limit (${usd(a.account_usd ?? 0)} of ${usd(a.account_limit_usd ?? 0)}): only an admin can approve it.`
+            : 'would pass a budget cap: approving is an audited admin override'}</strong>}
         </dd>
         <dt>Team this month</dt><dd><SpendLine s={a.team_spend} /></dd>
         <dt>Program this month</dt><dd><SpendLine s={a.program_spend} /></dd>

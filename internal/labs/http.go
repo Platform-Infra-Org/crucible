@@ -26,6 +26,15 @@ func (s *Service) Routes(r chi.Router) {
 		v, err := s.KillSwitch(r.Context())
 		reply(w, v, err)
 	})
+	r.Put("/api/admin/account-spend/marks", func(w http.ResponseWriter, r *http.Request) {
+		var b MarkBody
+		if err := httpx.Read(r, &b); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		v, err := s.SetBilledMark(r.Context(), user(r), b)
+		reply(w, v, err)
+	})
 	r.Post("/api/admin/kill-switch", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Enabled bool `json:"enabled"`

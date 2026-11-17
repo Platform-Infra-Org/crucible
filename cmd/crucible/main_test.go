@@ -166,14 +166,24 @@ func TestLintWantsAnEncryptedRootForHibernation(t *testing.T) {
 
 // Only the switches given reach labs-init, so a re-run without them keeps the stack's setting.
 func TestLabSwitchesAreOnlyTheFlagsGiven(t *testing.T) {
-	fs := flag.NewFlagSet("labs-init", flag.ContinueOnError)
-	fs.Bool("billing-export", true, "")
-	fs.Bool("account-public-access-block", true, "")
-	fs.Bool("yes", false, "")
-	if err := fs.Parse([]string{"--billing-export=false", "--yes"}); err != nil {
-		t.Fatal(err)
+	parse := func(args ...string) (map[string]string, error) {
+		fs := flag.NewFlagSet("labs-init", flag.ContinueOnError)
+		fs.Bool("billing-export", true, "")
+		fs.Bool("account-public-access-block", true, "")
+		fs.Bool("yes", false, "")
+		fs.String("spend-source", "", "")
+		if err := fs.Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		return labSwitches(fs)
 	}
-	if got := labSwitches(fs); len(got) != 1 || got["billing_export"] {
-		t.Fatalf("only billing_export=false: %v", got)
+	if got, err := parse("--billing-export=false", "--yes"); err != nil || len(got) != 1 || got["billing_export"] != "false" {
+		t.Fatalf("only billing_export=false: %v %v", got, err)
+	}
+	if got, err := parse("--spend-source=cost-explorer"); err != nil || len(got) != 1 || got["spend_source"] != "cost_explorer" {
+		t.Fatalf("cost-explorer maps to cost_explorer: %v %v", got, err)
+	}
+	if _, err := parse("--spend-source=invoice"); err == nil {
+		t.Fatal("an unknown spend source is refused")
 	}
 }

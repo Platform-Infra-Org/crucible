@@ -194,6 +194,26 @@ AWS labs sleep with the platform, so a trainee's lab does not run (and bill) all
 4. An encrypted lab disk launches under the boundary: a `run-instances` with an encrypted root volume (the account's KMS key) succeeds with the lab role, and without the key it is denied.
 5. A workspace volume works under sysbox with user namespaces (`hostUsers: false`) on the real node: write a file in the workspace, delete the workspace pod (`k3s kubectl -n lab-<id> delete pod workspace`) so it is re-created on the same volume, and the file is still there and writable by the lab user.
 
+## The account limit
+
+The setting **Monthly account limit (USD)** (Administrator → Forge settings → Lab spending) caps the AWS account's real
+bill. Past it (billed + not yet billed + reserved + the request), paid labs need an admin. A bill not read for 36 hours
+does the same (fail closed). Admins are emailed at 80%, at 100% and when the bill can't be read for 36 hours, once each per month.
+
+- **Where the bill comes from.** `labs-init --spend-source=budget` (the default) reads the AWS Budget
+  `crucible-labs-monthly` every 10 minutes, free. The budget is always created now; its alert emails exist only with
+  `--budget-email`. `--spend-source=cost-explorer` needs no budget: it reads Cost Explorer hourly at $0.01 a call:
+  about $0.24 on a day the node is up all day, about $7 a month around the clock or about $2.60 a month on the default
+  weekday schedule. The ops role may read only that one thing (`budgets:ViewBudget` or `ce:GetCostAndUsage`). Refresh
+  now on the Ledger also reads the bill, at most once every 5 minutes.
+- **Our account.** Step 6 needs nothing new: the budget is the default.
+
+**Verify on the account (by hand).**
+1. `labs-init` creates the budget. If our SCP refuses it, re-run with `--spend-source=cost-explorer`.
+2. The Ledger's *billed* figure matches the console's month-to-date cost.
+3. The next AWS bill shows no charge for Budgets reads (and, with Cost Explorer, about $0.24 on a day the node is up
+   all day: about $7 a month around the clock or about $2.60 a month on the default weekday schedule).
+
 ## AWS labs (runtime: terraform, cloud: aws)
 
 AWS labs run terraform in your **lab account** with one-hour credentials scoped to a single lab (spec §8.2). A

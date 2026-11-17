@@ -783,9 +783,11 @@ smtp_password = "…"                                         <span class="c"># 
             without it keeps the current list. <code>up</code> passes the list to the node, so run <code>up</code> after changing it.</li>
           <li><code>--crucible-account</code>: the account id that runs Crucible, when it isn't this one. It becomes the stack's
             <code>crucible_account_id</code>. The lab roles then trust that account's node role.</li>
-          <li><code>--budget-usd</code> and <code>--budget-email</code> (repeat, at most 10): the alert-only AWS Budget
-            <code>crucible-labs-monthly</code>, which emails at 80% and 100% of the month's actual spend. With no email, no budget is made.
+          <li><code>--budget-usd</code> and <code>--budget-email</code> (repeat, at most 10): the AWS Budget
+            <code>crucible-labs-monthly</code>. It is always made; with emails it also alerts at 80% and 100% of the month's actual spend.
+            Crucible reads it every 10 minutes (free) as the account's bill for the monthly account limit (<code>docs/runbooks/aws.md</code>, section "The account limit").
             Without <code>--budget-usd</code> the first run uses $100. A negative amount is refused. A re-run keeps each value you leave out.</li>
+          <li><code>--spend-source=cost-explorer</code>: read the bill from Cost Explorer instead of the budget ($0.01 a call, hourly: about $0.24 on a day the node is up all day, about $7 a month around the clock or about $2.60 a month on the default weekday schedule). Use it when the SCP refuses the budget.</li>
         </ul>
         <p>It creates the lab, ops and plan roles under a permission boundary, the lab state bucket <code>crucible-&lt;account&gt;-labstate</code>,
           the export bucket <code>crucible-&lt;account&gt;-labexports</code> and the CUR 2.0 export <code>crucible-labs</code> (Data Exports live in

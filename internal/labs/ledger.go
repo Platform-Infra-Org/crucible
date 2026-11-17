@@ -89,21 +89,22 @@ type Ledger struct {
 	ActualsStale bool       `json:"actuals_stale"`
 	ActualsError string     `json:"actuals_error,omitempty"` // admins only
 	// NoBillingExport: the lab account has no billing export, so there are no billed figures at all (never "stale").
-	NoBillingExport bool         `json:"no_billing_export,omitempty"`
-	PricesAsOf      *time.Time   `json:"prices_as_of,omitempty"` // the price data aws estimates and metering use
-	PricesStale     bool         `json:"prices_stale"`           // missing or older than 30 days: aws labs can't be estimated
-	PricesError     string       `json:"prices_error,omitempty"` // admins only
-	ReapedAt        *time.Time   `json:"reaped_at,omitempty"`
-	ReaperStale     bool         `json:"reaper_stale"`           // no successful reaper run for 12 hours (or a newer failure)
-	ReaperError     string       `json:"reaper_error,omitempty"` // admins only
-	CanRefresh      bool         `json:"can_refresh"`
-	Teams           []LedgerTeam `json:"teams"`
-	Daily           []LedgerDay  `json:"daily"`
-	Running         []LedgerLab  `json:"running"`
-	Labs            []LedgerLab  `json:"labs"` // this month, most expensive first (at most 100)
-	TopSpenders     []Spender    `json:"top_spenders"`
-	Accuracy        Accuracy     `json:"accuracy"`
-	Findings        []Finding    `json:"findings,omitempty"` // admins only
+	NoBillingExport bool          `json:"no_billing_export,omitempty"`
+	PricesAsOf      *time.Time    `json:"prices_as_of,omitempty"` // the price data aws estimates and metering use
+	PricesStale     bool          `json:"prices_stale"`           // missing or older than 30 days: aws labs can't be estimated
+	PricesError     string        `json:"prices_error,omitempty"` // admins only
+	ReapedAt        *time.Time    `json:"reaped_at,omitempty"`
+	Account         *AccountBlock `json:"account,omitempty"`      // admins and approvers, with AWS labs
+	ReaperStale     bool          `json:"reaper_stale"`           // no successful reaper run for 12 hours (or a newer failure)
+	ReaperError     string        `json:"reaper_error,omitempty"` // admins only
+	CanRefresh      bool          `json:"can_refresh"`
+	Teams           []LedgerTeam  `json:"teams"`
+	Daily           []LedgerDay   `json:"daily"`
+	Running         []LedgerLab   `json:"running"`
+	Labs            []LedgerLab   `json:"labs"` // this month, most expensive first (at most 100)
+	TopSpenders     []Spender     `json:"top_spenders"`
+	Accuracy        Accuracy      `json:"accuracy"`
+	Findings        []Finding     `json:"findings,omitempty"` // admins only
 }
 
 func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
@@ -145,6 +146,9 @@ func (s *Service) Ledger(ctx context.Context, u *auth.User) (*Ledger, error) {
 		return nil, err
 	}
 	l.ActualsAsOf = ingestOK
+	if l.Account, err = s.accountBlock(ctx, u); err != nil {
+		return nil, err
+	}
 	l.NoBillingExport = l.AWS && s.NoBillingExport
 	l.ActualsStale = l.AWS && !s.NoBillingExport && (ingestOK == nil || ingestOK.Before(now.Add(-36*time.Hour)) ||
 		(ingestErrAt != nil && ingestErrAt.After(*ingestOK)))
@@ -308,6 +312,13 @@ func (s *Service) RefreshFinOps(ctx context.Context, u *auth.User) (*Ledger, err
 		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable, rivertype.JobStateScheduled}}}
 	for _, args := range []river.JobArgs{CostArgs{}, ReapArgs{}} {
 		if _, err := s.Jobs.Insert(ctx, args, once); err != nil {
+			return nil, err
+		}
+	}
+	if ok, _, err := s.claimAccountRefresh(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		if _, err := s.Jobs.Insert(ctx, AccountSpendArgs{Manual: true}, once); err != nil {
 			return nil, err
 		}
 	}

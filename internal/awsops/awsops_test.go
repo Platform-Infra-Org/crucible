@@ -577,7 +577,7 @@ func TestDefaultOutputIncludesStderrInError(t *testing.T) {
 }
 
 func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
-	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"},"lab_instance_profile":{"value":"crucible-lab-instance"},"lab_subnet_cidrs":{"value":"10.2.129.0/24,10.2.130.0/24"}}`
+	labs := `{"lab_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab"},"ops_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-ops"},"state_bucket":{"value":"crucible-444455556666-labstate"},"state_region":{"value":"eu-west-1"},"regions":{"value":"eu-west-1"},"plan_role_arn":{"value":"arn:aws:iam::444455556666:role/crucible-lab-plan"},"export_bucket":{"value":"crucible-444455556666-exports"},"export_prefix":{"value":"cur"},"export_name":{"value":"crucible-labs"},"lab_vpc_id":{"value":"vpc-1"},"lab_subnet_ids":{"value":"subnet-a,subnet-b"},"lab_instance_profile":{"value":"crucible-lab-instance"},"lab_subnet_cidrs":{"value":"10.2.129.0/24,10.2.130.0/24"},"spend_source":{"value":"budget"},"budget_name":{"value":"crucible-labs-monthly"}}`
 	r := &recorder{output: func(cmd string) string {
 		if strings.Contains(cmd, "labs output -json") {
 			return labs
@@ -598,7 +598,7 @@ func TestLabsInitAndUpWiresTheLabAccount(t *testing.T) {
 	for _, want := range []string{"-var lab_role_arn=arn:aws:iam::444455556666:role/crucible-lab", "-var lab_ops_role_arn=arn:aws:iam::444455556666:role/crucible-lab-ops",
 		"-var lab_state_bucket=crucible-444455556666-labstate", "-var lab_state_region=eu-west-1", "-var lab_regions=eu-west-1",
 		"-var lab_plan_role_arn=arn:aws:iam::444455556666:role/crucible-lab-plan", "-var lab_export_bucket=crucible-444455556666-exports",
-		"-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs", "-var lab_vpc_id=vpc-1", "-var lab_subnet_ids=subnet-a,subnet-b",
+		"-var lab_spend_source=budget", "-var lab_budget_name=crucible-labs-monthly", "-var lab_export_prefix=cur", "-var lab_export_name=crucible-labs", "-var lab_vpc_id=vpc-1", "-var lab_subnet_ids=subnet-a,subnet-b",
 		"-var lab_instance_profile=crucible-lab-instance", "-var lab_subnet_cidrs=10.2.129.0/24,10.2.130.0/24"} {
 		if indexOf(r.calls, want) < 0 {
 			t.Fatalf("missing %q in:\n%s", want, strings.Join(r.calls, "\n"))
@@ -1655,7 +1655,7 @@ func TestTeardownFailedStopAllSaysLabsStayPaused(t *testing.T) {
 // and a re-run without the flags keeps what the stack has (its outputs), as with the budget.
 func TestLabsInitTurnsOffAndKeepsTheOrgManagedPieces(t *testing.T) {
 	r := &recorder{output: fakeAWS}
-	off := map[string]bool{"billing_export": false, "account_public_access_block": false}
+	off := map[string]string{"billing_export": "false", "account_public_access_block": "false"}
 	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}, off); err != nil {
 		t.Fatal(err)
 	}
@@ -1676,10 +1676,33 @@ func TestLabsInitTurnsOffAndKeepsTheOrgManagedPieces(t *testing.T) {
 		t.Fatalf("a re-run without the flags keeps both off:\n%s", strings.Join(r.calls, "\n"))
 	}
 	r = &recorder{output: labs}
-	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}, map[string]bool{"billing_export": true}); err != nil {
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}, map[string]string{"billing_export": "true"}); err != nil {
 		t.Fatal(err)
 	}
 	if indexOf(r.calls, "-var account_public_access_block=false -var billing_export=true") < 0 {
 		t.Fatalf("a flag set again turns its piece back on and keeps the other:\n%s", strings.Join(r.calls, "\n"))
+	}
+}
+
+func TestLabsInitPassesAndKeepsTheSpendSource(t *testing.T) {
+	r := &recorder{output: fakeAWS}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}, map[string]string{"spend_source": "cost_explorer"}); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "-var spend_source=cost_explorer") < 0 {
+		t.Fatalf("passed:\n%s", strings.Join(r.calls, "\n"))
+	}
+	labs := func(cmd string) string {
+		if strings.Contains(cmd, filepath.Join("deploy", "aws", "labs")+" output -json") {
+			return `{"lab_role_arn":{"value":"arn:aws:iam::1:role/crucible-lab"},"spend_source":{"value":"cost_explorer"}}`
+		}
+		return fakeAWS(cmd)
+	}
+	r = &recorder{output: labs}
+	if err := r.ops(t.TempDir()).LabsInit(context.Background(), "il-central-1", "", 0, nil, nil, LabNet{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(r.calls, "-var spend_source=cost_explorer") < 0 {
+		t.Fatalf("kept on a re-run:\n%s", strings.Join(r.calls, "\n"))
 	}
 }

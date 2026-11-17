@@ -18,3 +18,13 @@ test('the requester carries their smith rank', () => {
   expect(h).toContain('Tara <span class="muted">t@x</span> <span class="smith-mark l3">')
   expect(h).not.toMatch(/rank #|\btop |leaderboard/i)
 })
+
+test('over the account limit, the card says by how much and that only an admin can approve', () => {
+  Object.assign(a, { over_cap: true, tier: 'admin', cap_reason: 'account', account_usd: 450.37, account_limit_usd: 600 })
+  let h = renderToStaticMarkup(<MemoryRouter><ApprovalsPage /></MemoryRouter>)
+  expect(h).toContain('Would pass the account&#x27;s monthly limit ($450.37 of $600.00): only an admin can approve it.')
+  expect(h).not.toContain('would pass a budget cap')
+  Object.assign(a, { cap_reason: 'team' })
+  h = renderToStaticMarkup(<MemoryRouter><ApprovalsPage /></MemoryRouter>)
+  expect(h).toContain('would pass a budget cap: approving is an audited admin override')
+})

@@ -18,7 +18,11 @@ type Fake struct {
 	Err            error // when set, every call fails with it (throttling, an API down…)
 	TrailTruncated bool  // LabWrites returns its events with ErrTruncated
 	costsErr       error // when set, only Costs fails (a broken billing export)
-	sleepErr       error // when set, only Sleep fails (StopInstances refused on pending machines)
+	accountUSD     float64
+	accountErr     error // when set, only AccountSpend fails
+	// AccountSpendCalls counts AccountSpend calls.
+	AccountSpendCalls int
+	sleepErr          error // when set, only Sleep fails (StopInstances refused on pending machines)
 
 	mu        sync.Mutex
 	resources map[string]fakeRes // by ARN
@@ -220,6 +224,22 @@ func (f *Fake) Delete(_ context.Context, region string, c Credentials, arn strin
 
 // FailCosts makes Costs fail with err (nil restores it): an unreadable or malformed billing export.
 func (f *Fake) FailCosts(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.costsErr = err }
+
+// SetAccountSpend sets the account's month-to-date bill AccountSpend returns.
+func (f *Fake) SetAccountSpend(usd float64) { f.mu.Lock(); defer f.mu.Unlock(); f.accountUSD = usd }
+
+// FailAccountSpend makes AccountSpend fail with err (nil restores it).
+func (f *Fake) FailAccountSpend(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.accountErr = err }
+
+func (f *Fake) AccountSpend(context.Context) (float64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.AccountSpendCalls++
+	if f.accountErr != nil {
+		return 0, f.accountErr
+	}
+	return f.accountUSD, nil
+}
 
 func (f *Fake) Costs(_ context.Context, from, to time.Time) ([]DailyCost, error) {
 	f.mu.Lock()

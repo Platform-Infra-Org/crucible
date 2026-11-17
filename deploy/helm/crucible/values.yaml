@@ -44,6 +44,8 @@ awsLabs:
   exportBucket: ""          # billing export (CUR 2.0) bucket: billed spend (empty: off)
   exportPrefix: cur
   exportName: ""
+  spendSource: ""   # budget | cost_explorer: where the account's bill is read (empty: not read)
+  budgetName: ""
   vpcId: ""                 # where lab modules launch (labs-init --vpc-id); empty: the default VPC
   subnetIds: ""             # comma-separated (labs-init --subnet-ids)
   instanceProfile: ""       # labs stack output lab_instance_profile (var.crucible_instance_profile)

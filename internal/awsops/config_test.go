@@ -311,3 +311,33 @@ func TestFillInitOnANilConfigChangesNothing(t *testing.T) {
 		t.Errorf("a nil config must fill nothing: %q/%d", region, port)
 	}
 }
+
+// crucible.yaml's lab switches must reach Terraform under the variable names
+// labSwitches uses — underscores, as strings. Keyed any other way the file is
+// read, parsed, validated and then silently ignored, which is the worst of the
+// three outcomes because nothing says so.
+func TestFillLabsInitPutsSwitchesUnderTheirTerraformNames(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, minimalConfig+
+		"\nlabs:\n  regions: [il-central-1]\n  billing_export: false\n  account_public_access_block: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	region, vpc := "", ""
+	var regions, subnets, emails []string
+	budget := 0.0
+	settings := map[string]string{}
+	c.FillLabsInit(&region, &regions, &vpc, &subnets, &budget, &emails, settings)
+
+	for name, want := range map[string]string{"billing_export": "false", "account_public_access_block": "false"} {
+		if got, ok := settings[name]; !ok || got != want {
+			t.Errorf("settings[%q] = %q (present %v), want %q: the file would otherwise be ignored", name, got, ok, want)
+		}
+	}
+
+	// A flag given on the command line wins: the file fills what was left out.
+	given := map[string]string{"billing_export": "true"}
+	c.FillLabsInit(&region, &regions, &vpc, &subnets, &budget, &emails, given)
+	if given["billing_export"] != "true" {
+		t.Errorf("crucible.yaml overrode a flag that was given: %q", given["billing_export"])
+	}
+}

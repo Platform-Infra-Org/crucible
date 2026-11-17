@@ -338,8 +338,8 @@ func commaList(s string) []string {
 // so a re-run never resets or deletes the budget. A new stack starts from the defaults (no emails: no budget).
 // allowedRegions (the regions labs may use) must include region; left empty it keeps the stack's current list, and a
 // new stack allows region alone. net, both fields or neither, sets the lab network; empty keeps the stack's current one.
-// switches sets the stack's on/off settings by variable name (labSwitches); one left out keeps the stack's current value.
-func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, switches map[string]bool) error {
+// settings sets the stack's on/off and choice settings by variable name (labSettings); one left out keeps the stack's current value.
+func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budgetUSD float64, budgetEmails, allowedRegions []string, net LabNet, settings map[string]string) error {
 	if err := o.needTerraform(); err != nil {
 		return err
 	}
@@ -395,9 +395,9 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 		b, _ := json.Marshal(subnets) // a JSON list is an HCL list
 		args = append(args, "-var", "lab_vpc_id="+vpc, "-var", "lab_subnet_ids="+string(b))
 	}
-	for _, k := range labSwitches {
-		if v, ok := switches[k]; ok {
-			args = append(args, "-var", k+"="+strconv.FormatBool(v))
+	for _, k := range labSettings {
+		if v, ok := settings[k]; ok {
+			args = append(args, "-var", k+"="+v)
 		} else if v := cur[k]; v != "" {
 			args = append(args, "-var", k+"="+v)
 		}
@@ -419,9 +419,10 @@ func (o Ops) LabsInit(ctx context.Context, region, crucibleAccount string, budge
 	return o.backupState(ctx, "labs", "labs-stack.tfstate") // outside labs/, which lab sessions and the ops role read
 }
 
-// labSwitches are the labs stack's on/off settings (labs-init --account-public-access-block, --billing-export): off
-// where an organization already blocks public S3 account-wide, or denies billing exports to member accounts by SCP.
-var labSwitches = []string{"account_public_access_block", "billing_export"}
+// labSettings are the labs stack's on/off and choice settings (labs-init --account-public-access-block, --billing-export,
+// --spend-source): off where an organization already blocks public S3 account-wide, or denies billing exports to
+// member accounts by SCP; the spend source is where the account's bill is read.
+var labSettings = []string{"account_public_access_block", "billing_export", "spend_source"}
 
 // labVars wires the shared lab account into the node; without the labs stack, aws labs stay off.
 func labVars(l map[string]string) []string {
@@ -430,7 +431,8 @@ func labVars(l map[string]string) []string {
 		"-var", "lab_plan_role_arn=" + l["plan_role_arn"], "-var", "lab_export_bucket=" + l["export_bucket"],
 		"-var", "lab_export_prefix=" + l["export_prefix"], "-var", "lab_export_name=" + l["export_name"],
 		"-var", "lab_vpc_id=" + l["lab_vpc_id"], "-var", "lab_subnet_ids=" + l["lab_subnet_ids"],
-		"-var", "lab_instance_profile=" + l["lab_instance_profile"], "-var", "lab_subnet_cidrs=" + l["lab_subnet_cidrs"]}
+		"-var", "lab_instance_profile=" + l["lab_instance_profile"], "-var", "lab_subnet_cidrs=" + l["lab_subnet_cidrs"],
+		"-var", "lab_spend_source=" + l["spend_source"], "-var", "lab_budget_name=" + l["budget_name"]}
 }
 
 // snapshotFirst backs up a running node before a step that may lose its disk ("applying", "tearing down").

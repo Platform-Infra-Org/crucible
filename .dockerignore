@@ -5,3 +5,6 @@ web/dist
 e2e
 docs
 !docs/user
+deploy/aws/*/terraform.tfstate*
+deploy/aws/*/.terraform
+deploy/aws/*/crucible.tfvars

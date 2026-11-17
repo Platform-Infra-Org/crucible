@@ -10,17 +10,18 @@ out=$2
 cd "$(dirname "$0")/.."
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+root=$(pwd) # the trap below runs after this script has cd'd into $out
 work=$(mktemp -d)
 # A release binary carries AWS's Session Manager plugin, so `crucible aws connect`
 # needs nothing installed. The blobs are placeholders in git, filled here for each
 # platform in turn and cleared again afterwards, so a release build leaves no
 # multi-megabyte modification in the working tree.
-trap 'rm -rf "$work"; scripts/plugin-blobs.sh --clear >/dev/null' EXIT
+trap 'rm -rf "$work"; "$root/scripts/plugin-blobs.sh" --clear >/dev/null' EXIT
 for os in darwin linux; do
   for arch in amd64 arm64; do
     name="crucible_${version}_${os}_${arch}"
     mkdir -p "$work/$name"
-    scripts/plugin-blobs.sh "$os" "$arch"
+    "$root/scripts/plugin-blobs.sh" "$os" "$arch"
     CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
       -ldflags "-s -w -X crucible/internal/docs.Version=$version" -o "$work/$name/crucible" ./cmd/crucible
     tar -C "$work" -czf "$out/$name.tar.gz" "$name"

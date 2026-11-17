@@ -40,6 +40,9 @@ type AWS interface {
 	SendCommand(ctx context.Context, instanceID, document string, params map[string][]string) (string, error)
 	CommandResult(ctx context.Context, commandID, instanceID string) (status, stdout, stderr string, err error)
 	InstanceOnline(ctx context.Context, instanceID string) (bool, error)
+	// StartSession opens a Session Manager session. The data channel it
+	// returns is handed to the plugin, which is the only thing that speaks it.
+	StartSession(ctx context.Context, target, document string, params map[string][]string) (Session, error)
 
 	// EC2: the node itself, and the subnet init validates before any apply.
 	FindInstances(ctx context.Context, nameTag string, states ...string) ([]Instance, error)

@@ -254,3 +254,49 @@ func TestLoginSaysWhatToPutInTheConfig(t *testing.T) {
 		}
 	}
 }
+
+// The bug this pins: on a machine whose ~/.aws/config uses an [sso-session]
+// block — what `aws configure sso` writes, and what this project's own
+// machines have — the credential provider reads the token cache under the
+// session's name. login must therefore write it there, which means learning the
+// session's name from the shared configuration when crucible.yaml does not name
+// it. Keyed by the start URL instead, login reports success and every later
+// command says "not signed in", falling back to whatever stale token is filed
+// under the session's key.
+func TestLoginLearnsTheSessionFromTheSharedConfig(t *testing.T) {
+	o, home := ssoFor(t, deviceFlow(t, 0, oneAccount, oneRole))
+	cfg := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(cfg, []byte(
+		"[default]\nsso_session = Platform-AWS\nsso_account_id = 111122223333\nsso_role_name = Workload-Admin-PS\nregion = il-central-1\n"+
+			"[sso-session Platform-AWS]\nsso_start_url = https://example/start\nsso_region = il-central-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+
+	// No crucible.yaml and no flags: everything comes from ~/.aws/config.
+	if err := o.Login(context.Background(), LoginOpts{Open: func(string) error { return nil }}); err != nil {
+		t.Fatalf("login must work from the shared configuration alone: %v", err)
+	}
+	want, err := ssocreds.StandardCachedTokenFilepath("Platform-AWS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("login did not write the cache where credentials read it (%s): %v", want, err)
+	}
+
+	// And with the start URL given by hand, the session still decides the key.
+	entries, _ := os.ReadDir(filepath.Join(home, ".aws", "sso", "cache"))
+	for _, e := range entries {
+		_ = os.Remove(filepath.Join(home, ".aws", "sso", "cache", e.Name()))
+	}
+	if err := o.Login(context.Background(), LoginOpts{
+		StartURL: "https://example/start", SSORegion: "il-central-1",
+		Open: func(string) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("--sso-start-url must not change the cache key when the shared config names a session: %v", err)
+	}
+}

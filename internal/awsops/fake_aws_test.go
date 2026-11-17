@@ -290,3 +290,27 @@ func (f *fakeAPI) TaggedResources(ctx context.Context, tag string) ([]string, er
 	}
 	return strings.Fields(out), nil
 }
+
+// StartSession keeps the `aws ssm start-session` spelling, because that is the
+// call connect makes whether the plugin is driven by the AWS CLI or by us.
+func (f *fakeAPI) StartSession(ctx context.Context, target, document string, params map[string][]string) (Session, error) {
+	flat := ""
+	for _, k := range []string{"portNumber", "localPortNumber"} { // a stable order
+		if v, ok := params[k]; ok {
+			if flat != "" {
+				flat += ","
+			}
+			flat += k + "=" + strings.Join(v, ",")
+		}
+	}
+	_, err := f.call("aws ssm start-session --region " + f.at() + " --target " + target +
+		" --document-name " + document + " --parameters " + flat)
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{
+		ID:        "crucible-" + target,
+		Token:     "a-session-token",
+		StreamURL: "wss://ssmmessages." + f.at() + ".amazonaws.com/v1/data-channel/crucible-" + target,
+	}, nil
+}

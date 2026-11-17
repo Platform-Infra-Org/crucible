@@ -1,7 +1,7 @@
 # Crucible on AWS: runbook
 
 ## One-time setup (per AWS account)
-1. Install: terraform >= 1.10, AWS CLI v2 (logged in) with its [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) (`aws ssm start-session`, a shell on the node, needs it; check with `session-manager-plugin --version`), Docker with buildx, Helm 3, Go 1.26. A fresh clone has no `.local/tools`: `make tools` installs the repo's pinned Go and Terraform there (checksum-verified), then `export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH`. Run every command from the repo root. Either `go install ./cmd/crucible` (then use `crucible aws ...`) or prefix commands with `go run ./cmd/crucible`.
+1. Install: terraform >= 1.10, Docker with buildx, Helm 3, Go 1.26. `crucible` itself needs neither the AWS CLI nor the Session Manager plugin — it carries the plugin (`make plugins` fills the blobs in a source tree; a release binary already has them). The AWS CLI stays worth having for a shell on the node by hand (`aws ssm start-session --target <id>`), which `crucible` does not wrap. A fresh clone has no `.local/tools`: `make tools` installs the repo's pinned Go and Terraform there (checksum-verified), then `export PATH=$PWD/.local/tools/go/bin:$PWD/.local/tools:$PATH`. Run every command from the repo root. Either `go install ./cmd/crucible` (then use `crucible aws ...`) or prefix commands with `go run ./cmd/crucible`.
    **The region needs its default VPC**: the node goes into the default VPC's first default subnet, and `up` fails without one. Check with `aws ec2 describe-vpcs --region <region> --filters Name=is-default,Values=true --query 'Vpcs[].VpcId'` (an empty list means none); create one with `aws ec2 create-default-vpc --region <region>`.
 2. `go run ./cmd/crucible aws init --region eu-west-1 --domain crucible.example.com`. This creates the state and data buckets, the Cognito user pool and the secret key that seals repository credentials (`/<name>/secret_key`; see Secrets). None of them is ever destroyed.
 3. **The persistent stack's state is backed up for you.** `deploy/aws/persistent/terraform.tfstate` is local and git-ignored; after every successful apply, `init` copies it to `s3://<state_bucket>/persistent.tfstate` (private, versioned) and prints `state backed up to …`. If the copy fails, `init` exits with an error that gives the `aws s3 cp` to run by hand. On a machine without the file, `init` restores it from there first (it finds the bucket from your account: `crucible-<account>-tfstate`); with no backup it's a new stack, and if it can't tell (access denied) it stops before applying. The file holds the secret key and the Cognito client secret in plain text; a second copy outside the account (a password manager) protects against losing the account.
@@ -35,7 +35,7 @@ an Elastic IP, a DNS record or a certificate.
    region's EC2 Serial Console endpoint (`ec2-serial-console.il-central-1.api.aws` here; the name differs by region generation, so
    status looks it up in a table and checks only regions in it). `ghcr.io` and `pkg-containers.githubusercontent.com` (the workspace image's registry and blob host; the lab pod's Docker pulls it
    through the node). A blocked `host:22` line means `lab-console` can't connect from lab pods. The git host is not tested: check it by hand.
-5. `crucible aws connect` (AWS CLI, Session Manager plugin and your SSO login). Leave it running, open `http://localhost:18080` and
+5. `crucible aws connect` (your SSO login, and nothing installed: it starts the session through the SDK and runs the plugin it unpacked into `~/.config/crucible/bin`). Leave it running, open `http://localhost:18080` and
    sign in. Ctrl-C ends the tunnel. A `--port` other than the one in the node's
    `crucible:public-url` tag is refused.
 6. `crucible aws labs-init --region il-central-1 --vpc-id vpc-03aa39198d92c5a25 --subnet-ids subnet-0fa66f46aa023ab6e,subnet-08e721302b446603f --billing-export=false --account-public-access-block=false`
@@ -573,3 +573,30 @@ put secrets in terraform state or outputs** (no generated passwords, keys or tok
 - If the Ledger says the billed figures are out of date, look at the export (setup step 4), the ops role's read of
   the export bucket, and the tag activation (step 2). Budgets keep using metered spend and estimates meanwhile.
 - **Run one Crucible deployment per lab account.** The reaper never deletes resources of labs it does not know. It reports them instead, so a second deployment's labs show up as findings rather than being deleted.
+
+## By-hand checks against real AWS
+
+The test suite never touches AWS, so these are the owner's, once per change to the
+areas named.
+
+1. **`connect` with the embedded plugin** (after any change to `internal/awsops/plugin.go`,
+   `scripts/plugin-blobs.sh` or the pinned plugin version). On a machine with **no**
+   `session-manager-plugin` and **no** AWS CLI on `PATH`, using a release binary or one
+   built after `make plugins`:
+   ```
+   rm -rf ~/.config/crucible/bin        # force a fresh unpack
+   crucible aws login
+   crucible aws connect
+   ```
+   Expect: the plugin appears as `~/.config/crucible/bin/session-manager-plugin-<12 hex>`
+   with mode `0700`, its `LICENSE` and `NOTICE` beside it, and `Crucible is at
+   http://localhost:18080 while this runs`. Then, in a browser, **load the SPA and click
+   through two or three pages** — not just one request. A single-connection tunnel would
+   serve one request and then stall, and only a browser shows that. Sign in, so the
+   Cognito redirect is exercised too. Ctrl-C must end it quietly.
+2. **The plugin's own credential resolution.** The data channel is presigned, so the
+   tunnel opens without credentials, but the plugin re-resolves them through the default
+   chain to terminate the session at exit. `crucible aws login` writes the shared SSO
+   cache, so this should need nothing extra; if Ctrl-C ever leaves a session hanging in
+   **Systems Manager → Session history**, that is where to look.
+3. **A second `connect`** must reuse the unpacked plugin (no pause, same path).

@@ -119,3 +119,29 @@ func (c *awsClient) InstanceOnline(ctx context.Context, instanceID string) (bool
 	}
 	return out.InstanceInformationList[0].PingStatus == ssmtypes.PingStatusOnline, nil
 }
+
+// Session is a Session Manager data channel: a WebSocket URL and the token that
+// opens it. Nothing here reads it — the framed, multiplexed protocol inside it
+// is implemented only by AWS's session-manager-plugin, which Crucible embeds
+// (see plugin.go) and hands these three values to.
+type Session struct {
+	ID        string
+	Token     string
+	StreamURL string
+}
+
+func (c *awsClient) StartSession(ctx context.Context, target, document string, params map[string][]string) (Session, error) {
+	out, err := c.ssm().StartSession(ctx, &ssm.StartSessionInput{
+		Target:       aws.String(target),
+		DocumentName: aws.String(document),
+		Parameters:   params,
+	})
+	if err != nil {
+		return Session{}, signInError(err)
+	}
+	return Session{
+		ID:        aws.ToString(out.SessionId),
+		Token:     aws.ToString(out.TokenValue),
+		StreamURL: aws.ToString(out.StreamUrl),
+	}, nil
+}

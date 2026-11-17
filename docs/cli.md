@@ -112,8 +112,8 @@ those from the stacks. `terraform_vars` may not name a setting the schema owns, 
 ## AWS: `crucible aws …`
 
 These run on your laptop with your AWS credentials and drive Terraform, GHCR and the node (over SSM, never SSH).
-They call AWS through the SDK built into `crucible`, so the AWS CLI is not required — with one exception, `connect`,
-which still runs `aws ssm start-session`. `crucible aws login` signs you in.
+They call AWS through the SDK built into `crucible`, so the AWS CLI is not required at all: even `connect`,
+which drives AWS's Session Manager plugin, carries that plugin inside the binary. `crucible aws login` signs you in.
 
 **Terraform is needed by four commands only** — `init`, `labs-init`, `up` and `teardown`, the ones that create or destroy
 AWS resources. Every other command reads the install's details from `/<name>/install` in SSM, which those four publish
@@ -146,7 +146,7 @@ lost if the disk goes.
 | `crucible aws where` | Prints the configuration file, the application directory (the one thing worth backing up: it holds the persistent stack's state), each stack's directory and the Terraform in use. This is what the fourteen-resource recovery needs in order to run `terraform import` by hand. |
 | `crucible aws status` | The node's state and address, `release:`, SSM reachability, `/healthz`, the hosts the node can't reach, the bedtime, and the AWS labs by state. |
 | `crucible aws snapshot` | Runs the backup now (a `pg_dump` to the data bucket) and waits for it. |
-| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. **The one command that still needs the AWS CLI v2**, because it runs `aws ssm start-session`; also the Session Manager plugin and your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
+| `crucible aws connect [--region R] [--port P] [--name crucible]` | Opens a Session Manager port-forward to an `--access ssm` install and keeps it open until Ctrl-C. Needs nothing installed: it starts the session through the SDK and runs the Session Manager plugin carried inside the binary, which it unpacks into `~/.config/crucible/bin` the first time. All it needs of you is your sign-in (`crucible aws login`). Use Crucible's own port, or sign-in breaks. |
 | `crucible aws invite EMAIL [--name "Full Name"]` | Adds someone to the Cognito pool with a verified email and sends the invite. Run it again to resend an unused invite. |
 
 ### Night, morning and teardown

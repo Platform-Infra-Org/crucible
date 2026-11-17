@@ -261,10 +261,10 @@ func TestMaterialiseWritesOnlyStackFiles(t *testing.T) {
 	}
 }
 
-// connect still runs `aws ssm start-session`, so the AWS CLI is a prerequisite
-// for it until the in-process tunnel exists. A missing CLI must say so, not
-// surface as exec's "executable file not found" on the one route into the app.
-func TestConnectSaysWhenTheAWSCLIIsMissing(t *testing.T) {
+// connect used to run `aws ssm start-session`. It no longer does: the session is
+// opened through the SDK and handed to the embedded plugin, so a machine with no
+// AWS CLI at all reaches the app.
+func TestConnectDoesNotNeedTheAWSCLI(t *testing.T) {
 	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080")}
 	o := r.ops(t.TempDir())
 	o.LookPath = func(file string) (string, error) {
@@ -273,14 +273,7 @@ func TestConnectSaysWhenTheAWSCLIIsMissing(t *testing.T) {
 		}
 		return "/usr/local/bin/" + file, nil
 	}
-	err := o.Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
-	if err == nil {
-		t.Fatal("connect without the AWS CLI must fail with an explanation")
-	}
-	if !strings.Contains(err.Error(), "AWS CLI") {
-		t.Errorf("the error must name the AWS CLI: %v", err)
-	}
-	if indexOf(r.calls, "start-session") >= 0 {
-		t.Errorf("nothing may be started:\n%s", strings.Join(r.calls, "\n"))
+	if err := o.Connect(context.Background(), ConnectOpts{Region: "il-central-1"}); err != nil {
+		t.Fatalf("connect must work with no AWS CLI installed: %v", err)
 	}
 }

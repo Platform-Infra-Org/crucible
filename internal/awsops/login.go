@@ -44,8 +44,10 @@ func (o Ops) Login(ctx context.Context, in LoginOpts) error {
 // each is used and named, and anything else is an error listing the choices,
 // because guessing which account to deploy into is not ours to do.
 func (o Ops) LoginAndResolve(ctx context.Context, in LoginOpts) (string, string, error) {
+	in = fillFromSharedConfig(ctx, in)
 	if in.StartURL == "" {
-		return "", "", errors.New("no Identity Center start URL: set aws.sso_start_url in crucible.yaml, or sign in with `aws sso login`")
+		return "", "", errors.New("no Identity Center start URL: pass --sso-start-url, set aws.sso_start_url in crucible.yaml, " +
+			"or configure one in ~/.aws/config (`aws configure sso`)")
 	}
 	region := cmp2(in.SSORegion, o.region())
 	if region == "" {
@@ -284,4 +286,69 @@ func max32(a, def int32) int32 {
 		return def
 	}
 	return a
+}
+
+// fillFromSharedConfig takes what crucible.yaml and the flags left empty from
+// ~/.aws/config, the way the AWS CLI reads it.
+//
+// The session name is why this matters beyond convenience. A profile written by
+// `aws configure sso` names an [sso-session], and the credential provider then
+// looks for the token cache under that name. If login does not know the name it
+// files the token under the start URL instead, reports success, and every later
+// command reads some other file — the stale token filed under the session's key,
+// or nothing — and says "not signed in". So the name has to come from the same
+// place the provider reads it.
+func fillFromSharedConfig(ctx context.Context, in LoginOpts) LoginOpts {
+	profile := cmp2(os.Getenv("AWS_PROFILE"), "default")
+	// LoadSharedConfigProfile's default file list is resolved once, at package
+	// initialisation, so it honours neither AWS_CONFIG_FILE nor a HOME set
+	// later. Both are given here explicitly: an operator who points
+	// AWS_CONFIG_FILE somewhere must have login read the same file the
+	// credential provider will.
+	shared, err := awsconfig.LoadSharedConfigProfile(ctx, profile, func(opt *awsconfig.LoadSharedConfigOptions) {
+		opt.ConfigFiles = []string{sharedFile("AWS_CONFIG_FILE", "config")}
+		opt.CredentialsFiles = []string{sharedFile("AWS_SHARED_CREDENTIALS_FILE", "credentials")}
+	})
+	if err != nil {
+		return in // no shared configuration at all: the flags are all there is
+	}
+	// A profile either names an [sso-session] block or carries the legacy keys
+	// directly. Only the first form keys the cache by the session's name.
+	start, region, session := shared.SSOStartURL, shared.SSORegion, ""
+	if shared.SSOSession != nil {
+		start, region, session = shared.SSOSession.SSOStartURL, shared.SSOSession.SSORegion, shared.SSOSession.Name
+	}
+	if in.StartURL == "" {
+		in.StartURL = start
+	}
+	if in.SSORegion == "" {
+		in.SSORegion = region
+	}
+	// The session keys the cache, so it is taken whenever the shared
+	// configuration has one and crucible.yaml did not name a different one —
+	// including when the start URL came from a flag.
+	if in.Session == "" && session != "" && (in.StartURL == start || start == "") {
+		in.Session = session
+	}
+	if in.Account == "" {
+		in.Account = shared.SSOAccountID
+	}
+	if in.Role == "" {
+		in.Role = shared.SSORoleName
+	}
+	return in
+}
+
+// sharedFile is where the AWS CLI keeps one of its shared files: the
+// environment variable if set, else ~/.aws/<name>, read now rather than at
+// package initialisation.
+func sharedFile(env, name string) string {
+	if v := os.Getenv(env); v != "" {
+		return v
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".aws", name)
 }

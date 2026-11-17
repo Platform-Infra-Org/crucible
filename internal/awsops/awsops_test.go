@@ -50,8 +50,9 @@ func (r *recorder) ops(root string) Ops {
 			}
 			return r.output(cmd), nil
 		},
-		Sleep: func(time.Duration) {},
-		Log:   &r.log,
+		Sleep:  func(time.Duration) {},
+		Log:    &r.log,
+		Plugin: stubPluginGz(), // never the 13 MB copy embedded in a release build
 		LookPath: func(string) (string, error) {
 			if r.noPlugin {
 				return "", errors.New("not found")
@@ -491,8 +492,14 @@ func TestOutputsRequireInitAndUp(t *testing.T) {
 		return nil
 	}}
 	o := r.ops(t.TempDir())
-	if err := o.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "crucible aws up") {
+	// status now answers from the node's tags when the parameter is missing, so
+	// the demand for an `up` moves from the error to the report: it must still
+	// be said, or a thinner report reads as a healthy one.
+	if err := o.Status(context.Background()); err != nil {
 		t.Fatalf("main: %v", err)
+	}
+	if !strings.Contains(r.log.String(), "crucible aws up") {
+		t.Fatalf("status must still say the install's details are not in SSM:\n%s", r.log.String())
 	}
 	if err := o.Up(context.Background(), "x.tfvars", false, false, DeployOpts{}); err == nil || !strings.Contains(err.Error(), "crucible aws init") {
 		t.Fatalf("persistent: %v", err)
@@ -1174,7 +1181,9 @@ func TestConnectNeedsTheTag(t *testing.T) {
 
 func TestConnectNeedsThePlugin(t *testing.T) {
 	r := &recorder{output: fakeNode("i-0abc\thttp://localhost:18080"), noPlugin: true}
-	err := r.ops(t.TempDir()).Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
+	o := r.ops(t.TempDir())
+	o.Plugin = []byte{} // a build from source with no embedded plugin
+	err := o.Connect(context.Background(), ConnectOpts{Region: "il-central-1"})
 	if err == nil || !strings.Contains(err.Error(), "session-manager-plugin") || indexOf(r.calls, "start-session") >= 0 {
 		t.Fatalf("missing plugin: %v", err)
 	}

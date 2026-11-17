@@ -31,6 +31,7 @@ type Ops struct {
 	Sleep    func(time.Duration)
 	Get      func(url string) (*http.Response, error) // healthz probe; nil = real client with timeout
 	LookPath func(file string) (string, error)        // finds session-manager-plugin; nil = exec.LookPath
+	Plugin   []byte                                   // gzipped session-manager-plugin; nil = the copy embedded in this binary
 	Home     string                                   // where the stacks and the persistent stack's state live; "" = AppDir()
 	Config   *Config                                  // crucible.yaml; nil = no file, every value from flags
 	Endpoint string                                   // tests only: every AWS service at this URL
@@ -898,7 +899,7 @@ func (o Ops) printRelease(ctx context.Context, m map[string]string) {
 }
 
 func (o Ops) Status(ctx context.Context) error {
-	m, err := o.install(ctx)
+	m, err := o.installOrDiscover(ctx)
 	if err != nil {
 		return err
 	}
@@ -948,7 +949,10 @@ func (o Ops) Status(ctx context.Context) error {
 	if p, err := o.install(ctx); err == nil && p["cognito_login_url"] != "" {
 		extra = append(extra, strings.TrimPrefix(p["cognito_login_url"], "https://"))
 	} else {
-		note = ", but not the Cognito login domain (couldn't read it)"
+		// Not a failed probe: its URL is only in the install parameter, so
+		// there was nothing to probe. Saying "couldn't read it" of the domain
+		// reads as a network problem that is not there.
+		note = " (the Cognito login domain was not checked: its URL is only in " + o.installParam() + ")"
 	}
 	out, err := o.ssmOut(ctx, m, egressCheck(egressHosts(r, extra...), serialTCP(r)))
 	switch {
@@ -1134,24 +1138,47 @@ func (o Ops) Connect(ctx context.Context, in ConnectOpts) error {
 	if in.Port != 0 && in.Port != port {
 		return fmt.Errorf("crucible's address is %s: a different port (%d) breaks sign-in and saving, so use --port %d or leave it out", url, in.Port, port)
 	}
-	look := o.LookPath
-	if look == nil {
-		look = exec.LookPath
+	plugin, err := o.sessionPlugin()
+	if err != nil {
+		return err
 	}
-	if _, err := look("session-manager-plugin"); err != nil {
-		return errors.New("the AWS Session Manager plugin isn't installed (session-manager-plugin): " +
-			"https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html")
+
+	// The data channel's protocol — framed messages multiplexed inside one
+	// WebSocket — is implemented only by AWS's plugin, so Crucible opens the
+	// session through the SDK and hands the plugin the same six arguments the
+	// AWS CLI would. That is why connect needs no AWS CLI.
+	const document = "AWS-StartPortForwardingSession"
+	params := map[string][]string{
+		"portNumber":      {"80"},
+		"localPortNumber": {strconv.Itoa(port)},
 	}
-	// connect is the one command that still shells out: it runs
-	// `aws ssm start-session`, because the port-forward's data channel is not
-	// in the SDK. Every other command needs no AWS CLI.
-	if _, err := look("aws"); err != nil {
-		return errors.New("`crucible aws connect` runs `aws ssm start-session`, so it needs the AWS CLI v2 installed " +
-			"(every other command does not): https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html")
+	sess, err := o.AWS.In(region).StartSession(ctx, id, document, params)
+	if err != nil {
+		return fmt.Errorf("opening the session: %w", err)
 	}
+	response, err := json.Marshal(map[string]string{
+		"SessionId": sess.ID, "TokenValue": sess.Token, "StreamUrl": sess.StreamURL,
+	})
+	if err != nil {
+		return err
+	}
+	request, err := json.Marshal(map[string]any{
+		"Target": id, "DocumentName": document, "Parameters": params,
+	})
+	if err != nil {
+		return err
+	}
+	endpoint := o.Endpoint
+	if endpoint == "" {
+		endpoint = "https://ssm." + region + ".amazonaws.com"
+	}
+
 	fmt.Fprintf(o.Log, "Crucible is at %s while this runs; Ctrl-C closes it.\n", url)
-	err = o.Exec(ctx, o.Root, "aws", "ssm", "start-session", "--region", region, "--target", id,
-		"--document-name", "AWS-StartPortForwardingSession", "--parameters", fmt.Sprintf("portNumber=80,localPortNumber=%d", port))
+	// Argument order is the plugin's own: the StartSession response, the
+	// region, the operation, the profile (empty: it resolves credentials the
+	// same way the rest of Crucible does), the request parameters, and the
+	// endpoint.
+	err = o.Exec(ctx, o.Root, plugin, string(response), region, "StartSession", "", string(request), endpoint)
 	if ctx.Err() != nil {
 		return nil // Ctrl-C is how the tunnel is meant to close
 	}

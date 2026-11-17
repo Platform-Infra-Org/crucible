@@ -61,7 +61,7 @@ member account (the billing export: billed spend is then off, spend is metered a
 the organization's own applies); a re-run without them keeps the current setting, =true turns one back on.
 invite adds someone to the Cognito user pool with a verified email (Crucible refuses unverified ones); run it again to
 resend an invite that has not been used yet.
-connect opens the tunnel to an --access ssm install (AWS CLI, Session Manager plugin and your SSO login needed) and keeps it open until Ctrl-C.
+connect opens the tunnel to an --access ssm install (nothing to install: it carries the Session Manager plugin; your SSO login is all it needs) and keeps it open until Ctrl-C.
 labs-init --budget-usd and --budget-email set the lab account's monthly AWS Budget alert (a backstop; repeat --budget-email);
 a re-run without them keeps the current budget. labs-init --allowed-regions (comma-separated, must include --region) sets
 the regions labs may use; a re-run without it keeps the current list, and a new stack allows --region alone.

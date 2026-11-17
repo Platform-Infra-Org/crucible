@@ -522,6 +522,14 @@ git commit -m "feat(aws): the stacks ship inside the binary and adopt existing s
 
 ### Task 9: The in-process port-forward
 
+> **Superseded (2026-11-17).** This task is not built, and will not be. The
+> in-process tunnel would mean porting AWS's framing and smux multiplexing with
+> no way to verify the handshake except against real AWS, which the project
+> forbids. Instead `crucible` embeds AWS's own `session-manager-plugin` and
+> opens the session through the SDK (`internal/awsops/plugin.go`,
+> `scripts/plugin-blobs.sh`), which reaches the same goal — nothing for an
+> operator to install — and removes the AWS CLI from `connect` as well.
+
 **Files:**
 - Create: `internal/awsops/tunnel.go`, `internal/awsops/tunnel_test.go`
 - Modify: `internal/awsops/awsops.go` (`Connect`, and the `LookPath` field)

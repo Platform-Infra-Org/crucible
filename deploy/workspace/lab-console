@@ -11,8 +11,9 @@ read -r host want < <(awk -v r="$region" '$1 == r {print $2, $3}' "${CRUCIBLE_SE
 if [ -z "${host:-}" ] || [ -z "${want:-}" ]; then echo "no EC2 Serial Console endpoint with a pinned fingerprint known for $region" >&2; exit 1; fi
 dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
 # Record the endpoint's host key with a handshake that can't log in (no key pushed yet; ssh-keyscan gets no answer
-# from these endpoints), then refuse it unless it is AWS's published key.
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" \
+# from these endpoints), then refuse it unless it is AWS's published key. StrictHostKeyChecking=no only writes the key
+# to this fresh file (this image's OpenSSH 7.4 has no accept-new); the real connection below insists on it.
+ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile="$dir/known_hosts" \
   -o ConnectTimeout=10 "$id.port0@$host" true >/dev/null 2>&1 || true
 got=$(ssh-keygen -lf "$dir/known_hosts" 2>/dev/null | awk '{print $2}')
 if [ -z "$got" ] || [ "$got" != "$want" ]; then echo "serial console host key ${got:-none} is not AWS's published $want for $region" >&2; exit 1; fi

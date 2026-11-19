@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
@@ -180,6 +179,10 @@ func (s *Service) Routes(r chi.Router) {
 		reply(w, v, err)
 	})
 	r.Get("/api/labs/{id}/terminals/{name}/ws", s.terminal)
+	r.Delete("/api/labs/{id}/terminals/{name}", func(w http.ResponseWriter, r *http.Request) {
+		err := s.CloseTerminal(r.Context(), user(r), p(r, "id"), p(r, "name"), r.URL.Query().Get("tab"))
+		reply(w, struct{}{}, err)
+	})
 	r.Get("/api/labs/{id}/transcripts/{tid}", func(w http.ResponseWriter, r *http.Request) {
 		tid, err := strconv.ParseInt(p(r, "tid"), 10, 64)
 		if err != nil {
@@ -245,16 +248,23 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 			cols, rows = 120, 32
 		}
 	}
+	// A tab is one session: "console" and a second copy of it, "console #2", are separate shells of the same terminal.
+	tab := r.URL.Query().Get("tab")
+	if tab == "" {
+		tab = chi.URLParam(r, "name")
+	}
+	if tabTerminal(tab) != chi.URLParam(r, "name") {
+		httpx.Error(w, apperr.Wrap(apperr.NotFound, "terminal not found"))
+		return
+	}
 	ws, err := websocket.Accept(w, r, nil) // same-origin only (default); before any exec
 	if err != nil {
 		return
 	}
 	defer ws.CloseNow()
-	rn, err := s.runner(inst.Runtime)
-	var pty PTY
-	if err == nil {
-		pty, err = rn.OpenPTY(r.Context(), inst, service, cols, rows)
-	}
+	// The session outlives this websocket: a refresh or a closed tab comes back to the same shell (spec §8.3), and
+	// what it printed is replayed onto the new one. Only the newest websocket watches it, so nobody types blind.
+	ts, err := s.session(r.Context(), inst, tab, chi.URLParam(r, "name"), service, cols, rows)
 	if err != nil {
 		reason := s.runnerErr(err).Error()
 		if len(reason) > 120 {
@@ -264,35 +274,15 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.SetReadLimit(1 << 20)
-	ctx := r.Context()
-	rec, started := &tail{}, s.Now() // spec §7: the scorer sees what the terminal printed
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		buf := make([]byte, 32<<10)
-		for {
-			n, err := pty.Read(buf)
-			if n > 0 {
-				rec.Write(buf[:n]) // only this goroutine touches rec until done is closed
-				if ws.Write(ctx, websocket.MessageBinary, buf[:n]) != nil {
-					return
-				}
-			}
-			if err != nil {
-				_ = ws.Close(websocket.StatusNormalClosure, "terminal closed")
-				return
-			}
-		}
-	}()
-	defer func() {
-		_ = pty.Close()
-		ws.CloseNow()
-		<-done
-		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second) // a hung store must not pin the handler
-		s.saveTranscript(saveCtx, inst.ID, chi.URLParam(r, "name"), started, rec)
-		cancel()
-	}()
+	ctx, drop := context.WithCancel(r.Context())
+	defer drop()
+	v := &termViewer{
+		write: func(b []byte) error { return ws.Write(ctx, websocket.MessageBinary, b) },
+		drop:  drop,
+	}
+	ts.attach(v)
+	defer ts.detach(v)
+	pty := ts.pty
 	for {
 		typ, data, err := ws.Read(ctx)
 		if err != nil {

@@ -48,7 +48,7 @@ export type Tier = 'auto' | 'approver' | 'leader' | 'admin'
 export type LabView = {
   slept_as?: 'hibernated' | 'stopped'; slept_at?: string; woke_at?: string; workspace_warning?: boolean
   id: string; state: LabState; error?: string; runtime: string; team: string; training: string; module: string
-  terminals: Terminal[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
+  terminals: Terminal[]; open_terminals?: string[]; task_order: string; tasks: TaskView[]; server_now: string; ends_at?: string
   limit_reason?: string; end_reason?: string; idle_deadline?: string; idle_warning_s: number; idle_timeout_s: number
   can_extend: boolean; extension_pending: boolean; self_reported: boolean; lab_review?: Feedback; complete: boolean; score: number; max_score: number
   estimate_usd: number; tier: Tier; over_cap: boolean; escalate_at?: string; decided_by?: string; decision_note?: string

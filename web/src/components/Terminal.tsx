@@ -58,7 +58,7 @@ export function Terminal({ labId, name, size, tabKey, idx, onLeave, active, live
     let delay = 2000
     const connect = () => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      ws = new WebSocket(`${proto}://${location.host}/api/labs/${labId}/terminals/${encodeURIComponent(name)}/ws?cols=${term.cols}&rows=${term.rows}`)
+      ws = new WebSocket(`${proto}://${location.host}/api/labs/${labId}/terminals/${encodeURIComponent(name)}/ws?cols=${term.cols}&rows=${term.rows}&tab=${encodeURIComponent(tabKey)}`)
       ws.binaryType = 'arraybuffer'
       ws.onopen = () => { delay = 2000 }
       ws.onmessage = (e) => term.write(new Uint8Array(e.data as ArrayBuffer))
@@ -94,6 +94,6 @@ export function Terminal({ labId, name, size, tabKey, idx, onLeave, active, live
       term.dispose()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the size comes with the terminal's name: a new size is a new terminal
-  }, [labId, name])
+  }, [labId, name, tabKey])
   return <div ref={el} role="tabpanel" id={`term-panel-${idx}`} aria-labelledby={`term-tab-${idx}`} className="terminal" data-terminal={tabKey} style={{ display: active ? 'block' : 'none' }} />
 }

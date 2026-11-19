@@ -16,3 +16,15 @@ export function closeTab(tabs: Tab[], key: string): { tabs: Tab[]; active: strin
   const left = tabs.filter((t) => t.key !== key)
   return { tabs: left, active: left[Math.min(i, left.length - 1)]?.key ?? '' }
 }
+
+// terminalOf says which of the lab's terminals a tab key belongs to ("console #2" -> "console").
+export function terminalOf(key: string, declared: string[]): string {
+  return declared.find((n) => key === n || key.startsWith(`${n} #`)) ?? key
+}
+
+// initialTabs is what the page opens with: the lab's own terminals, plus any further tab still running on the server
+// (a session outlives the page, so a refresh or a walk to another page comes back to the same shells).
+export function initialTabs(declared: string[], open: string[]): Tab[] {
+  const extra = open.filter((k) => !declared.includes(k)).sort()
+  return [...declared, ...extra].map((key) => ({ key, name: terminalOf(key, declared) }))
+}

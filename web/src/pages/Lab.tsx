@@ -20,7 +20,7 @@ import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
 import { SparkBurst } from '../components/SparkBurst'
 import { Terminal } from '../components/Terminal'
-import { closeTab, openTab } from '../lib/terminals'
+import { closeTab, initialTabs, openTab } from '../lib/terminals'
 import { Timer } from '../components/Timer'
 
 const endMessages: Record<string, string> = {
@@ -297,7 +297,7 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
   })
   const [taskId, setTaskId] = useState(() => firstOpen(lab))
   const [active, setActive] = useState(lab.terminals[0].name)
-  const [tabs, setTabs] = useState(() => lab.terminals.map((t) => ({ key: t.name, name: t.name })))
+  const [tabs, setTabs] = useState(() => initialTabs(lab.terminals.map((t) => t.name), lab.open_terminals ?? []))
   const [askAlerts, setAskAlerts] = useState(() => {
     try { return notificationsUndecided() && localStorage.getItem('crucible-alerts') !== 'no' } catch { return notificationsUndecided() }
   })
@@ -382,10 +382,17 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
     setTabs((x) => [...x, tab])
     setActive(tab.key)
   }
-  const closeTerminal = () => {
+  const closeTerminal = async () => {
+    const tab = tabs.find((t) => t.key === active)
+    if (!tab) return
     const after = closeTab(tabs, active)
     setTabs(after.tabs)
     setActive(after.active)
+    try { // the shell, and whatever it holds (a machine's one serial console connection), ends with it
+      await api(`/api/labs/${lab.id}/terminals/${encodeURIComponent(tab.name)}?tab=${encodeURIComponent(tab.key)}`, { method: 'DELETE' })
+    } catch (e) {
+      toast((e as Error).message)
+    }
   }
   const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     const body = e.currentTarget.parentElement!

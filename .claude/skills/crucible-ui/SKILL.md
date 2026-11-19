@@ -65,7 +65,10 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - The lab's terminal tabs are opened and closed by hand: the toolbar carries one **+ <name>** button per terminal the
   lab declares and a **Close <name>** button for the one on screen (disabled at the last tab). Closing a tab ends the
   shell behind it — how a trainee frees a serial console, which allows one connection at a time. The tab list is state
-  (`lib/terminals.ts`: `openTab`, `closeTab`); a reopened terminal takes its plain name back.
+  (`lib/terminals.ts`: `openTab`, `closeTab`, `initialTabs`); a reopened terminal takes its plain name back. The shell
+  lives on the server, not in the websocket: the page starts from `lab.open_terminals` and `Terminal` names its tab on
+  the socket (`?tab=`), so a refresh reattaches and the output is replayed. Close calls
+  `DELETE /api/labs/<id>/terminals/<name>?tab=<key>`, which is what actually ends the shell.
 - A lab terminal fits its panel unless its `lab.yaml` entry has `size: COLSxROWS` (a serial console: GRUB draws on 80×24):
   then `Terminal` keeps exactly that grid, never fits, and sends no resizes. Its colours come from `lib/terminal.ts`
   (`terminalTheme`), where ANSI black is `--term-bg`, so a program painting "black" looks like the terminal.

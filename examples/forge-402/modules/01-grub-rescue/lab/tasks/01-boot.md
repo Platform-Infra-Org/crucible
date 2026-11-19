@@ -5,8 +5,8 @@ emergency shell. It breaks itself about a minute after the lab starts, and you n
 for this one. Find the instance id in the lab's outputs, or with
 `aws ec2 describe-instances --filters Name=tag:crucible:lab-id,Values=$CRUCIBLE_LAB_ID`.
 
-1. Open the serial console: run `lab-console <instance id>` in the workspace, or use the AWS console button on the lab
-   page and pick EC2 serial console. `aws ec2 get-console-screenshot` shows what the machine last drew.
+1. Open the serial console: run `lab-console <instance id>` in the **console** tab (sized for GRUB's 80×24 screen), or
+   use the AWS console button on the lab page and pick EC2 serial console. `aws ec2 get-console-screenshot` shows what the machine last drew.
 2. Reboot from there, or wait for the GRUB menu (10 seconds). Press `e` on the default entry and fix `root=`: use
    `blkid` from the emergency shell to find the right one, or `root=LABEL=cloudimg-rootfs`. Press Ctrl-X to boot.
 3. Once it boots, log in with `aws ssm start-session --target <instance id>` and make it stick: `sudo update-grub`.

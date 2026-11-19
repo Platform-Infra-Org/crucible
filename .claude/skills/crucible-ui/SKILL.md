@@ -62,6 +62,9 @@ rule, a layout convention), update this skill in the same commit. A stale skill 
 - Group each concern in a **panel**. Plain content: `<section className="panel" aria-labelledby="…">` with an `h2`.
   A form: `<form className="stack panel">` (fields get a readable max width; `h2 + p` is tightened).
 - List beside detail: `.manage-grid` with `.manage-list` (links, `.active` gets the molten inset edge) and `.manage-detail`.
+- A lab terminal fits its panel unless its `lab.yaml` entry has `size: COLSxROWS` (a serial console: GRUB draws on 80×24):
+  then `Terminal` keeps exactly that grid, never fits, and sends no resizes. Its colours come from `lib/terminal.ts`
+  (`terminalTheme`), where ANSI black is `--term-bg`, so a program painting "black" looks like the terminal.
 - A grid column that holds a terminal, an editor or anything that sizes itself is `minmax(0, 1fr)`, never a bare `1fr`
   (which can't shrink below its content and spills off the page). Something with `hidden` leaves the grid, so change
   the column template with it (the lab's Hide tasks).

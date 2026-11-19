@@ -5,6 +5,7 @@ idle_timeout: 45m
 task_order: free
 terminals:
   - { name: workspace, service: workspace }
+  - { name: console, service: workspace, size: 80x24 } # GRUB on the serial console draws on an 80x24 screen
 tasks:
   - id: t1-boot
     instructions: tasks/01-boot.md

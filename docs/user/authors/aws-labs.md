@@ -100,6 +100,11 @@ For the serial console to be useful, set the machine up for it. On Linux, put `G
 `update-grub`. On Windows, enable the Special Administration Console: `bcdedit /ems {current} on` and
 `bcdedit /emssettings EMSPORT:1 EMSBAUDRATE:115200`.
 
+Give the console its own terminal with a fixed size: `- { name: console, service: workspace, size: 80x24 }`. GRUB on a
+serial line draws on an 80×24 screen and places its cursor by row and column, so in a terminal that stretches to the
+page its prompts and menus land in the wrong places. A terminal with `size` stays exactly that many columns and rows
+(40–250 columns, 10–100 rows), and so does every copy a trainee opens with **+**. Any lab can use `size`.
+
 Never put a password in user data or state: the trainee's credentials can read both. To check the machine from your
 side, use `aws ssm send-command` and `aws ssm get-command-invocation`.
 

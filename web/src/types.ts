@@ -37,7 +37,7 @@ export type Choice = { id: number; text: string }
 export type PublicQuestion = { id: string; type: string; prompt: string; points: number; options?: Choice[]; left?: string[]; right?: Choice[]; human?: boolean; submission?: Feedback }
 export type QuizView = { pass_threshold: number; questions: PublicQuestion[]; status: string; attempts_left?: number; next_attempt_at?: string }
 export type QuizResult = { score: number; max: number; percent: number; passed: boolean; correct: Record<string, boolean>; pending_human: boolean; status: 'in_progress' | 'pending_review' | 'complete' }
-export type Terminal = { name: string; service: string }
+export type Terminal = { name: string; service: string; size?: string } // size: COLSxROWS, a fixed-size terminal
 export type TaskStatus = 'locked' | 'open' | 'setup_failed' | 'submitted' | 'passed' | 'skipped'
 export type TaskView = {
   id: string; title: string; status: TaskStatus; kind: 'check' | 'quiz' | 'review'; points: number; awarded: number

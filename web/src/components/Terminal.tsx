@@ -2,12 +2,13 @@ import { isLeaveChord } from '../lib/advanceFocus'
 import { useEffect, useRef } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { fixedSize, terminalTheme } from '../lib/terminal'
 
 function cssVar(name: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 
-export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, fontSize }: { labId: string; name: string; tabKey: string; idx: number; onLeave: () => void; active: boolean; live: boolean; fontSize: number }) {
+export function Terminal({ labId, name, size, tabKey, idx, onLeave, active, live, fontSize }: { labId: string; name: string; size?: string; tabKey: string; idx: number; onLeave: () => void; active: boolean; live: boolean; fontSize: number }) {
   const el = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -15,17 +16,21 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
   liveRef.current = live
   const leaveRef = useRef(onLeave)
   leaveRef.current = onLeave
+  // A fixed-size terminal (lab.yaml size: 80x24, a serial console) never fits its panel: GRUB places its cursor on an
+  // 80x24 screen, so the browser's grid must be exactly that.
+  const fixed = fixedSize(size)
   useEffect(() => {
     if (!termRef.current) return
     termRef.current.options.fontSize = fontSize
-    try { fitRef.current?.fit() } catch { /* hidden */ }
-  }, [fontSize])
+    if (!fixed) try { fitRef.current?.fit() } catch { /* hidden */ }
+  }, [fontSize, size]) // eslint-disable-line react-hooks/exhaustive-deps -- fixed follows size
   useEffect(() => {
     const term = new XTerm({
       cursorBlink: true,
       fontFamily: "'JetBrains Mono', Menlo, monospace",
       fontSize,
-      theme: { background: cssVar('--term-bg'), foreground: cssVar('--term-fg'), cursor: cssVar('--term-fg') },
+      theme: terminalTheme(cssVar),
+      ...(fixed ?? {}),
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -46,7 +51,7 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
       }
       return true
     })
-    try { fit.fit() } catch { /* hidden tab: fitted when shown */ }
+    if (!fixed) try { fit.fit() } catch { /* hidden tab: fitted when shown */ }
     let ws: WebSocket | null = null
     let closed = false
     let retry = 0
@@ -73,7 +78,7 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
     const enc = new TextEncoder()
     const input = term.onData((d) => ws?.readyState === WebSocket.OPEN && ws.send(enc.encode(d)))
     const ro = new ResizeObserver(() => {
-      if (!el.current?.offsetWidth) return
+      if (fixed || !el.current?.offsetWidth) return
       fit.fit()
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ cols: term.cols, rows: term.rows }))
     })
@@ -88,6 +93,7 @@ export function Terminal({ labId, name, tabKey, idx, onLeave, active, live, font
       fitRef.current = null
       term.dispose()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the size comes with the terminal's name: a new size is a new terminal
   }, [labId, name])
   return <div ref={el} role="tabpanel" id={`term-panel-${idx}`} aria-labelledby={`term-tab-${idx}`} className="terminal" data-terminal={tabKey} style={{ display: active ? 'block' : 'none' }} />
 }

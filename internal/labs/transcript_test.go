@@ -72,6 +72,13 @@ func TestTerminalSessionIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws.CloseNow()
+	// The shell outlives the websocket now, so the transcript is stored when the terminal itself is closed.
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/labs/"+v.ID+"/terminals/shell", nil)
+	resp0, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp0.Body.Close()
 	var id int64
 	var key, terminal string
 	for i := 0; i < 200 && key == ""; i++ {

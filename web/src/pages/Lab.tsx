@@ -20,6 +20,7 @@ import { Loader } from '../components/Loader'
 import { Markdown } from '../components/Markdown'
 import { SparkBurst } from '../components/SparkBurst'
 import { Terminal } from '../components/Terminal'
+import { closeTab, initialTabs, openTab } from '../lib/terminals'
 import { Timer } from '../components/Timer'
 
 const endMessages: Record<string, string> = {
@@ -296,13 +297,12 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
   })
   const [taskId, setTaskId] = useState(() => firstOpen(lab))
   const [active, setActive] = useState(lab.terminals[0].name)
-  const [extra, setExtra] = useState<{ key: string; name: string }[]>([])
+  const [tabs, setTabs] = useState(() => initialTabs(lab.terminals.map((t) => t.name), lab.open_terminals ?? []))
   const [askAlerts, setAskAlerts] = useState(() => {
     try { return notificationsUndecided() && localStorage.getItem('crucible-alerts') !== 'no' } catch { return notificationsUndecided() }
   })
   const offset = useMemo(() => clockOffset(lab.server_now, Date.now()), [lab.server_now])
-  const sizeOf = (name: string) => lab.terminals.find((t) => t.name === name)?.size // a copy ("+") keeps its terminal's size
-  const tabs = [...lab.terminals.map((t) => ({ key: t.name, name: t.name })), ...extra]
+  const sizeOf = (name: string) => lab.terminals.find((t) => t.name === name)?.size // a second copy keeps its terminal's size
 
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
@@ -375,11 +375,24 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
       toast((e as Error).message)
     }
   }
-  const addShell = () => {
-    const name = tabs.find((t) => t.key === active)?.name ?? lab.terminals[0].name
-    const key = `${name} #${extra.filter((e) => e.name === name).length + 2}`
-    setExtra((x) => [...x, { key, name }])
-    setActive(key)
+  // Terminals open and close by hand: a serial console allows one connection at a time, so closing its terminal (which
+  // ends the shell, and with it the ssh session) is how a trainee gets a stuck console back.
+  const openTerminal = (name: string) => {
+    const tab = openTab(tabs, name)
+    setTabs((x) => [...x, tab])
+    setActive(tab.key)
+  }
+  const closeTerminal = async () => {
+    const tab = tabs.find((t) => t.key === active)
+    if (!tab) return
+    const after = closeTab(tabs, active)
+    setTabs(after.tabs)
+    setActive(after.active)
+    try { // the shell, and whatever it holds (a machine's one serial console connection), ends with it
+      await api(`/api/labs/${lab.id}/terminals/${encodeURIComponent(tab.name)}?tab=${encodeURIComponent(tab.key)}`, { method: 'DELETE' })
+    } catch (e) {
+      toast((e as Error).message)
+    }
   }
   const startDrag = (e: ReactPointerEvent<HTMLDivElement>) => {
     const body = e.currentTarget.parentElement!
@@ -468,7 +481,13 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
             <span className="muted small" title="The terminal captures Tab. Ctrl+Alt+↑ is taken by some operating systems; Ctrl+Shift+F6 always works">Ctrl+Alt+↑ or Ctrl+Shift+F6 leaves the terminal</span>
             <button className="ghost" aria-label="Smaller text" onClick={() => bump(-1)}>A−</button>
             <button className="ghost" aria-label="Larger text" onClick={() => bump(1)}>A+</button>
-            <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>
+            {lab.terminals.map((t) => (
+              <button key={t.name} className="ghost" title={`Opens another ${t.name} terminal`} onClick={() => openTerminal(t.name)}>+ {t.name}</button>
+            ))}
+            <button
+              className="ghost" disabled={tabs.length < 2} onClick={closeTerminal}
+              title="Closes this terminal and ends what is running in it. A serial console frees its one connection this way."
+            >Close {active}</button>
             <button className="ghost" aria-pressed={full} title="Esc exits full screen" onClick={toggleFull}>Full screen</button>
           </div>
           {tabs.map((t, i) => <Terminal key={t.key} labId={lab.id} name={t.name} size={sizeOf(t.name)} tabKey={t.key} idx={i} onLeave={leaveTerminal} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}

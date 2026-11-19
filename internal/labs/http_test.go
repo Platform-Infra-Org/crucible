@@ -128,11 +128,117 @@ func TestTerminalOriginAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws.CloseNow()
+	// The shell outlives the websocket: a refresh comes back to it. Only closing the terminal ends it.
+	time.Sleep(100 * time.Millisecond)
+	if pr.pty.closed.Load() {
+		t.Fatal("pty closed when the websocket went away; a refresh would lose the shell")
+	}
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/api/labs/"+v.ID+"/terminals/shell", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 	for i := 0; i < 200 && !pr.pty.closed.Load(); i++ {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !pr.pty.closed.Load() {
-		t.Fatal("pty not closed after disconnect")
+		t.Fatal("pty not closed when the trainee closed the terminal")
+	}
+}
+
+// A refresh, or walking off the lab page and back, reattaches to the shell that is already running instead of opening
+// a second one beside it: a machine's serial console allows one connection, and the one left behind held it.
+func TestTerminalReattachesAfterRefresh(t *testing.T) {
+	f := setup(t, true)
+	r, w := io.Pipe()
+	pr := &ptyRunner{pty: &echoPTY{r: r, w: w}}
+	f.s.Runners["local"] = pr
+	v := f.start(t)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.u)))
+		})
+	})
+	f.s.Routes(router)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/labs/" + v.ID + "/terminals/shell/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ws, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Write(ctx, websocket.MessageBinary, []byte("tempered\n"))
+	if _, _, err := ws.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ws.CloseNow() // the browser goes away
+
+	again, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.CloseNow()
+	_, data, err := again.Read(ctx) // what the terminal printed is replayed onto the new connection
+	if err != nil || !strings.Contains(string(data), "tempered") {
+		t.Fatalf("replay: %q %v", data, err)
+	}
+	if n := pr.opens.Load(); n != 1 {
+		t.Fatalf("OpenPTY called %d times; the shell should have been reused", n)
+	}
+	// The lab says which terminals are still running, so the page opens the same tabs again.
+	view, err := f.s.Get(ctx, f.u, v.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.OpenTerminals) != 1 || view.OpenTerminals[0] != "shell" {
+		t.Fatalf("open terminals: %v", view.OpenTerminals)
+	}
+}
+
+// A second copy of a terminal ("shell #2") is its own shell; a tab that is not one of the lab's terminals is refused.
+func TestTerminalTabs(t *testing.T) {
+	f := setup(t, true)
+	r, w := io.Pipe()
+	pr := &ptyRunner{pty: &echoPTY{r: r, w: w}}
+	f.s.Runners["local"] = pr
+	v := f.start(t)
+	router := chi.NewRouter()
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), f.u)))
+		})
+	})
+	f.s.Routes(router)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+	base := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/labs/" + v.ID + "/terminals/shell/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	one, _, err := websocket.Dial(ctx, base, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer one.CloseNow()
+	two, _, err := websocket.Dial(ctx, base+"?tab=shell+%232", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer two.CloseNow()
+	for i := 0; i < 200 && pr.opens.Load() != 2; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := pr.opens.Load(); n != 2 {
+		t.Fatalf("OpenPTY called %d times for two tabs", n)
+	}
+	if ws, _, err := websocket.Dial(ctx, base+"?tab=other", nil); err == nil {
+		ws.CloseNow()
+		t.Fatal("a tab of another terminal was accepted")
 	}
 }
 

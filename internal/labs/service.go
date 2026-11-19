@@ -81,6 +81,9 @@ type Service struct {
 	setupMu    sync.Mutex
 	setupLocks map[string]*sync.Mutex // per lab: one setup decision at a time; dropped on destroy
 
+	termMu sync.Mutex
+	terms  map[string]*termSession // live terminals by lab and tab: they outlive the websocket watching them
+
 	meterMu   sync.Mutex
 	meteredAt map[string]time.Time // per aws lab: its last Meter in this process (one API replica); dropped by EndMeter
 }
@@ -124,6 +127,7 @@ type View struct {
 	Training         string             `json:"training"`
 	Module           string             `json:"module"`
 	Terminals        []content.Terminal `json:"terminals"`
+	OpenTerminals    []string           `json:"open_terminals,omitempty"` // tabs still running: a refresh opens them again
 	TaskOrder        string             `json:"task_order"`
 	Tasks            []TaskView         `json:"tasks"`
 	ServerNow        time.Time          `json:"server_now"`
@@ -428,7 +432,8 @@ func (s *Service) view(ctx context.Context, inst *Instance) (*View, error) {
 	statuses := taskStatuses(lab, done, setups, reviews)
 	v := &View{ID: inst.ID, State: inst.State, Error: inst.Error, Runtime: inst.Runtime, Team: inst.Team,
 		Training: inst.Training, Module: inst.Module, Terminals: lab.Terminals, TaskOrder: lab.TaskOrder,
-		ServerNow: s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
+		OpenTerminals: s.openTabs(inst.ID),
+		ServerNow:     s.Now(), EndsAt: inst.EndsAt, LimitReason: inst.LimitReason, EndReason: inst.EndReason,
 		IdleWarningS: int(inst.IdleWarning.Seconds()), IdleTimeoutS: int(inst.IdleTimeout.Seconds()),
 		EstimateUSD: inst.EstimateUSD, Tier: inst.Tier, OverCap: inst.OverCap, CapReason: inst.CapReason, EscalateAt: inst.EscalateAt, DecidedBy: inst.DecidedBy, DecisionNote: inst.DecisionNote, ClusterContext: inst.ClusterContext, SleptAs: inst.SleptAs, SleptAt: inst.SleptAt, WokeAt: inst.WokeAt, SelfReported: selfReported(inst.Runtime), Complete: true,
 		LabReview: rv.Feedback()}
@@ -1457,6 +1462,7 @@ func (s *Service) withdraw(ctx context.Context, u *auth.User, inst *Instance) (*
 }
 
 func (s *Service) destroy(ctx context.Context, inst *Instance, reason string) {
+	s.endSessions(inst.ID) // the shells go with the lab; their transcripts are stored on the way out
 	// the request may be cancelled mid-way; a half-finished destroy would wedge the lab in 'destroying'
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyTimeout(inst.Runtime))
 	// destroyed_at doubles as "destroying since" until the final update (see Sweep)

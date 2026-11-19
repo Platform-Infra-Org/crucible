@@ -64,7 +64,9 @@ A lab that builds machines (servers, a Windows desktop) lets you reach them with
     offer plain SSH. After the id you can name the user and a command to run instead of a shell:
     `lab-ssh --direct <id> ubuntu true`.
   - `lab-console <id>` opens the serial console, to watch a machine boot or fix one that won't. Leave with Enter,
-    then `~.`.
+    then `~.`. A machine allows one serial console connection at a time, so if it says the console is in use, close
+    that terminal (**Close <name>** above the terminals) and open a new one — closing it ends the old connection.
+    A refresh does not: the terminal keeps its console connection and you come back to the same screen.
   - `aws ec2 get-console-screenshot --instance-id <id>` takes a screenshot of the machine's screen.
 
   `lab-ssh` and `lab-console` are there when your install uses Crucible's workspace image.

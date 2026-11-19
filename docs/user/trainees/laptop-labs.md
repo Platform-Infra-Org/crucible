@@ -33,7 +33,10 @@ results before the lab counts as forged.
 
 ## Terminals
 
-**+** opens another shell, **A−** and **A+** change the text size, and **Full screen** fills the window. Copy and
+**+ workspace** (one button per terminal the lab gives you) opens another one of it, and **Close <name>** closes the
+one you are looking at, ending what runs in it; the last terminal stays. A terminal keeps running on its own: if you
+refresh the page, leave the lab and come back, or lose your connection, you land in the same shell with what it
+printed still on screen. It only ends when you close it or when the lab does. **A−** and **A+** change the text size, and **Full screen** fills the window. Copy and
 paste with Ctrl+Shift+C and Ctrl+Shift+V (Cmd+C and Cmd+V on a Mac). What your terminals print is recorded, and
 scorers can read it.
 

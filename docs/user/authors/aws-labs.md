@@ -95,9 +95,10 @@ three ways, and you set up the lab for them in Terraform.
   and the serial console. `lab-ssh` and `lab-console` come with the workspace image each release pins
   (an operator can override it with `workspace_image`).
 
-For the serial console to be useful, set the machine up for it. On Linux, put `GRUB_TERMINAL="serial console"`,
+For the serial console to be useful, set the machine up for it. On Linux, put `GRUB_TERMINAL="serial"`,
 `GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"` and `GRUB_TIMEOUT=10` in `/etc/default/grub` and run
-`update-grub`. On Windows, enable the Special Administration Console: `bcdedit /ems {current} on` and
+`update-grub`. Serial alone, not `"serial console"`: on EC2 the firmware console is the same serial port, so with both
+GRUB writes every byte twice and the screen fills with doubled letters and prompts. On Windows, enable the Special Administration Console: `bcdedit /ems {current} on` and
 `bcdedit /emssettings EMSPORT:1 EMSBAUDRATE:115200`.
 
 Give the console its own terminal with a fixed size: `- { name: console, service: workspace, size: 80x24 }`. GRUB on a

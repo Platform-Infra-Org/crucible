@@ -40,7 +40,7 @@ resource "aws_instance" "box" {
     #!/bin/bash
     set -eu
     cat >/etc/default/grub.d/99-crucible-serial.cfg <<'EOF'
-    GRUB_TERMINAL="serial console"
+    GRUB_TERMINAL="serial"
     GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200"
     GRUB_TIMEOUT_STYLE=menu
     GRUB_TIMEOUT=10

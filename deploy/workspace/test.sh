@@ -49,4 +49,19 @@ printf '#!/bin/sh\nexit 0\n' >"$s/ssh-keygen"
 chmod +x "$s/ssh" "$s/aws" "$s/ssh-keygen"
 PATH="$s:/usr/bin:/bin" ./lab-ssh --direct i-0123456789abcdef0 ubuntu test -e /x >/dev/null 2>&1 || { echo "lab-ssh with a command failed"; exit 1; }
 tail -4 "$s/ssh.args" | tr '\n' ' ' | grep -qx 'ubuntu@10.0.1.5 test -e /x ' || { echo "lab-ssh: ssh args: $(tr '\n' ' ' <"$s/ssh.args")"; exit 1; }
+# Every ssh -o option the helpers pass must be one the image's own OpenSSH knows (Amazon Linux 2's is 7.4: no
+# StrictHostKeyChecking=accept-new, which made both helpers die before connecting). Checked with ssh -G in the image's
+# base, with openssh-clients installed as the Dockerfile does; skipped where Docker isn't available.
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  base=$(awk '$1 == "FROM" {print $2; exit}' Dockerfile)
+  opts=$(grep -ho -- '-o [A-Za-z]*=[^ "\\]*' lab-ssh lab-console | sed 's/\$[^ ]*/\/tmp\/x/' | sort -u | tr '\n' ' ')
+  # The image's ssh, cached as a small local image after the first run (yum is slow).
+  if printf 'FROM %s\nRUN yum install -y -q openssh-clients && yum clean all\n' "$base" | docker build -q -t crucible-workspace-ssh-check - >/dev/null; then
+    # shellcheck disable=SC2086 # one -o per word, on purpose
+    err=$(docker run --rm --entrypoint ssh crucible-workspace-ssh-check -G $opts x 2>&1 >/dev/null) || # 7.4 warns about the tty: shown only on failure
+      { echo "$err"; echo "the workspace image's ssh refuses one of: $opts"; exit 1; }
+  else
+    echo "skipped the ssh option check: couldn't build the workspace image's ssh" >&2
+  fi
+fi
 echo "workspace helpers OK"

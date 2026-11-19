@@ -225,10 +225,12 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	service := ""
+	service, fixed := "", false
+	var cols, rows int
 	for _, t := range lab.Terminals {
 		if t.Name == chi.URLParam(r, "name") {
 			service = t.Service
+			cols, rows, fixed = t.Fixed() // a fixed-size terminal (a serial console) ignores the browser's size
 			break
 		}
 	}
@@ -236,10 +238,12 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, apperr.Wrap(apperr.NotFound, "terminal not found"))
 		return
 	}
-	cols, _ := strconv.Atoi(r.URL.Query().Get("cols"))
-	rows, _ := strconv.Atoi(r.URL.Query().Get("rows"))
-	if cols <= 0 || rows <= 0 {
-		cols, rows = 120, 32
+	if !fixed {
+		cols, _ = strconv.Atoi(r.URL.Query().Get("cols"))
+		rows, _ = strconv.Atoi(r.URL.Query().Get("rows"))
+		if cols <= 0 || rows <= 0 {
+			cols, rows = 120, 32
+		}
 	}
 	ws, err := websocket.Accept(w, r, nil) // same-origin only (default); before any exec
 	if err != nil {
@@ -299,7 +303,7 @@ func (s *Service) terminal(w http.ResponseWriter, r *http.Request) {
 				Cols int `json:"cols"`
 				Rows int `json:"rows"`
 			}
-			if json.Unmarshal(data, &size) == nil && size.Cols > 0 && size.Rows > 0 {
+			if !fixed && json.Unmarshal(data, &size) == nil && size.Cols > 0 && size.Rows > 0 {
 				_ = pty.Resize(size.Cols, size.Rows)
 			}
 			continue

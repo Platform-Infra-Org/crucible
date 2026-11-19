@@ -12,13 +12,15 @@ shift $(( $# < 2 ? $# : 2 ))
 [[ $id =~ ^i-[0-9a-f]{8,17}$ ]] || usage
 [[ $user =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || usage
 dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
+# StrictHostKeyChecking=no on a fresh, empty known_hosts trusts the machine's first key, as accept-new would: this
+# image's OpenSSH (7.4, Amazon Linux 2) has no accept-new.
 ssh-keygen -q -t ed25519 -N '' -f "$dir/key"
 aws ec2-instance-connect send-ssh-public-key --instance-id "$id" --instance-os-user "$user" \
   --ssh-public-key "file://$dir/key.pub" >/dev/null
 if [ "$direct" = 1 ]; then
   ip=$(aws ec2 describe-instances --instance-ids "$id" --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
-  ssh -i "$dir/key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" "$user@$ip" "$@"
+  ssh -i "$dir/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile="$dir/known_hosts" "$user@$ip" "$@"
   exit
 fi
-ssh -i "$dir/key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$dir/known_hosts" \
+ssh -i "$dir/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile="$dir/known_hosts" \
   -o ProxyCommand="aws ssm start-session --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p" "$user@$id" "$@"

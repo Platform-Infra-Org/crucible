@@ -132,6 +132,8 @@ func TestLoadProblems(t *testing.T) {
 		"upload needs rubric":          {map[string]string{"modules/m1/quiz.yaml": "questions:\n  - {id: q1, type: upload, prompt: Attach}\n  - {id: q2, type: terminal, prompt: X, check: checks/q2.sh}\n"}, "needs a rubric"},
 		"review needs rubric":          {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    check: {script: checks/t1.sh, run_in: box}\n", "    human_review: true\n", 1)}, "human_review tasks need a rubric"},
 		"review with check":            {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    points: 2\n", "    points: 2\n    human_review: true\n    rubric: R\n", 1)}, "scored by a person: drop check and quiz"},
+		"terminal size malformed":      {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "service: box}]", "service: box, size: 80by24}]", 1)}, `terminal "shell": size must look like 80x24`},
+		"terminal size too small":      {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "service: box}]", "service: box, size: 10x2}]", 1)}, `terminal "shell": size must look like 80x24`},
 		"rubric on a checked task":     {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "    points: 2\n", "    points: 2\n    rubric: R\n", 1)}, "rubric is only read for human_review tasks"},
 		"missing title":                {map[string]string{"training.yaml": "id: t1\nmodules: [m1]\n"}, "title is required"},
 		"bad runtime":                  {map[string]string{"modules/m1/lab/lab.yaml": strings.Replace(base["modules/m1/lab/lab.yaml"], "local", "moon", 1)}, "runtime must be"},
@@ -811,6 +813,16 @@ func TestUsageAcceptsCountedModules(t *testing.T) {
 		_, probs := Load(awsTree(t, map[string]string{"modules/m1/lab/lab.yaml": awsLabYAML + "  usage: {\"" + a + "\": {storage_gb: 1}}\n"}))
 		if len(probs) > 0 {
 			t.Fatalf("%s: %v", a, probs)
+		}
+	}
+}
+
+// A terminal may ask for a fixed size (a serial console: GRUB assumes 80x24 and places its cursor absolutely).
+func TestTerminalSize(t *testing.T) {
+	for size, want := range map[string][2]int{"80x24": {80, 24}, "132x43": {132, 43}, "": {0, 0}, "80by24": {0, 0}, "10x2": {0, 0}, "999x999": {0, 0}} {
+		c, r, ok := Terminal{Size: size}.Fixed()
+		if [2]int{c, r} != want || ok != (want[0] > 0) {
+			t.Errorf("%q: %d x %d %v", size, c, r, ok)
 		}
 	}
 }

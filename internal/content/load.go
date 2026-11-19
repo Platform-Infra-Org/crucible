@@ -412,6 +412,9 @@ func (l *loader) lab(dir string, quiz *Quiz) *Lab {
 			l.add(lf, "duplicate terminal name %q", term.Name)
 		}
 		names[term.Name] = true
+		if _, _, ok := term.Fixed(); term.Size != "" && !ok {
+			l.add(lf, "terminal %q: size must look like 80x24 (40-250 columns, 10-100 rows)", term.Name)
+		}
 		if lab.Runtime == "cluster" {
 			if term.Service != "" {
 				l.add(lf, "terminal %q: cluster lab terminals open in the toolbox; drop service", term.Name)

@@ -85,6 +85,7 @@ var Fields = map[string]Field{
 
 	"Terminal.name":    {Required: true, Description: "The terminal tab's label; unique within the lab."},
 	"Terminal.service": {Description: "The compose service (workspace for aws labs) the terminal opens in. Cluster labs: leave it out; terminals open in the toolbox."},
+	"Terminal.size":    {Description: "A fixed size, COLSxROWS (40-250 x 10-100), e.g. 80x24 for a serial console (GRUB draws on 80x24). Left out: the terminal fits its panel."},
 
 	"Script.script":  {Description: "The script's path, relative to the lab folder. It must be executable. Required, except for a cluster lab's ready check."},
 	"Script.run_in":  {Description: "The service the script runs in. Required, except in cluster labs, where scripts run in the toolbox."},

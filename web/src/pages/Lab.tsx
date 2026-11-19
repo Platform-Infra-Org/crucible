@@ -301,6 +301,7 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
     try { return notificationsUndecided() && localStorage.getItem('crucible-alerts') !== 'no' } catch { return notificationsUndecided() }
   })
   const offset = useMemo(() => clockOffset(lab.server_now, Date.now()), [lab.server_now])
+  const sizeOf = (name: string) => lab.terminals.find((t) => t.name === name)?.size // a copy ("+") keeps its terminal's size
   const tabs = [...lab.terminals.map((t) => ({ key: t.name, name: t.name })), ...extra]
 
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -470,7 +471,7 @@ export function LabWorkspace({ lab, setLab, title, back }: { lab: LabView; setLa
             <button className="ghost" aria-label="Open another shell" onClick={addShell}>+</button>
             <button className="ghost" aria-pressed={full} title="Esc exits full screen" onClick={toggleFull}>Full screen</button>
           </div>
-          {tabs.map((t, i) => <Terminal key={t.key} labId={lab.id} name={t.name} tabKey={t.key} idx={i} onLeave={leaveTerminal} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
+          {tabs.map((t, i) => <Terminal key={t.key} labId={lab.id} name={t.name} size={sizeOf(t.name)} tabKey={t.key} idx={i} onLeave={leaveTerminal} active={active === t.key} live={lab.state === 'ready'} fontSize={fontSize} />)}
         </section>
       </div>
       <IdleModal lab={lab} offset={offset} onHere={async () => {

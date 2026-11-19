@@ -2,6 +2,9 @@
 package content
 
 import (
+	"regexp"
+	"strconv"
+
 	"gopkg.in/yaml.v3"
 
 	"crucible/internal/yamlx"
@@ -93,6 +96,25 @@ type AWSConfig struct {
 type Terminal struct {
 	Name    string `yaml:"name" json:"name"`
 	Service string `yaml:"service" json:"service"`
+	// Size fixes the terminal at COLSxROWS (e.g. 80x24) instead of fitting the page: a serial console's GRUB assumes
+	// 80x24 and places its cursor absolutely. Empty: the terminal fits its panel.
+	Size string `yaml:"size" json:"size,omitempty"`
+}
+
+var terminalSize = regexp.MustCompile(`^([0-9]{2,3})x([0-9]{1,3})$`)
+
+// Fixed is the terminal's fixed size, when Size names one in bounds (40-250 columns, 10-100 rows).
+func (t Terminal) Fixed() (cols, rows int, ok bool) {
+	m := terminalSize.FindStringSubmatch(t.Size)
+	if m == nil {
+		return 0, 0, false
+	}
+	cols, _ = strconv.Atoi(m[1])
+	rows, _ = strconv.Atoi(m[2])
+	if cols < 40 || cols > 250 || rows < 10 || rows > 100 {
+		return 0, 0, false
+	}
+	return cols, rows, true
 }
 
 type Script struct {

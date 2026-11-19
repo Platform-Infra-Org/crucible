@@ -935,7 +935,7 @@ crucible aws deploy --version vX.Y.Z    <span class="c"># otherwise</span></code
       <li><h3>Tear down</h3>
         <div class="cmd"><pre><code>crucible aws teardown --yes</code></pre></div>
         <p>Ends every AWS lab first (the kill switch, then it waits until every lab has ended), takes a snapshot, then <code>terraform destroy</code> on the main stack without asking again.
-          It refuses a node that isn't running (<i>wake it first</i>: the labs can only be ended through a running server). If ending the labs fails the kill switch stays on until the server restarts: run teardown again. <code>--keep-labs</code> skips the labs.
+          With AWS labs on it refuses a node that isn't running (<i>wake it first</i>: the labs can only be ended through a running server), and one whose release predates v0.2.0 (end the AWS labs in the app, then use <code>--keep-labs</code>). With AWS labs off it goes on with a note, since nothing in AWS can be left behind. If ending the labs fails the kill switch stays on until the server restarts: run teardown again. <code>--keep-labs</code> skips the labs.
           It lists resources tagged <code>crucible:lab-id</code> that are left in the lab account and does not delete them: delete them by hand (with the server gone, no reaper runs). A teardown never overrides an admin's own kill switch. The buckets, snapshots, uploads,
           Cognito users, the secret key and the labs stack all survive. Without <code>--yes</code> it refuses. It reads
           <code>crucible.tfvars</code> (or <code>--var-file</code>) like <code>up</code>.</p></li>

@@ -44,8 +44,8 @@ AWS bills a day or so late, so the line adds **not yet billed**: Crucible's own 
 Crucible never counts from later than its last read of the bill, wherever a marker sits: until the bill has been read
 once no mark counts, and when the last read is more than 24 hours old the timeline reaches back to it.
 
-A band marks the hours the forge was asleep. **Refresh now** also reads the bill, at most once every 5 minutes for all
-admins together. Approvers see the timeline but can't move the markers.
+A band marks the hours the forge was asleep. **Refresh now** also reads the bill (with Cost Explorer, at most
+once every 5 minutes for all admins together). Approvers see the timeline but can't move the markers.
 
 Cluster labs run on the trainee's own cluster and cost nothing in Crucible, so they are not in the Ledger.
 

@@ -88,7 +88,8 @@ The schedule wakes the node at 07:30 and sleeps it at 19:30 (Mon-Fri, `schedule_
 
 ## Disaster / full teardown
 - `crucible aws teardown --yes`: ends every AWS lab first (`crucible labs stop-all --wait`: the kill switch, set by actor `crucible aws teardown`, then it waits until every lab has ended), takes a snapshot, then destroys the main stack. The buckets and Cognito pool survive.
-  - It refuses a node that isn't running (stopped, stopping, pending): run `crucible aws wake` first, because the labs can only be ended through a running server.
+  - With AWS labs on, it refuses a node that isn't running (stopped, stopping, pending): run `crucible aws wake` first, because the labs can only be ended through a running server. It also refuses a node running a release from before v0.2.0, which has no `crucible labs`: end the AWS labs in the app (Forge status: pause all labs), then run teardown with `--keep-labs`.
+  - With AWS labs off (no labs stack wired into the main stack), a stopped or too-old node doesn't block the teardown: it says so and goes on, since nothing in AWS can be left behind. Laptop and cluster labs lose their server.
   - If the stop-all fails, the kill switch stays on until the server restarts (`Morning()` clears a teardown's switch): run teardown again. `--keep-labs` skips the labs (they are then orphaned on the lab account, and keep billing).
   - It lists leftovers tagged `crucible:lab-id` in the lab account and does not delete them; delete them by hand (with the server gone, no reaper runs).
   - A teardown never overrides an admin's own kill switch: the server clears only a switch whose `changed_by` is `crucible aws teardown`.
@@ -205,7 +206,7 @@ does the same (fail closed). Admins are emailed at 80%, at 100% and when the bil
   `--budget-email`. `--spend-source=cost-explorer` needs no budget: it reads Cost Explorer hourly at $0.01 a call:
   about $0.24 on a day the node is up all day, about $7 a month around the clock or about $2.60 a month on the default
   weekday schedule. The ops role may read only that one thing (`budgets:ViewBudget` or `ce:GetCostAndUsage`). Refresh
-  now on the Ledger also reads the bill, at most once every 5 minutes.
+  now on the Ledger also reads the bill: every time with the budget (free), at most once every 5 minutes with Cost Explorer.
 - **Our account.** Step 6 needs nothing new: the budget is the default.
 
 **Verify on the account (by hand).**

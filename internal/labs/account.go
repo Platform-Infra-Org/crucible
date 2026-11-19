@@ -18,7 +18,7 @@ import (
 const (
 	accountReadEvery    = 10 * time.Minute // the periodic job (an AWS Budget read is free)
 	ceReadEvery         = time.Hour        // Cost Explorer costs $0.01 a call
-	accountRefreshEvery = 5 * time.Minute  // Refresh now, shared by every admin
+	accountRefreshEvery = 5 * time.Minute  // Refresh now with Cost Explorer, shared by every admin
 	accountStaleAfter   = 36 * time.Hour   // past it, the limit fails closed
 )
 
@@ -73,8 +73,12 @@ func (s *Service) ReadAccountSpend(ctx context.Context, manual bool) error {
 	return err
 }
 
-// claimAccountRefresh takes the shared 5-minute refresh slot atomically; wait is how long until the next one when it was taken.
+// claimAccountRefresh takes the shared 5-minute refresh slot atomically; wait is how long until the next one when it was
+// taken. Only Cost Explorer ($0.01 a call) has the slot: a budget read is free, so Refresh now always reads it.
 func (s *Service) claimAccountRefresh(ctx context.Context) (ok bool, wait time.Duration, err error) {
+	if s.SpendSource != "cost_explorer" {
+		return true, 0, nil
+	}
 	now := s.Now()
 	tag, err := s.DB.Exec(ctx, `UPDATE aws_ops SET account_refresh_at = $1::timestamptz
 		WHERE account_refresh_at IS NULL OR account_refresh_at <= $1::timestamptz - make_interval(secs => $2::float8)`, now, accountRefreshEvery.Seconds())
@@ -337,7 +341,7 @@ func (s *Service) accountBlock(ctx context.Context, u *auth.User) (*AccountBlock
 		LimitUSD: t.LimitUSD, Source: s.SpendSource, Stale: t.Stale, Window: t.Window}
 	if c.IsAdmin(u.Email) {
 		b.Error, b.CanMark = t.Bill.Error, true
-		if t.Bill.RefreshAt != nil {
+		if s.SpendSource == "cost_explorer" && t.Bill.RefreshAt != nil {
 			after := t.Bill.RefreshAt.Add(accountRefreshEvery)
 			b.RefreshAfter = &after
 		}

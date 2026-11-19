@@ -95,7 +95,7 @@ func TestLedgerNumbersAndStaleness(t *testing.T) {
 func TestRefreshQueuesUniqueJobsRateLimitedAndAudited(t *testing.T) {
 	ctx := context.Background()
 	f := setup(t, true)
-	f.s.Cloud = &awscloud.Fake{}
+	f.s.Cloud, f.s.SpendSource = &awscloud.Fake{}, "cost_explorer"
 	if _, err := f.s.RefreshFinOps(ctx, f.admin); err == nil {
 		t.Fatal("no queue: refresh must fail, not pretend")
 	}
@@ -127,7 +127,7 @@ func TestRefreshQueuesUniqueJobsRateLimitedAndAudited(t *testing.T) {
 	var acct int
 	_ = f.s.DB.QueryRow(ctx, `SELECT count(*) FROM river_job WHERE kind = 'aws_account_spend'`).Scan(&acct)
 	if acct != 1 {
-		t.Fatalf("the bill is read once per 5 minutes however many refreshes: got %d", acct)
+		t.Fatalf("Cost Explorer's bill is read once per 5 minutes however many refreshes: got %d", acct)
 	}
 }
 
